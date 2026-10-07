@@ -1,0 +1,6 @@
+* a resistor with a temperature coefficient over three temperatures
+V1 a 0 1
+R1 a 0 1k tc1=0.01
+.step temp list -40 27 125
+.tran 0 1m 0 100u
+.end

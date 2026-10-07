@@ -1,0 +1,5 @@
+* C:\recording\two_instance_wire.asc
+R1 a N001 1k
+R2 N001 0 2k
+.backanno
+.end

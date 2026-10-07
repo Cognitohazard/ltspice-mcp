@@ -1,0 +1,6 @@
+* a library file that is not there
+.lib nosuchfile.lib
+V1 a 0 1
+R1 a 0 1k
+.op
+.end

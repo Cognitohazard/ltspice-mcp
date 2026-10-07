@@ -1,0 +1,48 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\fourier.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.000 seconds.
+Total iterations: 10034
+
+Files loaded:
+C:\recording\fourier.cir
+
+Fourier components of V(out)
+N-Period=1
+DC component:-0.0735602
+
+Harmonic	Frequency	 Fourier 	Normalized	 Phase  	Normalized
+ Number 	  [Hz]   	Component	 Component	[degree]	Phase [deg]
+    1   	 1.000e+03	 8.659e-01	 1.000e+00	   90.00°	    0.00°
+    2   	 2.000e+03	 1.001e-01	 1.156e-01	    0.00°	  -90.00°
+    3   	 3.000e+03	 5.751e-02	 6.642e-02	   90.00°	    0.00°
+    4   	 4.000e+03	 2.033e-02	 2.348e-02	  180.00°	   90.00°
+    5   	 5.000e+03	 2.491e-03	 2.876e-03	   90.00°	   -0.00°
+    6   	 6.000e+03	 9.770e-03	 1.128e-02	 -180.00°	 -270.00°
+    7   	 7.000e+03	 6.712e-03	 7.751e-03	  -90.00°	 -180.00°
+    8   	 8.000e+03	 6.723e-04	 7.764e-04	    0.00°	  -90.00°
+    9   	 9.000e+03	 3.026e-03	 3.495e-03	  -90.00°	 -180.00°
+Partial Harmonic Distortion: 13.610272%
+Total Harmonic Distortion:   13.617501%
+
+Fourier components of V(in)
+N-Period=1
+DC component:-1.16268e-12
+
+Harmonic	Frequency	 Fourier 	Normalized	 Phase  	Normalized
+ Number 	  [Hz]   	Component	 Component	[degree]	Phase [deg]
+    1   	 1.000e+03	 1.000e+00	 1.000e+00	   90.00°	    0.00°
+    2   	 2.000e+03	 3.384e-10	 3.384e-10	   90.26°	    0.26°
+    3   	 3.000e+03	 1.225e-09	 1.225e-09	 -144.41°	 -234.41°
+    4   	 4.000e+03	 6.765e-10	 6.765e-10	   89.92°	   -0.08°
+    5   	 5.000e+03	 2.855e-09	 2.855e-09	   29.49°	  -60.51°
+Partial Harmonic Distortion: 0.000000%
+Total Harmonic Distortion:   0.000000%
+

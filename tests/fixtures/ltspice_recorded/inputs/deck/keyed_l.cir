@@ -1,0 +1,7 @@
+* an inductor's value given as L=
+V1 a 0 PULSE(0 1 0 1u 1u 1 2)
+R1 a b 1k
+L1 b 0 L=1m
+.tran 0 1m 0 20u
+.meas tran vb FIND V(b) AT 1u
+.end

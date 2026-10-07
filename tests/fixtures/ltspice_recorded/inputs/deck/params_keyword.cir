@@ -1,0 +1,11 @@
+* params: on a subcircuit definition and on its call
+.subckt div top out params: r=1k
+R1 top out {r}
+R2 out 0 1k
+.ends
+V1 in 0 3
+X1 in mid div params: r=2k
+X2 in mid2 div r=2k
+X3 in mid3 div
+.op
+.end

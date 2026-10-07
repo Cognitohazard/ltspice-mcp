@@ -1,0 +1,5 @@
+* C:\recording\pin_on_pin.asc
+R1 a P001 1k
+R2 P001 0 2k
+.backanno
+.end

@@ -1,0 +1,10 @@
+* operating point of a deck with two subcircuit instances
+.subckt div top out
+R1 top out 1k
+R2 out 0 1k
+.ends
+V1 in 0 4
+X1 in a div
+X2 a b div
+.op
+.end

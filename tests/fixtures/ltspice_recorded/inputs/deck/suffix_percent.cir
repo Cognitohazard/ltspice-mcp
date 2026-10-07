@@ -1,0 +1,5 @@
+* a percent sign after a number: each resistor carries 1 A, so V(n<i>) is the resistance LTspice read
+I1 0 n01 1
+R1 n01 0 8%
+.op
+.end

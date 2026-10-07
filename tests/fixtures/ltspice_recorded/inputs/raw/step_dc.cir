@@ -1,0 +1,7 @@
+* divider swept over two resistances
+V1 in 0 0
+R1 in out {r}
+R2 out 0 1k
+.step param r list 1k 3k
+.dc V1 0 4 1
+.end

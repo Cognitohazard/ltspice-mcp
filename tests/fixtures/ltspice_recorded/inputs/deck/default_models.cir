@@ -1,0 +1,11 @@
+* device type names used as model names, with no .model card
+V1 vcc 0 5
+R1 vcc d 1k
+M1 d d 0 0 NMOS
+R2 vcc a 1k
+D1 a 0 D
+R3 vcc c 1k
+R4 vcc b 100k
+Q1 c b 0 NPN
+.op
+.end

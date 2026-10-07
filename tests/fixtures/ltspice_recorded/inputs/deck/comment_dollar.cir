@@ -1,0 +1,5 @@
+* a dollar comment after a card
+I1 0 a 1
+R1 a 0 1k $ 2k
+.op
+.end

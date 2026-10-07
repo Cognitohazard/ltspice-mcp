@@ -1,0 +1,13 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\default_models.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\default_models.cir(4): Node or model name expected.
+
+M1 d d 0 0 NMOS
+           ^^^^
+C:\recording\default_models.cir(6): Undefined model "d".
+D1 a 0 D
+       ^
+C:\recording\default_models.cir(9): Undefined model "npn".
+Q1 c b 0 NPN
+         ^^^

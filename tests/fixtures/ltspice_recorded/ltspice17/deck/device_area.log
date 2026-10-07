@@ -1,0 +1,50 @@
+Circuit: * trailing area factors
+
+Direct Newton iteration for .op point succeeded.
+Semiconductor Device Operating Points:
+                        --- Diodes ---
+Name:      d1
+Model:     dn
+Id:      4.34e-03
+Vd:      6.65e-01
+Req:     5.97e+00
+CAP:     0.00e+00
+
+                        --- Bipolar Transistors ---
+Name:       q2          q1
+Model:      qn          qn
+Ib:       4.21e-05    4.21e-05
+Ic:       4.21e-03    4.21e-03
+Vbe:      7.93e-01    7.93e-01
+Vbc:     -7.93e-08   -7.93e-08
+Vce:      7.93e-01    7.93e-01
+BetaDC:   1.00e+02    1.00e+02
+Gm:       1.63e-01    1.63e-01
+Rpi:      6.15e+02    6.15e+02
+Rx:       0.00e+00    0.00e+00
+Ro:       1.29e+14    1.29e+14
+Cbe:      0.00e+00    0.00e+00
+Cbc:      0.00e+00    0.00e+00
+Cjs:      0.00e+00    0.00e+00
+BetaAC:   1.00e+02    1.00e+02
+Cbx:      0.00e+00    0.00e+00
+Ft:       0.00e+00    0.00e+00
+
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 7
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 7
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)

@@ -1,0 +1,6 @@
+* a transient that cannot advance
+V1 in 0 PULSE(0 1 1u 1n 1n 1 2)
+R1 in a 1k
+B1 a 0 V=if(V(a)>0.5,0,1)
+.tran 0 10u 0 1u
+.end

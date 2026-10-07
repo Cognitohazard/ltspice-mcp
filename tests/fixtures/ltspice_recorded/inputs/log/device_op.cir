@@ -1,0 +1,20 @@
+* device operating points in the log
+.options logopinfo
+V1 vdd 0 3
+R1 vdd d 10k
+M1 d d 0 0 NM W=10u L=1u
+R2 vdd c 10k
+R3 vdd b 220k
+Q1 c b 0 0 QN
+R4 vdd a 1k
+D1 a 0 DN
+X1 vdd xd stage
+.subckt stage top d
+R1 top d 10k
+M1 d d 0 0 NM W=20u L=1u
+.ends
+.model NM NMOS(VTO=0.7 KP=100u)
+.model QN NPN(BF=100)
+.model DN D
+.op
+.end

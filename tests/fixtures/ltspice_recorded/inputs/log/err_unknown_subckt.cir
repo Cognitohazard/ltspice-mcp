@@ -1,0 +1,6 @@
+* a subcircuit that is not defined
+V1 a 0 1
+R1 a b 1k
+X1 b 0 nosuchsub
+.op
+.end

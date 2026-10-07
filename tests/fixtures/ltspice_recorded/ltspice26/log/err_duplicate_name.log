@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\err_duplicate_name.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\err_duplicate_name.cir(4): Instance with that name already defined.
+R1 a 0 2k
+^^

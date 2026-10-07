@@ -1,0 +1,6 @@
+* a model that is not defined
+V1 a 0 1
+R1 a b 1k
+D1 b 0 NOSUCHMODEL
+.op
+.end
