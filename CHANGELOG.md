@@ -76,6 +76,11 @@ recording that showed it.
   character and is written back as it was read. LTspice reads such a file a
   byte at a time, so the copy is again what the simulator would have been
   given.
+- A `.four` card carrying a harmonic or period count, such as
+  `.four 1k 5 V(in)`, had the count read as a trace it asked for. When the
+  run produced no Fourier table, as on ngspice, an observation reported a
+  trace named "5" as requested and missing. Both builds read the number after
+  the frequency as the harmonic count, and the counts are skipped now.
 - On LTspice XVII no result of a run could be read when the deck's title line
   held one of those bytes. XVII copies the title into its log, and the log was
   refused as undecodable; `.meas` results failed the same way inside the log
