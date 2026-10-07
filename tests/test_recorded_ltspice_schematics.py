@@ -19,7 +19,7 @@ from spicelib.editor.asc_editor import AscEditor
 from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
-from ltspice_mcp.lib.lint_rules import deck_generator
+from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
 from ltspice_mcp.lib.netlist_diff import parse_directive, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import canon_ref, parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import (
@@ -320,6 +320,19 @@ class TestExportBoilerplate:
         else:
             assert generator == rec.manifest(build)["reported_build"]
 
+    def test_every_export_shows_which_generation_wrote_it(self, build: str):
+        """XVII names no generator, so its exports are told by their first line,
+        the sheet's path, standing alone."""
+        exports = sorted(rec.recorded(build, "export/boilerplate.net").parent.glob("*.net"))
+        assert len(exports) > 10
+        expected = (
+            UNNAMED_EXPORT_WRITER
+            if rec.generation(build) == "xvii"
+            else rec.manifest(build)["reported_build"]
+        )
+        for path in exports:
+            assert export_writer(read_spice_text_with_encoding(path)[0]) == expected, path.name
+
     def test_a_bipolar_transistor_is_exported_with_a_grounded_substrate(self, build: str):
         cards = rec.export_instances(build, "export/boilerplate")
         for reference in ("q1", "q2"):
@@ -388,6 +401,38 @@ class TestExportEncoding:
             pytest.skip("LTspice 26 re-encodes what it read")
         data = rec.recorded(build, "export/micro_utf8.net").read_bytes()
         assert b"R1 a 0 1\xc2\xb5\r\n" in data
+
+    @pytest.mark.parametrize("sheet", ["micro_cp1252", "micro_utf8"])
+    async def test_verify_warns_of_a_micro_sign_the_exporting_build_misreads(
+        self, build: str, sheet: str, state_no_sim, work_dir: Path
+    ):
+        """XVII copies a UTF-8 sheet's bytes into its export and decodes the
+        export as cp1252, so the micro sign there runs as 1. verify_circuit
+        warns of it from the export alone, with no XVII in the session; the
+        cp1252 export, and anything LTspice 26 wrote, stay an observation."""
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        deck = work_dir / f"{sheet}.net"
+        deck.write_bytes(rec.recorded(build, f"export/{sheet}.net").read_bytes())
+        result = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(deck), "checks": ["syntax"]}),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None
+        findings = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+        if rec.generation(build) != "xvii":
+            # LTspice 26 re-encodes what it read as cp1252: one micro sign
+            # stays one, and a UTF-8 one becomes the two mis-decoded characters.
+            assert [f["severity"] for f in findings] == (
+                ["observation"] if sheet == "micro_cp1252" else []
+            )
+        elif sheet == "micro_utf8":
+            (finding,) = findings
+            assert finding["severity"] == "warning"
+            assert finding["evidence"]["reader"] == UNNAMED_EXPORT_WRITER
+        else:
+            assert [f["severity"] for f in findings] == ["observation"]
 
     def test_the_setting_that_asks_for_u_writes_u(self, build: str):
         assert self.value(build, "micro_cp1252_as_u") == "1u"
