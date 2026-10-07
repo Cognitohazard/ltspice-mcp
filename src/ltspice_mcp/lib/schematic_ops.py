@@ -7,9 +7,11 @@ enforces and a finding the checker reports cannot drift apart.
 
 What lives here:
 
-- the typed op union (``OpAddComponent`` … ``OpRemoveDirective``), the in-place
+- the typed op union (``OpAddComponent`` … ``OpSetPlotPanes``), the in-place
   applier ``apply_op_inplace``, the facts its results report
   (``OP_RESULT_FACTS``), and the batch runner ``run_op_batch``;
+- ``SheetPlotSettings``, the plot settings file beside a sheet as one batch
+  changes it: the one op that does not edit the sheet itself writes there;
 - ``edit_guard``, which serializes one file's mutation in-process and across
   parallel server sessions, and the cached-editor accessors it wraps;
 - the placement, routing and net-partition geometry (``placed_geometry``,
@@ -32,6 +34,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple
 from weakref import WeakKeyDictionary
@@ -70,6 +73,19 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
+from ltspice_mcp.lib.plot_settings import (
+    SECTION_NAMES,
+    PlotPane,
+    PlotSettings,
+    check_trace,
+    encode_plot_settings,
+    plot_settings_path,
+    read_plot_settings,
+    render_plot_settings,
+    scale_names,
+    scales_of,
+    with_panes,
+)
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
@@ -2407,6 +2423,31 @@ class OpRemoveDirective(StrictModel):
     )
 
 
+class PlotPaneSpec(StrictModel):
+    """One waveform pane."""
+
+    traces: list[str] = Field(
+        min_length=1,
+        description="Expressions as typed in Add Traces, no spaces: 'V(out)', 'V(in)-V(out)'.",
+    )
+    x_scale: Literal["linear", "log"] | None = Field(
+        default=None, description="Default: linear for tran, log for ac."
+    )
+    y_scale: Literal["linear", "log", "db"] | None = Field(
+        default=None, description="Left Y axis. Default: linear for tran, db for ac."
+    )
+
+
+class OpSetPlotPanes(StrictModel):
+    """Set one analysis's waveform panes in the .plt beside the sheet."""
+
+    op: Literal["set_plot_panes"]
+    analysis: Literal["tran", "ac"]
+    panes: list[PlotPaneSpec] = Field(
+        description="Top to bottom; replaces the analysis's panes, and [] removes them."
+    )
+
+
 SchematicOp = (
     OpAddComponent
     | OpSetComponentValue
@@ -2419,7 +2460,43 @@ SchematicOp = (
     | OpWirePins
     | OpAddDirective
     | OpRemoveDirective
+    | OpSetPlotPanes
 )
+
+
+@dataclass
+class SheetPlotSettings:
+    """The plot settings file beside a sheet, as one op batch changes it.
+
+    ``original`` is the file's bytes when the batch read it (None when there
+    was none), so a commit that fails after replacing the file can put them
+    back. ``settings`` starts as what the file held and takes each
+    ``set_plot_panes`` in turn.
+    """
+
+    path: Path
+    original: bytes | None
+    settings: PlotSettings
+    changed: bool = False
+
+    @classmethod
+    def read(cls, sheet: Path) -> "SheetPlotSettings":
+        """The settings beside ``sheet``; call under the edit guard of both files."""
+        path = plot_settings_path(sheet)
+        try:
+            original: bytes | None = path.read_bytes()
+        except FileNotFoundError:
+            original = None
+        except OSError as exc:
+            raise NetlistError(f"cannot read {path.name}: {exc}") from exc
+        settings = PlotSettings() if original is None else read_plot_settings(original)
+        return cls(path=path, original=original, settings=settings)
+
+    def contents(self) -> bytes | None:
+        """The bytes to commit, or None when no section is left and the file goes."""
+        if not self.settings.sections:
+            return None
+        return encode_plot_settings(render_plot_settings(self.settings))
 
 
 def _resolve_op_xy(
@@ -2446,18 +2523,53 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
     "remove_component": ("deleted_wires",),
+    "set_plot_panes": ("plot_settings", "replaced_panes"),
 }
 
 
-def apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict[str, object]:
+def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, object]:
+    """Replace one analysis's panes in ``plot``; report the panes it had.
+
+    ``replaced_panes`` is in this op's own form, so passing it back as
+    ``panes`` restores them.
+    """
+    panes = [
+        PlotPane(
+            traces=tuple(check_trace(trace) for trace in spec.traces),
+            scales=scales_of(op.analysis, spec.x_scale, spec.y_scale),
+        )
+        for spec in op.panes
+    ]
+    before = plot.settings.section(SECTION_NAMES[op.analysis])
+    plot.settings = with_panes(plot.settings, op.analysis, panes)
+    plot.changed = True
+    replaced = [
+        {"traces": list(pane.traces), **scale_names(pane.scales)}
+        for pane in (before.panes if before is not None else ())
+    ]
+    return {"op": op.op, "plot_settings": str(plot.path), "replaced_panes": replaced}
+
+
+def apply_op_inplace(
+    editor: AscEditor,
+    op: SchematicOp,
+    asc_path: Path,
+    plot: SheetPlotSettings | None = None,
+) -> dict[str, object]:
     """Apply one schematic op against ``editor`` in place, return its result.
 
     Skips the load / save / lock dance: the batch runner's caller holds the
     edit guard and saves once, after every op in the batch has applied.
+    ``set_plot_panes`` changes ``plot`` instead, which the caller commits
+    beside the sheet; a batch holding one must pass it.
 
     Raises ``NetlistError`` on any per-op validation failure; the caller
     decides whether to abort or continue based on ``stop_on_error``.
     """
+    if isinstance(op, OpSetPlotPanes):
+        if plot is None:
+            raise NetlistError("set_plot_panes needs the sheet's plot settings to write into.")
+        return _set_plot_panes(op, plot)
     if isinstance(op, OpAddComponent):
         symbol_info = symbol_info_for(editor, op.symbol)
         if symbol_info is None:
@@ -2728,6 +2840,7 @@ def run_op_batch(
     asc_path: Path,
     *,
     stop_on_error: bool,
+    plot: SheetPlotSettings | None = None,
 ) -> tuple[list[dict[str, object]], str | None]:
     """Apply ``ops`` in order via ``apply_op_inplace``; return (results, abort_reason).
 
@@ -2741,7 +2854,7 @@ def run_op_batch(
     for i, op in enumerate(ops):
         entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
         try:
-            op_result = apply_op_inplace(editor, op, asc_path)
+            op_result = apply_op_inplace(editor, op, asc_path, plot)
             entry.update({k: v for k, v in op_result.items() if k != "op"})
         except (NetlistError, ValueError) as e:
             entry["ok"] = False

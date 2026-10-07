@@ -9,7 +9,11 @@ first turns a stale ``expected_sha256`` into a ``revision_conflict`` with nothin
 written.
 
 The op models and their in-place applier are reused verbatim from
-``lib/schematic_ops.py``. Post-commit, an optional compare stage exports the
+``lib/schematic_ops.py``. One op, ``set_plot_panes``, writes the plot settings
+file beside the sheet instead of the sheet: that file is read and replaced in
+the same transaction, under a file lock of its own taken after the sheet's. It
+is renamed into place before the sheet is, and its old bytes are put back if
+the sheet's rename fails. Post-commit, an optional compare stage exports the
 committed sheet on a COPY and compares it to a reference — a netlist, or an
 ``.asc`` exported the same way — the way verify_circuit does; a mismatch or an
 export failure there is reported but never un-commits the sheet.
@@ -29,7 +33,7 @@ import shutil
 import stat
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
@@ -43,6 +47,7 @@ from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, r
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -51,6 +56,7 @@ from ltspice_mcp.lib.pin_legend import (
     find_label_only_pins,
     paginate_view,
 )
+from ltspice_mcp.lib.plot_settings import plot_settings_path
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
     OP_RESULT_FACTS,
@@ -65,7 +71,9 @@ from ltspice_mcp.lib.schematic_ops import (
     OpRemoveWire,
     OpSetComponentAttribute,
     OpSetComponentValue,
+    OpSetPlotPanes,
     OpWirePins,
+    SheetPlotSettings,
     blank_sheet,
     build_on_wire_predicate,
     collapse_result_warnings,
@@ -127,7 +135,8 @@ ConsolidatedOp = Annotated[
     | OpRemoveWire
     | OpWirePins
     | OpAddDirective
-    | OpRemoveDirective,
+    | OpRemoveDirective
+    | OpSetPlotPanes,
     Field(discriminator="op"),
 ]
 
@@ -290,8 +299,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "type": "array",
             "description": (
                 "The commit-protocol stages that did not complete (revision_check, "
-                "apply_ops, stage_asc, rename, then the post-commit views, reference "
-                "and response); empty when every stage did."
+                "apply_ops, stage_asc, stage_plot_settings, rename, then the post-commit "
+                "views, reference and response); empty when every stage did."
             ),
             "items": {
                 "type": "object",
@@ -400,7 +409,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "(requested segments already on the sheet, not redrawn) and "
                 "junctions (where the route joined existing wiring off its "
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
-                "report how much they took."
+                "report how much they took. set_plot_panes reports the plot_settings "
+                "file it writes and the replaced_panes it held before, which passed "
+                "back as panes restore them."
             ),
             "items": {
                 "type": "object",
@@ -425,6 +436,19 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     },
                     "removed": {"type": "integer"},
                     "deleted_wires": {"type": "integer"},
+                    "plot_settings": {"type": "string"},
+                    "replaced_panes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "traces": {"type": "array", "items": {"type": "string"}},
+                                "x_scale": {"type": "string"},
+                                "y_scale": {"type": "string"},
+                            },
+                            "required": ["traces"],
+                        },
+                    },
                 },
                 "required": ["index", "op"],
             },
@@ -483,26 +507,82 @@ class _CommitOutcome(NamedTuple):
     staged: bool
     renamed: bool
     error: str | None
+    # The stage that failed, when it is not the sheet's own staging or rename.
+    stage: str | None = None
 
 
-def _commit_asc(text: str, target: Path, build_id: str, encoding: str) -> _CommitOutcome:
+def _write_beside(path: Path, data: bytes | None, build_id: str) -> None:
+    """Replace ``path`` with ``data`` the way the sheet is replaced; None removes it.
+
+    Staged as a sibling and renamed over it, in binary: the bytes on disk are
+    the ones encoded, CRLF or not, on every platform.
+    """
+    if data is None:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_name(f"{path.name}.staging-{build_id}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_BINARY, _target_mode(path))
+    try:
+        os.write(fd, data)
+        fsync_fd(fd)
+    finally:
+        os.close(fd)
+    try:
+        replace_file(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
+def _commit_asc(
+    text: str,
+    target: Path,
+    build_id: str,
+    encoding: str,
+    plot: SheetPlotSettings | None = None,
+) -> _CommitOutcome:
     """The whole commit write path (stage + fsync + atomic rename + dir fsync).
 
     Run as one blocking unit off the event loop and under ``asyncio.shield`` so a
     transport cancel can't abandon a half-commit. Returns per-phase outcomes so
     the caller keeps its two-stage bookkeeping; on a rename failure it removes the
     orphaned staging temp itself (the target is left untouched either way).
+
+    A batch that set plot panes replaces the plot settings file between the
+    sheet's staging and its rename, so the rename is still the last step; a
+    rename that fails puts the file's old bytes back.
     """
     try:
         tmp = _stage_asc(text, target, build_id, encoding)
     except Exception as exc:  # broad by design — pre-rename failure; target untouched
         return _CommitOutcome(staged=False, renamed=False, error=str(exc))
+    if plot is not None and plot.changed:
+        try:
+            _write_beside(plot.path, plot.contents(), build_id)
+        except Exception as exc:  # broad by design — the .plt and the target are unchanged
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            return _CommitOutcome(
+                staged=False,
+                renamed=False,
+                error=f"{plot.path.name}: {exc}",
+                stage="stage_plot_settings",
+            )
     try:
         _commit_rename(tmp, target)
     except Exception as exc:  # broad by design — pre-commit rename failure; target untouched
         with contextlib.suppress(OSError):
             tmp.unlink()
-        return _CommitOutcome(staged=True, renamed=False, error=str(exc))
+        error = str(exc)
+        if plot is not None and plot.changed:
+            try:
+                _write_beside(plot.path, plot.original, build_id)
+            except Exception as restore:  # broad by design — reported, not raised
+                error += (
+                    f"; {plot.path.name} keeps the new panes, putting it back failed: {restore}"
+                )
+        return _CommitOutcome(staged=True, renamed=False, error=error)
     return _CommitOutcome(staged=True, renamed=True, error=None)
 
 
@@ -891,6 +971,20 @@ async def _run_reference_stage(
 # ---------------------------------------------------------------------------
 
 
+@contextlib.asynccontextmanager
+async def _plot_settings_guard(target: Path, ops: Sequence[object]) -> AsyncIterator[None]:
+    """The cross-process lock on the plot settings file, for a batch that writes it.
+
+    Taken after the sheet's own, the fixed order an export takes the sheet's
+    and its netlist's in, so the two guards cannot deadlock each other.
+    """
+    if not any(isinstance(op, OpSetPlotPanes) for op in ops):
+        yield
+        return
+    async with circuit_file_lock(plot_settings_path(target)):
+        yield
+
+
 def _build_editor(target: Path, use_template: bool, state: SessionState) -> AscEditor:
     """Return the editor to mutate: a fresh blank-template one, or the cached target."""
     if not use_template:
@@ -914,21 +1008,33 @@ def _build_editor(target: Path, use_template: bool, state: SessionState) -> AscE
 
 def _apply_ops(
     editor, ops, target: Path, dry_run: bool
-) -> tuple[list[dict], list[dict], str | None]:
-    """Apply every op in order. Returns (results, failures, abort_reason).
+) -> tuple[list[dict], list[dict], str | None, SheetPlotSettings | None]:
+    """Apply every op in order. Returns (results, failures, abort_reason, plot).
 
     Delegates the loop to the shared ``run_op_batch`` runner (abort-on-first-
     failure unless ``dry_run``), then splits its unified entries into this
     surface's separate success/failure lists. Identical advisories across the
     batch are collapsed on the way out — see ``_op_warnings``.
+
+    ``plot`` is the plot settings file beside the sheet as the batch left it,
+    read only when the batch sets plot panes; a file that cannot be read fails
+    the first op that would write it.
     """
-    entries, abort_reason = run_op_batch(editor, ops, target, stop_on_error=not dry_run)
+    plot = None
+    first = next((i for i, op in enumerate(ops) if isinstance(op, OpSetPlotPanes)), None)
+    if first is not None:
+        try:
+            plot = SheetPlotSettings.read(target)
+        except NetlistError as exc:
+            failure = {"index": first, "op": "set_plot_panes", "error": str(exc)}
+            return [], [failure], f"op #{first} (set_plot_panes) failed: {exc}", None
+    entries, abort_reason = run_op_batch(editor, ops, target, stop_on_error=not dry_run, plot=plot)
     collapse_result_warnings(entries)
     results = [e for e in entries if e["ok"]]
     failures = [
         {"index": e["index"], "op": e["op"], "error": e["error"]} for e in entries if not e["ok"]
     ]
-    return results, failures, abort_reason
+    return results, failures, abort_reason, plot
 
 
 def _op_results(results: list[dict]) -> list[dict]:
@@ -1109,7 +1215,7 @@ async def _evaluate_edit_schematic(
             entry["error"] = error
         stages.append(entry)
 
-    async with edit_guard(target):
+    async with edit_guard(target), _plot_settings_guard(target, args.ops):
         # --- revision guard (inside the guard so a peer's committed write is seen)
         exists = target.exists()
         expected = args.expected_sha256.lower() if args.expected_sha256 else None
@@ -1219,7 +1325,7 @@ async def _evaluate_edit_schematic(
                 before = ([], [])
             elif args.ops:
                 before = _sheet_report(editor)
-            results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run)
+            results, failures, abort_reason, plot = _apply_ops(editor, args.ops, target, dry_run)
 
             # --- op failure → transactional abort (nothing written)
             if abort_reason is not None:
@@ -1331,11 +1437,11 @@ async def _evaluate_edit_schematic(
             # The whole write path runs off the loop as one shielded unit so a
             # transport cancel can't abandon a half-commit while the guard releases.
             outcome = await asyncio.shield(
-                asyncio.to_thread(_commit_asc, committed_text, target, build_id, encoding)
+                asyncio.to_thread(_commit_asc, committed_text, target, build_id, encoding, plot)
             )
             if not outcome.staged:
                 state.editors.invalidate(target)
-                _failed("stage_asc", outcome.error)
+                _failed(outcome.stage or "stage_asc", outcome.error)
                 return _commit_failure_response(
                     args,
                     target,

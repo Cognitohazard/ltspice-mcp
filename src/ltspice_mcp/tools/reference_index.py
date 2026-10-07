@@ -2,7 +2,7 @@
 own arguments.
 
 Each tool hides a vocabulary behind a discriminator: ``analyze_results`` has
-twenty-one recipe metrics, ``edit_schematic`` eleven ops, ``run_experiments``
+twenty-one recipe metrics, ``edit_schematic`` twelve ops, ``run_experiments``
 its variation kinds and random rules, ``inspect`` its query kinds,
 ``verify_circuit`` its checks, ``jobs`` its actions. A host that searches tools
 sees only names and descriptions, so nothing there can lead it to "phase
@@ -422,6 +422,12 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
     ("edit_schematic", "remove_wire"): ("delete a wire", "disconnect"),
     ("edit_schematic", "add_directive"): (".tran", ".ac", "spice directive", "simulation command"),
     ("edit_schematic", "remove_directive"): ("delete a directive",),
+    ("edit_schematic", "set_plot_panes"): (
+        "plot settings",
+        ".plt",
+        "waveform panes",
+        "traces to plot",
+    ),
     ("jobs", "status"): ("is it done", "progress", "check a job"),
     ("jobs", "wait"): ("block until finished", "long poll"),
     ("jobs", "cancel"): ("stop a run", "kill"),

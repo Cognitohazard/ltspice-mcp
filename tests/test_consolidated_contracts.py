@@ -718,7 +718,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Results inventory, signal/table pages and log facts also
     # contribute to the merged schema bound.
     "inspect": 10550,
-    # The typed op union — eleven ops, each its own branch — plus the compare
+    # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
     # compare is verify_circuit's spec: the mode field rides along.
@@ -728,7 +728,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # for wire_pins' {x, y} endpoint, the one way to end a route on a wire's
     # interior (a T-junction), which from_pin names beside the SpiceOrder form.
     # Measured 12,038.
-    "edit_schematic": 12040,
+    # Raised by about 1,030 characters for set_plot_panes, the twelfth op: the
+    # waveform panes LTspice opens for the sheet, written to the .plt beside
+    # it. Most of it is the pane model's structure (a trace list and two scale
+    # enums); the descriptions are a line each. Measured 13,070.
+    "edit_schematic": 13080,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
