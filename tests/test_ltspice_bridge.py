@@ -312,6 +312,16 @@ class TestSession:
             assert session.replace_design_text("C:\\work\\a.asc", "Version 4.1\nWIRE 0 0 16 0\n")
             assert session.design_text("C:\\work\\a.asc") == "Version 4.1\nWIRE 0 0 16 0\n"
 
+    def test_text_with_a_nul_character_is_never_sent(self, world: Path):
+        """LTspice 26.1.1 stops answering for good when it is handed such text
+        (seen with a UTF-16 sheet read as an 8-bit one), and in a window that
+        takes every open document with it."""
+        with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+            session.attach(4242)
+            with pytest.raises(BridgeError, match="NUL character"):
+                session.replace_design_text("C:\\work\\a.asc", "Version 4" + chr(0) + ".1\n")
+            assert session.design_text("C:\\work\\a.asc") == "Version 4.1\n"
+
     def test_a_window_that_is_not_there_cannot_be_attached_to(self, world: Path):
         with (
             BridgeSession(fake_command(world), timeout=LIVENESS_S) as session,
