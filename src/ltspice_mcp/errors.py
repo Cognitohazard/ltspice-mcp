@@ -118,9 +118,9 @@ class SymbolResolutionError(NetlistError):
 
     Its own type because the discriminant is structural, not textual: the
     schematic itself opened, so the missing file is one of its dependencies —
-    a symbol (``.asy``), a hierarchical sub-sheet, or a model library. Asking
-    whether the underlying message mentioned ``.asy`` blamed the schematic for
-    every dependency the third-party editor named some other way.
+    a symbol (``.asy``) or a model library. Asking whether the underlying
+    message mentioned ``.asy`` blamed the schematic for every dependency the
+    third-party editor named some other way.
     """
 
     code = "symbol_unresolved"
