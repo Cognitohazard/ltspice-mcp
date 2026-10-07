@@ -16,6 +16,7 @@ name, and the raw dialect and the linter key on it.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -55,34 +56,30 @@ class LTspice(_SpicelibLTspice):
     def _launch(
         cls,
         desktop: hidden_desktop.HiddenDesktop,
-        command: list[str],
+        mode: list[str],
         subject: Path,
+        cmd_line_switches: list | str | None,
         *,
         timeout: float | None,
         cwd: str | Path | None,
         exe_log: bool,
     ) -> int:
-        program = Path(cls.spice_exe[-1]).name if cls.spice_exe else "LTspice"
-        if not exe_log:
-            return hidden_desktop.run(
-                command,
-                timeout=timeout,
-                cwd=cwd,
-                desktop=desktop,
-                program=program,
-                remedy=_SEE_THE_BOX,
+        """Start LTspice on ``subject`` in ``mode`` and return its exit code."""
+        command = [*cls.spice_exe, *mode, subject.as_posix(), *_switches(cmd_line_switches)]
+        with contextlib.ExitStack() as opened:
+            # The console log spicelib keeps beside the input. LTspice writes
+            # nothing to it; it is connected all the same, as spicelib connects it.
+            console = (
+                opened.enter_context(open(subject.with_suffix(".exe.log"), "wb"))
+                if exe_log
+                else None
             )
-        # The console log spicelib keeps beside the input. LTspice writes
-        # nothing to it; it is connected all the same, as spicelib connects it.
-        with open(subject.with_suffix(".exe.log"), "wb") as console:
-            return hidden_desktop.run(
+            return desktop.run(
                 command,
                 timeout=timeout,
                 cwd=cwd,
                 stdout=console,
                 stderr=subprocess.STDOUT,
-                desktop=desktop,
-                program=program,
                 remedy=_SEE_THE_BOX,
             )
 
@@ -108,9 +105,15 @@ class LTspice(_SpicelibLTspice):
             return super().run(
                 netlist_file, cmd_line_switches, timeout, stdout, stderr, cwd, exe_log
             )
-        deck = Path(netlist_file)
-        command = [*cls.spice_exe, "-Run", "-b", deck.as_posix(), *_switches(cmd_line_switches)]
-        return cls._launch(desktop, command, deck, timeout=timeout, cwd=cwd, exe_log=exe_log)
+        return cls._launch(
+            desktop,
+            ["-Run", "-b"],
+            Path(netlist_file),
+            cmd_line_switches,
+            timeout=timeout,
+            cwd=cwd,
+            exe_log=exe_log,
+        )
 
     @classmethod
     def create_netlist(
@@ -134,8 +137,15 @@ class LTspice(_SpicelibLTspice):
                 circuit_file, cmd_line_switches, timeout, stdout, stderr, cwd, exe_log
             )
         sheet = Path(circuit_file)
-        command = [*cls.spice_exe, "-netlist", sheet.as_posix(), *_switches(cmd_line_switches)]
-        code = cls._launch(desktop, command, sheet, timeout=timeout, cwd=cwd, exe_log=exe_log)
+        code = cls._launch(
+            desktop,
+            ["-netlist"],
+            sheet,
+            cmd_line_switches,
+            timeout=timeout,
+            cwd=cwd,
+            exe_log=exe_log,
+        )
         netlist = sheet.with_suffix(".net")
         if code == 0 and netlist.exists():
             return netlist

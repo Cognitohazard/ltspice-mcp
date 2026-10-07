@@ -7,6 +7,7 @@ module hands out no desktop, which the last test pins.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import subprocess
@@ -18,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.lib import hidden_desktop
-from ltspice_mcp.lib.hidden_desktop import DialogError, HiddenDesktop
+from ltspice_mcp.lib.hidden_desktop import BoxWatch, DialogError, HiddenDesktop
 from ltspice_mcp.lib.windows_job import python_launch
 from tests.conftest import identify, process_running, wait_until, written
 
@@ -34,47 +35,12 @@ def _no_desktop_here() -> str | None:
 
 
 # Where the launch falls back to the ordinary one, there is nothing to test.
-windows_only = pytest.mark.skipif(_no_desktop_here() is not None, reason=_no_desktop_here() or "")
-
-# A program that says where it is running, then does what its first argument
-# names: report and exit 7, wait to be ended, or put up a message box.
-PROBE = textwrap.dedent(
-    """
-    import ctypes, json, os, sys, threading
-    from ctypes import wintypes
-
-    user = ctypes.WinDLL("user32")
-    kernel = ctypes.WinDLL("kernel32")
-    user.GetThreadDesktop.restype = wintypes.HANDLE
-    user.GetThreadDesktop.argtypes = [wintypes.DWORD]
-    user.GetUserObjectInformationW.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
-    ]
-    name = ctypes.create_unicode_buffer(256)
-    desktop = user.GetThreadDesktop(kernel.GetCurrentThreadId())
-    user.GetUserObjectInformationW(desktop, 2, name, ctypes.sizeof(name), None)
-    mode, report = sys.argv[1], sys.argv[2]
-    facts = {
-        "desktop": name.value,
-        "cwd": os.getcwd(),
-        "probe": os.environ.get("HIDDEN_DESKTOP_PROBE"),
-        "pid": os.getpid(),
-    }
-    with open(report, "w", encoding="utf-8") as out:
-        json.dump(facts, out)
-    if mode == "report":
-        print("to stdout")
-        print("to stderr", file=sys.stderr)
-        sys.exit(7)
-    if mode == "ask":
-        user.MessageBoxW(None, "Aborting: Unknown schematic syntax", "probe", 0)
-    threading.Event().wait()
-    """
-)
+_NO_DESKTOP = _no_desktop_here()
+windows_only = pytest.mark.skipif(_NO_DESKTOP is not None, reason=_NO_DESKTOP or "")
 
 
 def own_desktop() -> str:
-    """The name of the desktop this test runs on."""
+    """The name of the desktop the calling thread is on."""
     assert sys.platform == "win32"
     import ctypes
     from ctypes import wintypes
@@ -96,10 +62,39 @@ def own_desktop() -> str:
     return name.value
 
 
+#: The start of a program that has to say which desktop it runs on: the
+#: function above, as the test itself calls it.
+OWN_DESKTOP_SOURCE = "import sys\n\n\n" + inspect.getsource(own_desktop)
+
+# A program that says where it is running, then does what its first argument
+# names: report and exit 7, wait to be ended, or put up a message box.
+PROBE = OWN_DESKTOP_SOURCE + textwrap.dedent(
+    """
+    import ctypes, json, os, threading
+
+    mode, report = sys.argv[1], sys.argv[2]
+    facts = {
+        "desktop": own_desktop(),
+        "cwd": os.getcwd(),
+        "probe": os.environ.get("HIDDEN_DESKTOP_PROBE"),
+        "pid": os.getpid(),
+    }
+    with open(report, "w", encoding="utf-8") as out:
+        json.dump(facts, out)
+    if mode == "report":
+        print("to stdout")
+        print("to stderr", file=sys.stderr)
+        sys.exit(7)
+    if mode == "ask":
+        ctypes.WinDLL("user32").MessageBoxW(None, "Aborting: Unknown schematic syntax", "probe", 0)
+    threading.Event().wait()
+    """
+)
+
+
 @pytest.fixture
 def desktop() -> Iterator[HiddenDesktop]:
     with HiddenDesktop(f"ltspice-mcp-test-{os.getpid()}") as made:
-        assert made.available
         yield made
 
 
@@ -129,9 +124,7 @@ class TestStart:
     def test_a_program_runs_on_the_hidden_desktop_and_not_on_the_callers(
         self, desktop: HiddenDesktop, probe, tmp_path: Path
     ):
-        code = hidden_desktop.run(
-            probe("report"), cwd=tmp_path, env=environment(), desktop=desktop
-        )
+        code = desktop.run(probe("report"), cwd=tmp_path, env=environment())
         facts = json.loads(probe.report.read_text(encoding="utf-8"))
         assert code == 7
         assert facts["desktop"] == desktop.name
@@ -142,12 +135,7 @@ class TestStart:
     ):
         folder = tmp_path / "模型 Zoë"
         folder.mkdir()
-        hidden_desktop.run(
-            probe("report"),
-            cwd=folder,
-            env=environment(HIDDEN_DESKTOP_PROBE="值 ë"),
-            desktop=desktop,
-        )
+        desktop.run(probe("report"), cwd=folder, env=environment(HIDDEN_DESKTOP_PROBE="值 ë"))
         facts = json.loads(probe.report.read_text(encoding="utf-8"))
         assert Path(facts["cwd"]) == folder
         assert facts["probe"] == "值 ë"
@@ -157,20 +145,14 @@ class TestStart:
     ):
         both = tmp_path / "both.log"
         with open(both, "wb") as console:
-            hidden_desktop.run(
-                probe("report"),
-                env=environment(),
-                stdout=console,
-                stderr=subprocess.STDOUT,
-                desktop=desktop,
+            desktop.run(
+                probe("report"), env=environment(), stdout=console, stderr=subprocess.STDOUT
             )
         # Either order: Python flushes its buffered stdout at exit, after stderr.
         assert sorted(both.read_bytes().splitlines()) == [b"to stderr", b"to stdout"]
         out, err = tmp_path / "out.log", tmp_path / "err.log"
         with open(out, "wb") as to_out, open(err, "wb") as to_err:
-            hidden_desktop.run(
-                probe("report"), env=environment(), stdout=to_out, stderr=to_err, desktop=desktop
-            )
+            desktop.run(probe("report"), env=environment(), stdout=to_out, stderr=to_err)
         assert out.read_bytes().strip() == b"to stdout"
         assert err.read_bytes().strip() == b"to stderr"
 
@@ -198,7 +180,7 @@ class TestStart:
     def test_past_its_timeout_the_program_is_ended(self, desktop: HiddenDesktop, probe):
         with pytest.raises(subprocess.TimeoutExpired):
             # timing: the bound is the behaviour under test; the probe never exits
-            hidden_desktop.run(probe("wait"), timeout=1.0, env=environment(), desktop=desktop)
+            desktop.run(probe("wait"), timeout=1.0, env=environment())
         pid = json.loads(probe.report.read_text(encoding="utf-8"))["pid"]
         wait_until(lambda: not process_running(pid), what="the probe to be gone")
 
@@ -211,16 +193,18 @@ class TestStart:
         started.close()
         wait_until(lambda: not running.is_running(), what="the probe to be gone")
 
+    @pytest.mark.usefixtures("quick_looks")
     def test_a_program_waiting_on_a_message_box_is_ended_with_what_it_said(
         self, desktop: HiddenDesktop, probe
     ):
+        command = probe("ask")
         with pytest.raises(DialogError) as stopped:
-            hidden_desktop.run(
-                probe("ask"), env=environment(), desktop=desktop, program="LTspice.exe"
-            )
+            desktop.run(command, env=environment(), remedy="Look for yourself")
         assert stopped.value.text == "probe\nAborting: Unknown schematic syntax"
-        assert "LTspice.exe stopped on a message box" in str(stopped.value)
-        assert "probe; Aborting: Unknown schematic syntax" in str(stopped.value)
+        assert str(stopped.value).startswith(f"{Path(command[0]).name} stopped on a message box")
+        assert str(stopped.value).endswith(
+            "probe; Aborting: Unknown schematic syntax. Look for yourself"
+        )
         pid = json.loads(probe.report.read_text(encoding="utf-8"))["pid"]
         wait_until(lambda: not process_running(pid), what="the probe to be gone")
 
@@ -228,23 +212,44 @@ class TestStart:
         with pytest.raises(FileNotFoundError):
             desktop.start([str(tmp_path / "no-such-program.exe")])
 
-    def test_a_closed_desktop_starts_nothing(self, probe):
-        desktop = HiddenDesktop(f"ltspice-mcp-test-closed-{os.getpid()}")
+    def test_a_closed_desktop_starts_nothing(self, desktop: HiddenDesktop, probe):
         desktop.close()
         assert not desktop.available
         with pytest.raises(OSError, match="No desktop to start a program on"):
             desktop.start(probe("report"))
 
 
+class TestBoxWatch:
+    """A box counts once the same one has been there on two looks running."""
+
+    class Desktop:
+        """What a desktop says a program's message box reads, one look at a time."""
+
+        def __init__(self, *looks: str | None) -> None:
+            self._looks = iter(looks)
+
+        def dialog(self, _pid: int) -> str | None:
+            return next(self._looks)
+
+    def watch(self, *looks: str | None) -> list[str | None]:
+        boxes = BoxWatch(self.Desktop(*looks), 1)  # type: ignore[arg-type]
+        return [boxes.look() for _ in looks]
+
+    def test_a_box_seen_once_is_not_yet_a_question(self):
+        assert self.watch(None, "Save?") == [None, None]
+
+    def test_the_same_box_on_the_next_look_is(self):
+        assert self.watch("Save?", "Save?") == [None, "Save?"]
+
+    def test_a_box_that_closed_by_itself_never_counts(self):
+        assert self.watch("Loading", None, "Loading", None) == [None, None, None, None]
+
+    def test_another_box_starts_the_count_again(self):
+        assert self.watch("Save?", "Sure?", "Sure?") == [None, None, "Sure?"]
+
+
 @windows_only
 class TestSharedDesktop:
-    @pytest.fixture(autouse=True)
-    def _own_shared_desktop(self) -> Iterator[None]:
-        hidden_desktop.close_shared()
-        yield
-        hidden_desktop.configure(enabled=True)
-        hidden_desktop.close_shared()
-
     def test_one_desktop_is_made_on_first_use_and_kept(self):
         first = hidden_desktop.shared()
         assert first is not None
@@ -267,12 +272,6 @@ class TestSharedDesktop:
         hidden_desktop.configure(enabled=True)
         assert hidden_desktop.shared() is not None
 
-    def test_run_uses_the_shared_desktop_when_none_is_named(self, probe):
-        code = hidden_desktop.run(probe("report"), env=environment())
-        facts = json.loads(probe.report.read_text(encoding="utf-8"))
-        assert code == 7
-        assert facts["desktop"] == f"ltspice-mcp-{os.getpid()}"
-
 
 @pytest.mark.skipif(sys.platform == "win32", reason="what the module does where there is none")
 def test_off_windows_there_is_no_desktop_to_start_on():
@@ -280,7 +279,6 @@ def test_off_windows_there_is_no_desktop_to_start_on():
     desktop = HiddenDesktop("ltspice-mcp-test")
     assert not desktop.available
     assert desktop.dialog(os.getpid()) is None
+    assert desktop.window_owners() == set()
     with pytest.raises(OSError, match="No desktop to start a program on"):
-        desktop.start([sys.executable, "-c", "pass"])
-    with pytest.raises(OSError, match="No hidden desktop to run a program on"):
-        hidden_desktop.run([sys.executable, "-c", "pass"])
+        desktop.run([sys.executable, "-c", "pass"])

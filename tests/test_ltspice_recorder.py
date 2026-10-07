@@ -18,13 +18,13 @@ Three layers, all in this module because they share one object: the tree under
 from __future__ import annotations
 
 import codecs
-import os
 import re
 from pathlib import Path
 
 import pytest
 
 from tests import ltspice_recorder as recorder
+from tests._ltspice_recorded import installed_counterpart
 from tests.ltspice_recorder import (
     BEHAVIOUR_KEYS,
     FIXTURES,
@@ -417,32 +417,6 @@ def test_both_generations_are_recorded():
 GROUPS = sorted({case.case_id.split("/", 1)[0] for case in CASES.cases})
 
 
-def _installed_counterpart(label: str) -> recorder.Build | str:
-    """The installed build to hold against the recording ``label``, or why there is none.
-
-    The same major version when it is installed. Otherwise a newer build of
-    the same generation stands in for the newest recording of that generation,
-    which is how a new release gets compared with the last one recorded.
-    """
-    if os.environ.get("LTSPICE_MCP_RUN_LTSPICE_INTEGRATION") != "1":
-        return "LTspice integration tests are opt-in; set LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1"
-    installed = recorder.discover_builds()
-    for build in installed:
-        if build.label == label:
-            return recorder.unavailable_reason(build) or build
-    generation = load_manifest(FIXTURES / label)["generation"]
-    newest = max(
-        (other for other in BUILDS if load_manifest(FIXTURES / other)["generation"] == generation),
-        key=lambda other: int(other.removeprefix("ltspice")),
-    )
-    if label == newest:
-        for build in installed:
-            newer = int(build.label.removeprefix("ltspice")) > int(label.removeprefix("ltspice"))
-            if build.generation == generation and newer:
-                return recorder.unavailable_reason(build) or build
-    return f"no LTspice build to compare with the {label} recording is installed here"
-
-
 @pytest.mark.parametrize("group", GROUPS)
 @pytest.mark.parametrize("label", BUILDS)
 def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tmp_path: Path):
@@ -452,7 +426,7 @@ def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tm
     if the server depended on the old behaviour, then record again with
     ``scripts/record_ltspice_fixtures.py``.
     """
-    build = _installed_counterpart(label)
+    build = installed_counterpart(label)
     if isinstance(build, str):
         pytest.skip(build)
     only = [f"{group}/*"]

@@ -35,7 +35,7 @@ against a committed one; the opt-in LTspice tier calls it, so a release that
 changes behaviour fails there by name.
 
 The recorder drives LTspice natively and is Windows-only. It starts each run
-on a desktop of its own (``HiddenDesktop``), because LTspice otherwise takes
+on a desktop of its own (``recording_desktop``), because LTspice otherwise takes
 the keyboard focus for as long as a run lasts. Everything that reads a
 recording (``load_manifest``, ``recorded``, ``compare``) works anywhere.
 """
@@ -62,8 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import hidden_desktop
-from ltspice_mcp.lib.hidden_desktop import StartedProcess
+from ltspice_mcp.lib.hidden_desktop import BoxWatch, HiddenDesktop, StartedProcess
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_recorded"
 INPUTS = FIXTURES / "inputs"
@@ -686,7 +685,7 @@ def assert_private(
 # --------------------------------------------------------------------------
 
 
-class HiddenDesktop(hidden_desktop.HiddenDesktop):
+def recording_desktop() -> HiddenDesktop:
     """A desktop of its own for LTspice to open its window on.
 
     The launch is the server's (``lib/hidden_desktop.py``, which has the
@@ -697,25 +696,13 @@ class HiddenDesktop(hidden_desktop.HiddenDesktop):
     It also keeps a person out of the recording. LTspice answers some inputs
     with a message box and waits for OK; on the desktop someone is working at,
     a stray key press answers it, and the run then looks as if it had ended by
-    itself. Here nobody can, so ``dialog`` reads what the box says and the case
-    records that the build stopped to ask.
+    itself. Here nobody can, so the box is read and the case records that the
+    build stopped to ask.
 
-    Where a desktop cannot be made, ``launch`` starts the ordinary way and
-    ``dialog`` sees nothing.
+    Where a desktop cannot be made, a case is launched the ordinary way and
+    no box is seen.
     """
-
-    def __init__(self) -> None:
-        super().__init__(f"ltspice-recorder-{os.getpid()}")
-
-    def launch(
-        self, command: Sequence[str], cwd: Path
-    ) -> StartedProcess | subprocess.Popen[bytes]:
-        """Start ``command`` in ``cwd``, on this desktop where there is one."""
-        if not self.available:
-            return subprocess.Popen(
-                list(command), cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        return self.start(command, cwd=cwd)
+    return HiddenDesktop(f"ltspice-recorder-{os.getpid()}")
 
 
 # --------------------------------------------------------------------------
@@ -785,7 +772,7 @@ def _wait(
     stopped at ``timeout``.
     """
     started = time.monotonic()
-    asked: str | None = None
+    boxes = BoxWatch(desktop, process.pid)
     while True:
         try:
             # timing: looks between waits at a file LTspice is writing and at the
@@ -806,9 +793,8 @@ def _wait(
             waited = case.kill_after_s is not None and elapsed >= case.kill_after_s
             stop = grown or waited
         else:
-            dialog = desktop.dialog(process.pid)
-            stop = dialog is not None and dialog == asked
-            asked = dialog
+            dialog = boxes.look()
+            stop = dialog is not None
         if stop or elapsed >= timeout:
             process.kill()
             process.wait()
@@ -825,12 +811,15 @@ def _launch(
     timeout: float,
 ) -> _Ended:
     """Run ``command`` to its end or to the point the recorder stops it."""
-    process = desktop.launch(command, work)
-    try:
+    started = (
+        desktop.start(command, cwd=work)
+        if desktop.available
+        else subprocess.Popen(
+            list(command), cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    )
+    with started as process:
         return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
-    finally:
-        if isinstance(process, StartedProcess):
-            process.close()
 
 
 def run_case(
@@ -844,7 +833,7 @@ def run_case(
 ) -> CaseResult:
     """Run ``case`` on ``build`` in a fresh directory and return what it wrote."""
     if desktop is None:
-        with HiddenDesktop() as own:
+        with recording_desktop() as own:
             return run_case(build, case, inputs, work_root, timeout=timeout, desktop=own)
     settings = build.settings_file
     if settings is None:
@@ -1072,7 +1061,7 @@ def record_build(
     defaults: dict[str, str] = {}
     if only and (directory / MANIFEST).is_file():
         defaults = dict(load_manifest(directory).get("settings", {}).get("defaults", {}))
-    desktop = HiddenDesktop()
+    desktop = recording_desktop()
     try:
         forbidden = private_strings([str(root)])
         for case in selected:

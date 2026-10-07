@@ -528,7 +528,6 @@ class _WindowWatch:
         self._known: dict[int, bool] = {}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._watch, name="window-watch")
-        self.seen: set[int] = set()
         self.here = self.foreground = self.hidden = False
 
     def __enter__(self) -> "_WindowWatch":
@@ -579,7 +578,6 @@ class _WindowWatch:
             ours_hidden = {
                 pid for pid in (desktop.window_owners() if desktop else ()) if self._ours(pid)
             }
-            self.seen |= ours_here | ours_hidden
             self.here = self.here or bool(ours_here)
             self.hidden = self.hidden or bool(ours_hidden)
             front = owner(user.GetForegroundWindow())
@@ -597,7 +595,7 @@ class TestWindowStaysOffTheDesktop:
     no window where the person is, so it cannot."""
 
     def _assert_kept_away(self, watch: _WindowWatch) -> None:
-        assert watch.seen, "the watch never saw an LTspice window: it proves nothing"
+        assert watch.here or watch.hidden, "the watch saw no LTspice window: it proves nothing"
         assert watch.hidden, "LTspice had no window on the server's desktop"
         assert not watch.here, "LTspice had a window on the desktop the test runs on"
         assert not watch.foreground, "LTspice was the foreground window"
@@ -644,22 +642,19 @@ class TestMessageBoxWhereNobodyCanAnswer:
         """LTspice XVII answers a sheet that starts with a byte order mark with
         a box and waits for OK, which is recorded as ``export/micro_utf8_bom``.
         The export raises what that box said, as it was recorded."""
-        from tests import ltspice_recorder as recorder
+        from tests import _ltspice_recorded as recorded
 
-        xvii = next(
-            (build for build in recorder.discover_builds() if build.generation == "xvii"), None
-        )
-        if xvii is None:
-            pytest.skip("LTspice XVII is not installed here")
-        case = recorder.load_manifest(recorder.FIXTURES / "ltspice17")["cases"][
-            "export/micro_utf8_bom"
-        ]
-        sheet = work_dir / "micro_utf8_bom.asc"
-        shutil.copy2(recorder.INPUTS / "export" / "micro_utf8_bom.asc", sheet)
+        case_id = "export/micro_utf8_bom"
+        xvii = recorded.installed_counterpart("ltspice17")
+        if isinstance(xvii, str):
+            pytest.skip(xvii)
+        source = recorded.CASES.case(case_id).source
+        sheet = work_dir / Path(source).name
+        shutil.copy2(recorded.INPUTS / source, sheet)
         simulator = bind_named_executable(SIMULATORS["ltspice"], "ltspice:xvii", xvii.exe)
 
         with pytest.raises(DialogError) as stopped:
             await asyncio.to_thread(simulator.create_netlist, sheet, timeout=120)
 
-        assert stopped.value.text == case["dialog"]
+        assert stopped.value.text == recorded.entry("ltspice17", case_id)["dialog"]
         assert not sheet.with_suffix(".net").exists()
