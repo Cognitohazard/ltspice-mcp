@@ -29,6 +29,7 @@ from ltspice_mcp.lib.schematic_ops import (
     make_editor,
     net_partition,
     same_instance_dropped_segments,
+    trace_nets,
     wire_segments_of,
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, layout_issues
@@ -37,8 +38,10 @@ from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import apply_ops, sha_of
 from tests.conftest import FIXTURES_DIR
 from tests.ltspice_recorder import INPUTS
+from tests.test_verify_circuit import _run as run_verify_circuit
 
 ORIENTATION = rec.cases_of("symbol-orientation") + rec.cases_of("stock-symbol-orientation")
 CONNECTIVITY = rec.cases_of("wire-connectivity") + rec.cases_of("net-naming")
@@ -285,33 +288,21 @@ def test_a_bus_label_is_its_first_member_to_ltspice_and_a_name_to_the_server(
 
     editor = make_editor(sheet)
     assert isinstance(editor, AscEditor)
-    part = net_partition(editor)
-    node_of = label_folded_nets(part)
-    (r1,) = [row for row in collect_component_geometry(editor) if row["ref"] == "R1"]
-    (on_the_bus,) = [(pin["x"], pin["y"]) for pin in r1["pins"] if pin["order"] == 1]
-    names = {
-        text
-        for coordinate, texts in part.label_texts.items()
-        if node_of(coordinate) == node_of(on_the_bus)
-        for text in texts
-    }
-    assert names == {"D[0:3]"}
+    assert trace_nets(editor)[placed_pins(sheet)["R1"][1]] == {"D[0:3]"}
 
 
 # --------------------------------------------------------------------------
 # What a sheet holds besides its circuit
 # --------------------------------------------------------------------------
 
-#: The sheets of ``sheet-records`` that both builds export.
-EXPORTED = ("data_flags", "bus_tap", "blank_line")
-
 #: Sheets both builds export and the schematic editor refuses to open, each
-#: with the line its refusal names and what it says of it. spicelib's reader
-#: has no branch for either line (``docs/spicelib_bugs.md``, Bug 26), so the
-#: editing tools and ``inspect`` cannot read a sheet LTspice reads.
+#: with the line the refusal is for, its number, and what the refusal says of
+#: it. spicelib's reader has no branch for either line
+#: (``docs/spicelib_bugs.md``, Bug 26), so the editing tools and ``inspect``
+#: cannot read a sheet LTspice reads.
 EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR = {
-    "bus_tap": (11, "is a BUSTAP record ('BUSTAP 256 96 256 112')"),
-    "blank_line": (5, "is empty"),
+    "bus_tap": ("BUSTAP 256 96 256 112", 11, "is a BUSTAP record ('BUSTAP 256 96 256 112')"),
+    "blank_line": ("", 5, "is empty"),
 }
 
 
@@ -322,18 +313,6 @@ def exported_bodies(build: str, case_id: str) -> list[str]:
         for card in rec.export_cards(build, case_id)
         if card.kind not in {"comment", "blank"}
     ]
-
-
-async def verified(sheet: Path, state) -> dict:
-    """``verify_circuit``'s quality check of ``sheet``, with no LTspice in the session."""
-    from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-
-    result = await handle_verify_circuit(
-        VerifyCircuitInput.model_validate({"path": str(sheet), "checks": ["quality"]}), state
-    )
-    data = result.structured_content
-    assert data is not None
-    return data
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -357,7 +336,7 @@ class TestSheetRecords:
             assert (entry["exit_code"], entry["stopped"]) == (0, False)
             assert "dialog" not in entry
 
-    @pytest.mark.parametrize("sheet", EXPORTED)
+    @pytest.mark.parametrize("sheet", ["data_flags", "bus_tap", "blank_line"])
     def test_both_builds_export_a_data_label_a_bus_tap_and_an_empty_line(
         self, build: str, sheet: str
     ):
@@ -397,34 +376,21 @@ class TestSheetRecords:
         with an unknown keyword does not), so an edit must hand them back. The
         sheet lists them after its net labels and ahead of its first symbol;
         the committed sheet is the same one but for the value that was set."""
-        import hashlib
-
-        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
-
-        assert rec.entry(build, "export/data_flags")["written"] == [".net"]
-        assert rec.entry(build, "export/unknown_record")["written"] == []
+        assert rec.has(build, "export/data_flags.net")
         sheet = rec.stage_sheet(build, "export/data_flags", work_dir)
         before = sheet.read_text(encoding="utf-8").splitlines()
         labels = [line for line in before if line.startswith("DATAFLAG")]
         assert labels == ['DATAFLAG 192 96 ""', 'DATAFLAG 240 96 "$*2"']
-        result = await handle_edit_schematic(
-            EditSchematicInput.model_validate(
-                {
-                    "target": str(sheet),
-                    "expected_sha256": hashlib.sha256(sheet.read_bytes()).hexdigest(),
-                    "ops": [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
-                }
-            ),
+        data = await apply_ops(
             state_no_sim,
+            sheet.name,
+            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
         )
-        data = result.structured_content
-        assert data is not None and data["commit_state"] == "committed"
-        written = sheet.read_bytes()
-        assert data["sha256"] == hashlib.sha256(written).hexdigest()
-        assert written.decode("utf-8").splitlines() == [
+        assert data["commit_state"] == "committed"
+        assert data["sha256"] == sha_of(sheet)
+        assert sheet.read_text(encoding="utf-8").splitlines() == [
             "SYMATTR Value 2k" if line == "SYMATTR Value 1k" else line for line in before
         ]
-        assert b"IOPIN 288 96 Out\n" in written
 
     @pytest.mark.parametrize("sheet", sorted(EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR))
     def test_the_editor_refuses_a_sheet_both_builds_export_and_names_the_line(
@@ -432,12 +398,10 @@ class TestSheetRecords:
     ):
         from ltspice_mcp.errors import NetlistError
 
-        assert rec.entry(build, f"export/{sheet}")["written"] == [".net"]
-        number, what = EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR[sheet]
+        assert rec.has(build, f"export/{sheet}.net")
+        line, number, what = EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR[sheet]
         staged = rec.stage_sheet(build, f"export/{sheet}", work_dir)
-        assert staged.read_text(encoding="utf-8").splitlines()[number - 1] == (
-            "" if sheet == "blank_line" else "BUSTAP 256 96 256 112"
-        )
+        assert staged.read_text(encoding="utf-8").splitlines()[number - 1] == line
         with pytest.raises(NetlistError) as caught:
             make_editor(staged)
         message = str(caught.value)
@@ -447,7 +411,7 @@ class TestSheetRecords:
         """Here the editor and both builds agree: the sheet is not read."""
         from ltspice_mcp.errors import NetlistError
 
-        assert rec.entry(build, "export/unknown_record")["written"] == []
+        assert not rec.has(build, "export/unknown_record.net")
         staged = rec.stage_sheet(build, "export/unknown_record", work_dir)
         with pytest.raises(NetlistError) as caught:
             make_editor(staged)
@@ -456,8 +420,9 @@ class TestSheetRecords:
     async def test_verify_reports_the_bus_taps_its_drawing_reads_past(
         self, build: str, state_no_sim, work_dir: Path
     ):
-        assert rec.entry(build, "export/bus_tap")["written"] == [".net"]
-        data = await verified(rec.stage_sheet(build, "export/bus_tap", work_dir), state_no_sim)
+        assert rec.has(build, "export/bus_tap.net")
+        staged = rec.stage_sheet(build, "export/bus_tap", work_dir)
+        data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
         (note,) = [o for o in data["observations"] if "BUSTAP" in o]
         assert note.startswith(
             "2 BUSTAP records, the first at line 11, which the drawing does not"
@@ -484,8 +449,9 @@ class TestSheetRecords:
         """A data label, a port's direction and an empty line have nothing for
         a check built on the drawing to miss: the export is the circuit without
         them."""
-        assert rec.entry(build, f"export/{sheet}")["written"] == [".net"]
-        data = await verified(rec.stage_sheet(build, f"export/{sheet}", work_dir), state_no_sim)
+        assert rec.has(build, f"export/{sheet}.net")
+        staged = rec.stage_sheet(build, f"export/{sheet}", work_dir)
+        data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
         assert [o for o in data["observations"] if "does not read" in o] == []
 
     async def test_verify_only_observes_a_keyword_that_stops_both_builds(
@@ -494,9 +460,9 @@ class TestSheetRecords:
         """Neither build exports this sheet. The drawing reads past the line
         as it reads past a bus tap and reports it the same way, as an
         observation: it does not know which keywords a build knows."""
-        assert rec.entry(build, "export/unknown_record")["written"] == []
+        assert not rec.has(build, "export/unknown_record.net")
         staged = rec.stage_sheet(build, "export/unknown_record", work_dir)
-        data = await verified(staged, state_no_sim)
+        data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
         (note,) = [o for o in data["observations"] if "NOSUCHRECORD" in o]
         assert note.startswith("line 5: a NOSUCHRECORD record, which the drawing does not read")
         assert [f for f in data["findings"] if f["severity"] == "error"] == []
@@ -952,8 +918,7 @@ def test_sheet_directives_reach_the_netlist_as_the_cards_staging_reads(build: st
     """Directive text is exported verbatim, a two-line directive as two cards
     and a sheet comment as a comment."""
     cards = rec.export_cards(build, "export/directives")
-    bodies = [card.body for card in cards if card.kind not in {"comment", "blank"}]
-    assert bodies == [
+    assert exported_bodies(build, "export/directives") == [
         "R1 a 0 {rval}",
         ".include models.lib",
         ".lib mylib.lib",

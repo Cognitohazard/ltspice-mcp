@@ -849,10 +849,10 @@ class _AscDoc:
 
 # The records an LTspice sheet holds that the drawing has nothing to take from:
 # the header, a port's direction (its label is the FLAG before it) and a data
-# label's expression, none of which reaches an exported netlist (recorded as
-# export/data_flags). Any other keyword it does not read is reported. A bus tap
-# is one: both LTspice builds read it and it connects nothing in the netlist
-# (export/bus_tap), so the checks miss no connection by it.
+# label's expression (recorded as export/data_flags: the export is the circuit
+# without them). Any other keyword it does not read is reported, a bus tap
+# among them: LTspice draws one and this drawing does not, though it connects
+# nothing in the netlist (export/bus_tap).
 _UNDRAWN_KEYWORDS = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
 
 _ROTATIONS = frozenset({"R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"})
