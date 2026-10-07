@@ -400,7 +400,7 @@ def test_on_a_hidden_desktop_the_launch_is_the_audited_one(
     assert checked == [True]
     ((command, options),) = desktop.calls
     assert command == ["LTspice.exe", "-Run", "-b", str(deck), "-ini", str(path)]
-    assert set(options) == {"timeout", "cwd", "env", "remedy"}
+    assert (options["stdout"], options["stderr"]) == (None, None)
     assert (options["timeout"], options["cwd"]) == (10, tmp_path)
     assert options["env"] == {**before, "APPDATA": str(path.parent)}
     assert "hidden_desktop = false" in options["remedy"]
