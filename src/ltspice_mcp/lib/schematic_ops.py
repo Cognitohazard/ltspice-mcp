@@ -13,7 +13,8 @@ What lives here:
 - ``SheetPlotSettings``, the plot settings file beside a sheet as one batch
   changes it: the one op that does not edit the sheet itself writes there;
 - ``edit_guard``, which serializes one file's mutation in-process and across
-  parallel server sessions, and the cached-editor accessors it wraps;
+  parallel server sessions (with the files beside it a batch writes,
+  ``files_written_beside``), and the cached-editor accessors it wraps;
 - the placement, routing and net-partition geometry (``placed_geometry``,
   ``resolve_pin``, ``plan_connect_route``, ``net_partition``, ``trace_nets``),
   which reads each symbol once per request through ``symbol_info_for``;
@@ -33,8 +34,8 @@ import math
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, NamedTuple
 from weakref import WeakKeyDictionary
@@ -75,16 +76,17 @@ from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
+    PlotAnalysis,
     PlotPane,
     PlotSettings,
-    check_trace,
-    encode_plot_settings,
+    XScale,
+    YScale,
     plot_settings_path,
     read_plot_settings,
-    render_plot_settings,
     scale_names,
     scales_of,
     with_panes,
+    write_plot_settings,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
@@ -207,7 +209,7 @@ def _get_edit_lock(path: Path) -> asyncio.Lock:
 
 
 @asynccontextmanager
-async def edit_guard(path: Path) -> AsyncIterator[None]:
+async def edit_guard(path: Path, *beside: Path) -> AsyncIterator[None]:
     """Serialize a mutation of one circuit file, in-process and cross-process.
 
     Layering: the per-path asyncio lock first (tasks in this session), then
@@ -216,8 +218,15 @@ async def edit_guard(path: Path) -> AsyncIterator[None]:
     unserialized concurrent edit is last-writer-wins; this guard plus the
     editor cache's stat-on-fetch — which must happen INSIDE the guard —
     turn that into edit-on-latest.
+
+    ``beside`` names the other files the same mutation writes
+    (``files_written_beside``). Their file locks are taken after the
+    circuit's own, the order a netlist export takes a sheet's and its
+    netlist's in, so no two guards wait on each other in a cycle.
     """
-    async with _get_edit_lock(path), circuit_file_lock(path):
+    async with _get_edit_lock(path), circuit_file_lock(path), AsyncExitStack() as stack:
+        for other in beside:
+            await stack.enter_async_context(circuit_file_lock(other))
         yield
 
 
@@ -2430,10 +2439,10 @@ class PlotPaneSpec(StrictModel):
         min_length=1,
         description="Expressions as typed in Add Traces, no spaces: 'V(out)', 'V(in)-V(out)'.",
     )
-    x_scale: Literal["linear", "log"] | None = Field(
+    x_scale: XScale | None = Field(
         default=None, description="Default: linear for tran, log for ac."
     )
-    y_scale: Literal["linear", "log", "db"] | None = Field(
+    y_scale: YScale | None = Field(
         default=None, description="Left Y axis. Default: linear for tran, db for ac."
     )
 
@@ -2442,7 +2451,7 @@ class OpSetPlotPanes(StrictModel):
     """Set one analysis's waveform panes in the .plt beside the sheet."""
 
     op: Literal["set_plot_panes"]
-    analysis: Literal["tran", "ac"]
+    analysis: PlotAnalysis
     panes: list[PlotPaneSpec] = Field(
         description="Top to bottom; replaces the analysis's panes, and [] removes them."
     )
@@ -2464,39 +2473,56 @@ SchematicOp = (
 )
 
 
+def files_written_beside(sheet: Path, ops: Sequence[object]) -> tuple[Path, ...]:
+    """The files other than ``sheet`` a batch of ``ops`` may write, for ``edit_guard``."""
+    if any(isinstance(op, OpSetPlotPanes) for op in ops):
+        return (plot_settings_path(sheet),)
+    return ()
+
+
 @dataclass
 class SheetPlotSettings:
     """The plot settings file beside a sheet, as one op batch changes it.
 
-    ``original`` is the file's bytes when the batch read it (None when there
-    was none), so a commit that fails after replacing the file can put them
-    back. ``settings`` starts as what the file held and takes each
-    ``set_plot_panes`` in turn.
+    Nothing is read until a ``set_plot_panes`` loads it, so a batch without one
+    neither reads nor writes the file. Once loaded, ``original`` is the file's
+    bytes (None when there was none), so a commit that fails after replacing
+    the file can put them back, and ``settings`` takes each ``set_plot_panes``
+    in turn.
     """
 
     path: Path
-    original: bytes | None
-    settings: PlotSettings
-    changed: bool = False
+    loaded: bool = False
+    original: bytes | None = None
+    settings: PlotSettings = field(default_factory=PlotSettings)
 
     @classmethod
-    def read(cls, sheet: Path) -> "SheetPlotSettings":
-        """The settings beside ``sheet``; call under the edit guard of both files."""
-        path = plot_settings_path(sheet)
+    def beside(cls, sheet: Path) -> "SheetPlotSettings":
+        return cls(path=plot_settings_path(sheet))
+
+    def load(self) -> None:
+        """Read the file, once; the batch holds the edit guard of both files."""
+        if self.loaded:
+            return
         try:
-            original: bytes | None = path.read_bytes()
+            original: bytes | None = self.path.read_bytes()
         except FileNotFoundError:
             original = None
         except OSError as exc:
-            raise NetlistError(f"cannot read {path.name}: {exc}") from exc
-        settings = PlotSettings() if original is None else read_plot_settings(original)
-        return cls(path=path, original=original, settings=settings)
+            raise NetlistError(f"cannot read {self.path.name}: {exc}") from exc
+        if original is not None:
+            self.settings = read_plot_settings(original)
+        self.original = original
+        self.loaded = True
 
     def contents(self) -> bytes | None:
         """The bytes to commit, or None when no section is left and the file goes."""
-        if not self.settings.sections:
-            return None
-        return encode_plot_settings(render_plot_settings(self.settings))
+        return write_plot_settings(self.settings) if self.settings.sections else None
+
+    @property
+    def changed(self) -> bool:
+        """Whether committing the batch rewrites or removes the file."""
+        return self.loaded and self.contents() != self.original
 
 
 def _resolve_op_xy(
@@ -2533,16 +2559,15 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     ``replaced_panes`` is in this op's own form, so passing it back as
     ``panes`` restores them.
     """
+    plot.load()
     panes = [
         PlotPane(
-            traces=tuple(check_trace(trace) for trace in spec.traces),
-            scales=scales_of(op.analysis, spec.x_scale, spec.y_scale),
+            traces=tuple(spec.traces), scales=scales_of(op.analysis, spec.x_scale, spec.y_scale)
         )
         for spec in op.panes
     ]
     before = plot.settings.section(SECTION_NAMES[op.analysis])
     plot.settings = with_panes(plot.settings, op.analysis, panes)
-    plot.changed = True
     replaced = [
         {"traces": list(pane.traces), **scale_names(pane.scales)}
         for pane in (before.panes if before is not None else ())

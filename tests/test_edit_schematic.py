@@ -745,7 +745,7 @@ async def test_views_are_bound_to_the_committed_bytes_not_a_later_file_revision(
 
     def commit_then_peer_revision(text, target, build_id, encoding, plot=None):
         outcome = original_commit(text, target, build_id, encoding, plot)
-        if outcome.renamed:
+        if outcome.failed_stage is None:
             target.write_text("Version 4.1\nSHEET 1 880 680\nTEXT 32 32 Left 2 ;peer revision\n")
         return outcome
 

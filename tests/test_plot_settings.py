@@ -10,6 +10,7 @@ writer produces today.
 from __future__ import annotations
 
 import codecs
+from typing import get_args
 
 import pytest
 
@@ -17,23 +18,31 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.plot_settings import (
     DEFAULT_SCALES,
     SECTION_NAMES,
+    PlotAnalysis,
     PlotPane,
     PlotSection,
     PlotSettings,
+    XScale,
+    YScale,
     check_trace,
     decode_plot_settings,
-    encode_plot_settings,
     parse_plot_settings,
     read_plot_settings,
     render_plot_settings,
     scale_names,
     scales_of,
     with_panes,
+    write_plot_settings,
 )
 from tests.ltspice_recorder import INPUTS
 
 
-def pane(*traces: str, analysis: str = "tran", x: str | None = None, y: str | None = None):
+def pane(
+    *traces: str,
+    analysis: PlotAnalysis = "tran",
+    x: XScale | None = None,
+    y: YScale | None = None,
+) -> PlotPane:
     return PlotPane(traces=traces, scales=scales_of(analysis, x, y))
 
 
@@ -43,18 +52,18 @@ def section_of(settings: PlotSettings, name: str) -> PlotSection:
     return found
 
 
-def written(*sections: tuple[str, list[PlotPane]]) -> bytes:
+def written(*sections: tuple[PlotAnalysis, list[PlotPane]]) -> bytes:
     settings = PlotSettings()
     for analysis, panes in sections:
         settings = with_panes(settings, analysis, panes)
-    return encode_plot_settings(render_plot_settings(settings))
+    return write_plot_settings(settings)
 
 
 TWO_PANES = [pane("V(out)"), pane("V(in)", "I(R1)")]
 
 #: What the server wrote for each file the recorder hands LTspice to read
 #: (``inputs/plot``, the plot-settings-read cases).
-SERVER_WRITTEN = {
+SERVER_WRITTEN: dict[str, list[tuple[PlotAnalysis, list[PlotPane]]]] = {
     "plot/two_panes.plt": [("tran", TWO_PANES)],
     "plot/math.plt": [("tran", [pane("V(in)-V(out)", "V(out)*I(R1)")])],
     "plot/log_y.plt": [("tran", [pane("V(out)", y="log")])],
@@ -127,8 +136,8 @@ class TestScales:
 
     def test_a_log_line_reads_back_as_the_scales_that_wrote_it(self):
         for analysis in SECTION_NAMES:
-            for x in ("linear", "log"):
-                for y in ("linear", "log", "db"):
+            for x in get_args(XScale):
+                for y in get_args(YScale):
                     assert scale_names(scales_of(analysis, x, y)) == {"x_scale": x, "y_scale": y}
 
     def test_a_pane_without_a_log_line_names_no_scale(self):
@@ -172,7 +181,8 @@ class TestTraces:
         "expression", ["V(out)", "V(in)-V(out)", "V(out)*I(R1)", "Ix(U1:OUT)", "V(µout)"]
     )
     def test_an_expression_is_written_as_given(self, expression: str):
-        assert check_trace(expression) == expression
+        text = written(("tran", [pane(expression)])).decode("utf-16-le")
+        assert f'{{0,0,"{expression}"}}' in text
 
     @pytest.mark.parametrize(
         "expression", ['V("out")', "V(out){1}", "V(a)\nV(b)", "V(a)\tV(b)", " "]
@@ -180,6 +190,8 @@ class TestTraces:
     def test_an_expression_a_file_cannot_carry_is_refused(self, expression: str):
         with pytest.raises(NetlistError):
             check_trace(expression)
+        with pytest.raises(NetlistError):
+            with_panes(PlotSettings(), "tran", [pane(expression)])
 
     def test_whitespace_is_refused_with_the_spelling_that_is_read_whole(self):
         with pytest.raises(NetlistError, match="'V\\(in\\)-V\\(out\\)'"):

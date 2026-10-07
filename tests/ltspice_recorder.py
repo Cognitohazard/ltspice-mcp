@@ -62,12 +62,19 @@ import sys
 import tempfile
 import time
 import tomllib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib.hidden_desktop import BoxWatch, HiddenDesktop, StartedProcess
+from ltspice_mcp.lib.hidden_desktop import (
+    BoxWatch,
+    HiddenDesktop,
+    StartedProcess,
+    child_windows,
+    window_class,
+    window_text,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_recorded"
 INPUTS = FIXTURES / "inputs"
@@ -330,9 +337,17 @@ class Case:
     steps: tuple[tuple[str, str], ...] = ()
 
     @property
-    def inputs(self) -> tuple[str, ...]:
-        """Every input file the case copies: its source, its extras, its plot settings."""
-        return (self.source, *self.extra, *((self.plot,) if self.plot else ()))
+    def copies(self) -> dict[str, str]:
+        """Each input file the case copies, and its name in the case's directory.
+
+        The source takes the case's name and a plot settings file the deck's,
+        which is the file the waveform window reads; an extra keeps its own.
+        """
+        copies = {self.source: self.work_name}
+        copies.update((name, Path(name).name) for name in self.extra)
+        if self.plot:
+            copies[self.plot] = f"{self.stem}.plt"
+        return copies
 
     @property
     def stem(self) -> str:
@@ -443,7 +458,7 @@ def load_cases(inputs: Path = INPUTS) -> CaseFile:
             raise RecorderError(f"{case.case_id}: only a plot case has plot settings or steps")
         if case.kind == "plot" and not (case.plot or case.steps):
             raise RecorderError(f"{case.case_id}: a plot case reads plot settings or makes them")
-        for name in case.inputs:
+        for name in case.copies:
             if not (inputs / name).is_file():
                 raise RecorderError(f"{case.case_id}: missing input {name}")
     return CaseFile(behaviours=behaviours, cases=tuple(cases))
@@ -732,11 +747,11 @@ def recording_desktop() -> HiddenDesktop:
     build stopped to ask.
 
     Where a desktop cannot be made, a case is launched the ordinary way and
-    no box is seen. Under Wine one is made, but the windows on it cannot be
-    listed, so neither a box nor the waveform window a plot case drives could
-    be found there; the recorder launches the ordinary way instead, on the
-    display Wine draws to, where a run case sees no box but a plot case,
-    which lists its process's own windows, does.
+    its boxes are looked for among the windows of the desktop the recorder
+    runs on (``HiddenDesktop.windows``). Under Wine one is made, but the
+    windows on it cannot be listed, so neither a box nor the waveform window a
+    plot case drives could be found there; the recorder launches the ordinary
+    way instead, on the display Wine draws to, where both are.
     """
     desktop = HiddenDesktop(f"ltspice-recorder-{os.getpid()}")
     if recording_host() is not None:
@@ -859,6 +874,7 @@ def menu_label(text: str) -> str:
     return text.split("\t", 1)[0].replace("&", "").rstrip(".").strip()
 
 
+@functools.cache
 def waveform_commands(exe: Path) -> dict[str, int]:
     """The command each waveform-window menu item sends, by ``menu_label``.
 
@@ -882,22 +898,13 @@ def waveform_commands(exe: Path) -> dict[str, int]:
 
 @functools.cache
 def _user32() -> Any:
-    """The user32 calls a plot case makes."""
+    """The user32 calls a plot case makes besides the ones ``hidden_desktop`` makes."""
     if sys.platform != "win32":
         raise RecorderError("a plot case drives LTspice's window, which needs Windows")
     from ctypes import wintypes
 
     user = ctypes.WinDLL("user32", use_last_error=True)
-    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     signatures: dict[str, tuple[list[Any], Any]] = {
-        "EnumWindows": ([callback, wintypes.LPARAM], wintypes.BOOL),
-        "EnumChildWindows": ([wintypes.HWND, callback, wintypes.LPARAM], wintypes.BOOL),
-        "GetWindowTextW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
-        "GetClassNameW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
-        "GetWindowThreadProcessId": (
-            [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)],
-            wintypes.DWORD,
-        ),
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
         "IsWindow": ([wintypes.HWND], wintypes.BOOL),
         "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
@@ -922,27 +929,7 @@ def _user32() -> Any:
         function = getattr(user, name)
         function.argtypes = arguments
         function.restype = result
-    user.callback = callback
     return user
-
-
-def _text(window: int) -> str:
-    buffer = ctypes.create_unicode_buffer(2048)
-    _user32().GetWindowTextW(window, buffer, len(buffer))
-    return buffer.value
-
-
-def _class(window: int) -> str:
-    buffer = ctypes.create_unicode_buffer(256)
-    _user32().GetClassNameW(window, buffer, len(buffer))
-    return buffer.value
-
-
-def _children(window: int) -> list[int]:
-    found: list[int] = []
-    user = _user32()
-    user.EnumChildWindows(window, user.callback(lambda child, _: found.append(child) or True), 0)
-    return found
 
 
 def _send(window: int, message: int, wparam: int, lparam: int) -> None:
@@ -957,6 +944,10 @@ def _send(window: int, message: int, wparam: int, lparam: int) -> None:
         window, message, wparam, lparam, abort_if_hung, 5000, ctypes.byref(result)
     ):
         raise RecorderError(f"LTspice's window did not answer message {message:#06x}")
+
+
+def _closed(window: int) -> bool:
+    return not _user32().IsWindow(window)
 
 
 def _top(window: int) -> int:
@@ -974,66 +965,41 @@ class _WaveformWindow:
         self.desktop = desktop
         self.pid = pid
         self.raw_title = f"{stem}.raw".casefold()
-        self._last_box: str | None = None
 
     def top_level(self) -> list[int]:
-        user = _user32()
-        if self.desktop.available:
-            found = self.desktop.windows(self.pid)
-        else:
-            from ctypes import wintypes
-
-            found = []
-
-            def note(window: int, _unused: int) -> bool:
-                owner = wintypes.DWORD(0)
-                user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-                if owner.value == self.pid:
-                    found.append(window)
-                return True
-
-            user.EnumWindows(user.callback(note), 0)
-        return [window for window in found if user.IsWindowVisible(window)]
+        visible = _user32().IsWindowVisible
+        return [window for window in self.desktop.windows(self.pid) if visible(window)]
 
     def frame(self) -> int | None:
         return next(
             (
                 w
                 for w in self.top_level()
-                if _class(w).startswith("Afx:") and _text(w).startswith("LTspice")
+                if window_class(w).startswith("Afx:") and window_text(w).startswith("LTspice")
             ),
             None,
         )
 
     def waveform(self, frame: int) -> tuple[int, int] | None:
         """The waveform window of the case's raw file, and the MDI client it is in."""
-        for child in _children(frame):
-            if _text(child).casefold() == self.raw_title and _class(child).startswith("Afx:"):
-                return child, next(
-                    (c for c in _children(frame) if _class(c) == "MDIClient"), frame
-                )
+        children = child_windows(frame)
+        for child in children:
+            if window_text(child).casefold() == self.raw_title and window_class(child).startswith(
+                "Afx:"
+            ):
+                client = next((c for c in children if window_class(c) == "MDIClient"), frame)
+                return child, client
         return None
 
     def dialog(self, title: str) -> int | None:
         return next(
-            (w for w in self.top_level() if _class(w) == "#32770" and _text(w) == title), None
+            (
+                w
+                for w in self.top_level()
+                if window_class(w) == "#32770" and window_text(w) == title
+            ),
+            None,
         )
-
-    def stray_box(self, expected: str | None = None) -> str | None:
-        """What a dialog the case did not open says, once it is there on two looks running."""
-        seen = None
-        for window in self.top_level():
-            if _class(window) == "#32770" and _text(window) != expected:
-                lines = [_text(window)] + [
-                    _text(child)
-                    for child in _children(window)
-                    if _class(child) == "Static" and _text(child).strip()
-                ]
-                seen = "\n".join(lines)
-                break
-        waited_on = seen if seen is not None and seen == self._last_box else None
-        self._last_box = seen
-        return waited_on
 
 
 class _PlotStop(Exception):
@@ -1067,8 +1033,8 @@ def drive_plot(
     settings file beside the sheet. Each step then sends the menu command a
     person would choose, by the id the build's own menu gives it
     (``waveform_commands``); a trace is typed into the Add Traces dialog. The
-    case ends with Save Plot Settings, which writes ``<sheet>.plt``, and the
-    recorder ends the build there: a window run never exits by itself.
+    case ends with Save Plot Settings, which writes ``<sheet>.plt``; a window
+    run never exits by itself, so ``_launch`` ends the build afterwards.
 
     A dialog the case did not open is a message box the build is waiting on;
     the case stops with what it says, as a run does, and keeps no plot
@@ -1078,19 +1044,12 @@ def drive_plot(
     """
     deadline = time.monotonic() + timeout
     commands = waveform_commands(build.exe)
-    for kind, value in case.steps:
-        if kind == "command" and value not in commands:
-            raise RecorderError(f"{case.case_id}: {build.exe.name} has no menu item {value!r}")
     windows = _WaveformWindow(desktop, process.pid, case.stem)
+    boxes = BoxWatch(desktop, process.pid, ignore=_ADD_TRACES)
     user = _user32()
 
-    def kill() -> None:
-        process.kill()
-        process.wait()
-
-    waiting_for = "open the waveform window of the sheet's run"
-
-    def until(condition: Any, expected: str | None = None) -> Any:
+    def until(condition: Callable[[], Any], doing: str) -> Any:
+        """What ``condition`` returns once it is true; stops the case if the build will not."""
         while True:
             found = condition()
             if found:
@@ -1098,53 +1057,52 @@ def drive_plot(
             exit_code = process.poll()
             if exit_code is not None:
                 raise _PlotStop(_Ended(stopped=False, exit_code=exit_code))
-            box = windows.stray_box(expected)
+            box = boxes.look()
             if box is not None:
-                kill()
                 raise _PlotStop(_Ended(stopped=True, exit_code=None, dialog=box))
             if time.monotonic() >= deadline:
-                kill()
                 raise RecorderError(
-                    f"{case.case_id}: {build.exe.name} did not {waiting_for} in {timeout:.0f}s"
+                    f"{case.case_id}: {build.exe.name} did not {doing} in {timeout:.0f}s"
                 )
             # timing: looks at windows and files a GUI build is changing; neither signals
             time.sleep(0.25)
 
-    def settle(expected: str | None = None) -> None:
+    def settle(doing: str) -> None:
         # timing: a posted command is handled when the window's message loop gets
         # to it, which nothing reports; a second keeps the next step behind it
         settled = time.monotonic() + 1.0
-        until(lambda: time.monotonic() >= settled, expected)
+        until(lambda: time.monotonic() >= settled, doing)
 
     log = work / f"{case.stem}.log"
     plt = work / f"{case.stem}.plt"
+    doing = "open the waveform window of the sheet's run"
     try:
-        frame = until(windows.frame)
-        child, client = until(lambda: log.is_file() and windows.waveform(frame))
+        frame = until(windows.frame, doing)
+        child, client = until(lambda: log.is_file() and windows.waveform(frame), doing)
         _send(client, _WM_MDIACTIVATE, child, 0)
-        settle()
+        settle(doing)
         # Commands go to the waveform window's own frame, which hands them to
         # its view and document whichever window is active: after a run the
         # schematic can be, and its Save would save the sheet.
         for kind, value in case.steps:
-            waiting_for = f"take the step {kind} {value!r}"
+            doing = f"take the step {kind} {value!r}"
             if kind == "command":
                 user.PostMessageW(child, _WM_COMMAND, commands[value], 0)
-                settle()
+                settle(doing)
                 continue
             user.PostMessageW(child, _WM_COMMAND, commands[_ADD_TRACE], 0)
-            dialog = until(lambda: windows.dialog(_ADD_TRACES), _ADD_TRACES)
+            dialog = until(lambda: windows.dialog(_ADD_TRACES), doing)
             _type_expression(dialog, value)
             user.PostMessageW(dialog, _WM_COMMAND, _IDOK, 0)
-            until(lambda dialog=dialog: not user.IsWindow(dialog), _ADD_TRACES)
-            settle()
-        waiting_for = "save its plot settings"
+            until(functools.partial(_closed, dialog), doing)
+            settle(doing)
+        doing = "save its plot settings"
         before = _plot_stamp(plt)
         user.PostMessageW(child, _WM_COMMAND, commands[_SAVE_PLOT], 0)
         # Saved once the file has changed and then holds still for a settle.
-        written = until(lambda: _plot_stamp(plt) not in (None, before) and _plot_stamp(plt))
+        written = until(lambda: _plot_stamp(plt) not in (None, before) and _plot_stamp(plt), doing)
         while True:
-            settle()
+            settle(doing)
             now = _plot_stamp(plt)
             if now == written:
                 break
@@ -1152,7 +1110,6 @@ def drive_plot(
     except _PlotStop as stop:
         plt.unlink(missing_ok=True)
         return stop.ended
-    kill()
     return _Ended(stopped=True, exit_code=None)
 
 
@@ -1162,14 +1119,18 @@ def _type_expression(dialog: int, expression: str) -> None:
     The field is the edit box below the "Expression(s) to add" label: the
     dialog's other edit box is the filter of the list above it.
     """
-    children = _children(dialog)
+    children = child_windows(dialog)
     label = next(
-        (c for c in children if _class(c) == "Static" and _text(c).startswith("Expression")),
+        (
+            c
+            for c in children
+            if window_class(c) == "Static" and window_text(c).startswith("Expression")
+        ),
         None,
     )
     if label is None:
         raise RecorderError(f"the {_ADD_TRACES} dialog has no expression field")
-    below = [c for c in children if _class(c) == "Edit" and _top(c) >= _top(label)]
+    below = [c for c in children if window_class(c) == "Edit" and _top(c) >= _top(label)]
     if not below:
         raise RecorderError(f"the {_ADD_TRACES} dialog has no expression field")
     field = min(below, key=_top)
@@ -1207,15 +1168,14 @@ class CaseResult:
     defaults: dict[str, str] = field(default_factory=dict)
 
 
-#: The switches each kind of case starts the build with, before the input.
-MODE_SWITCHES: Mapping[str, tuple[str, ...]] = {
-    "netlist": ("-netlist",),
-    "plot": ("-Run",),
-}
-
-
 def _command(build: Build, case: Case, deck: Path, ini: Path) -> list[str]:
-    mode = MODE_SWITCHES.get(case.kind, ("-Run", "-b"))
+    # A plot case runs in the window, which a batch run (-b) never opens.
+    if case.kind == "netlist":
+        mode = ["-netlist"]
+    elif case.kind == "plot":
+        mode = ["-Run"]
+    else:
+        mode = ["-Run", "-b"]
     settings = ["-ini", str(ini)] if case.settings else []
     return [str(build.exe), *mode, deck.as_posix(), *case.switches, *settings]
 
@@ -1302,7 +1262,17 @@ def _launch(
     timeout: float,
     build: Build,
 ) -> _Ended:
-    """Run ``command`` to its end or to the point the recorder stops it."""
+    """Run ``command`` to its end or to the point the recorder stops it.
+
+    A build still running then, or when the recording fails on the way, is
+    ended here: a window run never exits by itself, and leaving the ``with``
+    of an ordinary launch waits for its process.
+    """
+    if case.kind == "plot":
+        commands = waveform_commands(build.exe)
+        for kind, value in case.steps:
+            if kind == "command" and value not in commands:
+                raise RecorderError(f"{case.case_id}: {build.exe.name} has no menu item {value!r}")
     started = (
         desktop.start(command, cwd=work)
         if desktop.available
@@ -1311,9 +1281,14 @@ def _launch(
         )
     )
     with started as process:
-        if case.kind == "plot":
-            return drive_plot(process, desktop, build, case, work, timeout)
-        return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
+        try:
+            if case.kind == "plot":
+                return drive_plot(process, desktop, build, case, work, timeout)
+            return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 def run_case(
@@ -1337,15 +1312,8 @@ def run_case(
         shutil.rmtree(work)
     work.mkdir(parents=True)
     digests: dict[str, str] = {}
-    for name in case.inputs:
+    for name, target in case.copies.items():
         data = (inputs / name).read_bytes()
-        if name == case.source:
-            target = case.work_name
-        elif name == case.plot:
-            # Under the deck's name, which is the file the waveform window reads.
-            target = f"{case.stem}.plt"
-        else:
-            target = Path(name).name
         (work / target).write_bytes(data)
         digests[name] = sha256_bytes(data)
     # Outside the case directory, so nothing the build writes can pick it up.
@@ -1533,18 +1501,14 @@ def record_build(
     work_root: Path | None = None,
     timeout: float = 120.0,
     progress: Any = None,
-    keep_library: bool = False,
 ) -> dict[str, Any]:
     """Record every applicable case on ``build`` into ``out / build.label``.
 
     With ``only`` (glob patterns over case ids) the named cases are re-recorded
-    and the rest of an existing recording is kept. Without it the directory is
+    and the rest of an existing recording is kept, with the settings defaults
+    and the library facts it was made with; ``progress`` is told when this
+    machine's library differs from those. Without ``only`` the directory is
     rebuilt, so a case removed from the list leaves no file behind.
-
-    ``keep_library`` keeps the library facts of the existing manifest instead
-    of reading this machine's: for re-recording some cases on an install whose
-    library is not the one the rest of the recording was made with, such as a
-    Wine prefix.
     """
     reason = unavailable_reason(build)
     if reason is not None:
@@ -1557,23 +1521,26 @@ def record_build(
         and (not only or any(fnmatch.fnmatch(case.case_id, pattern) for pattern in only))
     ]
     directory = out / build.label
+    library = library_record(build)
     previous: dict[str, Any] = {}
     if only and (directory / MANIFEST).is_file():
-        previous = load_manifest(directory).get("cases", {})
+        previous = load_manifest(directory)
     elif directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    cases: dict[str, Any] = dict(previous.get("cases", {}))
+    defaults: dict[str, str] = dict(previous.get("settings", {}).get("defaults", {}))
+    if previous:
+        if previous.get("library") != library and progress is not None:
+            progress(
+                f"{build.label}: this machine's library differs from the one the "
+                "recording was made with, whose facts are kept; record every case to "
+                "replace them"
+            )
+        library = previous.get("library")
 
     cleanup = work_root is None
     root = Path(tempfile.mkdtemp(prefix="ltspice-recording-")) if work_root is None else work_root
-    cases: dict[str, Any] = dict(previous)
-    defaults: dict[str, str] = {}
-    kept_library: dict[str, Any] | None = None
-    if only and (directory / MANIFEST).is_file():
-        defaults = dict(load_manifest(directory).get("settings", {}).get("defaults", {}))
-        kept_library = load_manifest(directory).get("library")
-    if keep_library and kept_library is None:
-        raise RecorderError("--keep-library needs --only and an existing recording to keep from")
     desktop = recording_desktop()
     try:
         forbidden = private_strings([str(root)])
@@ -1615,7 +1582,7 @@ def record_build(
                 "thread_count": "1",
                 "matrix_compiler_report": NEUTRAL_COMPILER_REPORT.strip(),
             },
-            "library": kept_library if keep_library else library_record(build),
+            "library": library,
             "cases": dict(sorted(cases.items())),
         }
         rendered = json.dumps(manifest).encode("utf-8")
@@ -1812,11 +1779,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, help="run cases here instead of a temp dir")
     parser.add_argument("--timeout", type=float, default=120.0, help="seconds per case")
     parser.add_argument(
-        "--keep-library",
-        action="store_true",
-        help="with --only, keep the committed library facts instead of this machine's",
-    )
-    parser.add_argument(
         "--check",
         action="store_true",
         help="record into a temporary directory and compare with --out instead of writing it",
@@ -1843,7 +1805,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 work_root=args.work_dir,
                 timeout=args.timeout,
                 progress=lambda line: print(line, flush=True),
-                keep_library=args.keep_library,
             )
             print(f"{build.label}: recorded {len(manifest['cases'])} cases")
             continue
@@ -1855,7 +1816,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 only=args.only,
                 work_root=args.work_dir,
                 timeout=args.timeout,
-                keep_library=args.keep_library,
             )
             differences = compare(
                 args.out / build.label, Path(scratch) / build.label, only=args.only

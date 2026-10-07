@@ -56,23 +56,25 @@ XScale = Literal["linear", "log"]
 YScale = Literal["linear", "log", "db"]
 
 #: The section each analysis's panes are under: the plot name its raw file has.
-SECTION_NAMES: dict[str, str] = {
+SECTION_NAMES: dict[PlotAnalysis, str] = {
     "tran": "Transient Analysis",
     "ac": "AC Analysis",
 }
 
 #: The ``Log`` line a build writes for a pane it made itself (``plot/one_trace``,
 #: ``plot/ac``): what a pane gets when the caller names no scale.
-DEFAULT_SCALES: dict[str, tuple[int, int, int]] = {
+DEFAULT_SCALES: dict[PlotAnalysis, tuple[int, int, int]] = {
     "tran": (0, 0, 0),
     "ac": (1, 2, 0),
 }
 
-_X_SCALES: dict[str, int] = {"linear": 0, "log": 1}
-_Y_SCALES: dict[str, int] = {"linear": 0, "log": 1, "db": 2}
+_X_SCALES: dict[XScale, int] = {"linear": 0, "log": 1}
+_Y_SCALES: dict[YScale, int] = {"linear": 0, "log": 1, "db": 2}
+_X_NAMES = {value: name for name, value in _X_SCALES.items()}
+_Y_NAMES = {value: name for name, value in _Y_SCALES.items()}
 
-#: How the file is written: the form LTspice XVII writes, which both builds read.
-PLOT_ENCODING = "utf-16-le"
+# How the file is written: the form LTspice XVII writes, which both builds read.
+_ENCODING = "utf-16-le"
 
 # Characters a trace expression cannot hold. The double quote ends the quoted
 # expression in a trace entry and a brace opens or closes one; a line break
@@ -224,8 +226,8 @@ def read_plot_settings(data: bytes) -> PlotSettings:
 # --------------------------------------------------------------------------
 
 
-def check_trace(expression: str) -> str:
-    """``expression`` if a ``.plt`` can hold it as a trace; raises otherwise."""
+def check_trace(expression: str) -> None:
+    """Raise unless a ``.plt`` can hold ``expression`` as a trace, read back whole."""
     if not expression.strip():
         raise NetlistError("a trace expression is empty")
     if any(char.isspace() for char in expression):
@@ -241,10 +243,11 @@ def check_trace(expression: str) -> str:
             "cannot carry inside a trace (a double quote, a brace or a control "
             "character)"
         )
-    return expression
 
 
-def scales_of(analysis: str, x_scale: str | None, y_scale: str | None) -> tuple[int, int, int]:
+def scales_of(
+    analysis: PlotAnalysis, x_scale: XScale | None, y_scale: YScale | None
+) -> tuple[int, int, int]:
     """The ``Log`` line of a pane: the analysis's own default, with the named scales."""
     x, left, right = DEFAULT_SCALES[analysis]
     if x_scale is not None:
@@ -258,22 +261,18 @@ def scale_names(scales: tuple[int, int, int] | None) -> dict[str, str]:
     """``x_scale`` / ``y_scale`` for a pane's ``Log`` line, each one it has a name for."""
     if scales is None:
         return {}
-    names: dict[str, str] = {}
-    x = next((name for name, value in _X_SCALES.items() if value == scales[0]), None)
-    y = next((name for name, value in _Y_SCALES.items() if value == scales[1]), None)
-    if x is not None:
-        names["x_scale"] = x
-    if y is not None:
-        names["y_scale"] = y
-    return names
+    names = {"x_scale": _X_NAMES.get(scales[0]), "y_scale": _Y_NAMES.get(scales[1])}
+    return {key: name for key, name in names.items() if name is not None}
 
 
-def render_section(name: str, panes: Sequence[PlotPane]) -> str:
-    """The text of one section holding ``panes`` (top first), as LTspice lays it out."""
-    lines = [f"[{name}]", "{", f"   Npanes: {len(panes)}"]
+def _render_body(panes: Sequence[PlotPane]) -> str:
+    """The text between a section's braces for ``panes`` (top first), as LTspice lays it out."""
+    lines = [f"   Npanes: {len(panes)}"]
     written = list(panes)[::-1]
     for index, pane in enumerate(written):
-        entries = " ".join(f'{{0,0,"{check_trace(trace)}"}}' for trace in pane.traces)
+        for trace in pane.traces:
+            check_trace(trace)
+        entries = " ".join(f'{{0,0,"{trace}"}}' for trace in pane.traces)
         scales = pane.scales if pane.scales is not None else (0, 0, 0)
         lines += [
             "   {",
@@ -281,25 +280,25 @@ def render_section(name: str, panes: Sequence[PlotPane]) -> str:
             "      Log: {} {} {}".format(*scales),
             "   }," if index < len(written) - 1 else "   }",
         ]
-    lines.append("}")
-    return "\n".join(lines) + "\n"
+    return "\n" + "\n".join(lines) + "\n"
 
 
-def with_panes(settings: PlotSettings, analysis: str, panes: Sequence[PlotPane]) -> PlotSettings:
+def with_panes(
+    settings: PlotSettings, analysis: PlotAnalysis, panes: Sequence[PlotPane]
+) -> PlotSettings:
     """``settings`` with ``analysis``'s section holding ``panes``; none removes it.
 
     The section keeps its place among the others; a new one goes last. Its
     ``body`` is the text written for it, so ``render_plot_settings`` needs
-    nothing else.
+    nothing else. Raises ``NetlistError`` for a pane without a trace and for a
+    trace the file cannot carry (``check_trace``).
     """
     name = SECTION_NAMES[analysis]
     if any(not pane.traces for pane in panes):
         raise NetlistError("every pane needs at least one trace")
     replacement: PlotSection | None = None
     if panes:
-        text = render_section(name, panes)
-        body = text[text.index("{") + 1 : text.rindex("}")]
-        replacement = PlotSection(name=name, panes=tuple(panes), body=body)
+        replacement = PlotSection(name=name, panes=tuple(panes), body=_render_body(panes))
     kept: list[PlotSection] = []
     placed = False
     for section in settings.sections:
@@ -321,4 +320,9 @@ def render_plot_settings(settings: PlotSettings) -> str:
 
 def encode_plot_settings(text: str) -> bytes:
     """``text`` as the bytes of a ``.plt``: UTF-16 LE, no byte order mark, LF line ends."""
-    return text.replace("\r\n", "\n").encode(PLOT_ENCODING)
+    return text.replace("\r\n", "\n").encode(_ENCODING)
+
+
+def write_plot_settings(settings: PlotSettings) -> bytes:
+    """The bytes of a ``.plt`` holding ``settings``."""
+    return encode_plot_settings(render_plot_settings(settings))

@@ -90,8 +90,9 @@ async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
     circuit file locks on BOTH the schematic and the sidecar ``.net`` —
     LTspice reads the ``.asc`` and overwrites the ``.net``, and a parallel
     session may be editing the ``.net`` itself under its own file lock.
-    Fixed acquisition order (``.asc`` then ``.net``); edit paths take exactly
-    one file lock, so no cycle is possible.
+    Fixed acquisition order (``.asc`` then ``.net``); an edit takes its
+    circuit's file lock before any other (``edit_guard``), so no cycle is
+    possible.
     """
     async with (
         path_lock(_asc_export_locks, asc_path),
