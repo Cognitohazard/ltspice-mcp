@@ -619,18 +619,22 @@ file and leaves it in front. If that needs checking again, capture the window;
 `PrintWindow` works on a window of another desktop when the capturing process
 is started on that desktop.
 
-A second is behind a paragraph of the guide and no code: that LTspice ties a
-waveform pane to a sheet, so that clicking a net plots it, only for a run made
-in that window. The same grid of clicks was posted to the sheet's view in four
-windows and each captured. After a run made in the window the clicks added
-traces, whether the panes were tiled or the sheet covered the results; with a
-batch run's results beside the sheet under its name and opened in the window,
-they added none in either layout. That is why `plot_waveform(in_ltspice=true)`
-leaves a job's results where the job wrote them, and why the guide sends a
-session to a run in the window when a person wants to probe by clicking. What
-such a run simulates is recorded: the recorder makes its run with the window
-holding one resistor value and the file another, and notes which the netlist
-beside the sheet carries, and that the sheet was not written.
+A second is behind a paragraph of the guide and no code: when LTspice ties a
+plot to a sheet, so that clicking a net plots it. The same grid of clicks was
+posted to the sheet's view in each window and the window captured. Results
+opened on their own were never tied: through the bridge by the results file's
+name or by the sheet's, with the panes tiled or the sheet covering the results,
+with the results or the sheet opened first, and for a run made in a window as
+for a batch run once that LTspice had been closed. Results opened from the
+sheet always were: by a run made in that window, and by the sheet's own
+Visible Traces command, sent as the command the build's menu resource gives
+that label, for a window run's results in a later session and for a batch
+run's alike. The first round of this looked only at the bridge's ways of
+opening a file and concluded that only a run in the window ties a plot; a
+person pressing the toolbar button showed otherwise. What a run in the window
+simulates is recorded: the recorder makes its run with the window holding one
+resistor value and the file another, and notes which the netlist beside the
+sheet carries, and that the sheet was not written.
 
 A third is what makes replacing a window's copy safe to do unasked: the
 replaced sheet is one step of the window's undo history. Undo is a key press,
