@@ -1,0 +1,37 @@
+Circuit: * every .meas result form
+
+.OP point found by inspection.
+
+m_max: MAX(v(out))=0.999956 FROM 0 TO 0.001
+m_min: MIN(v(out))=0 FROM 0 TO 0.001
+m_pp: PP(v(out))=0.999956 FROM 0 TO 0.001
+m_avg: AVG(v(out))=0.79874 FROM 0 TO 0.0005
+m_rms: RMS(v(out))=0.921232 FROM 0 TO 0.001
+m_integ: INTEG(v(out))=0.000898702 FROM 0 TO 0.001
+m_find: v(out)=0.993253 at 0.0005
+m_when: v(out)=0.5 AT 7.11305e-005
+m_findwhen: v(in)=1 at 7.11305e-005
+m_trigtarg=0.000220382 FROM 1.11609e-005 TO 0.000231543
+m_param: m_max*2=1.99991
+m_deriv: D(v(out))=4027.41 at 0.0001
+m_nokind: MAX(v(in))=1 FROM 0 TO 0.001
+m_expr: v(out)*2+1=2.98651 at 0.0005
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 144
+traniter = 144
+tranpoints = 73
+accept = 73
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

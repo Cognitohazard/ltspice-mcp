@@ -1,0 +1,6 @@
+* behavioural power sink
+V1 a 0 10
+R1 a b 1
+B1 b 0 P=1
+.op
+.end

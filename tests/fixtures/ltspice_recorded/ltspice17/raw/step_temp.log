@@ -1,0 +1,23 @@
+Circuit: * a resistor with a temperature coefficient over three temperatures
+
+Direct Newton iteration for .op point succeeded.
+.step temp=-40°C
+.step temp=27°C
+.step temp=125°C
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 125
+method = modified trap
+totiter = 57
+traniter = 54
+tranpoints = 28
+accept = 28
+rejected = 0
+matrix size = 2
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)

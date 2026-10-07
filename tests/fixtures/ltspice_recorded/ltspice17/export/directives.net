@@ -1,0 +1,13 @@
+* C:\recording\directives.asc
+R1 a 0 {rval}
+.include models.lib
+.lib mylib.lib
+.lib corners.lib tt
+.param rval=1k
+.tran 1m
+* a comment on the sheet
+.model sw1 SW(Ron=1)
+.options reltol=1e-4
+.meas tran vmax MAX V(a)
+.backanno
+.end

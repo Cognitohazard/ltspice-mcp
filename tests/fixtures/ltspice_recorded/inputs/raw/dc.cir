@@ -1,0 +1,7 @@
+* resistive divider swept
+V1 in 0 0
+R1 in out 1k
+R2 out 0 1k
+.dc V1 0 5 1
+.meas dc vmid FIND V(out) AT 3
+.end

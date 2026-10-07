@@ -10,6 +10,50 @@ tool-surface changes.
 
 ### Fixed
 
+The entries in this group were found by holding the server against files
+LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
+(`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
+recording that showed it.
+
+- Results from LTspice 26 could not be read for a deck with two or more
+  subcircuit instances. LTspice 24 and later write one `Backannotation:` line
+  in the raw header for each instance, and the raw preflight refused a header
+  field that appeared twice.
+- Results could not be read for a deck carrying `.options plotwinsize=0`,
+  which adds a `nocompression` flag to the raw header, nor for a `.tf` run,
+  whose `Transfer Function` plot had no validated layout. Both are read now.
+- On LTspice XVII every `.op` deck run through the server failed. The server
+  adds `.options logopinfo` so that LTspice prints the operating point of each
+  semiconductor; XVII prints it unasked and stops with "unrecognized option"
+  on a deck that asks. The option is no longer added for XVII or LTspice IV.
+- Three kinds of LTspice XVII result were unreadable: a run stepped over
+  temperature (XVII logs `.step temp=-40°C`, with the unit, and the step value
+  did not parse), the semiconductor operating-point block (the row check ran
+  on into the `Date:` line XVII writes after it), and `.four` results (XVII
+  prints `Total Harmonic Distortion: 13.60%(13.61%)` on one line).
+- A failed run was reported as a generic `execution_failed` where the cause
+  was known: a missing include or library on LTspice 26 (`File not found.`
+  under the directive), a missing library on XVII (`Could not open library
+  file "..."`), and an undefined subcircuit on both (26: `This sub-circuit
+  name is not defined.`; XVII gives the calling card on the following line).
+  These are `missing_include` and `missing_model` with the name they concern.
+- `edit_schematic` could write a value LTspice read a million times too large.
+  A micro sign put into a sheet that held only ASCII was stored as UTF-8, and
+  neither build reads a sheet as UTF-8: LTspice 26 exports that value as `2Âµ`
+  and XVII reads the same two bytes the same way. The first non-ASCII
+  character an edit adds is now written in cp1252, which both builds read. A
+  sheet that already held non-ASCII text keeps its encoding.
+- A pin or label on the interior of a diagonal wire was not connected to it by
+  the schematic editor's net trace and warnings; LTspice connects it, as it
+  does anywhere along a horizontal or vertical wire.
+- A directive on a deck's first line was treated as live by the lint and by
+  `verify_circuit`. LTspice reads line 1 as the title whatever it says, so
+  `.param r=2k` there defines nothing.
+- `inspect(kind:"hierarchy")` did not take `gnd` for ground on LTspice. It is
+  node 0 there too, except in a subcircuit that names a port `gnd`.
+- The `suffix-mega-milli` lint missed a capital `M` followed by a unit: LTspice
+  reads `1MHz` as a millihertz. It is flagged now; `1Meg` and `1mil` are not.
+
 - `run_experiments` refused valid decks under its default `lint: "block"`, and
   an `.asc` is linted through its exported netlist, so schematics were refused
   too. `model-missing` read the model of `Q2 c b e QN 8` (the area factor of a

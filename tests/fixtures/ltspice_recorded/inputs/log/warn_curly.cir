@@ -1,0 +1,6 @@
+* braces around a voltage reference
+V1 b 0 2
+B1 a 0 V={V(b)}
+R1 a 0 1k
+.op
+.end

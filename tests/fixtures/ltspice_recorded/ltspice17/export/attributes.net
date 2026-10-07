@@ -1,0 +1,20 @@
+* C:\recording\attributes.asc
+XX1 NC_01 NC_02 NC_03 NC_04 sub1 gain=2
+XX2 NC_05 NC_06 NC_07 NC_08 sub2 extra=1 a=1 b=2
+XX3 NC_09 NC_10 NC_11 NC_12 mdl sub3
+XX4 NC_13 NC_14 NC_15 NC_16 sub4 params: r=2k
+Q1 NC_17 NC_18 NC_19 0 2N2222 2
+Q2 NC_20 NC_21 NC_22 0 2N2222 area=2
+D1 NC_23 NC_24 1N4148 3
+M1 NC_25 NC_26 NC_27 NC_28 NMOS l=1u w=10u
+R1 NC_29 NC_30 1k tol=1 pwr=0.1
+.model D D
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.dio
+.model NPN NPN
+.model PNP PNP
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.bjt
+.model NMOS NMOS
+.model PMOS PMOS
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.mos
+.backanno
+.end

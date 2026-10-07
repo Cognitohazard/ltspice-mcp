@@ -1,0 +1,6 @@
+* two voltage sources in parallel
+V1 a 0 1
+V2 a 0 2
+R1 a 0 1k
+.op
+.end

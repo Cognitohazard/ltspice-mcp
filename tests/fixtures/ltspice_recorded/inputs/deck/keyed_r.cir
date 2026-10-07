@@ -1,0 +1,5 @@
+* a resistor's value given as R=
+I1 0 a 1
+R1 a 0 R=1k
+.op
+.end

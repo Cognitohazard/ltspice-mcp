@@ -1,0 +1,10 @@
+* complex measurement results
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.ac dec 10 10 100k
+.meas ac g1k FIND V(out) AT 1k
+.meas ac gmax MAX mag(V(out))
+.meas ac fc WHEN mag(V(out))=0.70710678
+.meas ac bw TRIG mag(V(out))=0.9 FALL=1 TARG mag(V(out))=0.1 FALL=1
+.end

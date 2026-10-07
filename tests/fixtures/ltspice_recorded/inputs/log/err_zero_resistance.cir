@@ -1,0 +1,5 @@
+* a resistor of zero ohms
+V1 a 0 1
+R1 a 0 0
+.op
+.end

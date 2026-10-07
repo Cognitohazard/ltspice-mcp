@@ -1,0 +1,6 @@
+* two components with one name
+V1 a 0 1
+R1 a 0 1k
+R1 a 0 2k
+.op
+.end

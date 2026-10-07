@@ -1,0 +1,23 @@
+* letters that are no scale suffix: each resistor carries 1 A, so V(n<i>) is the resistance LTspice read
+I1 0 n01 1
+R1 n01 0 2Hz
+I2 0 n02 1
+R2 n02 0 3V
+I3 0 n03 1
+R3 n03 0 2ohm
+I4 0 n04 1
+R4 n04 0 2A
+I5 0 n05 1
+R5 n05 0 7x
+I6 0 n06 1
+R6 n06 0 5s
+I7 0 n07 1
+R7 n07 0 2Ohms
+I8 0 n08 1
+R8 n08 0 4H
+I9 0 n09 1
+R9 n09 0 6W
+I10 0 n10 1
+R10 n10 0 9V1
+.op
+.end

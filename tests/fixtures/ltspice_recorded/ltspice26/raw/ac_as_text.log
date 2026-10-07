@@ -1,0 +1,21 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\ac_as_text.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = Gear
+AsciiRawFile = true
+Compress1stOrder = true
+Compress2ndOrder = true
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.000 seconds.
+Total iterations: 0
+
+Files loaded:
+C:\recording\ac_as_text.cir
+
+fc: mag(V(out))=0.70710678 AT 1000.00000436
+gain1k: V(out)=(-3.01029995413dB,-44.9999999835°) at 1000

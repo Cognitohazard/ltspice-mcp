@@ -1,0 +1,6 @@
+* an element card with too few fields
+V1 a 0 1
+R1 a 0 1k
+R2 a
+.op
+.end

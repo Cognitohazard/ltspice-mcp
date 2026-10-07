@@ -1,0 +1,13 @@
+* measurement tables over a stepped parameter
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.step param r list 1k 2k 20k
+.tran 0 1m 0 20u
+.meas tran s_max MAX V(out)
+.meas tran s_avg AVG V(out) FROM 0 TO 0.5m
+.meas tran s_find FIND V(out) AT 0.5m
+.meas tran s_when WHEN V(out)=0.5
+.meas tran s_rise TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL=0.3 RISE=1
+.meas tran s_param PARAM s_max*2
+.end

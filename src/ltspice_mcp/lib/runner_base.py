@@ -31,7 +31,7 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
-from ltspice_mcp.lib.simulator_build import reported_build
+from ltspice_mcp.lib.simulator_build import executable_path, predates_logopinfo, reported_build
 from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
@@ -442,11 +442,13 @@ def collect_run_outcome(
 def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
     """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
 
-    LTspice writes each semiconductor's small-signal operating point (gm, gds,
-    vth, vdsat, junction caps) to the ``.log`` only under ``.options logopinfo``,
-    and only for ``.op`` analyses — so adding it lets ``operating_point`` read
-    those params back by name. ngspice uses ``@dev[param]`` raw traces instead
-    and needs nothing here.
+    LTspice 24 and later write each semiconductor's small-signal operating
+    point (gm, gds, vth, vdsat, junction caps) to the ``.log`` only under
+    ``.options logopinfo``, and only for ``.op`` analyses — so adding it lets
+    ``operating_point`` read those params back by name. ngspice uses
+    ``@dev[param]`` raw traces instead and needs nothing here. Neither does
+    LTspice XVII or IV: they print the block for every ``.op``, and stop with
+    "unrecognized option" on a deck that carries the option.
 
     Append-only into a per-job sibling file (a leading-dot, ``job_id``-stamped
     name) so the simulator sees the caller's deck byte-for-byte plus the one
@@ -463,6 +465,8 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
     from spicelib.simulators.ltspice_simulator import LTspice
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
+        return netlist_path
+    if predates_logopinfo(executable_path(simulator) or ""):
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path

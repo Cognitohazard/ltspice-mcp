@@ -625,7 +625,11 @@ class TestParseMeasurementsFourierNan:
             "Total Harmonic Distortion:   -nan%\n"
             "\n"
             "vrms_late: RMS(V(out) )=0 FROM 0.03 TO 0.05\n"
-            "Total elapsed time: 0.001 seconds.\n"
+            "Total elapsed time: 0.001 seconds.\n",
+            # As LTspice 24 and later write a log. Unnamed, the degree sign
+            # would be written in the machine's code page, which on a
+            # Chinese or Japanese Windows is bytes no LTspice writes.
+            encoding="utf-8",
         )
         # Should NOT raise — the sanitizer should let .MEAS still parse.
         result = parse_measurements(log)

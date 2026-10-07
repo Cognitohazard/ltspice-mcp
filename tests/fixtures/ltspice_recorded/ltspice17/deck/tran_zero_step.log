@@ -1,0 +1,21 @@
+Circuit: * .tran with a zero step
+
+.OP point found by inspection.
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2090
+traniter = 2090
+tranpoints = 1046
+accept = 1046
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

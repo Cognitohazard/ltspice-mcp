@@ -1,0 +1,5 @@
+* names differing only in case
+I1 0 Node 1
+r1 NODE 0 1K
+.OP
+.END

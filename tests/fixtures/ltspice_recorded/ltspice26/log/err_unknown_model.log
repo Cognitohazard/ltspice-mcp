@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\err_unknown_model.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\err_unknown_model.cir(4): Undefined model "nosuchmodel".
+D1 b 0 NOSUCHMODEL
+       ^^^^^^^^^^^

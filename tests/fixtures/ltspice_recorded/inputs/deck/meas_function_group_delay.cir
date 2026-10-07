@@ -1,0 +1,9 @@
+* group_delay() inside .meas, between two measurements that are sound
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.ac dec 10 10 100k
+.meas ac before FIND mag(V(out)) AT 1k
+.meas ac asked FIND group_delay(V(out)) AT 1k
+.meas ac after FIND mag(V(out)) AT 10k
+.end

@@ -1,0 +1,7 @@
+* two sections
+.lib tt
+.param rval=1k
+.endl tt
+.lib ff
+.param rval=2k
+.endl ff

@@ -1,0 +1,7 @@
+* a capacitor's value given as C=
+V1 a 0 PULSE(0 1 0 1u 1u 1 2)
+R1 a b 1k
+C1 b 0 C=100n
+.tran 0 1m 0 20u
+.meas tran vb FIND V(b) AT 0.5m
+.end

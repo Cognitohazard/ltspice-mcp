@@ -1,0 +1,12 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\err_inductor_loop.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Total elapsed time: 0.000 seconds.
+Total iterations: 0
+Voltage source V1 and inductor L1 are paralleled making an over-defined circuit matrix.
+You will need to correct the circuit or add some series resistance.
