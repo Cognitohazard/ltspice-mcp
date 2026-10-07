@@ -2,7 +2,9 @@
 name: signals
 description: >
   Naming a trace in a recipe, `V(a,b)` and ratios, trace math in Python with
-  time-weighted statistics, and reading a deck that carries `.step`.
+  time-weighted statistics, the amplitude and phase of one frequency (the
+  `tone` recipe, and LTspice's `.four`), and reading a deck that carries
+  `.step`.
 ---
 
 # Signals, trace math, and `.step`
@@ -61,6 +63,43 @@ skip, name quantile levels: `"quantiles": [0.01, 0.99]` adds `q01`, `q99` and
 reduce or spec. A key is the level as a percentage with `_` for the decimal
 point, so 0.999 is `q99_9`. `q99` is the smallest value the signal spends 99%
 of the window at or below.
+
+## One frequency: amplitude and phase
+
+The `tone` recipe reads the amplitude and phase of a transient signal at one
+frequency you give:
+
+```json
+{"key": "out_1k", "metric": "tone", "signal": "V(out)", "frequency_hz": "1k",
+ "window": {"start": "5m"}}
+```
+
+It cuts the window to the whole periods that fit from its start (`t_start`,
+`t_end` and `n_cycles` say which), weights the samples by time, and returns
+`amplitude` (peak, in the signal's unit), `phase_deg`, `dc`, and the
+coefficients `sin_component` and `cos_component`. The signal reads as
+`dc + amplitude*sin(2*pi*f*t + phase_deg)`, with `t` the simulation's own time
+from zero, so the phase does not move with the window: the gain from `V(in)` to
+`V(out)` at that frequency is the ratio of their amplitudes, and the phase
+shift is the difference of their phases. Start the window once the start-up
+transient has settled. A warning names a sampling step too wide for straight
+lines between samples to follow a sinusoid; a smaller `.tran` maximum timestep
+removes it. In Python, `analyze_tone(t, y, f)` does the same on arrays cut by
+`window_and_clean`. Prefer either to a `.meas` correlation integral or to numpy
+over the samples, which weights LTspice's clustered samples by count.
+
+LTspice's `.four <freq> [Nharmonics] [Nperiods] <trace>` prints a Fourier
+table to the log, and the `summary` recipe returns it as `fourier`, with each
+harmonic's `magnitude` and `phase`. The number after the frequency is the
+harmonic count, not the period count: `.four 1k V(out)` gives nine harmonics
+over one period, `.four 1k 5 V(in)` five over one. LTspice XVII's help puts
+the window at the last period before the stop time, the last `Nperiods` of
+them, or the whole run for `-1`, so it cannot start where you choose. The phase is
+printed in each build's own convention: for a `SINE(0 1 1k)` source, LTspice
+XVII prints the fundamental at 0 degrees and LTspice 26 at 90, and no
+constant offset turns one build's phases into the other's. Read phase with
+`tone`. ngspice skips `.four` when it writes a raw
+file, as the server runs it, and the run's warnings say so.
 
 ## Reading a deck that carries `.step`
 

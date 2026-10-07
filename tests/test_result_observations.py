@@ -28,6 +28,7 @@ from ltspice_mcp.lib.result_observations import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import format_observations
 from tests.conftest import LTSPICE_TRAN_RC_VFINAL, make_raw_mock
+from tests.ltspice_recorder import INPUTS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -49,6 +50,19 @@ class TestParseRequestedOutputs:
     def test_four_signals(self):
         out = parse_requested_outputs(".four 1k V(out) V(in)")
         assert out["four"] == ["V(out)", "V(in)"]
+
+    def test_four_counts_before_the_traces_are_not_signals(self):
+        # .four <freq> [Nharmonics] [Nperiods] <trace> ...: the counts sit
+        # between the frequency and the traces, and -1 periods is the whole run.
+        out = parse_requested_outputs(".four 1k 5 V(in)\n.four 1k 7 -1 V(a) V(b)")
+        assert out["four"] == ["V(in)", "V(a)", "V(b)"]
+
+    def test_four_on_the_recorded_deck(self):
+        """Both recorded LTspice builds read the 5 in ``.four 1k 5 V(in)`` as a
+        harmonic count (``test_recorded_ltspice_results.py`` pins it), so this
+        deck asks for two traces, not three."""
+        deck = (INPUTS / "log" / "fourier.cir").read_text(encoding="utf-8")
+        assert parse_requested_outputs(deck)["four"] == ["V(out)", "V(in)"]
 
     def test_ignores_non_directives(self):
         out = parse_requested_outputs("R1 n1 n2 1k\nV1 in 0 1\n.tran 1m")
@@ -131,6 +145,11 @@ class TestReconciliationObservations:
         obs = reconciliation_observations({"fourier": []}, {"four": ["V(out)"]})
         assert obs[0]["evidence"]["request_kind"] == "four"
         assert obs[0]["evidence"]["reason"] == "missing"
+
+    def test_a_four_harmonic_count_is_not_reported_as_a_missing_trace(self):
+        requested = parse_requested_outputs(".four 1k 5 V(in)")
+        obs = reconciliation_observations({"fourier": []}, requested)
+        assert [o["evidence"]["name"] for o in obs] == ["V(in)"]
 
 
 class TestValueObservations:

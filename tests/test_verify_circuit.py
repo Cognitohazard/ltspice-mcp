@@ -34,7 +34,7 @@ from pydantic import ValidationError
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import raster
-from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER
+from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
 from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
@@ -438,13 +438,14 @@ _SIMULATOR_SPECIFIC = (
     "R1 out 0 1k\n"
     ".tran 0 1m\n"
     ".meas ac g FIND vdb(out) AT=1k\n"
+    ".meas tran p PARAM atan2(1,1)\n"
     ".end\n"
 )
 
 
 async def test_syntax_checks_against_an_ngspice_default(config, work_dir):
     """An ngspice session is told about ngspice faults (a zero .tran step) and
-    not about LTspice ones (vdb() in .meas, C= as the value)."""
+    not about LTspice ones (vdb() in .meas, C= as the value, trig in .meas)."""
     from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
     state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
@@ -463,7 +464,35 @@ async def test_syntax_checks_against_an_ltspice_default(state_no_sim, work_dir):
     assert sorted(f["subject"] for f in data["findings"]) == [
         ".meas ac g FIND vdb(out) AT=1k",
         "C1 in out C=1n",
+        "p",
     ]
+
+
+_TRIG_MEAS = (
+    "* phase of the fundamental\n"
+    "V1 out 0 SIN(0 1 1k)\n"
+    ".meas tran a INTEG V(out)*cos(2*pi*1k*time)\n"
+    ".meas tran p PARAM atan2(a,1)*180/pi\n"
+    ".meas tran peak MAX V(out)\n"
+    ".tran 2m\n"
+    ".end\n"
+)
+
+
+async def test_syntax_flags_trig_in_a_measurement_on_ltspice(state_no_sim, work_dir):
+    """LTspice reads a trig function's angle in a .meas in degrees, where a B
+    source reads it in radians; the check says so in the linter's words."""
+    deck = _write(work_dir, "trig.cir", _TRIG_MEAS)
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    found = [f for f in data["findings"] if f["rule_id"] == "meas_trig_degrees"]
+    assert [(f["subject"], f["at"]["line"], f["evidence"]["functions"]) for f in found] == [
+        ("a", 3, ["cos"]),
+        ("p", 4, ["atan2"]),
+    ]
+    assert {f["severity"] for f in found} == {"error"}
+    assert found[0]["evidence"]["reason"] == MEAS_ANGLE_REASON
 
 
 async def test_export_stage_reports_micro_signs_in_the_exported_netlist(

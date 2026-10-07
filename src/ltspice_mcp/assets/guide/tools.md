@@ -25,6 +25,7 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
+| amplitude and phase at one frequency | recipe `tone` (guide section 'signals') |
 | symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
 | nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
@@ -95,7 +96,9 @@ attach the recipe that reads it back:
 ```
 
 The simulator computes the scalar and the `measurements` recipe reads it back
-from the log, parsed and with SI units. On ngspice, measure the trace with a
+from the log, parsed and with SI units. Each case's row carries it as
+`value.measured.vout_dc`, null and listed in `value.failed_measurements` if
+that case's `.meas` failed. On ngspice, measure the trace with a
 recipe instead (guide section 'ngspice'). An `assign` target must exist in the
 deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in
@@ -113,13 +116,17 @@ lint blocks a mismatch. A case that produced nothing is counted in
   id you lost. A `wait` that returns `timed_out` ended the wait, not the job.
 - `analyze_results`: the default reply is the answer (`results`, `coverage`,
   `observations`, `failures`); ask for more under `include` (`fields`,
-  `per_run`, `outliers`, `signals_available`). `group_by` is a top-level
-  argument, never inside a recipe. Results of the `operating_point` recipe are
-  in `device_op_points`, keyed by the simulator's literal names (`@m1[gm]`).
+  `per_run`, `outliers`, `signals_available`). A failure row is one reason:
+  one that hit several runs carries `count` and `wheres` (the first 10
+  places). `group_by` is a top-level argument, never inside a recipe. Results
+  of the `operating_point` recipe are in `device_op_points`, keyed by the
+  simulator's literal names (`@m1[gm]`).
   For a staircase signal (DAC steps, line reflections), read each level with a
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur
-  the levels.
+  the levels. Runs with no number for a reduced or spec'd field (a failed
+  `.meas`) are counted in `no_value_count`, and a spec stays `indeterminate`
+  while there are any, unless you set `allow_incomplete`.
 - `inspect` reads decks, schematics, libraries and result facts:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
 - `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`
@@ -203,9 +210,17 @@ in order until it fits:
 
 | rung | what is removed |
 |-|-|
-| 0 trim | empty presentation blocks and the identity echo (`source`, `source_hashes`) |
+| 0 trim | empty presentation blocks and the per-run identity echo (`source_hashes`, an attached analysis's included) |
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
 | 2 shrink | page size, with cursors minted against the smaller page so paging still walks every row |
+
+Rung 2 lowers one page limit on every list in the reply at once, to the
+largest whose rows together fit: three recipes' values share the budget rather
+than each taking it. If even one row per list is over, a `run_experiments` or
+`jobs` receipt carries no per-case rows at all, so its floor is the same size
+for 4 cases or 400: `completeness` and `runs.total` count the runs,
+`jobs(runs)` from `runs.next_cursor` pages them, and `analyze_results` over the
+`job_id` returns the attached analysis's rows. Reductions and verdicts stay.
 
 Facts are never cut: `failures`, `observations`, `warnings`, `completeness`
 and spec verdicts always come back whole, and a budget too small for them
