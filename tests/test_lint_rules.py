@@ -313,7 +313,9 @@ def test_model_missing_resolves_through_staged_include_snapshots(tmp_path: Path)
         tmp_path / "deck.cir",
         None,
         "LTspice",
-        includes=[(tmp_path / "staged" / "amp.inc", ".subckt AMP a b\nR1 a b 1k\n.ends AMP\n", "utf-8")],
+        includes=[
+            (tmp_path / "staged" / "amp.inc", ".subckt AMP a b\nR1 a b 1k\n.ends AMP\n", "utf-8")
+        ],
     )
 
     assert "model-missing" not in {finding["rule_id"] for finding in findings}

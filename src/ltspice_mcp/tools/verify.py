@@ -493,8 +493,7 @@ _ARITY_ERROR_SCHEMA: dict[str, Any] = {
         "reference_arity": {
             "type": "integer",
             "description": (
-                "Terminal count on the reference side; with 'side' set, the instance's "
-                "node count."
+                "Terminal count on the reference side; with 'side' set, the instance's node count."
             ),
         },
         "candidate_arity": {
