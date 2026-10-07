@@ -127,15 +127,19 @@ entire conversation turns of recovery.
 
 ### No auto-routing
 
-When the server refuses a wire, it returns the **conflict set**: what
-blocked it and where. It does not calculate an alternate route. General
-routing is NP-hard and is outside the project's scope; the caller uses the
-conflict set to choose another route.
+The caller decides what the drawing looks like; the server does not lay out
+or route a circuit on its own. When it refuses a wire, it returns the
+**conflict set**: what blocked it and where, and the caller uses that to
+choose another route. Joining two pins on a grid is not hard to compute; the
+path is left to the caller because the choice of path is the drawing. What
+the server is meant to resolve from a stated intent (a pin placed on a point,
+a route given as a shape) is set out in `docs/design/schematic_engine.md`.
 
-### No preview mode
+### Safe mutation
 
-There is no `dry_run` / preview parameter. Three mechanisms cover safe
-mutation instead:
+`edit_schematic` takes `dry_run`, which resolves and validates a batch and
+returns its geometry without writing. Three mechanisms make a committed
+mutation safe:
 
 - **Validate-before-write refusals** — the `wire_pins` op refuses invalid
   geometry before the file is touched, with itemized error text naming
@@ -644,8 +648,10 @@ diagnostics are captured alongside its log file and fed through it. qspice
 
 These are intentional gaps, not pending features.
 
-- **Auto-routing / auto-placement.** Conflict-set returns on refusal
-  are the substitute. General routing is out of scope.
+- **Layout or routing the caller did not ask for.** The caller states where
+  a part goes and what path a wire takes; a refusal returns the conflict
+  set. See `docs/design/schematic_engine.md` for what the server resolves
+  from a stated intent.
 - **Semantic part search** ("find me a low-Vgs-th NMOS under 100mΩ
   Rds(on)"). Requires parsing every `.model` card, normalizing units
   across vendors, building a queryable parameter index — a separate
@@ -670,8 +676,10 @@ Forward-looking and **not commitments**. Priorities follow the scope
 statement at the top of this doc: work that is structured, validated,
 geometry-aware, and LTspice-specific comes first.
 
-- **Layout primitives**: `route_bus`, `align`, `distribute` for the
-  rows of caps/resistors agents constantly need to place.
+- **Schematic authoring**: placement by pin, routes given as a shape, a
+  net on a named trunk, a move that keeps its wires, and the engine rework
+  they need. The full list and its order are in
+  `docs/design/schematic_engine.md`.
 - **`ltspice-mcp doctor`**: one-shot diagnostic that checks simulator
   detection, symbol-path resolution, output-dir placement, Wine vs WSL
   selection, `.MEAS`-on-UNC risk. The `flutter doctor` / `brew doctor`
