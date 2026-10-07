@@ -32,6 +32,7 @@ import importlib
 import itertools
 import math
 import re
+import traceback
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -1125,15 +1126,86 @@ class GridPoint(StrictModel):
 # ---------------------------------------------------------------------------
 
 
+# The DATAFLAG records (data labels: an expression LTspice shows at a point on
+# the sheet) each sheet held when it was read, in file order. spicelib skips
+# them on read and has nothing to write them from (docs/spicelib_bugs.md,
+# Bug 25), so an edit's render puts them back from here.
+_data_flags_by_editor: WeakKeyDictionary[AscEditor, tuple[str, ...]] = WeakKeyDictionary()
+
+
+def data_flag_records(editor: AscEditor) -> tuple[str, ...]:
+    """The DATAFLAG lines ``editor``'s sheet held when it was read, without line ends."""
+    return _data_flags_by_editor.get(editor, ())
+
+
+def _read_data_flags(path: Path, encoding: str) -> tuple[str, ...]:
+    # Read the way spicelib read it: its codec, universal newlines, its test.
+    with open(path, encoding=encoding) as sheet:
+        return tuple(line.removesuffix("\n") for line in sheet if line.startswith("DATAFLAG"))
+
+
+def _unreadable_record(path: Path, exc: NotImplementedError) -> NetlistError:
+    """The refusal for a sheet holding a line spicelib's reader has no branch for.
+
+    spicelib raises ``NotImplementedError`` naming the line but neither its
+    file nor its number (docs/spicelib_bugs.md, Bug 26), and the line may be in
+    a sheet ``path`` loads rather than in ``path``. The innermost read in the
+    traceback is the one that refused: its editor names the sheet and codec,
+    and its ``line`` the record.
+    """
+    sheet, encoding, record = path, None, None
+    for frame, _ in traceback.walk_tb(exc.__traceback__):
+        if frame.f_code is not AscEditor.reset_netlist.__code__:
+            continue
+        owner = frame.f_locals.get("self")
+        if isinstance(owner, AscEditor):
+            sheet, encoding = Path(owner.asc_file_path), owner.encoding
+            record = frame.f_locals.get("line")
+    if not isinstance(record, str):
+        return NetlistError(
+            f"Cannot open {path}: the schematic editor cannot read it: {exc}", show_hint=False
+        )
+    number = None
+    try:
+        with open(sheet, encoding=encoding) as text:
+            # The reader stops at the first line it cannot read, so the first
+            # line equal to the record is that line.
+            number = next((n for n, line in enumerate(text, 1) if line == record), None)
+    except (OSError, UnicodeError, LookupError):
+        pass
+    shown = record.removesuffix("\n")
+    if not shown.strip():
+        what = "is empty"
+    elif shown[0].isspace():
+        what = f"starts with whitespace ({shown!r})"
+    else:
+        what = f"is a {shown.split()[0]} record ({shown!r})"
+    where = f"line {number}" if number is not None else "a line"
+    if sheet != path:
+        where = f"{sheet}, a sheet it loads: {where}"
+    return NetlistError(
+        f"Cannot open {path}: {where} {what}, which the schematic editor does not "
+        "read, so the sheet cannot be opened for reading or editing here.",
+        show_hint=False,
+    )
+
+
 def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
-    Raises NetlistError if file not found or .asy symbol files are missing.
+    Raises NetlistError if the file is not found or holds a line the schematic
+    editor cannot read, and SymbolResolutionError if a file the schematic
+    refers to (a symbol, a sub-sheet) is missing.
     """
     try:
-        if path.suffix.lower() == ".asc":
-            return AscEditor(str(path))
-        return SpiceEditor(str(path))
+        if path.suffix.lower() != ".asc":
+            return SpiceEditor(str(path))
+        try:
+            editor = AscEditor(str(path))
+        except NotImplementedError as e:
+            raise _unreadable_record(path, e) from e
+        _data_flags_by_editor[editor] = _read_data_flags(path, editor.encoding)
+        return editor
     except FileNotFoundError as e:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
