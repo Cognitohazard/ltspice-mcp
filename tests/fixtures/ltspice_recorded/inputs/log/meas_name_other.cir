@@ -1,0 +1,13 @@
+* .meas names that look reserved and are not
+V1 s 0 SIN(0 1 1k)
+R1 s 0 1k
+.tran 0 1m 0 10u
+.meas tran time MAX V(s)
+.meas tran temp MAX V(s)
+.meas tran freq MAX V(s)
+.meas tran boltz MAX V(s)
+.meas tran echarge MAX V(s)
+.meas tran kelvin MAX V(s)
+.meas tran gmin MAX V(s)
+.meas tran meg MAX V(s)
+.end

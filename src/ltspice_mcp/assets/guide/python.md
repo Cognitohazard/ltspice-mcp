@@ -142,7 +142,8 @@ Importable from `ltspice_mcp.api`; arrays in, dicts out.
 - Transient: `window_and_clean`, `compute_signal_stats`,
   `time_weighted_quantiles`, `analyze_edge`, `analyze_pulse_response`,
   `analyze_disturbance_response`, `analyze_timing_between`,
-  `analyze_periodic`, `analyze_thd`, `compute_measurement_stats`.
+  `analyze_periodic`, `analyze_thd`, `analyze_tone`,
+  `compute_measurement_stats`.
 - AC: `prepare_ac_arrays`, `gain_at_frequencies`, `detect_crossings`,
   `find_crossings_any_quantity`, `compute_filter_metrics`,
   `compute_stability_metrics`, `compute_roll_off`, `compute_resonances`,
