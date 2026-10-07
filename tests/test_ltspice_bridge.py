@@ -10,7 +10,6 @@ same recording, so a test that passes against it passes for a recorded reason.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,9 +29,11 @@ from ltspice_mcp.lib.ltspice_window import (
     OpenDesign,
     OpenSheet,
     OpenWindows,
+    WindowsUnavailable,
     content_difference,
     sheet_content,
 )
+from tests._ltspice_window import fake_command, read_world, write_world
 from tests.conftest import LIVENESS_S
 from tests.ltspice_bridge_recorder import (
     FIXTURES,
@@ -47,7 +48,6 @@ from tests.ltspice_bridge_recorder import (
 )
 from tests.test_hidden_desktop import own_desktop, windows_only
 
-FAKE = Path(__file__).with_name("fake_ltspice_bridge.py")
 BUILDS = recorded_builds()
 #: The calls the server makes. The recorder also runs a sheet in the window, which it never does.
 SERVER_CALLS = {
@@ -61,14 +61,6 @@ SERVER_CALLS = {
     "bring_to_front",
     "open_design",
 }
-
-
-def fake_command(world: Path) -> list[str]:
-    return [sys.executable, str(FAKE), str(world)]
-
-
-def write_world(world: Path, windows: list[dict[str, Any]], **extra: Any) -> None:
-    world.write_text(json.dumps({"windows": windows, **extra}), encoding="utf-8")
 
 
 def recorded_sheet(build: str, name: str) -> str:
@@ -326,6 +318,9 @@ class TestSession:
             session.attach(4242)
             with pytest.raises(BridgeError, match="NUL character"):
                 session.replace_design_text("C:\\work\\a.asc", "Version 4" + chr(0) + ".1\n")
+            # By name too: the refusal is where every call passes.
+            with pytest.raises(BridgeError, match="NUL character"):
+                session.call("set_design_content", path="C:\\work\\a.asc", text=chr(0))
             assert session.design_text("C:\\work\\a.asc") == "Version 4.1\n"
 
     def test_a_window_that_is_not_there_cannot_be_attached_to(self, world: Path):
@@ -343,12 +338,21 @@ class TestSession:
 
     def test_a_bridge_that_stops_answering_is_ended_at_the_deadline(self, world: Path):
         write_world(world, [], silent_on="status")
-        # The stand-in never answers, so what ends the wait is the deadline.
-        with BridgeSession(
-            fake_command(world), timeout=0.5
-        ) as session:  # timing: the deadline under test
-            with pytest.raises(BridgeError, match=r"did not answer within 0\.5 s and was ended"):
+        started: list[BridgeSession] = []
+
+        def ask() -> None:
+            with BridgeSession(  # timing: the deadline under test
+                fake_command(world), timeout=0.5
+            ) as session:
+                started.append(session)
                 session.instances()
+
+        # The stand-in never answers, so what ends the wait is the deadline. It
+        # is the whole session's, its start included, so on a loaded machine it
+        # can fall before the request that is never answered: the same end.
+        with pytest.raises(BridgeError, match=r"did not answer within 0\.5 s and was ended"):
+            ask()
+        for session in started:
             assert session._process.wait(timeout=LIVENESS_S) is not None
 
     def test_a_bridge_that_exits_is_reported(self, tmp_path: Path):
@@ -457,43 +461,38 @@ class TestOpenWindows:
             OpenDesign(pid=8, version="26.1.1", path=str(deck), active=False, text=None),
         ]
 
-    def test_with_no_bridge_what_is_open_cannot_be_said(self):
-        with pytest.raises(BridgeError, match="because"):
-            OpenWindows(None, unavailable="because").designs()
+    def test_with_no_bridge_every_question_says_why_it_cannot_be_asked(self, tmp_path: Path):
+        windows = OpenWindows(None, unavailable="because")
+        assert not windows.available
+        assert windows.unavailable == "because"
+        sheet = tmp_path / "amp.asc"
+        for ask in (
+            windows.designs,
+            lambda: windows.holding(sheet),
+            lambda: windows.open_sheet(sheet),
+            lambda: windows.show_results(sheet.with_suffix(".raw")),
+        ):
+            with pytest.raises(
+                WindowsUnavailable, match="LTspice windows cannot be reached here: because"
+            ):
+                ask()
 
     def test_showing_a_sheet_replaces_what_that_window_holds(self, tmp_path: Path):
         sheet = tmp_path / "amp.asc"
         world = tmp_path / "world.json"
         write_world(world, [{"pid": 8, "version": "26.1.1", "designs": {str(sheet): "B\n"}}])
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
-        rows = windows.show_each(windows.holding(sheet), "C\n")
-        assert rows == [{"pid": 8, "version": "26.1.1", "shown": True}]
-        assert (
-            json.loads(world.read_text(encoding="utf-8"))["windows"][0]["designs"][str(sheet)]
-            == "C\n"
-        )
+        assert windows.show_each(windows.holding(sheet), "C\n") == [None]
+        assert read_world(world)["windows"][0]["designs"][str(sheet)] == "C\n"
 
-    def test_a_window_that_closed_in_between_is_a_row_not_an_error(self, tmp_path: Path):
+    def test_a_window_that_closed_in_between_is_an_answer_not_an_error(self, tmp_path: Path):
         sheet = tmp_path / "amp.asc"
         world = tmp_path / "world.json"
         write_world(world, [{"pid": 8, "version": "26.1.1", "designs": {str(sheet): "B\n"}}])
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
         held = windows.holding(sheet)
         write_world(world, [])
-        assert windows.show_each(held, "C\n") == [
-            {
-                "pid": 8,
-                "version": "26.1.1",
-                "shown": False,
-                "reason": "no live LTspice instance with that pid",
-            }
-        ]
-
-    def test_with_no_bridge_no_window_has_anything_open(self, tmp_path: Path):
-        windows = OpenWindows(None, unavailable="because")
-        assert not windows.available
-        assert windows.unavailable == "because"
-        assert windows.holding(tmp_path / "amp.asc") == []
+        assert windows.show_each(held, "C\n") == ["no live LTspice instance with that pid"]
 
     def test_the_setting_turns_it_off(self):
         windows = OpenWindows.detect(["C:\\anywhere\\LTspice.exe"], enabled=False)

@@ -11,7 +11,6 @@ against a recording of LTspice 26.1.1 in ``test_ltspice_bridge.py``).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +31,9 @@ from ltspice_mcp.lib.plot_settings import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 from tests import _ltspice_recorded as rec
-from tests.conftest import LIVENESS_S, stage_recorded_fixture
-from tests.test_ltspice_bridge import fake_command, write_world
+from tests._ltspice_window import PID, a_window, put_windows, read_world
+from tests.conftest import stage_recorded_fixture
 
-PID = 4242
 TRAN = SECTION_NAMES["tran"]
 # What each build's own waveform window saved for panes it made.
 SAVED_BY_A_BUILD = list(rec.per_build(rec.cases_of("plot-settings")))
@@ -43,6 +41,10 @@ SAVED_BY_A_BUILD = list(rec.per_build(rec.cases_of("plot-settings")))
 
 def read(path: Path) -> bytes:
     return path.read_bytes()
+
+
+def write(path: Path, data: bytes) -> None:
+    path.write_bytes(data)
 
 
 def panes_of(path: Path, section: str = TRAN) -> tuple[PlotPane, ...]:
@@ -55,13 +57,8 @@ def was_written(path: str) -> bool:
     return Path(path).is_file()
 
 
-def world_of(world: Path) -> dict[str, Any]:
-    return json.loads(world.read_text(encoding="utf-8"))
-
-
-def a_window(state: SessionState, world: Path, **extra: Any) -> None:
-    write_world(world, [{"pid": PID, "version": "26.1.1", "designs": {}}], **extra)
-    state.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
+def one_window(state: SessionState, world: Path) -> None:
+    put_windows(state, world, [a_window()])
 
 
 async def plot(state: SessionState, **arguments: Any) -> dict[str, Any]:
@@ -110,7 +107,7 @@ async def test_the_run_is_opened_in_ltspice_with_its_traces_named(
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     world = tmp_path / "world.json"
-    a_window(state_no_sim, world)
+    one_window(state_no_sim, world)
 
     data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
 
@@ -127,7 +124,7 @@ async def test_the_run_is_opened_in_ltspice_with_its_traces_named(
         ),
     }
     assert panes_of(raw.with_suffix(".plt")) == (PlotPane(("V(out)",), DEFAULT_SCALES["tran"]),)
-    assert world_of(world)["windows"][0]["shown"] == [str(raw)]
+    assert read_world(world)["windows"][0]["shown"] == [str(raw)]
     # Asked for in LTspice, the chart is not opened in a browser as well.
     assert data["opened"] is False
     # The chart and its numbers are made all the same.
@@ -139,7 +136,7 @@ async def test_named_panels_become_panes(
     state_no_sim: SessionState, work_dir: Path, tmp_path: Path
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    a_window(state_no_sim, tmp_path / "world.json")
+    one_window(state_no_sim, tmp_path / "world.json")
 
     data = await plot(
         state_no_sim,
@@ -161,7 +158,7 @@ async def test_settings_saved_from_ltspice_are_left_as_they_are(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     saved = rec.recorded(build, f"{case_id}.plt").read_bytes()
     raw.with_suffix(".plt").write_bytes(saved)
-    a_window(state_no_sim, tmp_path / "world.json")
+    one_window(state_no_sim, tmp_path / "world.json")
 
     data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
 
@@ -175,7 +172,7 @@ async def test_settings_written_before_are_replaced(
     state_no_sim: SessionState, work_dir: Path, tmp_path: Path
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    a_window(state_no_sim, tmp_path / "world.json")
+    one_window(state_no_sim, tmp_path / "world.json")
     await plot(state_no_sim, raw_file=str(raw), signals=["V(in)"], in_ltspice=True)
 
     await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
@@ -183,11 +180,28 @@ async def test_settings_written_before_are_replaced(
     assert [pane.traces for pane in panes_of(raw.with_suffix(".plt"))] == [("V(out)",)]
 
 
+async def test_the_panes_of_another_analysis_are_kept(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """The file beside a results file is the one beside a sheet of that name,
+    where set_plot_panes may have put an AC run's panes: showing a transient
+    run replaces the transient section and no other."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    ac_panes = (PlotPane(("V(out)", "V(in)"), DEFAULT_SCALES["ac"]),)
+    write(raw.with_suffix(".plt"), write_plot_settings(with_panes(PlotSettings(), "ac", ac_panes)))
+    one_window(state_no_sim, tmp_path / "world.json")
+
+    await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+
+    assert panes_of(raw.with_suffix(".plt"), SECTION_NAMES["ac"]) == ac_panes
+    assert [pane.traces for pane in panes_of(raw.with_suffix(".plt"))] == [("V(out)",)]
+
+
 async def test_an_ac_run_is_given_the_scales_ltspice_gives_one(
     state_no_sim: SessionState, work_dir: Path, tmp_path: Path
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    a_window(state_no_sim, tmp_path / "world.json")
+    one_window(state_no_sim, tmp_path / "world.json")
 
     data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
 
@@ -202,7 +216,7 @@ async def test_a_run_whose_plot_settings_are_not_recorded_is_opened_without_any(
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_dc_div")
     world = tmp_path / "world.json"
-    a_window(state_no_sim, world)
+    one_window(state_no_sim, world)
 
     data = await plot(state_no_sim, raw_file=str(raw), in_ltspice=True)
 
@@ -210,7 +224,7 @@ async def test_a_run_whose_plot_settings_are_not_recorded_is_opened_without_any(
     assert data["ltspice"]["plot_settings"] is None
     assert "is not recorded" in data["ltspice"]["note"]
     assert not raw.with_suffix(".plt").exists()
-    assert world_of(world)["windows"][0]["shown"] == [str(raw)]
+    assert read_world(world)["windows"][0]["shown"] == [str(raw)]
 
 
 async def test_with_no_window_open_nothing_is_started_and_the_traces_are_still_written(
@@ -218,8 +232,7 @@ async def test_with_no_window_open_nothing_is_started_and_the_traces_are_still_w
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     world = tmp_path / "world.json"
-    write_world(world, [])
-    state_no_sim.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
+    put_windows(state_no_sim, world, [])
 
     data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
 
@@ -254,10 +267,10 @@ async def test_without_the_argument_ltspice_is_not_asked(
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     world = tmp_path / "world.json"
-    a_window(state_no_sim, world)
+    one_window(state_no_sim, world)
 
     data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], open=False)
 
     assert "ltspice" not in data
     assert not raw.with_suffix(".plt").exists()
-    assert "shown" not in world_of(world)["windows"][0]
+    assert "shown" not in read_world(world)["windows"][0]

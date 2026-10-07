@@ -64,6 +64,10 @@ def own_desktop() -> str:
     return name.value
 
 
+def _kind(path: str) -> str:
+    return "schematic" if path.lower().endswith(".asc") else "netlist"
+
+
 class _Refused(Exception):
     """A tool result marked as an error, carrying its text."""
 
@@ -79,11 +83,11 @@ class Bridge:
         self._was_attached = False
         self._committed = False
 
-    def _windows(self) -> list[dict[str, Any]]:
-        return json.loads(self._world.read_text(encoding="utf-8")).get("windows", [])
+    def _load(self) -> dict[str, Any]:
+        return json.loads(self._world.read_text(encoding="utf-8"))
 
-    def _silent_on(self) -> str | None:
-        return json.loads(self._world.read_text(encoding="utf-8")).get("silent_on")
+    def _windows(self) -> list[dict[str, Any]]:
+        return self._load().get("windows", [])
 
     def _window(self) -> dict[str, Any]:
         """The window this session is attached to, or the newest if it has none yet."""
@@ -134,7 +138,7 @@ class Bridge:
     def _in_window(self, change: Any) -> None:
         """Apply ``change`` to this session's window in the world, and keep it."""
         window = self._window()
-        world = json.loads(self._world.read_text(encoding="utf-8"))
+        world = self._load()
         for entry in world["windows"]:
             if entry["pid"] == window["pid"]:
                 change(entry, world)
@@ -155,12 +159,11 @@ class Bridge:
 
         if not already:
             self._in_window(load)
-        kind = "schematic" if path.lower().endswith(".asc") else "netlist"
         return {
             "already_open": "true" if already else "false",
             "path": path,
             "status": "ok",
-            "type": kind,
+            "type": _kind(path),
         }
 
     def _bring_to_front(self, path: str | None) -> None:
@@ -171,30 +174,28 @@ class Bridge:
         self._in_window(front)
 
     def _show_results(self, path: str) -> str:
-        window = self._window()
-        world = json.loads(self._world.read_text(encoding="utf-8"))
-        if path not in world.get("results", []) and not Path(path).is_file():
-            raise _Refused("file not found")
-        for entry in world["windows"]:
-            if entry["pid"] == window["pid"]:
-                entry.setdefault("shown", []).append(path)
-        self._world.write_text(json.dumps(world), encoding="utf-8")
+        def show(entry: dict[str, Any], world: dict[str, Any]) -> None:
+            if path not in world.get("results", []) and not Path(path).is_file():
+                raise _Refused("file not found")
+            entry.setdefault("shown", []).append(path)
+
+        self._in_window(show)
         return path
 
     def _replace(self, path: str, text: str) -> dict[str, Any]:
-        window, held = self._design(path)
+        _window, held = self._design(path)
         if held == text:
             return {"status": "ok", "unchanged": "true"}
-        world = json.loads(self._world.read_text(encoding="utf-8"))
-        for entry in world["windows"]:
-            if entry["pid"] == window["pid"]:
-                entry["designs"][path] = text
-        self._world.write_text(json.dumps(world), encoding="utf-8")
+
+        def replace(entry: dict[str, Any], _world: dict[str, Any]) -> None:
+            entry["designs"][path] = text
+
+        self._in_window(replace)
         self._committed = True
         return {"message": "", "status": "ok", "unchanged": "false"}
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if self._silent_on() == name:
+        if self._load().get("silent_on") == name:
             # Never answers, as a bridge that has stopped: the caller's deadline ends it.
             threading.Event().wait()
         if name == "where_am_i":
@@ -212,8 +213,7 @@ class Bridge:
                 # recorded; the client reads a refusal and an empty path alike.
                 raise _Refused("document not found")
             in_front = window.get("active") or list(window["designs"])[-1]
-            kind = "schematic" if in_front.lower().endswith(".asc") else "netlist"
-            return {"path": in_front, "type": kind}
+            return {"path": in_front, "type": _kind(in_front)}
         if name == "get_raw_info":
             return {"path": self._show_results(arguments["path"])}
         if name == "open_design":

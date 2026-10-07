@@ -89,7 +89,6 @@ from ltspice_mcp.lib.lint_rules import (
     value_suffix_evidence,
 )
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
-from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -132,6 +131,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FINDING_SCHEMA,
     HINT_SCHEMA,
+    LTSPICE_WINDOW_PROPERTIES,
     REPEATABLE_CHANGE_ANNOTATIONS,
     WARNINGS_SCHEMA,
     CompareSpec,
@@ -151,6 +151,7 @@ from ltspice_mcp.tools._base import (
     resolve_reference,
     safe_path,
     symbol_resolver_for,
+    window_difference,
 )
 
 # The wiring geometry comes from lib/schematic_ops.py rather than a second copy,
@@ -682,8 +683,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "shown": {"type": "boolean"},
                 "path": {"type": "string", "description": "The file opened."},
-                "pid": {"type": "integer", "description": "The LTspice process."},
-                "version": {"type": "string"},
+                **LTSPICE_WINDOW_PROPERTIES,
                 "already_open": {
                     "type": "boolean",
                     "description": (
@@ -2125,26 +2125,16 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     when the person is looking at something else than was checked.
     """
     report: dict[str, Any] = {"shown": False, "path": str(path)}
-    windows = state.open_windows
-    if not windows.available:
-        report["reason"] = f"LTspice windows cannot be reached here: {windows.unavailable}"
-        return report
     try:
-        opened = windows.open_sheet(path)
+        window, held = state.open_windows.open_sheet(path)
     except BridgeError as error:
         report["reason"] = str(error)
         return report
-    report["shown"] = True
-    if isinstance(opened, OpenSheet):
-        report.update(pid=opened.pid, version=opened.version, already_open=True)
-        if path.suffix.lower() == ".asc":
-            difference = file_difference(path.read_bytes(), opened.text)
-            report["differs_from_file"] = difference is not None
-            if difference is not None:
-                report["difference"] = difference
-    else:
-        report["pid"], report["version"] = opened
-        report["already_open"] = False
+    report.update(
+        shown=True, pid=window.pid, version=window.version, already_open=held is not None
+    )
+    if held is not None and path.suffix.lower() == ".asc":
+        report.update(window_difference(path.read_bytes(), held))
     return report
 
 
@@ -2153,14 +2143,14 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     if shown is None:
         return None
     if not shown["shown"]:
-        return f"not opened in LTspice: {shown['reason']}"
+        return f"Not opened in LTspice: {shown['reason']}."
     if shown.get("differs_from_file"):
         return (
             "LTspice already had the sheet open and shows a different one from the file "
             f"that was checked ({shown['difference']}); to see the file's, close it there "
-            "without saving and ask again"
+            "without saving and ask again."
         )
-    return "in front in LTspice"
+    return "In front in LTspice."
 
 
 def _hint(data: dict[str, Any]) -> str:
@@ -2171,7 +2161,6 @@ def _hint(data: dict[str, Any]) -> str:
         remedy = first.get("remedy")
         return f"{first['stage']} failed: {first['error']}" + (f" — {remedy}" if remedy else "")
     parts: list[str] = []
-    in_ltspice = _ltspice_hint(data.get("ltspice"))
     # A warning says a result exists only because something was assumed, so it
     # leads: without it "no problems found" reads as a clean bill of health over a
     # comparison that was built on a deck nothing could parse.
@@ -2218,8 +2207,9 @@ def _hint(data: dict[str, Any]) -> str:
             headline += " Not run: " + ", ".join(f"{s['check']} ({s['reason']})" for s in skipped)
     if delivery_note:
         headline = f"{headline.rstrip('.')}. {delivery_note}"
+    in_ltspice = _ltspice_hint(data.get("ltspice"))
     if in_ltspice:
-        headline = f"{headline.rstrip('.')}. {in_ltspice[0].upper()}{in_ltspice[1:]}."
+        headline = f"{headline.rstrip('.')}. {in_ltspice}"
     return headline
 
 

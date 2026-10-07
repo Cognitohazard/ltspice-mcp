@@ -39,7 +39,7 @@ import math
 import os
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +48,7 @@ from ltspice_mcp.lib.ltspice_bridge import (
     DEFAULT_TIMEOUT_S,
     BridgeError,
     BridgeSession,
+    Instance,
     bridge_command,
 )
 
@@ -59,6 +60,11 @@ _SYMBOL_LINES = frozenset({"SYMATTR", "WINDOW"})
 _MICRO_SIGNS = str.maketrans({"µ": "u", "μ": "u"})
 _TEXT_GRID = 8
 _WINDOW = "gui"
+_NO_WINDOW = "no LTspice window is open, and none is started for this"
+
+
+class WindowsUnavailable(BridgeError):
+    """There is no bridge to ask here: off Windows, turned off, or none installed."""
 
 
 def _on_text_grid(coordinate: str) -> str:
@@ -138,9 +144,16 @@ def file_difference(on_disk: bytes, window_text: str) -> str | None:
     file holds nothing of its own. A window that differs has unsaved changes
     or was opened before the file last changed, and nothing tells which.
     """
-    readings = (decode_spice_bytes(on_disk), decode_windows_1252(on_disk))
-    differences = [content_difference(reading, window_text) for reading in readings]
-    return differences[0] if all(differences) else None
+    as_read_here = decode_spice_bytes(on_disk)
+    difference = content_difference(as_read_here, window_text)
+    if difference is None:
+        return None
+    as_ltspice_reads = decode_windows_1252(on_disk)
+    if as_ltspice_reads != as_read_here and (
+        content_difference(as_ltspice_reads, window_text) is None
+    ):
+        return None
+    return difference
 
 
 @dataclass(frozen=True)
@@ -181,8 +194,8 @@ class OpenWindows:
     """The LTspice windows on this machine, as far as the bridge shows them.
 
     ``available`` is False where there is no bridge to ask, and every method
-    then answers as if no window had anything open. ``unavailable`` says why,
-    for ``inspect(kind="capabilities")``.
+    then raises ``WindowsUnavailable``. ``unavailable`` says why, for
+    ``inspect(kind="capabilities")``.
     """
 
     def __init__(
@@ -221,31 +234,46 @@ class OpenWindows:
             unavailable="no detected LTspice has ltspice-mcp-bridge.exe beside it (LTspice 26.1 or later)",
         )
 
+    def check(self) -> None:
+        """Raise ``WindowsUnavailable``, saying why, where there is no bridge to ask."""
+        if self._command is None:
+            raise WindowsUnavailable(f"LTspice windows cannot be reached here: {self.unavailable}")
+
+    def _session(self) -> BridgeSession:
+        self.check()
+        assert self._command is not None
+        return BridgeSession(self._command, timeout=self._timeout)
+
+    @staticmethod
+    def _windows(session: BridgeSession) -> list[Instance]:
+        """The instances a person has open: never one a bridge started for itself."""
+        return [instance for instance in session.instances() if instance.mode == _WINDOW]
+
+    @staticmethod
+    def _having(
+        session: BridgeSession, windows: Sequence[Instance], path: Path
+    ) -> Iterator[tuple[Instance, str]]:
+        """Each of ``windows`` that has ``path`` open, with the path as it spells it.
+
+        The session is attached to that window while the caller holds the pair.
+        """
+        for window in windows:
+            session.attach(window.pid)
+            for spelled in session.open_designs():
+                if _same_file(path, spelled):
+                    yield window, spelled
+
     def holding(self, path: Path) -> list[OpenSheet]:
         """Every window that has ``path`` open, with the sheet as it holds it.
 
         Blocks for the bridge's answer. Raises ``BridgeError`` when the bridge
         cannot say, which is not the same answer as "no window has it".
         """
-        if self._command is None:
-            return []
-        sheets: list[OpenSheet] = []
-        with BridgeSession(self._command, timeout=self._timeout) as session:
-            for instance in session.instances():
-                if instance.mode != _WINDOW:
-                    continue
-                session.attach(instance.pid)
-                for spelled in session.open_designs():
-                    if _same_file(path, spelled):
-                        sheets.append(
-                            OpenSheet(
-                                pid=instance.pid,
-                                version=instance.version,
-                                path=spelled,
-                                text=session.design_text(spelled),
-                            )
-                        )
-        return sheets
+        with self._session() as session:
+            return [
+                OpenSheet(window.pid, window.version, spelled, session.design_text(spelled))
+                for window, spelled in self._having(session, self._windows(session), path)
+            ]
 
     def designs(
         self, wants_text: Callable[[str], bool] = lambda _path: False
@@ -257,107 +285,82 @@ class OpenWindows:
         Blocks; raises ``BridgeError`` when there is no bridge to ask or it
         cannot say.
         """
-        if self._command is None:
-            raise BridgeError(self.unavailable or "no bridge")
         found: list[OpenDesign] = []
-        windows = 0
-        with BridgeSession(self._command, timeout=self._timeout) as session:
-            for instance in session.instances():
-                if instance.mode != _WINDOW:
-                    continue
-                windows += 1
-                session.attach(instance.pid)
+        with self._session() as session:
+            windows = self._windows(session)
+            for window in windows:
+                session.attach(window.pid)
                 in_front = session.active_design()
-                for spelled in session.open_designs():
-                    found.append(
-                        OpenDesign(
-                            pid=instance.pid,
-                            version=instance.version,
-                            path=spelled,
-                            active=in_front is not None and _same_file(Path(in_front), spelled),
-                            text=session.design_text(spelled) if wants_text(spelled) else None,
-                        )
+                found += [
+                    OpenDesign(
+                        pid=window.pid,
+                        version=window.version,
+                        path=spelled,
+                        active=in_front is not None and _same_file(Path(in_front), spelled),
+                        text=session.design_text(spelled) if wants_text(spelled) else None,
                     )
-        return windows, found
+                    for spelled in session.open_designs()
+                ]
+        return len(windows), found
 
-    def open_sheet(self, path: Path) -> OpenSheet | tuple[int, str]:
+    def open_sheet(self, path: Path) -> tuple[Instance, str | None]:
         """Open a sheet or netlist in an LTspice window and put it in front.
 
-        A window that already has it open is the one used, and what comes
-        back is that window's copy (an ``OpenSheet``), because LTspice does
-        not read the file again: the caller can then say whether what the
-        person is shown is the file. Otherwise the first window opens it from
-        the file, and its process and version come back. For a caller who was
-        asked to show it. Blocks; raises ``BridgeError`` when there is no
-        bridge, when no window is running (none is started), or when LTspice
-        refuses the file.
+        Returns the window it is in, and that window's own copy when it
+        already had the file open: LTspice does not read the file again, so
+        the caller can then say whether what the person is shown is the file.
+        Otherwise the first window opens it from the file, and there is no
+        copy to hand back. For a caller who was asked to show it. Blocks;
+        raises ``BridgeError`` when there is no bridge, when no window is
+        running (none is started), or when LTspice refuses the file.
         """
-        if self._command is None:
-            raise BridgeError(self.unavailable or "no bridge")
-        with BridgeSession(self._command, timeout=self._timeout) as session:
-            running = [instance for instance in session.instances() if instance.mode == _WINDOW]
-            if not running:
-                raise BridgeError("no LTspice window is open, and none is started for this")
-            for window in running:
-                session.attach(window.pid)
-                for spelled in session.open_designs():
-                    if _same_file(path, spelled):
-                        held = OpenSheet(
-                            pid=window.pid,
-                            version=window.version,
-                            path=spelled,
-                            text=session.design_text(spelled),
-                        )
-                        session.bring_to_front(spelled)
-                        return held
-            window = running[0]
-            session.attach(window.pid)
+        with self._session() as session:
+            windows = self._windows(session)
+            if not windows:
+                raise BridgeError(_NO_WINDOW)
+            for window, spelled in self._having(session, windows, path):
+                held = session.design_text(spelled)
+                session.bring_to_front(spelled)
+                return window, held
+            session.attach(windows[0].pid)
             session.open_design(str(path))
             session.bring_to_front(str(path))
-        return window.pid, window.version
+            return windows[0], None
 
-    def show_results(self, results: Path) -> tuple[int, str]:
-        """Open a results file in an LTspice window and put it in front.
+    def show_results(self, results: Path) -> Instance:
+        """Open a results file in an LTspice window, in front, and return the window.
 
-        Returns the process and version of the window it went to. This is
-        the one thing here that opens something in a window, so it is for a
-        caller who was asked to. Blocks; raises ``BridgeError`` when there is
-        no bridge, when no window is running (none is started), or when
-        LTspice refuses the file.
+        For a caller who was asked to show it. Blocks; raises ``BridgeError``
+        when there is no bridge, when no window is running (none is started),
+        or when LTspice refuses the file.
         """
-        if self._command is None:
-            raise BridgeError(self.unavailable or "no bridge")
-        with BridgeSession(self._command, timeout=self._timeout) as session:
-            running = [instance for instance in session.instances() if instance.mode == _WINDOW]
-            if not running:
-                raise BridgeError("no LTspice window is open, and none is started for this")
-            window = running[0]
-            session.attach(window.pid)
+        with self._session() as session:
+            windows = self._windows(session)
+            if not windows:
+                raise BridgeError(_NO_WINDOW)
+            session.attach(windows[0].pid)
             session.show_results(str(results))
-        return window.pid, window.version
+            return windows[0]
 
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""
-        if self._command is None:
-            raise BridgeError(self.unavailable or "no bridge")
-        with BridgeSession(self._command, timeout=self._timeout) as session:
+        with self._session() as session:
             session.attach(sheet.pid)
             session.replace_design_text(sheet.path, text)
 
-    def show_each(self, sheets: Sequence[OpenSheet], text: str) -> list[dict[str, object]]:
-        """``show`` for every window, as one row each of what happened there.
+    def show_each(self, sheets: Sequence[OpenSheet], text: str) -> list[str | None]:
+        """``show`` for every window: None where it took the sheet, else why not.
 
-        A window that could not be reached is a row saying so, never an
+        A window that could not be reached is an answer saying so, never an
         exception: the file is already committed when this runs, and a window
         left behind is a fact about that window.
         """
-        rows: list[dict[str, object]] = []
+        refusals: list[str | None] = []
         for sheet in sheets:
-            row: dict[str, object] = {"pid": sheet.pid, "version": sheet.version, "shown": True}
             try:
                 self.show(sheet, text)
             except BridgeError as error:
-                row["shown"] = False
-                row["reason"] = str(error)
-            rows.append(row)
-        return rows
+                refusals.append(str(error))
+            else:
+                refusals.append(None)
+        return refusals

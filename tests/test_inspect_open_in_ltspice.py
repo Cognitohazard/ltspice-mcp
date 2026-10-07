@@ -7,7 +7,6 @@ replayed against a recording of LTspice 26.1.1 in ``test_ltspice_bridge.py``).
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 from pathlib import Path
 from typing import Any
@@ -15,23 +14,19 @@ from typing import Any
 import jsonschema
 import pytest
 
-from ltspice_mcp.lib.encoding import decode_windows_1252
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import LIVENESS_S
-from tests.test_ltspice_bridge import fake_command, write_world
-
-PID = 4242
-
-
-def as_ltspice_reads(sheet: Path) -> str:
-    return decode_windows_1252(sheet.read_bytes())
-
-
-def digest(sheet: Path) -> str:
-    return hashlib.sha256(sheet.read_bytes()).hexdigest()
+from tests._ltspice_window import (
+    PID,
+    a_window,
+    as_ltspice_reads,
+    digest,
+    fake_command,
+    put_windows,
+    write_world,
+)
 
 
 def a_second_sheet(asc_file: Path) -> Path:
@@ -60,13 +55,6 @@ async def ask(state: SessionState) -> dict[str, Any]:
     return item
 
 
-def open_windows(
-    state: SessionState, world: Path, windows: list[dict[str, Any]], **extra: Any
-) -> None:
-    write_world(world, windows, **extra)
-    state.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
-
-
 async def test_it_lists_what_is_open_and_which_document_is_in_front(
     asc_state: SessionState,
     asc_file: Path,
@@ -78,7 +66,7 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
     # A directory beside the sandbox, not in it.
     outside = a_sheet_outside(tmp_path_factory.mktemp("elsewhere"), asc_file)
     changed = as_ltspice_reads(other).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
-    open_windows(
+    put_windows(
         asc_state,
         tmp_path / "world.json",
         [
@@ -154,7 +142,7 @@ async def test_the_digest_it_reports_is_the_one_an_edit_takes(
 ):
     from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 
-    open_windows(
+    put_windows(
         asc_state,
         tmp_path / "world.json",
         [
@@ -187,9 +175,7 @@ async def test_the_digest_it_reports_is_the_one_an_edit_takes(
 async def test_with_ltspice_running_and_nothing_open_the_list_is_empty(
     asc_state: SessionState, tmp_path: Path
 ):
-    open_windows(
-        asc_state, tmp_path / "world.json", [{"pid": PID, "version": "26.1.1", "designs": {}}]
-    )
+    put_windows(asc_state, tmp_path / "world.json", [a_window()])
 
     item = await ask(asc_state)
 
@@ -200,7 +186,7 @@ async def test_with_ltspice_running_and_nothing_open_the_list_is_empty(
 async def test_with_no_ltspice_running_there_are_no_windows(
     asc_state: SessionState, tmp_path: Path
 ):
-    open_windows(asc_state, tmp_path / "world.json", [])
+    put_windows(asc_state, tmp_path / "world.json", [])
 
     item = await ask(asc_state)
 
@@ -246,9 +232,7 @@ async def test_a_long_list_is_cut_and_counted(
 ):
     monkeypatch.setattr(inspect_tools, "_OPEN_DESIGNS_LIMIT", 3)
     designs = {str(asc_file.with_name(f"deck{n}.net")): "* deck\n" for n in range(3 + extra)}
-    open_windows(
-        asc_state, tmp_path / "world.json", [{"pid": PID, "version": "26.1.1", "designs": designs}]
-    )
+    put_windows(asc_state, tmp_path / "world.json", [a_window(designs)])
 
     data = (await ask(asc_state))["data"]
 

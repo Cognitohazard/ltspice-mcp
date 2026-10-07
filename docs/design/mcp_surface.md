@@ -1134,8 +1134,11 @@ cross-session rules — was judged worse half-done than absent.
 **A sheet open in LTspice.** LTspice reads a sheet once. A window that has the
 target open holds a copy of its own from then on: a write to the file changes
 nothing on screen, and the window's next save puts the old sheet back over the
-new file. So the transaction looks for such a window, inside the edit guard,
-through the MCP bridge LTspice ships from 26.1 (`lib/ltspice_window.py`):
+new file. So a transaction that replaces the sheet looks for such a window,
+inside the edit guard, through the MCP bridge LTspice ships from 26.1
+(`lib/ltspice_window.py`). One that leaves the sheet as it is (a read with no
+ops, a batch of nothing but `set_plot_panes`) replaces nothing a window holds,
+and asks nothing:
 
 - **Before the commit** the window's copy is compared with the file. A window
   that differs either has changes nobody saved or was opened before the file

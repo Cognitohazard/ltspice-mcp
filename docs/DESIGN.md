@@ -461,8 +461,9 @@ so zoom / pan / hover does nothing for it.
   ships (`OpenWindows.show_results`). A results file opened there shows an
   empty plot unless a plot settings file of the same name sits beside it, so
   the server writes one naming the panels' traces, with the module that
-  writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`). That covers
-  the two analyses whose section is recorded, a transient and an AC run; any
+  writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`), replacing
+  the section of the run's analysis and keeping the others. That covers the
+  two analyses whose section is recorded, a transient and an AC run; any
   other run opens with an empty plot and the reply says why. A settings file
   a person saved from LTspice is left alone: writing its panes back never
   gives its bytes, which is how it is told from one written here. LTspice is

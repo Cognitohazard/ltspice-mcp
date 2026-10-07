@@ -11,7 +11,7 @@ of a real install to what LTspice's own server lists
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import jsonschema
 import pytest
@@ -21,6 +21,7 @@ from ltspice_mcp.lib import simulator_docs
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from tests.conftest import installed_simulator
 from tests.ltspice_bridge_recorder import FIXTURES, load_manifest, recorded_builds
 
 MEAS = """---
@@ -61,17 +62,6 @@ F2 places a component.
 """
 
 
-class InstalledSimulator:
-    """A simulator whose library is wherever the test put it."""
-
-    spice_exe: ClassVar[list[str]] = []
-    library: Path
-
-    @classmethod
-    def get_default_library_paths(cls) -> list[str]:
-        return [str(cls.library)]
-
-
 def an_install(root: Path, *, with_reference: bool = True) -> type:
     library = root / "LTspice" / "lib"
     library.mkdir(parents=True)
@@ -81,7 +71,7 @@ def an_install(root: Path, *, with_reference: bool = True) -> type:
         (reference / "MEAS-REFERENCE.md").write_text(MEAS, encoding="utf-8")
         (reference / "keys.md").write_bytes(SHORTCUTS.replace("\n", "\r\n").encode("utf-8"))
         (reference / "notes.txt").write_text("not a document", encoding="utf-8")
-    return type("Installed", (InstalledSimulator,), {"library": library})
+    return installed_simulator(library)
 
 
 @pytest.fixture
@@ -222,7 +212,8 @@ def test_the_install_this_models_is_the_one_ltspice_was_recorded_writing(build: 
 
 
 def test_the_directory_is_the_one_beside_a_library_root(tmp_path: Path):
-    library = an_install(tmp_path).library  # type: ignore[attr-defined]
+    an_install(tmp_path)
+    library = tmp_path / "LTspice" / "lib"
     assert simulator_docs.reference_directory([tmp_path, library]) == library.parent / "reference"
     assert simulator_docs.reference_directory([tmp_path]) is None
     assert simulator_docs.reference_directory([]) is None

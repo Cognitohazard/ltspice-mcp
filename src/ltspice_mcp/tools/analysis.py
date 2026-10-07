@@ -47,6 +47,7 @@ from ltspice_mcp.lib.ac_analysis import (
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
+from ltspice_mcp.lib.ltspice_window import WindowsUnavailable
 from ltspice_mcp.lib.metrics import (
     guarded_axis,
     parse_time,
@@ -71,6 +72,7 @@ from ltspice_mcp.lib.signal_analysis import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
+    LTSPICE_WINDOW_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
     RawSelectionFields,
@@ -1072,38 +1074,6 @@ _ALREADY_OPEN_NOTE = (
 )
 
 
-def _write_plot_settings(results: Path, plot_name: str, panes: list[list[str]]) -> str | None:
-    """Write the plot settings that draw ``panes`` beside ``results``. Blocking.
-
-    None once written, and otherwise why they were not. A file a person saved
-    from LTspice is theirs and is left alone; one written here before is
-    replaced.
-    """
-    analysis = plot_settings.analysis_of(plot_name)
-    if analysis is None:
-        return (
-            f"no traces are drawn, because how LTspice reads the plot settings of a "
-            f"{plot_name} plot is not recorded"
-        )
-    target = plot_settings.plot_settings_path(results)
-    scales = plot_settings.DEFAULT_SCALES[analysis]
-    try:
-        if target.is_file() and not plot_settings.holds_only_panes(target.read_bytes()):
-            return (
-                f"{target.name} was saved from LTspice and is left as it is, so the "
-                "window shows the traces saved in it"
-            )
-        drawn = plot_settings.with_panes(
-            plot_settings.PlotSettings(),
-            analysis,
-            [plot_settings.PlotPane(tuple(names), scales) for names in panes],
-        )
-        atomic_write_bytes(target, plot_settings.write_plot_settings(drawn), durable=False)
-    except (NetlistError, OSError) as error:
-        return f"the plot settings could not be written ({error})"
-    return None
-
-
 def _show_in_ltspice(
     state: SessionState, results: Path, plot_name: str, panes: list[list[str]]
 ) -> dict[str, Any]:
@@ -1122,14 +1092,19 @@ def _show_in_ltspice(
         "panes": panes,
     }
     windows = state.open_windows
-    if not windows.available:
-        report["reason"] = f"LTspice windows cannot be reached here: {windows.unavailable}"
+    try:
+        windows.check()
+    except WindowsUnavailable as error:
+        report["reason"] = str(error)
         return report
-    left_alone = _write_plot_settings(results, plot_name, panes)
+    try:
+        left_alone = plot_settings.write_beside(results, plot_name, panes)
+    except (NetlistError, OSError) as error:
+        left_alone = f"the plot settings could not be written ({error})"
     if left_alone is None:
         report["plot_settings"] = str(plot_settings.plot_settings_path(results))
     try:
-        report["pid"], report["version"] = windows.show_results(results)
+        window = windows.show_results(results)
     except BridgeError as error:
         report["reason"] = str(error)
         if left_alone is None:
@@ -1138,8 +1113,12 @@ def _show_in_ltspice(
                 "plot settings beside it name them."
             )
         return report
-    report["shown"] = True
-    report["note"] = _ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}."
+    report.update(
+        shown=True,
+        pid=window.pid,
+        version=window.version,
+        note=_ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}.",
+    )
     return report
 
 
@@ -1200,8 +1179,7 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                 "description": "Present with in_ltspice: what happened in the LTspice window.",
                 "properties": {
                     "shown": {"type": "boolean"},
-                    "pid": {"type": "integer", "description": "The LTspice process."},
-                    "version": {"type": "string"},
+                    **LTSPICE_WINDOW_PROPERTIES,
                     "results": {"type": "string", "description": "The file opened."},
                     "plot_settings": {
                         "type": ["string", "null"],
