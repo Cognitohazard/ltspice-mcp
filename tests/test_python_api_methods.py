@@ -625,7 +625,17 @@ def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
 ) -> None:
     api = SyncApi(state_no_sim)
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    recipes = [{"key": f"invalid-{index}", "metric": "not_a_recipe"} for index in range(107)]
+    # Each recipe names a label of its own, so each fails for its own reason:
+    # 107 distinct rows, which the wire page cannot collapse below its cap.
+    recipes = [
+        {
+            "key": f"ghost-{index}",
+            "metric": "value",
+            "expr": "V(out)",
+            "sources": [f"ghost{index}"],
+        }
+        for index in range(107)
+    ]
     sources = [{"raw_path": str(raw), "label": "dut"}]
     complete = api.analyze_results(sources=sources, recipes=recipes)
     wire = api.analyze_results(raw_page=True, sources=sources, recipes=recipes)
@@ -638,6 +648,28 @@ def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
         item.get("code") == "failures_truncated" and "107" in item.get("detail", "")
         for item in wire["observations"]
     )
+
+
+def test_analyze_complete_failure_inventory_uncollapses_the_wire_rows(
+    state_no_sim: SessionState,
+    work_dir: Path,
+) -> None:
+    """The page counts a repeated failure in one row; the complete result keeps
+    every record, so the two interfaces reconcile to the same failures."""
+    api = SyncApi(state_no_sim)
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    recipes = [{"key": f"invalid-{index}", "metric": "not_a_recipe"} for index in range(107)]
+    sources = [{"raw_path": str(raw), "label": "dut"}]
+    complete = api.analyze_results(sources=sources, recipes=recipes)
+    wire = api.analyze_results(raw_page=True, sources=sources, recipes=recipes)
+
+    assert len(complete["failures"]) == 107
+    assert all("count" not in row for row in complete["failures"])
+    (row,) = wire["failures"]
+    assert row["count"] == 107
+    assert row["wheres"] == [f"recipes[{index}]" for index in range(10)]
+    assert row["where"] == "recipes[0]"
+    assert not any(item.get("code") == "failures_truncated" for item in wire["observations"])
 
 
 def test_analyze_reports_a_repeat_it_read_once_through_both_interfaces(

@@ -896,13 +896,28 @@ _GRID_RECIPES: list[dict[str, Any]] = [
 _FLOOR_DIGIT_SLACK = 16
 
 
-async def _grid_receipt(state: SessionState, deck: Path, cases: int, budget: int):
+# A signal no run carries: the recipe fails the same way on every run.
+_ABSENT_SIGNAL_RECIPE: dict[str, Any] = {
+    "key": "absent",
+    "metric": "value",
+    "expr": "V(nope)",
+    "at": "900u",
+}
+
+
+async def _grid_receipt(
+    state: SessionState,
+    deck: Path,
+    cases: int,
+    budget: int,
+    recipes: list[dict[str, Any]] = _GRID_RECIPES,
+):
     """A completed ``cases``-case grid over two-by-two by ``cases // 4`` values."""
     values = [f"{index}k" for index in range(1, cases // 4 + 1)]
     result = await exp_mod.handle_run_experiments(
         exp_mod.RunExperimentsInput.model_validate(
             {
-                "request_id": f"grid-{cases}-{budget}",
+                "request_id": f"grid-{recipes[0]['key']}-{cases}-{budget}",
                 "circuits": [{"path": str(deck), "id": "dut"}],
                 "execution": {"wait_s": LIVENESS_S},
                 "variations": [
@@ -911,7 +926,7 @@ async def _grid_receipt(state: SessionState, deck: Path, cases: int, budget: int
                         "assign": {"R1": values, "C1": ["1u", "2u"], "V1": ["1", "2"]},
                     }
                 ],
-                "analyze": {"recipes": _GRID_RECIPES},
+                "analyze": {"recipes": recipes},
                 "budget": budget,
             }
         ),
@@ -979,6 +994,62 @@ class TestReceiptFloor:
             seen.extend(row["case_id"] for row in page["items"])
             cursor = page["next_cursor"]
         assert seen == [f"dut-case-{index:04d}" for index in range(64)]
+
+    async def test_a_recipe_failing_on_every_run_is_one_counted_row(
+        self, state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Failures are a fact channel no rung trims, so a failure per run kept
+        the floor growing with the job: a signal no run carries is one message
+        per run, identical but for ``where``. It is one reason, so one row,
+        counted — on the receipt and on analyze_results over the job alike."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = work_dir / "grid.cir"
+        deck.write_text(_GRID_DECK)
+        floor = response_budget.BUDGET_MIN_TOKENS
+        # The row names its places up to a cap, so the floor stops moving once
+        # the job has more runs than that: both sizes here are past it.
+        sizes = (16, 64)
+        assert sizes[0] > analyze_mod._FAILURE_WHERE_CAP
+
+        receipts = {
+            cases: await _grid_receipt(
+                state_with_sim, deck, cases, floor, recipes=[_ABSENT_SIGNAL_RECIPE]
+            )
+            for cases in sizes
+        }
+
+        small = response_budget.estimate_tokens(receipts[sizes[0]])
+        large = response_budget.estimate_tokens(receipts[sizes[1]])
+        assert large - small <= _FLOOR_DIGIT_SLACK, (small, large)
+        for cases, data in receipts.items():
+            (row,) = data["analysis"]["result"]["failures"]
+            assert row["code"] == "recipe_failed"
+            assert row["count"] == cases
+            # The places, in run order, capped: the count says how many more.
+            places = [
+                f"experiment:dut-case-{index:04d}"
+                for index in range(analyze_mod._FAILURE_WHERE_CAP)
+            ]
+            assert row["wheres"] == places
+            assert row["where"] == places[0]
+
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": receipts[64]["job_id"]}],
+                    "recipes": [_ABSENT_SIGNAL_RECIPE],
+                }
+            ),
+            state_with_sim,
+        )
+        data = standalone.structured_content
+        assert data is not None
+        jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(data)
+        (row,) = data["failures"]
+        assert row["count"] == 64
+        assert data["coverage"]["runs_requested"] == 64
+        assert data["coverage"]["runs_analyzed"] == 0
+        assert data["outcome"] != "complete"
 
     async def test_a_budget_the_rows_can_share_keeps_as_many_as_fit(
         self, state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch

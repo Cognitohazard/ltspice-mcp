@@ -882,6 +882,14 @@ in the result set, so a continuation replays them.
   share one; a label the caller writes must still be unique.
 - Validation, results and errors are per recipe: one bad recipe fails that item
   only.
+- A failure row is one reason, not one place. Rows sharing `code`, `stage` and
+  `message` (numbers folded, as a repeated log diagnostic is) become one: the
+  first by `where`, verbatim, plus `wheres` (the distinct places, at most 10)
+  and `count` (the failure records it stands for). A recipe that fails on every
+  run of a sweep — a signal no run carries — is one row, not a row per run, so
+  the failures channel no rung trims stays bounded in the run count. The page
+  then caps rows at 100 with a `failures_truncated` observation. The Python
+  API's complete result lists every record, one per place.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
   assignments}`.
@@ -936,7 +944,8 @@ in the result set, so a continuation replays them.
 
 Output: `outcome, coverage {runs_requested, runs_analyzed, missing_cases: Page},
 results {key -> {metric, units, reduced[], groups?, steps?, spec?,
-per_run?: Page, warnings}}, observations[], failures[], signals_available?,
+per_run?: Page, warnings}}, observations[],
+failures[] {code, stage, where, message, wheres?, count?}, signals_available?,
 source_hashes, result_set_id?, hint`.
 
 The name `analyze_results` is broader than the naming rule prefers. It was kept

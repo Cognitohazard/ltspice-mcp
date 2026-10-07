@@ -554,7 +554,7 @@ module so that `__all__` stays the pinned stability boundary and does not move.
   MCP pages" is impossible past an irreversible cap: (a) neutral evaluator
   output equals Python output; (b) MCP output equals the documented projection
   or cap of that neutral output; (c) every omitted record reconciles through
-  totals and truncation observations.
+  totals, the `count` on a collapsed failure row, and truncation observations.
 - **Collectors.** More than 50 runs; more than 100 analyze rows or failures;
   more than 25 verify findings per rule; more than 100 pin rows on one edit; a
   batched `inspect` with several live cursors; an `.asc` net with pins *and*

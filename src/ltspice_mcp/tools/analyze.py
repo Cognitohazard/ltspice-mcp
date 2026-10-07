@@ -7,6 +7,7 @@ import contextlib
 import copy
 import math
 import os
+import re
 import statistics
 import time
 from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
@@ -266,6 +267,55 @@ class Failure:
             "where": self.where,
             "message": message,
         }
+
+
+_FAILURE_WHERE_CAP = 10
+"""How many places a collapsed failure row names before deferring to ``count``."""
+
+_DIGIT_RUN = re.compile(r"(\d+)")
+
+
+def _place_order(where: str) -> tuple[Any, ...]:
+    """``where`` in reading order: ``recipes[2]`` before ``recipes[10]``."""
+    return tuple(
+        int(part) if index % 2 else part for index, part in enumerate(_DIGIT_RUN.split(where))
+    )
+
+
+def _collapse_failures(
+    failures: Sequence[Failure], served: Collection[str] | None = None
+) -> list[dict[str, Any]]:
+    """Failure rows in wire shape, one per reason rather than one per place.
+
+    A recipe that fails one way fails that way on every run — a signal no run
+    carries is one message per run, identical but for ``where`` — so a wide
+    sweep returned a row per run in a channel the budget ladder may never trim.
+    Rows sharing ``(code, stage, message)`` therefore become one row naming its
+    places, the way the experiment receipt already collapses case failures.
+
+    The message keys through :func:`diagnostic_collapse_key`, which folds
+    numbers: a message carrying the run's own numeric state differs in every
+    case of a Monte Carlo, and a verbatim key would group none of them. The row
+    is one member verbatim, the first by ``where`` so that two identical calls
+    pick the same one. ``count`` is the true number of failure records and
+    ``wheres`` the distinct places, capped, so a capped list reports its own
+    shortfall rather than rounding it away. The Python API's complete result
+    keeps every record, uncollapsed.
+    """
+    grouped: dict[tuple[str, str, str], list[Failure]] = {}
+    for failure in failures:
+        key = (failure.code, failure.stage, diagnostic_collapse_key(failure.message))
+        grouped.setdefault(key, []).append(failure)
+    rows: list[dict[str, Any]] = []
+    for members in grouped.values():
+        ordered = sorted(members, key=lambda failure: _place_order(failure.where))
+        row = ordered[0].wire(served)
+        if len(ordered) > 1:
+            places = list(dict.fromkeys(failure.where for failure in ordered))
+            row["wheres"] = places[:_FAILURE_WHERE_CAP]
+            row["count"] = len(ordered)
+        rows.append(row)
+    return rows
 
 
 @dataclass(frozen=True)
@@ -2548,6 +2598,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "stage": {"type": "string"},
                     "where": {"type": "string"},
                     "message": {"type": "string"},
+                    # Present on a row that stands for several failures with one
+                    # cause: the distinct places, capped, and the true count.
+                    "wheres": {"type": "array", "items": {"type": "string"}},
+                    "count": {"type": "integer", "minimum": 2},
                 },
                 "required": ["code", "stage", "where", "message"],
                 "additionalProperties": False,
@@ -2845,19 +2899,25 @@ def _assemble(
                 view_fields=a.include.fields,
             ),
         }
-    failure_total = len(failures)
-    if failure_total > _FAILURE_CAP:
-        failures = failures[:_FAILURE_CAP]
+    failure_rows = _collapse_failures(failures, a.served)
+    if len(failure_rows) > _FAILURE_CAP:
+        standing_for = (
+            f", which stand for {len(failures)} failures"
+            if len(failures) != len(failure_rows)
+            else ""
+        )
         observations.append(
             Observation(
                 code="failures_truncated",
                 kind="coverage",
                 detail=(
-                    f"Returned {_FAILURE_CAP} of {failure_total} failure records; "
-                    "coverage and recipe result presence still reflect the full call."
+                    f"Returned {_FAILURE_CAP} of {len(failure_rows)} failure records"
+                    f"{standing_for}; coverage and recipe result presence still "
+                    "reflect the full call."
                 ),
             )
         )
+        failure_rows = failure_rows[:_FAILURE_CAP]
     runs_requested = len(a.runs) + len(a.missing)
     # A continuation handle is both a delivery (there is more to fetch, so the
     # call did not come back empty-handed) and a shortfall (this page is not
@@ -2888,7 +2948,7 @@ def _assemble(
         "coverage": coverage,
         "results": results,
         "observations": [observation.wire() for observation in observations],
-        "failures": [failure.wire(a.served) for failure in failures],
+        "failures": failure_rows,
         "source_hashes": _source_hashes(item, provenance=provenance),
         "result_set_id": item.result_set_id,
         "cursor": next_value["cursor"] if next_value is not None else None,
@@ -2919,7 +2979,7 @@ def _assemble(
         data["hint"] = " ".join(hints)
     text = (
         f"analyze_results: {outcome}; {len(results)} recipe result(s), "
-        f"{failure_total} failure(s), "
+        f"{len(failures)} failure(s), "
         f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
     )
     return data, text
@@ -3961,6 +4021,8 @@ def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str,
         groups=None,
     )
     data, _text = _assemble(combined, None, limits)
+    # Every record, one per place: the page's collapse and cap are how a wire
+    # response stays bounded, and a complete result has no bound to keep.
     data["failures"] = [failure.wire() for failure in combined.failure_inventory]
     data["observations"] = [
         observation

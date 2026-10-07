@@ -113,9 +113,11 @@ lint blocks a mismatch. A case that produced nothing is counted in
   id you lost. A `wait` that returns `timed_out` ended the wait, not the job.
 - `analyze_results`: the default reply is the answer (`results`, `coverage`,
   `observations`, `failures`); ask for more under `include` (`fields`,
-  `per_run`, `outliers`, `signals_available`). `group_by` is a top-level
-  argument, never inside a recipe. Results of the `operating_point` recipe are
-  in `device_op_points`, keyed by the simulator's literal names (`@m1[gm]`).
+  `per_run`, `outliers`, `signals_available`). A failure row is one reason:
+  one that hit several runs carries `count` and `wheres` (the first 10
+  places). `group_by` is a top-level argument, never inside a recipe. Results
+  of the `operating_point` recipe are in `device_op_points`, keyed by the
+  simulator's literal names (`@m1[gm]`).
   For a staircase signal (DAC steps, line reflections), read each level with a
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur
