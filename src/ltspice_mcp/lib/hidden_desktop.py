@@ -449,16 +449,20 @@ class HiddenDesktop:
         *,
         cwd: str | Path | None = None,
         env: Mapping[str, str] | None = None,
+        stdin: IO[Any] | int | None = None,
         stdout: IO[Any] | int | None = None,
         stderr: IO[Any] | int | None = None,
     ) -> StartedProcess:
         """Start ``command`` with its windows on this desktop.
 
-        ``stdout`` and ``stderr`` are open files (or descriptors) the program
-        writes to, ``stderr`` also ``subprocess.STDOUT`` for the same one as
-        ``stdout``; None leaves the stream unconnected. Only those handles
-        are inherited, never another this process happens to hold open. The
-        program is in its job before it runs its first instruction.
+        ``stdin`` is an open file (or descriptor) the program reads, and
+        ``stdout`` and ``stderr`` ones it writes to, ``stderr`` also
+        ``subprocess.STDOUT`` for the same one as ``stdout``; None leaves the
+        stream unconnected. Only those handles are inherited, never another
+        this process happens to hold open, so the far end of a pipe given
+        here stays this process's alone. The program is in its job before it
+        runs its first instruction, and whatever it starts shares both its
+        job and this desktop.
         """
         if self._handle is None:
             raise OSError("No desktop to start a program on")
@@ -474,17 +478,21 @@ class HiddenDesktop:
         created = _ProcessInformation()
         line = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(command)))
         with contextlib.ExitStack() as held:
+            read = None if stdin is None else held.enter_context(_inheritable(stdin))
             out = None if stdout is None else held.enter_context(_inheritable(stdout))
             if stderr == subprocess.STDOUT:
                 error = out
             else:
                 error = None if stderr is None else held.enter_context(_inheritable(stderr))
-            inherited = [handle for handle in dict.fromkeys((out, error)) if handle is not None]
+            inherited = [
+                handle for handle in dict.fromkeys((read, out, error)) if handle is not None
+            ]
             if inherited:
                 # The extended form of the startup information, which is what
                 # carries the list of the handles to inherit.
                 startup.StartupInfo.cb = ctypes.sizeof(startup)
                 startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
+                startup.StartupInfo.hStdInput = read
                 startup.StartupInfo.hStdOutput = out
                 startup.StartupInfo.hStdError = error
                 startup.lpAttributeList = held.enter_context(_handle_list(inherited))
