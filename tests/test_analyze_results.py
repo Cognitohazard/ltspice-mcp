@@ -55,6 +55,8 @@ from tests.conftest import (
     make_experiment_job,
     stage_recorded_fixture,
 )
+from tests.test_measurement_aggregation import TCROSS_AT as SWEEP_TCROSS
+from tests.test_measurement_aggregation import VFINAL as SWEEP_VFINAL
 
 
 def _source(raw: Path, label: str = "dut") -> dict[str, Any]:
@@ -498,9 +500,11 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
             for case in evaluation.missing
             if recipe.sources is None or case.get("label") in set(recipe.sources)
         ]
+        tallies = analyze_mod._tallies(recipe, rows)
         spec = analyze_mod._spec(
             recipe,
-            rows,
+            tallies,
+            len(rows),
             incomplete=bool(unit.failures or relevant_missing),
             include_outliers=True,
             fail_case_limit=max(1, len(rows)),
@@ -516,7 +520,7 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
                 key=unit.key,
                 position=unit.position,
                 rows=tuple(rows),
-                reductions=tuple(analyze_mod._reduce(recipe, rows)),
+                reductions=tuple(analyze_mod._reduce(recipe, tallies)),
                 facts={
                     "metric": recipe.metric,
                     "warnings": analyze_mod._record_warnings(rows),
@@ -2808,7 +2812,7 @@ async def test_every_metric_exposes_a_flat_numeric_headline(
     # name (measurements: value.measured.<name>, or per-.meas stats on a stepped
     # run), not a single measurement with a headline. operating_point is NOT here only because 'step'/'step_count'
     # are numeric — bookkeeping, not its answer, which is why the answer
-    # channel has to keep its buckets whole (_WHOLE_VALUE_METRICS) rather than
+    # channel has to keep its buckets whole (_LEAN_VALUES) rather than
     # trust this test to notice their loss.
     exempt = {"measurements"}
     raw = stage_recorded_fixture(work_dir, fixture_name)
@@ -2872,26 +2876,65 @@ async def test_measurements_recipe_bins_the_distribution_on_request(
     assert plain["histogram"] == []
 
 
-# What LTspice printed in each per-case log of a three-case R sweep of an RC
-# low-pass (tests/test_measurement_aggregation.py): vfinal is FIND V(out) AT=0.9m,
-# tcross is WHEN V(out)=0.5, whose result is the time of the crossing.
-_SWEEP_VFINAL = [0.999876166042, 0.98323999039, 0.852486569628]
-_SWEEP_TCROSS = [6.98285618328e-05, 0.000152998664495, 0.000326276827772]
+# One LTspice log per case of a three-case R sweep of an RC low-pass, and the
+# deck's .meas lines: vfinal is FIND V(out) AT=0.9m, tcross is WHEN V(out)=0.5,
+# whose result is the time of the crossing. SWEEP_VFINAL and SWEEP_TCROSS are
+# what each log printed.
+_SWEEP_LOGS = [FIXTURES_DIR / f"ltspice_sweep_meas_run{index}.log" for index in range(3)]
 _SWEEP_DECK = (
     ".tran 1m\n.meas tran vfinal FIND V(out) AT=0.9m\n.meas tran tcross WHEN V(out)=0.5\n.end\n"
 )
 
 
-def _sweep_job(state: SessionState, work_dir: Path) -> str:
-    """A completed three-case experiment whose cases left the recorded sweep logs."""
-    for index in range(3):
-        shutil.copy(
-            FIXTURES_DIR / f"ltspice_sweep_meas_run{index}.log", work_dir / f"case-{index}.log"
-        )
-    job = make_experiment_job(state, job_id="exp_sweep_meas", count=3)
+def _meas_job(state: SessionState, job_id: str, logs: list[Path]) -> str:
+    """A completed experiment with one case per log, run from the sweep's deck."""
+    job = make_experiment_job(state, job_id=job_id, count=len(logs))
+    for case, log in zip(job.cases, logs, strict=True):
+        assert case.log_file is not None
+        shutil.copy(log, case.log_file)
     # The deck's own .meas lines are what tell a WHEN from a FIND.
-    (work_dir / f"{job.job_id}.cir").write_text(_SWEEP_DECK, encoding="utf-8")
+    job.sources[0].path.write_text(_SWEEP_DECK, encoding="utf-8")
     return job.job_id
+
+
+def _sweep_job(state: SessionState) -> str:
+    return _meas_job(state, "exp_sweep_meas", _SWEEP_LOGS)
+
+
+def _failed_vfinal_job(state: SessionState) -> str:
+    """Three cases whose third has no vfinal.
+
+    The first two are cases of the recorded sweep. The third is LTspice XVII's
+    log of the same FIND with V(out) missing from .save, which XVII reports as
+    FAIL'ed (LTspice 26 refuses that deck instead). That log holds no tcross.
+    """
+    return _meas_job(
+        state,
+        "exp_failed_vfinal",
+        [*_SWEEP_LOGS[:2], recorded_ltspice.recorded("ltspice17", "deck/save_omits_meas.log")],
+    )
+
+
+def _meas_failed_sources(work_dir: Path) -> list[dict[str, Any]]:
+    """One log_path source per recorded build's meas_failed.log, labelled by
+    build: 'before' and 'after' measured, 'never' and 'depends' FAIL'ed."""
+    sources = []
+    for build in recorded_ltspice.BUILDS:
+        log = work_dir / f"meas_failed_{build}.log"
+        shutil.copy(recorded_ltspice.recorded(build, "log/meas_failed.log"), log)
+        sources.append({"log_path": str(log), "label": build})
+    return sources
+
+
+async def _analyze_request(state: SessionState, request: dict[str, Any]) -> dict[str, Any]:
+    reply = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state)
+    assert reply.structured_content is not None
+    return reply.structured_content
+
+
+def _reduced_by(data: dict[str, Any], key: str = "m") -> dict[tuple[str, str], dict[str, Any]]:
+    """A recipe's reduced rows by (field, stat)."""
+    return {(row["field"], row["stat"]): row for row in data["results"][key]["reduced"]}
 
 
 def _sweep_request(job_id: str, **include: Any) -> dict[str, Any]:
@@ -2910,14 +2953,13 @@ def _sweep_rows() -> list[tuple[str, dict[str, Any]]]:
             # The FIND's AT point is what the log printed beside its value.
             {"measured": {"vfinal": vfinal, "tcross": tcross}, "at": {"vfinal": 0.0009}},
         )
-        for index, (vfinal, tcross) in enumerate(zip(_SWEEP_VFINAL, _SWEEP_TCROSS, strict=True))
+        for index, (vfinal, tcross) in enumerate(zip(SWEEP_VFINAL, SWEEP_TCROSS, strict=True))
     ]
 
 
 @pytest.mark.asyncio
 async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
     state_no_sim: SessionState,
-    work_dir: Path,
 ):
     """A sweep's per-run row carries one number per .meas, not a stats block.
 
@@ -2928,32 +2970,23 @@ async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
     for two measurements, against 291 with the numbers by name. The block is
     one include.fields away, and the cross-run reduction still reads it.
     """
-    request = _sweep_request(_sweep_job(state_no_sim, work_dir))
-    reply = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    assert reply.structured_content is not None
-    data = reply.structured_content
+    job_id = _sweep_job(state_no_sim)
+    request = _sweep_request(job_id)
+    data = await _analyze_request(state_no_sim, request)
     assert data["outcome"] == "complete"
     rows = data["results"]["m"]["per_run"]["items"]
     assert [(row["case_id"], row["value"]) for row in rows] == _sweep_rows()
 
     # The reduction is computed from the full values and attributed to the case.
-    reduced = {(row["field"], row["stat"]): row for row in data["results"]["m"]["reduced"]}
-    assert reduced["vfinal", "min"]["value"] == min(_SWEEP_VFINAL)
+    reduced = _reduced_by(data)
+    assert reduced["vfinal", "min"]["value"] == min(SWEEP_VFINAL)
     assert reduced["vfinal", "min"]["case_id"] == "case-0002"
-    assert reduced["tcross", "max"]["value"] == max(_SWEEP_TCROSS)
-    assert reduced["tcross", "mean"]["value"] == pytest.approx(sum(_SWEEP_TCROSS) / 3)
+    assert reduced["tcross", "max"]["value"] == max(SWEEP_TCROSS)
+    assert reduced["tcross", "mean"]["value"] == pytest.approx(sum(SWEEP_TCROSS) / 3)
 
     # The stats block is still there for the caller who names it.
-    full = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            _sweep_request(request["sources"][0]["job_id"], fields=["value"])
-        ),
-        state_no_sim,
-    )
-    assert full.structured_content is not None
-    for row, vfinal in zip(
-        full.structured_content["results"]["m"]["per_run"]["items"], _SWEEP_VFINAL, strict=True
-    ):
+    full = await _analyze_request(state_no_sim, _sweep_request(job_id, fields=["value"]))
+    for row, vfinal in zip(full["results"]["m"]["per_run"]["items"], SWEEP_VFINAL, strict=True):
         stats = row["value"]["stats"]["vfinal"]
         assert (stats["total_count"], stats["mean"]) == (1, vfinal)
         assert row["value"]["measured"]["vfinal"] == vfinal
@@ -2966,15 +2999,10 @@ async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
     assert attached["results"]["m"]["per_run"]["items"] == rows
 
 
-def test_the_python_api_reads_a_sweep_row_the_same_way(
-    state_no_sim: SessionState,
-    work_dir: Path,
-):
+def test_the_python_api_reads_a_sweep_row_the_same_way(state_no_sim: SessionState):
     """One evaluator behind both interfaces: the API's complete result carries
     the same per-run rows the MCP page does."""
-    reply = SyncApi(state_no_sim).analyze_results(
-        **_sweep_request(_sweep_job(state_no_sim, work_dir))
-    )
+    reply = SyncApi(state_no_sim).analyze_results(**_sweep_request(_sweep_job(state_no_sim)))
     rows = reply["results"]["m"]["per_run"]["items"]
     assert [(row["case_id"], row["value"]) for row in rows] == _sweep_rows()
 
@@ -2986,23 +3014,15 @@ async def test_a_failed_meas_stays_on_the_row_as_a_failure(
 ):
     """A .meas the run reported FAIL'ed keeps its name, with null, and is named
     as failed, so the row cannot be read as one that never measured it."""
-    sources = []
-    for build in recorded_ltspice.BUILDS:
-        log = work_dir / f"meas_failed_{build}.log"
-        shutil.copy(recorded_ltspice.recorded(build, "log/meas_failed.log"), log)
-        sources.append({"log_path": str(log), "label": build})
-    reply = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                "sources": sources,
-                "recipes": [{"key": "m", "metric": "measurements"}],
-                "include": {"per_run": True},
-            }
-        ),
+    data = await _analyze_request(
         state_no_sim,
+        {
+            "sources": _meas_failed_sources(work_dir),
+            "recipes": [{"key": "m", "metric": "measurements"}],
+            "include": {"per_run": True},
+        },
     )
-    assert reply.structured_content is not None
-    rows = reply.structured_content["results"]["m"]["per_run"]["items"]
+    rows = data["results"]["m"]["per_run"]["items"]
     assert [row["source"] for row in rows] == list(recorded_ltspice.BUILDS)
     for row in rows:
         value = row["value"]
@@ -3035,57 +3055,24 @@ async def test_a_stepped_runs_row_keeps_its_spread(
     assert row["value"]["stats"]["vfinal"]["total_count"] == 3
 
 
-def _failed_vfinal_job(state: SessionState, work_dir: Path) -> str:
-    """A completed three-case experiment whose third case has no vfinal.
-
-    The first two cases left the recorded sweep's logs. The third left LTspice
-    XVII's log of the same FIND with V(out) missing from .save, which XVII
-    reports as FAIL'ed (LTspice 26 refuses that deck instead). That log holds
-    no tcross at all.
-    """
-    for index in range(2):
-        shutil.copy(
-            FIXTURES_DIR / f"ltspice_sweep_meas_run{index}.log", work_dir / f"case-{index}.log"
-        )
-    shutil.copy(
-        recorded_ltspice.recorded("ltspice17", "deck/save_omits_meas.log"),
-        work_dir / "case-2.log",
-    )
-    job = make_experiment_job(state, job_id="exp_failed_vfinal", count=3)
-    (work_dir / f"{job.job_id}.cir").write_text(_SWEEP_DECK, encoding="utf-8")
-    return job.job_id
-
-
-async def _analyze_sources(
-    state: SessionState, sources: list[dict[str, Any]], recipes: list[dict[str, Any]]
-) -> dict[str, Any]:
-    reply = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate({"sources": sources, "recipes": recipes}), state
-    )
-    assert reply.structured_content is not None
-    return reply.structured_content
-
-
 @pytest.mark.asyncio
-async def test_a_reduction_counts_the_runs_that_gave_no_value(
-    state_no_sim: SessionState,
-    work_dir: Path,
-):
+async def test_a_reduction_counts_the_runs_that_gave_no_value(state_no_sim: SessionState):
     """A reduction over three runs, one of which has no number for the field,
     says so instead of reporting two runs as if they were all there were."""
-    job_id = _failed_vfinal_job(state_no_sim, work_dir)
-    data = await _analyze_sources(
+    data = await _analyze_request(
         state_no_sim,
-        [{"job_id": job_id, "label": "mixed"}],
-        [{"key": "m", "metric": "measurements", "reduce": ["min", "max", "count"]}],
+        {
+            "sources": [{"job_id": _failed_vfinal_job(state_no_sim), "label": "mixed"}],
+            "recipes": [{"key": "m", "metric": "measurements", "reduce": ["min", "max", "count"]}],
+        },
     )
     assert data["coverage"]["runs_analyzed"] == 3
-    reduced = {(row["field"], row["stat"]): row for row in data["results"]["m"]["reduced"]}
+    reduced = _reduced_by(data)
     assert set(reduced) == {
         (field, stat) for field in ("vfinal", "tcross") for stat in ("min", "max", "count")
     }
     assert reduced["vfinal", "count"]["value"] == 2
-    assert reduced["vfinal", "min"]["value"] == _SWEEP_VFINAL[1]
+    assert reduced["vfinal", "min"]["value"] == SWEEP_VFINAL[1]
     assert reduced["vfinal", "min"]["case_id"] == "case-0001"
     # The FAIL'ed run and the run whose log never had tcross are counted alike.
     assert {row["no_value_count"] for row in reduced.values()} == {1}
@@ -3099,17 +3086,17 @@ async def test_a_spec_does_not_pass_over_a_run_it_could_not_judge(
     allow_incomplete: bool,
     verdict: str,
     state_no_sim: SessionState,
-    work_dir: Path,
 ):
     """Two runs above the limit and one with no vfinal is not a pass: the third
     run was never judged. allow_incomplete judges what there is, and the count
     of the run it could not judge stays on the verdict."""
-    job_id = _failed_vfinal_job(state_no_sim, work_dir)
     limits = {"min": 0.9, "allow_incomplete": allow_incomplete}
-    data = await _analyze_sources(
+    data = await _analyze_request(
         state_no_sim,
-        [{"job_id": job_id, "label": "mixed"}],
-        [{"key": "m", "metric": "measurements", "field": "vfinal", "spec": limits}],
+        {
+            "sources": [{"job_id": _failed_vfinal_job(state_no_sim), "label": "mixed"}],
+            "recipes": [{"key": "m", "metric": "measurements", "field": "vfinal", "spec": limits}],
+        },
     )
     spec = data["results"]["m"]["spec"]
     assert (spec["pass_count"], spec["fail_count"], spec["no_value_count"]) == (2, 0, 1)
@@ -3123,18 +3110,15 @@ async def test_a_meas_that_failed_in_every_run_is_still_reduced(
 ):
     """A .meas no run measured comes back as a reduction of nothing over every
     run, not as a name missing from the result."""
-    sources = []
-    for build in recorded_ltspice.BUILDS:
-        log = work_dir / f"meas_failed_{build}.log"
-        shutil.copy(recorded_ltspice.recorded(build, "log/meas_failed.log"), log)
-        sources.append({"log_path": str(log), "label": build})
-    data = await _analyze_sources(
+    data = await _analyze_request(
         state_no_sim,
-        sources,
-        [{"key": "m", "metric": "measurements", "reduce": ["count", "max"]}],
+        {
+            "sources": _meas_failed_sources(work_dir),
+            "recipes": [{"key": "m", "metric": "measurements", "reduce": ["count", "max"]}],
+        },
     )
     runs = len(recorded_ltspice.BUILDS)
-    reduced = {(row["field"], row["stat"]): row for row in data["results"]["m"]["reduced"]}
+    reduced = _reduced_by(data)
     assert {field for field, _ in reduced} == {"before", "after", "never", "depends"}
     for field in ("never", "depends"):
         assert reduced[field, "count"]["value"] == 0
