@@ -489,27 +489,25 @@ async def negotiate_receipt(
     text = ""
     rendered: dict[str, Any] = {}
 
-    def candidate(
-        limit: int, rung: response_budget.Rung
-    ) -> tuple[dict[str, Any], tuple[str, list[str]]]:
+    def candidate(limit: int, rung: response_budget.Rung) -> response_budget.Rendered:
         data, line = build(limit, rung)
-        return data, (line, _degrade_receipt(data, rung))
+        return data, line, _degrade_receipt(data, rung)
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
         nonlocal text, rendered
         if rung.shrink:
-            measure = response_budget.RowMeasure.of_surfaces(_receipt_surfaces(rendered))
-            rendered, (text, cut) = response_budget.render_to_fit(
-                min(page_limit, measure.affordable(rung)),
+            rendered, text, cut = response_budget.shrink_to_fit(
+                response_budget.RowMeasure.of(_receipt_surfaces(rendered), page=rung.measured),
                 lambda limit: candidate(limit, rung),
                 rung,
                 floor=0,
+                cap=page_limit,
             )
         elif rung.level == response_budget.RUNG_TRIM:
             # The undegraded rung built this same page; degrade it in place.
             cut = _degrade_receipt(rendered, rung)
         else:
-            rendered, (text, cut) = candidate(page_limit, rung)
+            rendered, text, cut = candidate(page_limit, rung)
         rung.cut.extend(cut)
         return rendered
 
@@ -529,10 +527,7 @@ async def render_run_receipt(
         data, text = build(_RUN_PAGE_LIMIT, None)
     else:
         data, text = await negotiate_receipt(
-            budget,
-            build,
-            _RUN_PAGE_LIMIT,
-            notes=_RUN_BUDGET_NOTES,
+            budget, build, _RUN_PAGE_LIMIT, notes=_RUN_BUDGET_NOTES
         )
     result = format_response(text, data)
     result.is_error = is_error

@@ -197,26 +197,6 @@ _SURFACE_RECIPES: list[dict[str, Any]] = [
 ]
 
 
-async def _surfaces_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[str, Any]:
-    result = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                "sources": [
-                    {"raw_path": str(raw), "label": f"corner{index:02d}"}
-                    for index in range(_WIDE_SOURCES)
-                ],
-                "recipes": _SURFACE_RECIPES,
-                "all_steps": True,
-                **extra,
-            }
-        ),
-        state,
-    )
-    assert result.structured_content is not None
-    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structured_content)
-    return result.structured_content
-
-
 # Fractions of an undegraded response's own size, spanning a met budget down
 # past the floor. A rung that only misbehaves partway down the ladder is
 # invisible to a floor-only probe, so every walk in this file covers the spread.
@@ -268,24 +248,25 @@ class TestLadderPrimitives:
         assert response_budget.estimate_tokens(payload) == expected
 
     def test_fit_limit_never_grows_and_never_reaches_zero(self):
-        measure = response_budget.RowMeasure.of([{"a": "x" * 40} for _ in range(20)])
-        generous = Rung(level=response_budget.RUNG_SHRINK, budget=1_000_000, measured=500)
-        assert measure.fit_limit(20, generous) == 20
-        starved = Rung(level=response_budget.RUNG_SHRINK, budget=500, measured=100_000)
-        assert measure.fit_limit(20, starved) == 1
+        rows = [{"a": "x" * 40} for _ in range(20)]
+        rung = Rung(level=response_budget.RUNG_SHRINK, budget=500, measured=0)
+        generous = response_budget.RowMeasure.of([rows], page=0)
+        assert generous.fit_limit(20, rung) == 20
+        starved = response_budget.RowMeasure.of([rows], page=100_000)
+        assert starved.fit_limit(20, rung) == 1
 
     def test_a_limit_is_priced_on_every_surface_it_caps(self):
         surface = [{"a": "x" * 30} for _ in range(10)]
         rows = response_budget.estimate_tokens(surface)
-        apart = response_budget.RowMeasure.of_surfaces([surface] * 3)
-        pooled = response_budget.RowMeasure.of(surface * 3)
         fixed = 100
+        apart = response_budget.RowMeasure.of([surface] * 3, page=fixed + 3 * rows)
+        pooled = response_budget.RowMeasure.of([surface * 3], page=fixed + 3 * rows)
         # Room for half of every surface's rows, and not one row more.
         room = 3 * rows // 2 + 1
         rung = Rung(
             level=response_budget.RUNG_SHRINK,
             budget=fixed + room + response_budget.NOTE_RESERVE_TOKENS,
-            measured=fixed + apart.tokens,
+            measured=0,
         )
         assert apart.affordable(rung) == 5
         # One pool of thirty rows affords fifteen, which as each surface's own
@@ -655,11 +636,13 @@ class TestAnalysisBudget:
         smaller page would have fitted."""
         state_no_sim.config.default_budget = 0
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        full = response_budget.estimate_tokens(await _surfaces_analysis(state_no_sim, raw))
+        full = response_budget.estimate_tokens(
+            await _analysis(state_no_sim, raw, recipes=_SURFACE_RECIPES)
+        )
 
         for divisor in (2, 3, 6):
             budget = full // divisor
-            data = await _surfaces_analysis(state_no_sim, raw, budget=budget)
+            data = await _analysis(state_no_sim, raw, recipes=_SURFACE_RECIPES, budget=budget)
             assert _observation(data, "budget_not_met") is None, budget
             assert response_budget.estimate_tokens(data) <= budget
             assert all(entry.get("values") for entry in data["results"].values()), budget

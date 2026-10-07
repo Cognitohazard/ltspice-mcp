@@ -77,7 +77,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import dataclasses
 import sys
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
@@ -2501,9 +2500,10 @@ async def _negotiate_inspect(
     # envelope rather than copying the pass and rebuilding over it.
     built_from: _View | None = None
 
-    def shrunk(rung: response_budget.Rung, limit: int, coord_limit: int) -> _View:
-        """The view the standing envelope's rows leave room for under ``rung``."""
-        measure = response_budget.RowMeasure.of_surfaces(_paged_surfaces(rendered))
+    def shrunk(rung: response_budget.Rung, page: int, limit: int, coord_limit: int) -> _View:
+        """The view the standing envelope's rows, on a page of ``page`` estimated
+        tokens, leave room for under ``rung``."""
+        measure = response_budget.RowMeasure.of(_paged_surfaces(rendered), page=page)
         return _View(
             limit=measure.fit_limit(limit, rung),
             coord_limit=measure.fit_limit(coord_limit, rung),
@@ -2526,7 +2526,7 @@ async def _negotiate_inspect(
         if not rung.shrink:
             await build(_View(lean=rung.answer_channel), rung)
             return rendered
-        view = shrunk(rung, _PAGE_SIZE, _COORD_PAGE_SIZE)
+        view = shrunk(rung, rung.measured, _PAGE_SIZE, _COORD_PAGE_SIZE)
         await build(view, rung)
         measured = response_budget.estimate_tokens(rendered)
         if measured > rung.body_budget:
@@ -2534,8 +2534,7 @@ async def _negotiate_inspect(
             # every query it cut — so the estimate is taken once more from this
             # envelope, which carries them. Once, not a search: each limit
             # re-asks every query in the batch.
-            again = dataclasses.replace(rung, measured=measured)
-            await build(shrunk(again, view.limit, view.coord_limit), rung)
+            await build(shrunk(rung, measured, view.limit, view.coord_limit), rung)
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
