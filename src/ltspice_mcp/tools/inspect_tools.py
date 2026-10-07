@@ -2475,17 +2475,16 @@ _BUDGET_NOTES = response_budget.Notes(
 )
 
 
-def _paged_rows(data: dict[str, Any]) -> list[Any]:
-    """Every row the answered batch is currently showing, across all items."""
-    rows: list[Any] = []
+def _paged_surfaces(data: dict[str, Any]) -> list[list[Any]]:
+    """Every row list the answered batch is showing, one per item's list: the
+    shrunk limit caps each of them on its own."""
+    surfaces: list[list[Any]] = []
     for item in data["results"]:
         payload = item.get("data")
         if not isinstance(payload, dict):
             continue
-        for value in payload.values():
-            if isinstance(value, list):
-                rows.extend(value)
-    return rows
+        surfaces.extend(value for value in payload.values() if isinstance(value, list))
+    return surfaces
 
 
 async def _negotiate_inspect(
@@ -2501,17 +2500,19 @@ async def _negotiate_inspect(
     # envelope rather than copying the pass and rebuilding over it.
     built_from: _View | None = None
 
-    async def render(rung: response_budget.Rung) -> dict[str, Any]:
+    def shrunk(rung: response_budget.Rung, page: int, limit: int, coord_limit: int) -> _View:
+        """The view the standing envelope's rows, on a page of ``page`` estimated
+        tokens, leave room for under ``rung``."""
+        measure = response_budget.RowMeasure.of(_paged_surfaces(rendered), page=page)
+        return _View(
+            limit=measure.fit_limit(limit, rung),
+            coord_limit=measure.fit_limit(coord_limit, rung),
+            lean=rung.answer_channel,
+            shrunk=True,
+        )
+
+    async def build(view: _View, rung: response_budget.Rung) -> None:
         nonlocal rendered, built_from
-        view = _View(lean=rung.answer_channel)
-        if rung.shrink:
-            measure = response_budget.RowMeasure.of(_paged_rows(rendered))
-            view = _View(
-                limit=measure.fit_limit(_PAGE_SIZE, rung),
-                coord_limit=measure.fit_limit(_COORD_PAGE_SIZE, rung),
-                lean=rung.answer_channel,
-                shrunk=rung.shrink,
-            )
         if built_from != view:
             if view not in passes:
                 passes[view] = await _run_queries(args, state, view)
@@ -2520,6 +2521,20 @@ async def _negotiate_inspect(
             rendered = inspect_envelope(copy.deepcopy(passes[view]))
             built_from = view
         _degrade_inspect(rendered, rung)
+
+    async def render(rung: response_budget.Rung) -> dict[str, Any]:
+        if not rung.shrink:
+            await build(_View(lean=rung.answer_channel), rung)
+            return rendered
+        view = shrunk(rung, rung.measured, _PAGE_SIZE, _COORD_PAGE_SIZE)
+        await build(view, rung)
+        measured = response_budget.estimate_tokens(rendered)
+        if measured > rung.body_budget:
+            # A cut adds what the uncut envelope never showed — a cursor for
+            # every query it cut — so the estimate is taken once more from this
+            # envelope, which carries them. Once, not a search: each limit
+            # re-asks every query in the batch.
+            await build(shrunk(rung, measured, view.limit, view.coord_limit), rung)
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here

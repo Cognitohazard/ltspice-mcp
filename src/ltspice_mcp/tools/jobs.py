@@ -84,7 +84,6 @@ from ltspice_mcp.tools.receipts import (
     ReceiptBuilt,
     ReceiptSnapshot,
     finalize_receipt,
-    jobs_rows,
     negotiate_receipt,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
@@ -650,13 +649,7 @@ async def _negotiate_jobs(
     page_limit: int,
 ) -> _JobsBuilt:
     """Render this jobs response at the mildest ladder rung that fits ``budget``."""
-    return await negotiate_receipt(
-        budget,
-        build,
-        page_limit,
-        rows=jobs_rows,
-        notes=_BUDGET_NOTES,
-    )
+    return await negotiate_receipt(budget, build, page_limit, notes=_BUDGET_NOTES)
 
 
 def _without_control_tokens(value: Any) -> Any:
