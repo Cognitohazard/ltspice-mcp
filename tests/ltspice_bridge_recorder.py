@@ -207,6 +207,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                         path=str(work / f"{name}.asc"),
                     )
                 recording.call(session, "every sheet is open", "list_open_designs")
+                recording.call(session, "the document in front", "get_active_design_path")
                 for name in names:
                     reply = recording.call(
                         session,

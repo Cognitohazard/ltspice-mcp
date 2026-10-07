@@ -126,6 +126,15 @@
   }
  },
  {
+  "note": "the document in front",
+  "call": "get_active_design_path",
+  "arguments": {},
+  "reply": {
+   "path": "C:\\recording\\text_off_grid.asc",
+   "type": "schematic"
+  }
+ },
+ {
   "note": "the window's copy",
   "call": "get_design_content",
   "arguments": {

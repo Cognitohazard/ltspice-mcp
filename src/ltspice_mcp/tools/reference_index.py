@@ -397,6 +397,14 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "subcircuit ports",
     ),
     ("inspect", "model"): ("find a part", "subckt", "transistor model", "library search"),
+    ("inspect", "open_in_ltspice"): (
+        "what do i have open",
+        "the sheet in front",
+        "this circuit",
+        "current schematic",
+        "active design",
+        "unsaved changes",
+    ),
     ("inspect", "reference"): (
         "what arguments",
         "which recipe",

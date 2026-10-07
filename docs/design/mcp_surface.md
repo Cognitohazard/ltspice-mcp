@@ -1394,10 +1394,36 @@ Python API), which are never capped. The gate stays a whole-file answer.
     session reads first, ending in an index of the topic sections and task
     playbooks; a `section` from that index returns that part. An unknown name
     fails the item as `unknown_section`, listing the names that exist
+{kind: "open_in_ltspice"}
+    the documents open in the LTspice windows on this machine: `windows`
+    (how many are running), `total`, and `designs`, each {path, kind:
+    "schematic"|"netlist"|"other", active (the one in front in its window),
+    pid, version, in_sandbox}. A sheet inside the sandbox adds its `sha256`
+    and `differs_from_file`, with `difference` naming a few entries when the
+    window's copy is not the file's. A document outside the sandbox is named
+    and not read. Fails as `open_windows_unavailable` where there is no bridge
+    to ask (not Windows, LTspice before 26.1, the setting off) and as
+    `open_windows_unreachable` when the bridge does not answer
 ```
 
 `path` is required except on `capabilities`, `symbols`, `symbol`,
-`reference` and `guide`; `results` accepts either `path` or `job_id`.
+`reference`, `guide` and `open_in_ltspice`; `results` accepts either `path` or
+`job_id`.
+
+**Why what is open is a query.** A person working in LTspice says "this
+circuit", and until now the surface could only be handed a path. LTspice knows
+which documents are open and which is in front, and from 26.1 it can be asked
+(`lib/ltspice_window.py`). The answer is a starting point and nothing more: it
+names files, and every tool still reads the file. That is why a sheet comes
+with `differs_from_file`: when the window holds something the file does not,
+a run or a check on that path would answer about a circuit the person is not
+looking at, and `edit_schematic` would refuse. The `sha256` is there so that an
+edit of the sheet in front is one call after this one. The window's copy is
+compared and never returned, so nothing reaches a caller that is not in a file,
+and a document outside the sandbox is named, as its path is not a secret from
+a client on the same machine, but neither it nor the window's copy of it is
+read. A query that cannot be answered fails; an empty list would say that
+nothing is open.
 
 **Why the guide is a query kind.** The instructions send every session to the
 guide's core first, and the one door every client has is a tool call: some
