@@ -20,7 +20,7 @@ Two rules keep the delta quiet when nothing changed:
 
 Components are matched by reference the way the equivalence mode matches them
 (``netlist_graph.canon_ref``), and across the ``X`` LTspice puts before a
-subcircuit instance's name on export (``netlist_graph.pair_across_added_x``),
+subcircuit instance's name on export (``netlist_graph.rekey_across_added_x``),
 which is listed as a rename and is not a difference. They are compared on their
 model or value plus their instance parameters. Nodes are left out on purpose:
 equivalence is the mode that compares wiring.
@@ -34,7 +34,7 @@ from itertools import takewhile
 from pathlib import Path
 
 from ltspice_mcp.lib.format import fold_micro_sign
-from ltspice_mcp.lib.netlist_graph import canon_ref, pair_across_added_x
+from ltspice_mcp.lib.netlist_graph import canon_ref, rekey_across_added_x
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -216,8 +216,7 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     added ``X``; it is the one list here that is not a difference.
     """
     a = baseline.components
-    renames = pair_across_added_x(a, compared.components)
-    b = {renames.get(key, key): value for key, value in compared.components.items()}
+    b, renamed = rekey_across_added_x(a, compared.components)
     declared = {d.model for d in baseline.directives if d.model is not None}
     da = _by_key(baseline.directives)
     db = _by_key(
@@ -226,9 +225,7 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     return {
         "components_added": sorted(b[key][0] for key in b.keys() - a.keys()),
         "components_removed": sorted(a[key][0] for key in a.keys() - b.keys()),
-        "components_renamed": [
-            {"before": a[key][0], "after": b[key][0]} for key in sorted(renames.values())
-        ],
+        "components_renamed": [{"before": a[key][0], "after": b[key][0]} for key in renamed],
         "components_changed": [
             {"reference": b[key][0], "before": a[key][1], "after": b[key][1]}
             for key in sorted(a.keys() & b.keys())

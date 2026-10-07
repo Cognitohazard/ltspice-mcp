@@ -71,9 +71,10 @@ verdict is unaffected.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TypeVar
 
 from ltspice_mcp.lib.deck_staging import resolve_reference
 from ltspice_mcp.lib.format import fold_micro_sign, parse_plain_value
@@ -391,7 +392,7 @@ class ArityError:
     ref: str
     reference_arity: int
     candidate_arity: int
-    detail: str = ""
+    detail: str
     side: str | None = None
 
 
@@ -1019,7 +1020,8 @@ def compare_graphs(
     # --- per-component diffs, by reference-name matching ----------------------
     ref_by_ref = {canon_ref(c.ref): c for c in ref_flat.components}
     cand_by_ref = {canon_ref(c.ref): c for c in cand_flat.components}
-    cand_by_ref, result.renamed = _pair_across_added_x(ref_by_ref, cand_by_ref)
+    cand_by_ref, paired = rekey_across_added_x(ref_by_ref, cand_by_ref)
+    result.renamed = _renamed_instances(ref_by_ref, cand_by_ref, paired)
 
     for key, rc in ref_by_ref.items():
         if key not in cand_by_ref:
@@ -1062,55 +1064,61 @@ def compare_graphs(
     return result
 
 
+_V = TypeVar("_V")
+
+
 def _without_added_x(key: str) -> str:
     """A reference key with the ``X`` LTspice adds taken off each instance
     segment (``xxe.r1`` is ``xe.r1``)."""
     return ".".join(seg[1:] if seg.startswith("xx") else seg for seg in key.split("."))
 
 
-def pair_across_added_x(reference: Iterable[str], candidate: Iterable[str]) -> dict[str, str]:
-    """Candidate keys that match a reference key only across LTspice's added ``X``.
+def rekey_across_added_x(
+    reference: Mapping[str, object], candidate: Mapping[str, _V]
+) -> tuple[dict[str, _V], list[str]]:
+    """``candidate`` with each key that matches a reference key only across
+    LTspice's added ``X`` re-keyed to that reference key, and those keys.
 
     LTspice exports a subcircuit symbol's instance with an ``X`` before its
     name whatever the name is: ``Xe`` is ``X§Xe`` from LTspice 24 on and ``XXe``
     from XVII, where a netlist written by hand names it ``Xe``. Keys are
     :func:`canon_ref` keys, hierarchical ones included. Only keys left unmatched
     by name on both sides are paired, and only one to one, so a netlist that
-    really holds both ``Xe`` and ``XXe`` is compared by name. Returns each
-    paired candidate key mapped to its reference key.
+    really holds both ``Xe`` and ``XXe`` is compared by name. The re-keyed
+    reference keys come back sorted.
     """
-    reference, candidate = set(reference), set(candidate)
-    unmatched_ref: dict[str, list[str]] = {}
-    for key in reference - candidate:
-        unmatched_ref.setdefault(_without_added_x(key), []).append(key)
-    unmatched_cand: dict[str, list[str]] = {}
-    for key in candidate - reference:
-        unmatched_cand.setdefault(_without_added_x(key), []).append(key)
-    pairs: dict[str, str] = {}
-    for stripped, cand_keys in unmatched_cand.items():
-        ref_keys = unmatched_ref.get(stripped, [])
+
+    def unmatched(keys: Iterable[str], others: Mapping[str, object]) -> dict[str, list[str]]:
+        grouped: dict[str, list[str]] = {}
+        for key in keys:
+            if key not in others:
+                grouped.setdefault(_without_added_x(key), []).append(key)
+        return grouped
+
+    by_reference = unmatched(reference, candidate)
+    rekeyed = dict(candidate)
+    paired: list[str] = []
+    for stripped, cand_keys in unmatched(candidate, reference).items():
+        ref_keys = by_reference.get(stripped, [])
         if len(cand_keys) == 1 and len(ref_keys) == 1:
-            pairs[cand_keys[0]] = ref_keys[0]
-    return pairs
+            rekeyed[ref_keys[0]] = rekeyed.pop(cand_keys[0])
+            paired.append(ref_keys[0])
+    return rekeyed, sorted(paired)
 
 
-def _pair_across_added_x(
-    ref_by_ref: dict[str, FlatComponent], cand_by_ref: dict[str, FlatComponent]
-) -> tuple[dict[str, FlatComponent], list[RenamedInstance]]:
-    """Re-key the candidate's components :func:`pair_across_added_x` pairs and
-    that keep their element type, and name each instance paired that way once."""
-    rekeyed = dict(cand_by_ref)
+def _renamed_instances(
+    ref_by_ref: dict[str, FlatComponent], cand_by_ref: dict[str, FlatComponent], paired: list[str]
+) -> list[RenamedInstance]:
+    """Each instance a paired leaf's path renames, named once."""
     renamed: dict[tuple[str, str], RenamedInstance] = {}
-    for cand_key, ref_key in pair_across_added_x(ref_by_ref, cand_by_ref).items():
-        rc, cc = ref_by_ref[ref_key], cand_by_ref[cand_key]
-        if rc.type_letter != cc.type_letter:
-            continue
-        rekeyed[ref_key] = rekeyed.pop(cand_key)
-        for ref_seg, cand_seg in zip(rc.ref.split("."), cc.ref.split("."), strict=False):
+    for key in paired:
+        segments = zip(
+            ref_by_ref[key].ref.split("."), cand_by_ref[key].ref.split("."), strict=False
+        )
+        for ref_seg, cand_seg in segments:
             if canon_ref(ref_seg) != canon_ref(cand_seg):
-                pair = (ref_seg, cand_seg)
-                renamed.setdefault(pair, RenamedInstance(ref_seg, cand_seg))
-    return rekeyed, sorted(renamed.values(), key=lambda d: canon_ref(d.reference_ref))
+                renamed.setdefault((ref_seg, cand_seg), RenamedInstance(ref_seg, cand_seg))
+    return sorted(renamed.values(), key=lambda d: canon_ref(d.reference_ref))
 
 
 def _unresolved_records(ref: _FlattenOutcome, cand: _FlattenOutcome) -> list[UnresolvedSubckt]:
