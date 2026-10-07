@@ -90,6 +90,12 @@ _SEED_CASES = [
         None,
         "LTspice",
     ),
+    (
+        "meas-name-ltspice",
+        "V1 in 0 1\nR1 in 0 1k\n.tran 1m\n.meas tran k MAX V(in)\n.end\n",
+        None,
+        "LTspice",
+    ),
     ("byte-85-ltspice", _BYTE_85_DECK, None, "LTspice"),
     ("node-control-byte-ltspice", _EURO_NODE_DECK, None, "LTspice"),
     (

@@ -1605,11 +1605,12 @@ that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle
 LTspice 26 and XVII read in degrees on their default settings where a B source
 reads radians; `verify_circuit`'s `syntax` check reports the same as
 `meas_trig_degrees`), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
-mode), three LTspice refusals recorded on LTspice 26 and XVII, each blocking —
+mode), four LTspice refusals recorded on LTspice 26 and XVII, each blocking —
 `analysis-count-ltspice` (two of `.tran`/`.ac`/`.dc`/`.noise`; `.op` may sit
 beside one), `meas-function-ltspice` (`vdb()`, `phase()` or `group_delay()` in a
-`.meas`) and `lib-section-ltspice` (`.lib file section`, which LTspice reads as
-one file name) — `byte-85-ltspice` (warning, LTspice: a byte 0x85 in an 8-bit
+`.meas`), `meas-name-ltspice` (a `.meas` named `e`, `k`, `pi` or `q`, constants
+of the expression engine) and `lib-section-ltspice` (`.lib file section`, which
+LTspice reads as one file name) — `byte-85-ltspice` (warning, LTspice: a byte 0x85 in an 8-bit
 deck or include with a card after it on the line, which LTspice 24 and later
 read as a line break and XVII does not; silent when the session's LTspice is
 known to be XVII), `node-control-byte-ltspice` (warning, LTspice: a node name

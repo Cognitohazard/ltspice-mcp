@@ -39,7 +39,7 @@ recording that showed it.
   sine is -3.5e-5 where 1e-3 was meant. `ph()` in a `.meas` gives degrees as
   well, and the per-user setting "Use radian measure in waveform expressions"
   turns both to radians. `run_experiments` now refuses such a `.meas` (lint
-  `meas-trig-degrees`, blocking; `linter_version` 7) and `verify_circuit`'s
+  `meas-trig-degrees`, blocking; `linter_version` 8) and `verify_circuit`'s
   `syntax` check reports it as `meas_trig_degrees`, both naming the B-source
   form whose unit does not depend on the setting. The `vdb()`, `phase()` and
   `group_delay()` refusals also see a call written after an operator
@@ -55,10 +55,11 @@ recording that showed it.
   magnitude, and the guide now says to write the former.
 - A `.meas` named `e`, `k`, `pi` or `q` was accepted. Those are constants of
   LTspice's expression engine: LTspice 26 refuses the whole deck and XVII
-  skips the measurement. The directive check behind `verify_circuit`'s
-  `syntax` check and `edit_schematic`'s directives now refuses them
-  (`meas_reserved_name`), and the fix rides on the error relayed from a run
-  LTspice 26 refused.
+  skips the measurement. `run_experiments` now refuses such a deck before it
+  runs (lint `meas-name-ltspice`, blocking; `linter_version` 8), the
+  directive check behind `verify_circuit`'s `syntax` check and
+  `edit_schematic`'s directives refuses it (`meas_reserved_name`), and the
+  fix rides on the error relayed from a run LTspice 26 refused.
 - Results from LTspice 26 could not be read for a deck with two or more
   subcircuit instances. LTspice 24 and later write one `Backannotation:` line
   in the raw header for each instance, and the raw preflight refused a header
