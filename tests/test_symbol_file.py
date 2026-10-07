@@ -7,11 +7,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from spicelib import AscEditor
 
-from ltspice_mcp.lib.asc_document import Window
+from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_ops import make_editor
-from ltspice_mcp.lib.schematic_scene import parse_symbol
+from ltspice_mcp.lib.schematic_ops import sheet_view as editor_view
+from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, parse_symbol
+from ltspice_mcp.lib.schematic_scene import sheet_view as scene_view
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolArc, read_symbol
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from tests._schematic_fixtures import SUITE_SYMBOLS, suite_name
@@ -91,11 +94,63 @@ class TestTheBox:
         symbol = read_symbol("LINE Normal 0 0 10 10\nPIN -5 20 NONE 0\n")
         assert symbol.bbox == BBox(-5, 0, 10, 20)
 
-    def test_an_arc_counts_as_the_box_of_its_ellipse(self) -> None:
-        # The start and end points are on the ellipse; even ones written
-        # outside its box do not widen the symbol's.
+    def test_an_arc_counts_as_what_is_drawn_of_it(self) -> None:
+        # Half a circle, from the lower right round the top to the upper left.
+        # The two points only give its directions, so ones written far outside
+        # the ellipse do not widen the box; the half not drawn does not either.
         symbol = read_symbol("ARC Normal 0 0 10 10 99 99 -99 -99\n")
-        assert symbol.bbox == BBox(0, 0, 10, 10)
+        assert symbol.bbox == BBox(1, 0, 10, 9)
+        assert symbol.body == BBox(1, 0, 10, 9)
+
+    def test_the_body_leaves_the_pins_out(self) -> None:
+        symbol = read_symbol("LINE Normal 0 0 10 10\nPIN -5 20 NONE 0\n")
+        assert symbol.body == BBox(0, 0, 10, 10)
+        assert read_symbol("PIN -5 20 NONE 0\n").body is None
+
+
+class TestAnArc:
+    """What is drawn of an ellipse: from the start point's direction to the end
+    point's, counter-clockwise as displayed, with y pointing down."""
+
+    def test_a_quarter(self) -> None:
+        # From the bottom of the circle to its right: the lower right quarter.
+        assert SymbolArc(0, 0, 40, 40, 20, 40, 40, 20).extent() == (20, 20, 40, 40)
+
+    def test_the_other_three_quarters(self) -> None:
+        # The same two points the other way round: all but that quarter, which
+        # touches the box on every side.
+        assert SymbolArc(0, 0, 40, 40, 40, 20, 20, 40).extent() == (0, 0, 40, 40)
+
+    def test_a_shallow_arc_of_a_large_circle(self) -> None:
+        # The curved plate of a polarized capacitor: sixty degrees across the
+        # top of a circle of radius 32, four units deep.
+        arc = SymbolArc(-16, 36, 48, 100, 32, 40, 0, 40)
+        assert arc.extent() == (0, 36, 32, 41)
+
+    def test_a_loop_of_a_coil(self) -> None:
+        # Three quarters of a circle, open towards the left: it stops short of
+        # the left side of its box.
+        assert SymbolArc(0, 40, 32, 72, 4, 68, 4, 44).extent() == (4, 40, 32, 72)
+
+    def test_one_direction_for_both_points_is_the_whole_ellipse(self) -> None:
+        assert SymbolArc(0, 0, 40, 20, 40, 10, 40, 10).extent() == (0, 0, 40, 20)
+
+    def test_an_arc_that_ends_on_a_side_of_its_box_reaches_it(self) -> None:
+        # From the right of the circle to its top, a quarter turn exactly.
+        assert SymbolArc(0, 0, 40, 40, 40, 20, 20, 0).extent() == (20, 0, 40, 20)
+
+    def test_an_ellipse_with_no_area_draws_nothing(self) -> None:
+        assert SymbolArc(0, 0, 0, 40, 0, 0, 0, 40).extent() is None
+        assert read_symbol("ARC Normal 0 0 0 40 0 0 0 40\n").body is None
+
+    def test_the_points_the_renderer_draws_are_inside_it(self) -> None:
+        arc = SymbolArc(-16, 36, 48, 100, 32, 40, 0, 40)
+        start, turn = arc.sweep() or (0.0, 0.0)
+        x1, y1, x2, y2 = arc.extent() or (0, 0, 0, 0)
+        for step in range(25):
+            x, y = arc.at(start + turn * step / 24)
+            assert x1 - 1e-6 <= x <= x2 + 1e-6
+            assert y1 - 1e-6 <= y <= y2 + 1e-6
 
 
 class TestLinesThatDoNotRead:
@@ -193,6 +248,34 @@ class TestBothReadersUseIt:
         assert [pin.name for pin in parse_symbol(asy, "broken").pins] == ["A"]
         with pytest.raises(ValueError, match="unreadable pin line 'PIN 5'"):
             parse_asy_file(asy)
+
+    @pytest.mark.parametrize("rotation", ROTATIONS)
+    def test_a_part_drawn_with_arcs_has_one_box(self, rotation: str, tmp_path: Path) -> None:
+        """The box the editor reports for a part and the box the checker judges
+        it by are the same box, an arc counting as what is drawn of it."""
+        (tmp_path / "coil.asy").write_text(
+            "Version 4\nSymbolType CELL\n"
+            "ARC Normal 0 32 32 64 6 60 6 36\n"
+            "ARC Normal -32 0 64 96 48 8 -16 8\n"
+            "PIN 16 0 NONE 0\nPINATTR PinName A\nPINATTR SpiceOrder 1\n"
+            "PIN 16 64 NONE 0\nPINATTR PinName B\nPINATTR SpiceOrder 2\n",
+            encoding="utf-8",
+        )
+        sheet = tmp_path / "coiled.asc"
+        sheet.write_text(
+            f"Version 4\nSHEET 1 880 680\nSYMBOL coil 160 160 {rotation}\nSYMATTR InstName L1\n",
+            encoding="utf-8",
+        )
+        editor = make_editor(sheet)
+        assert isinstance(editor, AscEditor)
+        (for_the_editor,) = editor_view(editor).parts
+        scene = build_scene(sheet, SymbolResolver(local_dir=tmp_path))
+        (for_the_checker,) = scene_view(scene).parts
+        assert for_the_editor.box == for_the_checker.box
+        assert for_the_checker.box is not None and for_the_checker.body is not None
+        # The shallow arc is a sliver of its circle's box, which is 96 units
+        # each way: the part is nowhere near that size.
+        assert max(for_the_checker.box.width, for_the_checker.box.height) <= 64
 
     def test_a_half_written_arc_is_in_neither_box(self, tmp_path: Path) -> None:
         asy = tmp_path / "arc.asy"

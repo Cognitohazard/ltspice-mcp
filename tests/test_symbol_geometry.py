@@ -197,23 +197,21 @@ class TestParseAsyFile:
         assert info.bbox.height == 60
 
     def test_arc_bbox_ignores_start_end_points(self, tmp_path: Path):
-        """Regression: the ARC bbox is the underlying ellipse's bounding rectangle.
+        """Regression: an ARC's start and end points never widen the box.
 
         The previous regex parser pair-collected all 8 ints in the ARC line,
         which would let synthetic out-of-bbox start/end points expand the bbox.
-        Real LTspice files always place start/end on the arc, so they're inside
-        the ellipse bbox; the typed parser pins this contract regardless.
+        The two points only say in which directions the arc starts and ends,
+        so the box is what is drawn of the ellipse between them and stays
+        inside the ellipse's rectangle wherever the points are written.
         """
-        # Synthetic file: ARC bbox is (0,0)..(10,10) but start/end are far outside.
+        # Synthetic file: the ellipse is (0,0)..(10,10) but start/end are far outside.
         content = "Version 4\nARC Normal 0 0 10 10 999 999 -999 -999\n"
         p = tmp_path / "arc_synth.asy"
         p.write_text(content)
         info = parse_asy_file(p)
-        # Bbox should follow the ellipse rectangle alone.
-        assert info.bbox.x1 == 0
-        assert info.bbox.y1 == 0
-        assert info.bbox.x2 == 10
-        assert info.bbox.y2 == 10
+        # Half the circle, from the lower right round the top to the upper left.
+        assert info.bbox == BBox(1, 0, 10, 9)
 
     def test_cp1252_encoded_description(self, tmp_path: Path):
         """Regression: real LTspice vendor symbols carry cp1252 bytes (µ/°/±/©)
