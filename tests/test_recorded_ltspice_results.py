@@ -292,9 +292,8 @@ class TestSteppedRuns:
     def test_a_stepped_operating_point_stores_every_step(self, build: str, tmp_path: Path):
         """One point a step, with the stepped parameter as the first variable.
 
-        The log names no step values for it, so the steps cannot be matched to
-        log lines and the decoder offers the plot for inventory only. The
-        values are all there in the raw.
+        The log names no step values for it, so the raw's own parameter column
+        is the record: every step is read, with its value.
         """
         assert declared_points(build, "raw/step_op") == 3
         assert declared_names(build, "raw/step_op")[0] == "v"
@@ -305,7 +304,11 @@ class TestSteppedRuns:
         # V(out) is four fifths of the source, the second variable after the parameter.
         assert list(stored["rest"][:, 1]) == pytest.approx([0.8, 1.6, 2.4])
         parsed = rec.decode(build, "raw/step_op", tmp_path)
-        assert parsed.raw.descriptor.step_status == "unresolved"
+        assert parsed.raw.descriptor.step_status == "matched"
+        assert parsed.raw.steps == [{"v": 1.0}, {"v": 2.0}, {"v": 3.0}]
+        assert parsed.raw.get_steps(v=2.0) == [1]
+        for step, level in enumerate((0.8, 1.6, 2.4)):
+            assert list(parsed.raw.get_wave("V(out)", step)) == pytest.approx([level])
         log = read_spice_text(rec.recorded(build, "raw/step_op.log"))
         assert not [line for line in log.splitlines() if line.startswith(".step")]
 

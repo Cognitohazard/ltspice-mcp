@@ -306,3 +306,17 @@ def test_raw_step_values_must_agree_with_captured_log_facts(tmp_path, monkeypatc
     with pytest.raises(ValueError, match="Step values"):
         read_parsed_artifacts(result, directory, limits=LIMITS, require_raw=True, request=request)
     assert reads == []
+
+
+def test_stored_step_parameters_must_be_the_plots_param_variables(parsed_manifest, tmp_path):
+    """A worker claiming a plot stores its own step values is held to the
+    header: the variables it names must be the plot's leading ``param`` ones,
+    which this plot's time axis is not."""
+    plot = parsed_manifest["plots"][0]
+    plot["step_status"] = "matched"
+    plot["step_ranges"] = [
+        {"step_index": index, "offset": index, "length": 1, "log_row": None} for index in range(2)
+    ]
+    plot["step_parameters"] = [0]
+    with pytest.raises(ValueError, match="Stored step parameters"):
+        read_decoded_raw(parsed_manifest, tmp_path, limits=LIMITS)
