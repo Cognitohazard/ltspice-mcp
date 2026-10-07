@@ -30,6 +30,7 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
+    build_simulation_summary,
     has_valid_raw_header,
     raw_writer_command,
     read_partial_raw_progress,
@@ -311,6 +312,13 @@ class TestSteppedRuns:
             assert list(parsed.raw.get_wave("V(out)", step)) == pytest.approx([level])
         log = read_spice_text(rec.recorded(build, "raw/step_op.log"))
         assert not [line for line in log.splitlines() if line.startswith(".step")]
+
+    def test_a_stepped_operating_points_summary_counts_its_steps(self, build: str, tmp_path: Path):
+        """The run's summary no longer says only the first step is read."""
+        parsed = rec.decode(build, "raw/step_op", tmp_path)
+        summary = build_simulation_summary(parsed.raw, parsed.logs, step=2)
+        assert summary["step_count"] == 3
+        assert not any("Stepped .op" in warning for warning in summary.get("warnings", []))
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

@@ -909,11 +909,11 @@ def build_simulation_summary(
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails).
-        # A stepped ``.op`` stores one point per step in the .raw, with the
-        # stepped parameter as its first variable, and names no step value in
-        # the log; only the first point is read from it here. The count both
-        # warns the user (operating-point runs) and gates the OP-error demote
-        # below (the first point can't vouch for a later step).
+        # A stepped LTspice ``.op`` stores one point per step in the .raw, with
+        # the stepped parameter as its first variable, and the decoder reads it
+        # as that many steps. The count warns the user when a raw holds fewer
+        # steps than the log solved (operating-point runs), and gates the
+        # OP-error demote below (one step's point can't vouch for another's).
         op_log_steps = section_value("steps", "step rows")
         op_iterations = section_value("op_iterations", "OP iterations")
         op_coverage_known = op_log_steps is not None and op_iterations is not None
@@ -956,7 +956,7 @@ def build_simulation_summary(
                     for d in demoted
                 )
 
-        if op_solve_count > 1 and "operating" in sim_type.lower():
+        if op_solve_count > 1 and step_count <= 1 and "operating" in sim_type.lower():
             if op_log_steps:
                 param_name = next(iter(op_log_steps[0].keys()), "param")
                 suggestion = (
@@ -970,8 +970,8 @@ def build_simulation_summary(
                 )
             warnings.append(
                 f"Stepped .op detected: log shows {op_solve_count} bias-"
-                "point iterations; the .raw holds one point per step and only the "
-                "first is read here. " + suggestion
+                "point iterations, and the .raw exposes one; only that one is read "
+                "here. " + suggestion
             )
 
         fourier_data = section_value("fourier", "fourier")
