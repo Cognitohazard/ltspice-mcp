@@ -575,6 +575,8 @@ recording that showed it.
   already running, with the plotted traces drawn: it writes the plot settings
   file LTspice loads beside the results. Settings a person saved from LTspice
   are left alone.
+- The server is also published as `osic-mcp` (open-source IC), a third alias
+  beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains

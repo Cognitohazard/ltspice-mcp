@@ -40,8 +40,8 @@ uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
 Needs Python 3.11 or newer; `ltspice-mcp --help` confirms it installed. In
 [Claude Code](https://code.claude.com/docs/en/mcp) you can skip the JSON with
 `claude mcp add -s project spice -- ltspice-mcp`. The same server is also
-published as `circuit-mcp` and `ngspice-mcp` — same program, in case one of
-those names is easier to remember.
+published as `circuit-mcp`, `ngspice-mcp` and `osic-mcp` — same program, in
+case one of those names is easier to remember.
 
 **You also need a simulator on the same machine.** LTspice or ngspice —
 auto-detected on Windows, Linux and macOS; on WSL you point at LTspice
