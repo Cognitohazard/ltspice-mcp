@@ -759,6 +759,65 @@ def test_a_fourier_block_is_read_with_its_harmonics_and_distortion(build: str, t
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_number_after_a_fourier_frequency_is_the_harmonic_count(build: str, tmp_path: Path):
+    """The deck has ``.four 1k V(out)`` and ``.four 1k 5 V(in)`` on a run five
+    periods long. The 5 makes V(in)'s table five harmonics where V(out)'s has
+    the default nine, and leaves both on one period: read as a period count it
+    would have printed ``N-Period=5`` beside nine harmonics. No deck here gives
+    a second number, so the period count's place is not recorded."""
+    fourier = rec.decode_log(build, "log/fourier", tmp_path).value("fourier")
+    counts = {block["signal"].lower(): len(block["harmonics"]) for block in fourier}
+    assert counts == {"v(out)": 9, "v(in)": 5}
+    # The decoder does not keep the period count, so it is read off the log.
+    text = read_spice_text(rec.recorded(build, "log/fourier.log"))
+    assert re.findall(r"N-Period=(\d+)", text) == ["1", "1"]
+
+
+def _fourier_phases(build: str, signal: str, scratch: Path) -> dict[int, tuple[float, float]]:
+    """``{harmonic: (magnitude, phase in degrees)}`` of one recorded block."""
+    fourier = rec.decode_log(build, "log/fourier", scratch).value("fourier")
+    (block,) = [block for block in fourier if block["signal"].lower() == signal]
+    return {h["number"]: (h["magnitude"], h["phase"]) for h in block["harmonics"]}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_fourier_phase_is_read_in_the_builds_own_convention(build: str, tmp_path: Path):
+    """``V(in)`` is ``SINE(0 1 1k)``, sin(2*pi*1k*t) at zero phase, and the two
+    builds report its fundamental at different phases: XVII at 0 degrees, the
+    phase of a sine, and LTspice 26 at 90. The server passes each through as
+    printed, so a ``.four`` phase means what the build that wrote it means; the
+    ``tone`` recipe states its own reference instead (guide section 'signals')."""
+    (_, phase) = _fourier_phases(build, "v(in)", tmp_path)[1]
+    expected = 0.0 if rec.generation(build) == "xvii" else 90.0
+    assert phase == pytest.approx(expected, abs=0.05)
+
+
+def test_no_constant_offset_turns_one_builds_fourier_phase_into_the_others(tmp_path: Path):
+    """On the clipped sine every harmonic strong enough to read keeps
+    ``phase(26) = 90 - phase(XVII)`` (mod 360), while adding 90 degrees to
+    XVII's phase leaves every even harmonic half a turn out. So a ``.four``
+    phase cannot be carried from one build to the other by an offset. The
+    input's symmetry makes a sign flip and a half-period shift of the time
+    origin fit equally well, so this pins the relation, not which of the two
+    the builds do."""
+    builds = {rec.generation(build): build for build in rec.BUILDS}
+    if set(builds) != {"current", "xvii"}:
+        pytest.skip("needs a recording from LTspice 26 and from XVII")
+    current = _fourier_phases(builds["current"], "v(out)", tmp_path / "current")
+    xvii = _fourier_phases(builds["xvii"], "v(out)", tmp_path / "xvii")
+    strong = [n for n, (magnitude, _) in xvii.items() if magnitude > 5e-3]
+    assert {2, 4, 6} <= set(strong)
+
+    def wrapped(degrees: float) -> float:
+        return (degrees + 180.0) % 360.0 - 180.0
+
+    for n in strong:
+        assert abs(wrapped(current[n][1] - (90.0 - xvii[n][1]))) < 2.0, n
+        offset_miss = abs(wrapped(current[n][1] - (xvii[n][1] + 90.0)))
+        assert abs(offset_miss - (180.0 if n % 2 == 0 else 0.0)) < 2.0, n
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 class TestDeviceOperatingPoints:
     """The block of semiconductor operating points in an ``.op`` log."""
 

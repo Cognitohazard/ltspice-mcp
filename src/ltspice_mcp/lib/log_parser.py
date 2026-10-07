@@ -821,8 +821,8 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             continue
         if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
             warnings.append(
-                stripped + " ngspice skips .four when writing a rawfile, so Fourier/THD "
-                "is unavailable for this run."
+                stripped + " ngspice skips .four when writing a rawfile; the "
+                "analyze_results 'tone' and 'thd' recipes read harmonics from the raw."
             )
             i += 1
             continue

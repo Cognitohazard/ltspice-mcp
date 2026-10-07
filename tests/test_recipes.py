@@ -56,6 +56,7 @@ VALID_RECIPES = {
     "periodic": {"signal": "V(out)"},
     "transient_response": {"signal": "V(out)", "mode": "step"},
     "thd": {"signal": "V(out)"},
+    "tone": {"signal": "V(out)", "frequency_hz": "1k"},
     "bode_filter": {"signal": "V(out)"},
     "bode_point": {"signal": "V(out)", "at_hz": "1k"},
     "bode_crossing": {"signal": "V(out)", "level_db": -3.0},
@@ -79,6 +80,7 @@ MULTI_FIELDS = {
     "bode_filter": "cutoff_low_hz",
     "stability": "phase_margin_deg",
     "return_loss": "return_loss_db",
+    "tone": "phase_deg",
 }
 
 
@@ -183,7 +185,7 @@ def test_step_selection_is_not_a_recipe_field(spelling: str):
     """Which .step iteration to read is one choice for the whole call.
 
     It lives on analyze_results (and on run_experiments' attached analysis),
-    not restated on each of the twenty-one recipes."""
+    not restated on each of the twenty-two recipes."""
     value = {"axis": "R", "value": "1k"} if spelling == "step" else True
     with pytest.raises(ValidationError, match="Extra inputs"):
         validate_recipe(

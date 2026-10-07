@@ -244,7 +244,7 @@ they let a session pay for depth only where it needs it. The compact listing
 drops the prose for every argument — every branch's and every tool's own — on
 the bet that a session uses a handful of them; the reference lookup is what
 buys that prose back, one entry at a time, for the handful actually used. It
-covers both halves: the branch vocabulary (twenty-one recipes, twelve ops, six
+covers both halves: the branch vocabulary (twenty-two recipes, twelve ops, six
 actions, and the rest) and each tool's own top-level arguments, indexed as one
 entry per tool under the family `argument`, so `all_steps` or `expected_sha256`
 is found the same way `stability` is. Neither half of the pair stands alone.
@@ -1751,7 +1751,7 @@ scope.
 
 ### A.2 Recipe
 
-21 discriminant values. Shared fields — `key` (required and unique),
+22 discriminant values. Shared fields — `key` (required and unique),
 `sources?`, `reduce`, `field`, `spec` — are accepted only where the reducer
 category allows: the per-variant accepts-matrix binds to the scalar /
 multi-field / keyed / variable-length categories in `lib/recipes.py`, and
@@ -1783,7 +1783,7 @@ and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included, and the recorded LTspice builds print phase in different conventions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name. A run holding one value per name also carries `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
@@ -1792,6 +1792,7 @@ and reported when the caller names it.
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
+| `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample, resampled by linear interpolation as `thd`'s coherent path is, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
 | `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
@@ -1804,6 +1805,26 @@ and reported when the caller names it.
 | `operating_point` | op | — | `device?` — scoping to one device is the difference between a few hundred bytes and tens of KB on a real opamp |
 | `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
+
+`tone` exists because one frequency's amplitude and phase has correctness
+obligations the server can own once instead of each caller re-deriving them.
+The existing routes reach it only with care. A `.meas INTEG` correlation
+integral puts hand-written trigonometry in the deck; numpy over `RawResult`
+samples weights LTspice's clustered timestep by sample count unless the caller
+interpolates, and has to cut the window to whole periods itself. `.four`, read
+back through `summary`, covers the last periods before the stop time or the
+whole run (LTspice XVII's help; the recordings show only its default of one
+period), never a window the caller places; it is skipped by ngspice in batch mode, and
+it prints phase in a convention that differs between LTspice 26 and XVII
+(`tests/test_recorded_ltspice_results.py`). The
+server-owned burden is therefore time weighting, whole-period alignment and a
+stated phase reference. `thd` already carried the first two, so `tone` reuses
+its trim and resample (`signal_analysis._whole_periods`, `_resample_uniform`)
+rather than a second spectral path. It is a recipe of its own rather than a
+phase column on `thd` because `thd` is a scalar recipe that reduces only
+`thd_pct`, and detects its fundamental when none is given, which a phase
+referred to time zero cannot tolerate: a frequency error df moves it by
+360·df·t_start degrees.
 
 A `signal`, `signals` entry or `expr` names one trace as the raw holds it, or a
 node-pair voltage `V(a,b)`. No simulator writes a pair as a trace, so the one
