@@ -761,6 +761,49 @@ class TestSheetOpenInAWindow:
         (still,) = await asyncio.to_thread(windows.holding, sheet)
         assert "SYMATTR Value 9k" in still.text
 
+    async def test_inspect_lists_the_sheet_the_window_has_in_front(
+        self, ltspice_state: SessionState, open_sheet
+    ):
+        import hashlib
+
+        from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+        sheet, pid = open_sheet
+
+        async def ask() -> dict:
+            result = await handle_inspect(
+                InspectInput.model_validate({"queries": [{"kind": "open_in_ltspice"}]}),
+                ltspice_state,
+            )
+            assert result.structured_content is not None
+            (item,) = result.structured_content["results"]
+            assert item["ok"] is True, item
+            (design,) = [row for row in item["data"]["designs"] if row["pid"] == pid]
+            return design
+
+        design = await ask()
+        on_disk = await asyncio.to_thread(sheet.read_bytes)
+        assert Path(design["path"]) == sheet
+        assert (design["kind"], design["active"], design["in_sandbox"]) == (
+            "schematic",
+            True,
+            True,
+        )
+        assert design["sha256"] == hashlib.sha256(on_disk).hexdigest()
+        assert design["differs_from_file"] is False
+
+        # Someone changes the sheet in the window and does not save it.
+        windows = ltspice_state.open_windows
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        await asyncio.to_thread(
+            windows.show, held, held.text.replace("SYMATTR Value 1k", "SYMATTR Value 9k")
+        )
+
+        design = await ask()
+        assert design["differs_from_file"] is True
+        assert "SYMBOL res" in design["difference"]
+        assert design["sha256"] == hashlib.sha256(on_disk).hexdigest()
+
     def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
         self, ltspice_state: SessionState
     ):
