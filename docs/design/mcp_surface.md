@@ -687,11 +687,12 @@ protected. If the irreducible floor exceeds the budget, the floor is returned
 with `budget_not_met` rather than facts being dropped.
 
 One page limit caps every row surface of a receipt — the run page and each
-attached recipe's values, groups, failing cases and missing cases — so the
-shared estimate, which counts the rows all surfaces show, can price a page as
-fitting that cut nothing. The receipt's shrink rung therefore measures: when
-the estimated page is still over, it bisects below it for the largest limit
-that fits. The search may reach zero. A receipt's rows are previews of
+attached recipe's values, groups, failing cases and missing cases. The shared
+estimate prices each surface under that limit (`RowMeasure`), but it is read
+off the uncut page, so it cannot see what a cut adds: an omission warning per
+recipe, a cursor. The receipt's shrink rung therefore measures: when the
+estimated page is still over, it bisects below it for the largest limit that
+fits. The search may reach zero. A receipt's rows are previews of
 surfaces other calls page (`jobs(runs)`, `analyze_results` over the `job_id`),
 so the floor carries no per-case row: `completeness` and `runs.total` count the
 runs, `runs.next_cursor` starts `jobs(runs)` at the first, each recipe's
@@ -910,6 +911,14 @@ in the result set, so a continuation replays them.
   then caps rows at 100 with a `failures_truncated` observation. The Python
   API's complete `analyze_results` result lists every record, one per place;
   an analysis attached to an experiment is stored as the page renders it.
+- Under a `budget`, the shrink rung lowers one limit on every row surface —
+  each recipe's `values`, `groups`, `per_run` page and `spec.fail_cases`, and
+  `coverage.missing_cases` — to the largest whose rows together fit, priced
+  surface by surface rather than as one pool, which over-filled the budget by
+  up to the number of surfaces. It then checks the assembled page and searches
+  below the estimate when that page is still over, down to one row, since the
+  `per_run` and missing-cases pages continue themselves. `reduced` is the
+  answer, not a surface: no limit shrinks it.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
   assignments, no_value_count?}`. `no_value_count` is the number of the

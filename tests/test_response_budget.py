@@ -189,6 +189,34 @@ async def _spec_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[s
     return result.structured_content
 
 
+# Three recipes over the same fan-out: three value lists, so one page limit caps
+# three row surfaces at once.
+_SURFACE_RECIPES: list[dict[str, Any]] = [
+    {"key": f"v_{at}", "metric": "value", "expr": "V(out)", "at": at}
+    for at in ("100u", "500u", "900u")
+]
+
+
+async def _surfaces_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[str, Any]:
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [
+                    {"raw_path": str(raw), "label": f"corner{index:02d}"}
+                    for index in range(_WIDE_SOURCES)
+                ],
+                "recipes": _SURFACE_RECIPES,
+                "all_steps": True,
+                **extra,
+            }
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structured_content)
+    return result.structured_content
+
+
 # Fractions of an undegraded response's own size, spanning a met budget down
 # past the floor. A rung that only misbehaves partway down the ladder is
 # invisible to a floor-only probe, so every walk in this file covers the spread.
@@ -245,6 +273,24 @@ class TestLadderPrimitives:
         assert measure.fit_limit(20, generous) == 20
         starved = Rung(level=response_budget.RUNG_SHRINK, budget=500, measured=100_000)
         assert measure.fit_limit(20, starved) == 1
+
+    def test_a_limit_is_priced_on_every_surface_it_caps(self):
+        surface = [{"a": "x" * 30} for _ in range(10)]
+        rows = response_budget.estimate_tokens(surface)
+        apart = response_budget.RowMeasure.of_surfaces([surface] * 3)
+        pooled = response_budget.RowMeasure.of(surface * 3)
+        fixed = 100
+        # Room for half of every surface's rows, and not one row more.
+        room = 3 * rows // 2 + 1
+        rung = Rung(
+            level=response_budget.RUNG_SHRINK,
+            budget=fixed + room + response_budget.NOTE_RESERVE_TOKENS,
+            measured=fixed + apart.tokens,
+        )
+        assert apart.affordable(rung) == 5
+        # One pool of thirty rows affords fifteen, which as each surface's own
+        # cap cuts none of them: the budget's rows, three times over.
+        assert pooled.affordable(rung) > 10
 
     def test_largest_fitting_lands_on_a_limit_it_saw_fit(self):
         seen: list[int] = []
@@ -599,10 +645,32 @@ class TestAnalysisBudget:
         assert len(entry["groups"]) < len(every_group)
         assert any("group(s) omitted" in warning for warning in entry["warnings"])
 
+    async def test_several_row_surfaces_share_the_budget_instead_of_each_taking_it(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The shrink rung measured the rows every surface showed as one pool,
+        and the count it afforded became each surface's own cap, so three
+        recipes' value lists each took the whole allowance: the response came
+        back budget_not_met, telling the caller to narrow a request whose
+        smaller page would have fitted."""
+        state_no_sim.config.default_budget = 0
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        full = response_budget.estimate_tokens(await _surfaces_analysis(state_no_sim, raw))
+
+        for divisor in (2, 3, 6):
+            budget = full // divisor
+            data = await _surfaces_analysis(state_no_sim, raw, budget=budget)
+            assert _observation(data, "budget_not_met") is None, budget
+            assert response_budget.estimate_tokens(data) <= budget
+            assert all(entry.get("values") for entry in data["results"].values()), budget
+
     async def test_the_row_measurement_covers_every_surface_the_ladder_shrinks(self):
         """The cost model's two halves have to name the same surfaces. One the
         ladder shrinks but the measurement omits is billed to the fixed envelope,
-        so the shrink rung sizes its page against a cost that is not real."""
+        so the shrink rung sizes its page against a cost that is not real; one
+        it counts but never shrinks — a recipe's reductions — prices the
+        envelope cheaper than it is. Each surface is its own list, because one
+        limit caps each of them."""
         data = {
             "results": {
                 "k": {
@@ -615,13 +683,12 @@ class TestAnalysisBudget:
             },
             "coverage": {"missing_cases": {"items": ["missing-row"]}},
         }
-        assert sorted(analyze_mod.analysis_rows(data)) == [
-            "fail-row",
-            "group-row",
-            "missing-row",
-            "per-run-row",
-            "reduced-row",
-            "value-row",
+        assert sorted(analyze_mod.analysis_surfaces(data)) == [
+            ["fail-row"],
+            ["group-row"],
+            ["missing-row"],
+            ["per-run-row"],
+            ["value-row"],
         ]
 
     async def test_a_budget_below_the_floor_is_refused_at_the_edge(self):
@@ -1205,6 +1272,24 @@ class TestInspectBudget:
         plain = await _inspect(state_no_sim, [query])
         met = await _inspect(state_no_sim, [query], budget=1_000_000)
         assert _stable(met) == _stable(plain)
+
+    async def test_a_batch_shares_the_budget_instead_of_each_query_taking_it(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Each query's page is its own surface under the one shrunk limit, so
+        a batch priced as one pool of rows gave every query the whole allowance
+        and came back over a budget a smaller page per query would have met."""
+        state_no_sim.config.default_budget = 0
+        path = _many_component_netlist(work_dir, 90)
+        batch = [{"kind": "components", "path": str(path)} for _ in range(3)]
+        full = response_budget.estimate_tokens(await _inspect(state_no_sim, batch))
+
+        for divisor in (2, 3, 4):
+            budget = full // divisor
+            data = await _inspect(state_no_sim, batch, budget=budget)
+            assert _observation(data, "budget_not_met") is None, budget
+            assert response_budget.estimate_tokens(data) <= budget
+            assert all(item["data"]["components"] for item in data["results"]), budget
 
     async def test_shrunk_pages_reach_every_component(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch

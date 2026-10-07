@@ -213,12 +213,15 @@ in order until it fits:
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
 | 2 shrink | page size, with cursors minted against the smaller page so paging still walks every row |
 
-On a `run_experiments` or `jobs` receipt, rung 2 keeps as many rows as fit,
-and if even one row per surface is over it carries no per-case rows at all, so
-the floor is the same size for 4 cases or 400: `completeness` and `runs.total`
-count the runs, `jobs(runs)` from `runs.next_cursor` pages them, and
-`analyze_results` over the `job_id` returns the attached analysis's rows.
-Reductions and verdicts stay.
+Rung 2 lowers one page limit on every list in the reply at once, to the
+largest whose rows together fit: three recipes' values share the budget rather
+than each taking it. `run_experiments`, `jobs` and `analyze_results` measure
+the page they settle on; `inspect` checks its estimate once. If even one row
+per list is over, a `run_experiments` or `jobs` receipt carries no per-case
+rows at all, so its floor is the same size for 4 cases or 400: `completeness`
+and `runs.total` count the runs, `jobs(runs)` from `runs.next_cursor` pages
+them, and `analyze_results` over the `job_id` returns the attached analysis's
+rows. Reductions and verdicts stay.
 
 Facts are never cut: `failures`, `observations`, `warnings`, `completeness`
 and spec verdicts always come back whole, and a budget too small for them

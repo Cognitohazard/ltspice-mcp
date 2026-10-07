@@ -85,7 +85,6 @@ from ltspice_mcp.tools.receipts import (
     ReceiptSnapshot,
     finalize_receipt,
     negotiate_receipt,
-    receipt_rows,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
     snapshot_receipt,
@@ -654,7 +653,6 @@ async def _negotiate_jobs(
         budget,
         build,
         page_limit,
-        rows=receipt_rows,
         notes=_BUDGET_NOTES,
     )
 

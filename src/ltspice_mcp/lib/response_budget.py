@@ -16,9 +16,10 @@ the tool re-renders one rung further down a fixed ladder:
 2. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
    is minted against what was actually returned. Never post-hoc truncation of
    an assembled page: a per_run cursor commits during evaluation, and trimming
-   rows afterwards would point it past rows the caller never saw. A renderer
-   that can afford to rebuild may measure instead of estimating
-   (:func:`largest_fitting`).
+   rows afterwards would point it past rows the caller never saw. One limit
+   caps every row surface, priced surface by surface (:class:`RowMeasure`); a
+   renderer that can afford to rebuild measures the page instead
+   (:func:`render_to_fit`).
 
 Four rules hold at every rung:
 
@@ -41,9 +42,12 @@ Four rules hold at every rung:
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
+
+#: What a renderer hands back beside the payload it measures.
+_Extra = TypeVar("_Extra")
 
 # The convention for estimating tokens from a payload: compact-JSON characters
 # divided by four. Response size is measured the same way everywhere in this
@@ -204,38 +208,64 @@ def apply_trim(
 
 @dataclass(frozen=True)
 class RowMeasure:
-    """One measurement of the rows a rung rendered, shared by every limit.
+    """One measurement of the rows a rung rendered, surface by surface.
 
     A response with several row surfaces sizes them all against the same
-    envelope, so the rows are measured once and each limit divides into that
-    measurement rather than re-serializing the same rows per limit. The count
-    it affords is for every surface together: applied to each surface as its
-    own cap, it over-fills by up to the number of surfaces.
+    envelope, so the rows are measured once and every limit is read off that
+    one measurement rather than re-serializing the same rows per limit. A limit
+    caps each surface on its own, so the measurement keeps them apart: priced
+    as one pool, K surfaces under one limit over-fill the budget by up to K
+    times.
     """
 
-    shown: int
-    tokens: int
+    #: Per surface: how many rows it showed, and their estimated tokens.
+    surfaces: tuple[tuple[int, int], ...]
 
     @classmethod
     def of(cls, rows: Sequence[Any]) -> RowMeasure:
-        return cls(shown=len(rows), tokens=estimate_tokens(list(rows)))
+        """A measurement of one surface."""
+        return cls.of_surfaces([rows])
+
+    @classmethod
+    def of_surfaces(cls, surfaces: Iterable[Sequence[Any]]) -> RowMeasure:
+        """A measurement of each surface a limit caps, one row list apiece."""
+        return cls(tuple((len(rows), estimate_tokens(list(rows))) for rows in surfaces if rows))
+
+    @property
+    def shown(self) -> int:
+        return sum(count for count, _tokens in self.surfaces)
+
+    @property
+    def tokens(self) -> int:
+        return sum(tokens for _count, tokens in self.surfaces)
 
     def affordable(self, rung: Rung) -> int:
-        """How many rows of the measured cost this budget leaves room for.
+        """The largest per-surface limit this budget leaves room for.
 
         Splits the previous rung's measurement into the fixed envelope and the
-        rows it carried, then divides what the budget leaves by the per-row
-        cost. Never below one row: a page of one row still carries a cursor,
-        which is the route back to the rest.
+        rows it carried, prices each surface's rows at its own per-row cost, and
+        finds the largest limit whose rows across every surface fit what the
+        budget leaves. Never above the widest surface, where a larger limit
+        cuts nothing more, and never below one row: a page of one row still
+        carries a cursor, which is the route back to the rest.
 
         Every row surface a rung shrinks has to be in the measurement this was
         built from. A surface left out is charged to ``fixed`` — correct only
         while it genuinely cannot shrink, and an under-count of the fixed cost
         the moment it can.
         """
-        fixed = max(0, rung.measured - self.tokens)
-        per_row = max(1, self.tokens // self.shown) if self.shown > 0 else 1
-        return max(1, (rung.body_budget - fixed) // per_row)
+        if not self.surfaces:
+            return 1
+        room = rung.body_budget - max(0, rung.measured - self.tokens)
+
+        def fits(limit: int) -> bool:
+            # At each surface's own average row, unrounded: a rounded-down cost
+            # per row is an under-count that grows with every row it prices.
+            return (
+                sum(tokens * min(count, limit) / count for count, tokens in self.surfaces) <= room
+            )
+
+        return largest_fitting(max(count for count, _ in self.surfaces), fits, floor=1)
 
     def fit_limit(self, current: int, rung: Rung) -> int:
         """``current``, lowered to what :meth:`affordable` leaves room for.
@@ -265,6 +295,33 @@ def largest_fitting(start: int, fits: Callable[[int], bool], *, floor: int = 0) 
         else:
             high = middle - 1
     return low
+
+
+def render_to_fit(
+    start: int,
+    render: Callable[[int], tuple[dict[str, Any], _Extra]],
+    rung: Rung,
+    *,
+    floor: int,
+) -> tuple[dict[str, Any], _Extra]:
+    """``render`` at the largest limit from ``floor`` to ``start`` whose payload
+    fits ``rung``, or at ``floor`` if none does; each limit is rendered once.
+
+    The shrink rung's measured form, for a renderer that can afford to rebuild:
+    an estimate cannot see what only a cut adds — an omission warning, a
+    continuation cursor — so a page it priced as fitting may not.
+    """
+    rendered: dict[int, tuple[dict[str, Any], _Extra]] = {}
+
+    def at(limit: int) -> tuple[dict[str, Any], _Extra]:
+        if limit not in rendered:
+            rendered[limit] = render(limit)
+        return rendered[limit]
+
+    limit = largest_fitting(
+        start, lambda cap: estimate_tokens(at(cap)[0]) <= rung.body_budget, floor=floor
+    )
+    return at(limit)
 
 
 # --------------------------------------------------------------------------

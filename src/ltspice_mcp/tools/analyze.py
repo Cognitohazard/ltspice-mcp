@@ -2872,23 +2872,19 @@ class _Limits:
             fail_cases=_FAIL_CASE_PAGE_CAP,
         )
 
-    def scaled(self, measure: response_budget.RowMeasure, rung: response_budget.Rung) -> _Limits:
-        """These limits, shrunk to what the previous rung's measurement affords.
+    def capped(self, limit: int) -> _Limits:
+        """These limits, each lowered to ``limit`` — the shrink rung's one number.
 
-        Every surface named here is also in :func:`analysis_rows`. That pairing
-        is the cost model: a surface this shrinks but the measurement omits is
-        charged to the fixed envelope, and one the measurement counts but this
-        cannot shrink makes the fixed envelope look smaller than it is.
+        Every surface capped here is also in :func:`analysis_surfaces`. That
+        pairing is the cost model: a surface this shrinks but the measurement
+        omits is charged to the fixed envelope, and one the measurement counts
+        but this cannot shrink makes the fixed envelope look smaller than it is.
         """
         return _Limits(
-            per_run=(None if self.per_run is None else measure.fit_limit(self.per_run, rung)),
-            rows=measure.fit_limit(self.rows, rung),
-            fail_cases=measure.fit_limit(self.fail_cases, rung),
-            groups=(
-                measure.fit_limit(self.groups, rung)
-                if self.groups is not None
-                else measure.affordable(rung)
-            ),
+            per_run=None if self.per_run is None else min(self.per_run, limit),
+            rows=min(self.rows, limit),
+            fail_cases=min(self.fail_cases, limit),
+            groups=limit if self.groups is None else min(self.groups, limit),
         )
 
 
@@ -3467,27 +3463,28 @@ def render_attached_analysis(
     return data
 
 
-def analysis_rows(data: dict[str, Any]) -> list[Any]:
-    """Every row this response is currently showing, across all row surfaces.
+def analysis_surfaces(data: dict[str, Any]) -> list[list[Any]]:
+    """Every row surface this response is showing, one row list apiece.
 
-    Every surface :meth:`_Limits.scaled` shrinks appears here, and nothing else
+    Every surface :meth:`_Limits.capped` shrinks appears here, and nothing else
     does. A spec-heavy or group_by-heavy call is otherwise the size driver the
     shrink rung neither measures nor touches, which degrades to budget_not_met
-    on a response the ladder could in fact have fitted.
+    on a response the ladder could in fact have fitted. A recipe's ``reduced``
+    rows are not a surface: they are the answer, no limit shrinks them, and
+    counted as rows they would price the envelope cheaper than it is.
     """
-    rows: list[Any] = []
+    surfaces: list[list[Any]] = []
     for entry in data["results"].values():
-        rows.extend(entry.get("reduced", []))
-        rows.extend(entry.get("values", []))
-        rows.extend(entry.get("groups", []))
+        surfaces.append(entry.get("values", []))
+        surfaces.append(entry.get("groups", []))
         per_run = entry.get("per_run")
         if isinstance(per_run, dict):
-            rows.extend(per_run["items"])
+            surfaces.append(per_run["items"])
         spec = entry.get("spec")
         if isinstance(spec, dict):
-            rows.extend(spec["fail_cases"]["items"])
-    rows.extend(data["coverage"]["missing_cases"]["items"])
-    return rows
+            surfaces.append(spec["fail_cases"]["items"])
+    surfaces.append(data["coverage"]["missing_cases"]["items"])
+    return surfaces
 
 
 # Rung 0's allowlist, declared as data rather than spelled inside the ``if``
@@ -3526,21 +3523,23 @@ def _degrade_analysis(
     rung: response_budget.Rung,
     *,
     preserve_provenance: bool = False,
-) -> None:
+) -> list[str]:
     """Apply the budget ladder's in-place trim rung to this envelope.
 
-    The answer rung and the shrink rung are not here: revoking an opt-in changes
-    what gets computed, and shrinking a page has to happen before its cursor is
-    minted, so both are inputs to :func:`_assemble` instead.
+    Returns the keys it emptied of content, for the rung's note. The answer
+    rung and the shrink rung are not here: revoking an opt-in changes what gets
+    computed, and shrinking a page has to happen before its cursor is minted,
+    so both are inputs to :func:`_assemble` instead.
     """
-    if rung.trim:
-        # An explicit include.provenance is a caller opt-in, and the trim rung's
-        # charter is to revoke none — so below the answer rung (the rung whose
-        # documented job IS revoking opt-ins) an enriched identity echo
-        # survives. Once the answer rung has revoked the opt-in, emptying the
-        # echo is the ladder working as specified, not a second revocation.
-        keep = preserve_provenance and not rung.answer_channel
-        rung.cut.extend(trim_analysis(data, keep_provenance=keep))
+    if not rung.trim:
+        return []
+    # An explicit include.provenance is a caller opt-in, and the trim rung's
+    # charter is to revoke none — so below the answer rung (the rung whose
+    # documented job IS revoking opt-ins) an enriched identity echo survives.
+    # Once the answer rung has revoked the opt-in, emptying the echo is the
+    # ladder working as specified, not a second revocation.
+    keep = preserve_provenance and not rung.answer_channel
+    return trim_analysis(data, keep_provenance=keep)
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3565,27 +3564,45 @@ _BUDGET_NOTES = response_budget.Notes(
 async def _negotiate_analysis(
     budget: ResponseBudget, a: AnalysisEvaluation
 ) -> tuple[dict[str, Any], str]:
-    """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
+    """Assemble this analysis at the mildest ladder rung that fits ``budget``.
+
+    Assembly re-renders finished work, so the shrink rung checks the page its
+    estimate priced and searches below it when that page is still over.
+    """
     base = _Limits.of(a.include)
     text = ""
     rendered: dict[str, Any] = {}
-    # What the standing assembly was built for. Only two things change what
-    # :func:`_assemble` produces — the answer channel and the limits — so a rung
-    # that changes neither is the previous rung degraded one step further, not a
-    # second pass over the same finished work.
-    built_for: tuple[bool, _Limits] | None = None
+    # The answer channel the standing assembly was built for. The undegraded
+    # rung and the trim rung assemble the same thing, so the trim rung degrades
+    # that assembly in place rather than making a second pass over the work.
+    built_for: bool | None = None
+
+    def candidate(
+        limits: _Limits, rung: response_budget.Rung
+    ) -> tuple[dict[str, Any], tuple[str, list[str]]]:
+        data, line = _assemble(a, rung, limits)
+        return data, (
+            line,
+            _degrade_analysis(data, rung, preserve_provenance=a.include.provenance),
+        )
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
         nonlocal text, rendered, built_for
-        limits = (
-            base.scaled(response_budget.RowMeasure.of(analysis_rows(rendered)), rung)
-            if rung.shrink
-            else base
-        )
-        if built_for != (rung.answer_channel, limits):
-            rendered, text = _assemble(a, rung, limits)
-            built_for = (rung.answer_channel, limits)
-        _degrade_analysis(rendered, rung, preserve_provenance=a.include.provenance)
+        if rung.shrink:
+            measure = response_budget.RowMeasure.of_surfaces(analysis_surfaces(rendered))
+            rendered, (text, cut) = response_budget.render_to_fit(
+                measure.affordable(rung),
+                lambda limit: candidate(base.capped(limit), rung),
+                rung,
+                # Its per_run and missing-cases pages continue themselves.
+                floor=1,
+            )
+        elif built_for != rung.answer_channel:
+            rendered, (text, cut) = candidate(base, rung)
+            built_for = rung.answer_channel
+        else:
+            cut = _degrade_analysis(rendered, rung, preserve_provenance=a.include.provenance)
+        rung.cut.extend(cut)
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
