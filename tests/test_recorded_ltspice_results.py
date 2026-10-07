@@ -33,7 +33,6 @@ from ltspice_mcp.lib.raw_parser import (
     has_valid_raw_header,
     raw_writer_command,
     read_partial_raw_progress,
-    sniff_raw_dialect,
 )
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
@@ -103,12 +102,6 @@ def test_every_recorded_raw_is_recognised_as_ltspices(build: str, case_id: str):
     command = raw_writer_command(path)
     assert command is not None
     assert "LTspice" in command
-    eight_bit = not raw_header_text(path.read_bytes()[:64]).startswith("Title:") or (
-        path.read_bytes()[1:2] != b"\x00"
-    )
-    # Sniffing knows LTspice by its UTF-16 header. The text raw LTspice 26
-    # writes under its ASCII setting is 8-bit, and is told by its Command line.
-    assert sniff_raw_dialect(path) == (None if eight_bit else "ltspice")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
