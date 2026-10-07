@@ -575,6 +575,10 @@ recording that showed it.
   already running, with the plotted traces drawn: it writes the plot settings
   file LTspice loads beside the results. Settings a person saved from LTspice
   are left alone.
+- `verify_circuit(in_ltspice=true)` opens the checked sheet or netlist in the
+  LTspice window that is already running and puts it in front. A sheet the
+  window already had open is shown as the window holds it, and the reply says
+  when that is not the file that was checked.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 

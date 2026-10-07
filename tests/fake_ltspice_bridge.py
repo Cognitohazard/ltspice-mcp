@@ -14,8 +14,10 @@ changes what is running between two calls by rewriting it:
 
 ``active`` is the document in front in that window; left out, it is the last
 one listed, which is the one LTspice had in front after opening them in turn.
-A window opens a results file that exists on disk, or one the world lists
-under ``results``; each one opened is added to the window's ``shown``.
+A window opens a sheet that exists on disk, or one the world lists under
+``files`` with the text it would then hold, and puts it in front. It opens a
+results file that exists on disk, or one the world lists under ``results``;
+each one opened is added to the window's ``shown``.
 
 ``silent_on`` names a tool this program stops answering at, for the tests of a
 bridge that hangs. A replaced design is written back to the world. One tool is
@@ -129,6 +131,45 @@ class Bridge:
             raise _Refused("document not found")
         return window, window["designs"][path]
 
+    def _in_window(self, change: Any) -> None:
+        """Apply ``change`` to this session's window in the world, and keep it."""
+        window = self._window()
+        world = json.loads(self._world.read_text(encoding="utf-8"))
+        for entry in world["windows"]:
+            if entry["pid"] == window["pid"]:
+                change(entry, world)
+        self._world.write_text(json.dumps(world), encoding="utf-8")
+
+    def _open(self, path: str) -> dict[str, Any]:
+        """Open a document: one the world lists under ``files``, or one on disk."""
+        already = path in self._window()["designs"]
+
+        def load(entry: dict[str, Any], world: dict[str, Any]) -> None:
+            if path in world.get("files", {}):
+                entry["designs"][path] = world["files"][path]
+            elif Path(path).is_file():
+                entry["designs"][path] = Path(path).read_bytes().decode("cp1252", "replace")
+            else:
+                raise _Refused("file not found")
+            entry["active"] = path
+
+        if not already:
+            self._in_window(load)
+        kind = "schematic" if path.lower().endswith(".asc") else "netlist"
+        return {
+            "already_open": "true" if already else "false",
+            "path": path,
+            "status": "ok",
+            "type": kind,
+        }
+
+    def _bring_to_front(self, path: str | None) -> None:
+        def front(entry: dict[str, Any], _world: dict[str, Any]) -> None:
+            if path in entry["designs"]:
+                entry["active"] = path
+
+        self._in_window(front)
+
     def _show_results(self, path: str) -> str:
         window = self._window()
         world = json.loads(self._world.read_text(encoding="utf-8"))
@@ -175,8 +216,10 @@ class Bridge:
             return {"path": in_front, "type": kind}
         if name == "get_raw_info":
             return {"path": self._show_results(arguments["path"])}
+        if name == "open_design":
+            return self._open(arguments["path"])
         if name == "bring_to_front":
-            self._window()
+            self._bring_to_front(arguments.get("path"))
             return {"status": "ok"}
         if name == "get_design_content":
             return {"path": arguments["path"], "text": self._design(arguments["path"])[1]}

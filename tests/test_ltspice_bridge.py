@@ -49,7 +49,7 @@ from tests.test_hidden_desktop import own_desktop, windows_only
 
 FAKE = Path(__file__).with_name("fake_ltspice_bridge.py")
 BUILDS = recorded_builds()
-#: The calls the server makes. The recorder also opens sheets, which it never does.
+#: The calls the server makes. The recorder also runs a sheet in the window, which it never does.
 SERVER_CALLS = {
     "status",
     "attach",
@@ -59,6 +59,7 @@ SERVER_CALLS = {
     "set_design_content",
     "get_raw_info",
     "bring_to_front",
+    "open_design",
 }
 
 
@@ -229,13 +230,14 @@ class TestContentDifference:
 @pytest.mark.parametrize("build", BUILDS)
 def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_path: Path):
     world = tmp_path / "world.json"
+    # LTspice was started with the first sheet and asked to open the others.
+    started_with, *opened_later = input_names()
     window = {
         "pid": NEUTRAL_PID,
         "version": load_conversation(FIXTURES / build)[3]["reply"]["instances"][0]["version"],
-        "designs": {
-            f"{NEUTRAL_DIR}\\{name}.asc": recorded_sheet(build, name) for name in input_names()
-        },
+        "designs": {f"{NEUTRAL_DIR}\\{started_with}.asc": recorded_sheet(build, started_with)},
     }
+    files = {f"{NEUTRAL_DIR}\\{name}.asc": recorded_sheet(build, name) for name in opened_later}
     steps = [
         step for step in load_conversation(FIXTURES / build) if step.get("call") in SERVER_CALLS
     ]
@@ -262,7 +264,7 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
     with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
         for step in steps[:first_with_window]:
             replay(session, step)
-    write_world(world, [window], results=[f"{NEUTRAL_DIR}\\older_version.raw"])
+    write_world(world, [window], results=[f"{NEUTRAL_DIR}\\older_version.raw"], files=files)
     with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
         for step in steps[first_with_window:first_after]:
             replay(session, step)

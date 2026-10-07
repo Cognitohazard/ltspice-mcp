@@ -135,6 +135,46 @@
   }
  },
  {
+  "note": "open a sheet that is already open",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\micro_sign.asc"
+  },
+  "reply": {
+   "already_open": "true",
+   "path": "C:\\recording\\micro_sign.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "put it in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\micro_sign.asc"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "the document in front now",
+  "call": "get_active_design_path",
+  "arguments": {},
+  "reply": {
+   "path": "C:\\recording\\micro_sign.asc",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "open a sheet that is not there",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\absent.asc"
+  },
+  "error": "file not found"
+ },
+ {
   "note": "the window's copy",
   "call": "get_design_content",
   "arguments": {

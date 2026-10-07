@@ -396,6 +396,22 @@ class BridgeSession:
             raise BridgeError(str(reply.get("message") or f"LTspice did not take {path}"))
         return str(reply.get("unchanged")).lower() != "true"
 
+    def open_design(self, path: str) -> bool:
+        """Open the sheet or netlist at ``path`` in the attached window.
+
+        True when the window already had it open, in which case nothing is
+        read from the file: the window keeps the copy it holds. LTspice's
+        refusal of a file it cannot open is raised with what it said.
+        """
+        reply = self.call("open_design", path=path)
+        if reply.get("status") != "ok":
+            raise BridgeError(str(reply.get("message") or f"LTspice did not open {path}"))
+        return str(reply.get("already_open")).lower() == "true"
+
+    def bring_to_front(self, path: str) -> None:
+        """Put the open document or results file at ``path`` in front in its window."""
+        self.call("bring_to_front", path=path)
+
     def show_results(self, path: str) -> None:
         """Open the results file at ``path`` in the attached window, in front.
 
@@ -406,7 +422,7 @@ class BridgeSession:
         was showing; nothing the bridge answers tells the two cases apart.
         """
         self.call("get_raw_info", path=path)
-        self.call("bring_to_front", path=path)
+        self.bring_to_front(path)
 
     def close(self) -> None:
         """End the bridge. It leaves the LTspice window it was attached to running."""
