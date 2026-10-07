@@ -1687,8 +1687,8 @@ integral puts hand-written trigonometry in the deck; numpy over `RawResult`
 samples weights LTspice's clustered timestep by sample count unless the caller
 interpolates, and has to cut the window to whole periods itself. `.four`, read
 back through `summary`, covers the last periods before the stop time or the
-whole run (LTspice's help; the recordings show only its default of one period),
-never a window the caller places; it is skipped by ngspice in batch mode, and
+whole run (LTspice XVII's help; the recordings show only its default of one
+period), never a window the caller places; it is skipped by ngspice in batch mode, and
 it prints phase in a convention that differs between LTspice 26 and XVII
 (`tests/test_recorded_ltspice_results.py`). The
 server-owned burden is therefore time weighting, whole-period alignment and a
