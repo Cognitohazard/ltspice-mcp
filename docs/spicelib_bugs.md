@@ -2261,9 +2261,10 @@ second half goes and the sheet joins the ones the editor is held to.
 **Affected version:** spicelib 1.5.1 (`spicelib/sim/simulator.py`,
 `run_function`; `spicelib/simulators/ltspice_simulator.py`, `LTspice.run` and
 `LTspice.create_netlist`).
-**Our workaround:** none in the server yet. The fixture recorder starts
-LTspice itself, on a desktop of its own (`tests/ltspice_recorder.py`,
-`HiddenDesktop`).
+**Our workaround:** `lib/ltspice_windows.py` is the LTspice class a server on
+native Windows launches: it overrides `run` and `create_netlist` to start
+spicelib's own command lines through `lib/hidden_desktop.py`, on a desktop of
+the server's own. The fixture recorder uses the same launch.
 
 ### Summary
 
@@ -2332,12 +2333,16 @@ simulator's while the run completes with exit code 0.
 
 ### Cross-reference
 
-`tests/ltspice_recorder.py::HiddenDesktop` is the working launch, including
-reading the text of a message box (`dialog`) so that a build which stops to
-ask is recorded as having done so. The recordings of
-`export/micro_utf8_bom` and `export/micro_utf16le_bom` on LTspice XVII carry
-that text. Giving the server the same launch is tracked separately; once
-upstream offers a hook, both use it in place of their own `CreateProcessW`.
+`lib/hidden_desktop.py` is the working launch, including reading the text of a
+message box (`HiddenDesktop.dialog`) so that a build which stops to ask is
+ended and reported instead of waiting where nobody can answer. The recordings
+of `export/micro_utf8_bom` and `export/micro_utf16le_bom` on LTspice XVII
+carry that text. `tests/test_ltspice_windows.py` pins that the overriding
+class runs the command lines spicelib builds, and
+`tests/test_ltspice_integration.py::TestWindowStaysOffTheDesktop` watches a
+real LTspice for a window on the user's desktop. Once upstream offers a hook,
+`lib/ltspice_windows.py` passes the desktop through it and its two overrides
+go.
 
 ---
 
