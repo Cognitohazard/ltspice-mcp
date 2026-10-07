@@ -552,15 +552,19 @@ as the rest of the recording (the digests match the manifest's), and each
 entry says so in `host`. A recording made on Windows has no `host`, so
 recording them again there with
 `uv run python scripts/record_ltspice_fixtures.py --only 'plot/*' --keep-library`
-replaces them. Two things decided that Wine was fit for this. The run cases
-it was checked against (`--check`) came out as committed: identical raw
-samples and headers, and logs that differ only in XVII's trailing matrix
-compiler report, which is timing-dependent there too. And the file a plot
-case keeps is LTspice's own serialisation, which the host does not touch.
-Under Wine a desktop of its own can be made but its windows cannot be listed,
-so the recorder launches on Wine's display there. `--keep-library` keeps the
-library facts of the committed manifest: a Wine prefix has the library the
-installer unpacked, not the one the rest of the recording describes.
+replaces them. Every other committed case was recorded again under Wine
+(`--check`) to see what the host changes. On LTspice 26 every file came out
+as committed but those of the two cases that run on the recording user's own
+settings, which differ by design. On XVII two things differed: each log ended
+without the blank line that follows the matrix compiler report, and a message
+box the build stopped on (the two sheets with a byte order mark) was not seen,
+because a run case finds a box only on a desktop of its own, and under Wine
+the windows on one cannot be listed, so the recorder launches on Wine's
+display there. Neither touches a plot case. What it keeps is the build's own
+serialisation of the file. Its driver looks for a box among the process's own
+windows, which Wine does list. `--keep-library` keeps the library facts of
+the committed manifest: a Wine prefix has the library the installer unpacked,
+not the one the rest of the recording describes.
 
 ### The opt-in tier
 

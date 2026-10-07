@@ -735,7 +735,8 @@ def recording_desktop() -> HiddenDesktop:
     no box is seen. Under Wine one is made, but the windows on it cannot be
     listed, so neither a box nor the waveform window a plot case drives could
     be found there; the recorder launches the ordinary way instead, on the
-    display Wine draws to.
+    display Wine draws to, where a run case sees no box but a plot case,
+    which lists its process's own windows, does.
     """
     desktop = HiddenDesktop(f"ltspice-recorder-{os.getpid()}")
     if recording_host() is not None:
