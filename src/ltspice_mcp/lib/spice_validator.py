@@ -328,22 +328,26 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     meas_cards = [c for c in cards if c.kind == "meas"]
     if not meas_cards:
         return None
-    try:
-        meas = MeasCard.from_card(meas_cards[0])
-    except SpiceLexError:
-        return None
+    refused = meas_functions_refused(meas_cards[0], simulator)
+    return refused[0][1] if refused else None
 
+
+def meas_functions_refused(
+    card: SpiceCard, simulator: str = "LTspice"
+) -> list[tuple[str, ValidationError]]:
+    """Each function a lexed ``.meas`` card calls that ``simulator`` does not
+    take in a measurement, with its error, in rule order."""
+    try:
+        meas = MeasCard.from_card(card)
+    except SpiceLexError:
+        return []
     called = {fc.name.lower() for fc in meas.function_calls}
-    for rule in _RULES:
-        if rule.simulators and simulator not in rule.simulators:
-            continue
-        if rule.blocked_function.lower() in called:
-            return ValidationError(
-                rule_name=rule.name,
-                message=rule.message,
-                suggestion=rule.suggestion,
-            )
-    return None
+    return [
+        (rule.blocked_function, ValidationError(rule.name, rule.message, rule.suggestion))
+        for rule in _RULES
+        if (not rule.simulators or simulator in rule.simulators)
+        and rule.blocked_function.lower() in called
+    ]
 
 
 # The checks ``validate_netlist_arity`` runs, each with the severity of every

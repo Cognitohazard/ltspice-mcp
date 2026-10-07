@@ -21,7 +21,9 @@ tool-surface changes.
   what the box said, where before it waited for the timeout or for someone to
   click it. `[simulator] hidden_desktop = false` (or
   `LTSPICE_MCP_HIDDEN_DESKTOP=0`) starts LTspice on your own desktop as
-  before. Named executables are launched the same way; WSL and Wine are
+  before. Named executables are launched the same way, and so is the audited
+  LTspice launch a recoverable experiment resumes with, which keeps its
+  command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
 
 The entries in this group were found by holding the server against files
@@ -80,6 +82,60 @@ recording that showed it.
   held one of those bytes. XVII copies the title into its log, and the log was
   refused as undecodable; `.meas` results failed the same way inside the log
   reader the server uses. Both read the log now.
+- The value parser refused values LTspice reads: a unit written against the
+  number (`2Hz`, `3V`, `2ohm`) and the infix forms. LTspice reads digits after
+  a scale letter or `R` as the fraction
+  (`1k5` is 1500, `4R7` is 4.7, `2M2` is 2.2m, `1Meg5` is 1.5e6) and ignores
+  any other letters after the number (`9V1` is 9). Every spelling recorded now
+  reads to the number LTspice ran. `8%` stays refused: LTspice 26 refuses it.
+  Where a value has to be told from a name (comparing two netlists, Monte
+  Carlo, a variation's assignment), `2N2222` and `1N4148` are still names.
+- Three refusals LTspice 26 states on a line of their own (`No analysis
+  specified.`, `More than one analysis specified.`, `R1: Resistance must not
+  be zero.`) were not extracted, so the caller got a log excerpt and no
+  structured error. They are errors now, as XVII's `Fatal Error:` forms were.
+- `run_experiments` ran decks LTspice refuses and reported the refusal only
+  afterwards: two exclusive analyses in one deck, `vdb()`, `phase()` or
+  `group_delay()` in a `.meas` (XVII fails that measurement), and
+  `.lib file section`, which LTspice reads as one file name. Each is a
+  blocking lint now (`analysis-count-ltspice`, `meas-function-ltspice`,
+  `lib-section-ltspice`).
+- A stepped `.op` returned its first step only, though LTspice stores every
+  step in its raw. Every step is read now, with its parameter values, and the
+  warning that only one step is available is given only when that is so.
+- A run LTspice refused before it began (a missing include or library, a
+  `.lib` section) answered a request for its measurements with the log
+  reader's "Expected pattern" message. It answers with an empty measurement
+  table carrying LTspice's errors.
+- In a stepped measurement table LTspice XVII prints `0` for a step whose
+  measurement failed, where LTspice 24 and later print `failed`, so a failure
+  reached the caller as a value. The `measurements` recipe now names each step
+  that reads exactly 0 on a run XVII wrote (`measurement_zero_or_failed`).
+- `verify_circuit` did not recognise an LTspice XVII export, which names no
+  generator, so a UTF-8 micro sign in one was only an observation. XVII copies
+  a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
+  value runs as 1, not 1e-6. An export that opens with its schematic's path and
+  names no generator is now read as XVII's, and the micro sign is a warning.
+- `verify_circuit`'s comparison read a subcircuit instance LTspice exported
+  with an added `X` (`Xe` as `X§Xe` from LTspice 24 on, `XXe` from XVII) as a
+  different part from the `Xe` a netlist written by hand names, so every leaf
+  under it was listed as removed and added again and `equivalent` was false.
+  Names that pair only across that `X`, one to one and of the same element
+  type, now match; each instance paired that way is listed under `renamed`,
+  which is not a difference. The `structural_diff` mode, and an export's
+  `diff_vs_prior`, pair them the same way and list them under
+  `components_renamed`.
+- An arity error said only `reference_arity 3, candidate_arity 2`, and for an
+  instance whose node count disagrees with its own subcircuit's ports those
+  two numbers were not the two sides at all. Each arity error now carries a
+  `detail` naming the nodes and ports, and `side` for that case; when a node
+  is the subcircuit's own name, the detail says the card names it twice, as a
+  symbol that gives the name as both its value and its model does.
+- Two ways an 8-bit deck runs differently from how the server reads it are
+  warnings now. Byte 0x85 ends the line on LTspice 24 and later, so what
+  follows it is a card (`byte-85-ltspice`); and a node named with a byte from
+  0x80 to 0x9F is refused by LTspice 26 and saved under a control character
+  by XVII (`node-control-byte-ltspice`).
 - Under WSL, LTspice was not found, and its symbols not loaded, for a Windows
   user whose profile directory is not ASCII. `%LOCALAPPDATA%` was read from
   `cmd.exe` in the console's code page, where such a name is not UTF-8 and a

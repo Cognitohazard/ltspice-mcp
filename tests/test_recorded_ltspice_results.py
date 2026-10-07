@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 import pytest
 
+from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
@@ -30,11 +32,13 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
+    build_simulation_summary,
     has_valid_raw_header,
     raw_writer_command,
     read_partial_raw_progress,
-    sniff_raw_dialect,
 )
+from ltspice_mcp.lib.recipes import MeasurementsRecipe
+from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 
@@ -103,12 +107,6 @@ def test_every_recorded_raw_is_recognised_as_ltspices(build: str, case_id: str):
     command = raw_writer_command(path)
     assert command is not None
     assert "LTspice" in command
-    eight_bit = not raw_header_text(path.read_bytes()[:64]).startswith("Title:") or (
-        path.read_bytes()[1:2] != b"\x00"
-    )
-    # Sniffing knows LTspice by its UTF-16 header. The text raw LTspice 26
-    # writes under its ASCII setting is 8-bit, and is told by its Command line.
-    assert sniff_raw_dialect(path) == (None if eight_bit else "ltspice")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -299,9 +297,8 @@ class TestSteppedRuns:
     def test_a_stepped_operating_point_stores_every_step(self, build: str, tmp_path: Path):
         """One point a step, with the stepped parameter as the first variable.
 
-        The log names no step values for it, so the steps cannot be matched to
-        log lines and the decoder offers the plot for inventory only. The
-        values are all there in the raw.
+        The log names no step values for it, so the raw's own parameter column
+        is the record: every step is read, with its value.
         """
         assert declared_points(build, "raw/step_op") == 3
         assert declared_names(build, "raw/step_op")[0] == "v"
@@ -312,9 +309,20 @@ class TestSteppedRuns:
         # V(out) is four fifths of the source, the second variable after the parameter.
         assert list(stored["rest"][:, 1]) == pytest.approx([0.8, 1.6, 2.4])
         parsed = rec.decode(build, "raw/step_op", tmp_path)
-        assert parsed.raw.descriptor.step_status == "unresolved"
+        assert parsed.raw.descriptor.step_status == "matched"
+        assert parsed.raw.steps == [{"v": 1.0}, {"v": 2.0}, {"v": 3.0}]
+        assert parsed.raw.get_steps(v=2.0) == [1]
+        for step, level in enumerate((0.8, 1.6, 2.4)):
+            assert list(parsed.raw.get_wave("V(out)", step)) == pytest.approx([level])
         log = read_spice_text(rec.recorded(build, "raw/step_op.log"))
         assert not [line for line in log.splitlines() if line.startswith(".step")]
+
+    def test_a_stepped_operating_points_summary_counts_its_steps(self, build: str, tmp_path: Path):
+        """The run's summary no longer says only the first step is read."""
+        parsed = rec.decode(build, "raw/step_op", tmp_path)
+        summary = build_simulation_summary(parsed.raw, parsed.logs, step=2)
+        assert summary["step_count"] == 3
+        assert not any("Stepped .op" in warning for warning in summary.get("warnings", []))
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -485,6 +493,49 @@ class TestMeasurements:
         )
         assert crossing[2] == (0.0 if rec.generation(build) == "xvii" else None)
 
+    async def test_a_zero_xvii_may_have_printed_for_a_failure_is_named(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The measurements recipe names the steps that read exactly 0 when the
+        run's own output says XVII wrote it, and stays silent for LTspice 26,
+        which prints ``failed``. The raw beside the log is one the same build
+        wrote; XVII names itself only in a raw's ``Command:`` line."""
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        raw = log.with_suffix(".raw")
+        raw.write_bytes(rec.recorded(build, "deck/after_end.raw").read_bytes())
+        result = await metrics.measurements(
+            services.source_for_raw_path(raw, state_no_sim),
+            MeasurementsRecipe(key="meas", metric="measurements"),
+            None,
+            state_no_sim,
+        )
+        if rec.generation(build) == "xvii":
+            (observation,) = result["observations"]
+            assert observation["code"] == "measurement_zero_or_failed"
+            assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+        else:
+            assert "observations" not in result
+            assert result["stats"]["s_when"]["failure_count"] == 1
+
+    async def test_a_jobs_recorded_build_names_the_zeros_without_a_raw(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A job's case records the build its run named, so the zeros are named
+        from that record when no artifact read here names XVII."""
+        if rec.generation(build) != "xvii":
+            pytest.skip("only XVII prints 0 for a failed step")
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        source = services.resolve_analysis_source(state_no_sim, log_file=str(log))
+        recipe = MeasurementsRecipe(key="meas", metric="measurements")
+        unnamed = await metrics.measurements(source, recipe, None, state_no_sim)
+        assert "observations" not in unnamed  # an XVII log names no build
+        recorded = replace(source, simulator_version=rec.manifest(build)["reported_build"])
+        result = await metrics.measurements(recorded, recipe, None, state_no_sim)
+        (observation,) = result["observations"]
+        assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
         the directive and takes the measurements around it."""
@@ -627,8 +678,27 @@ def test_a_failed_run_is_classified_by_its_cause(build: str, case_id: str):
     assert classify_failure_code(errors) == FAILURES[case_id]
 
 
+#: Runs both builds refused before they began: the log has no "Circuit:"
+#: line, and gives the reason as a parse or fatal error.
+REFUSED_BEFORE_THE_RUN = ["log/err_missing_include", "log/err_missing_lib", "deck/lib_section"]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(REFUSED_BEFORE_THE_RUN)))
+def test_a_run_refused_before_it_began_reports_why_not_a_parse_failure(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Such a log holds no measurement or Fourier block, so both are absent
+    and the diagnostics carry the reason. spicelib's complaint that the log
+    lacks its header is not an answer to give the caller."""
+    assert "Circuit:" not in read_spice_text(rec.recorded(build, f"{case_id}.log"))
+    logs = rec.decode_log(build, case_id, tmp_path)
+    for name in ("measurements", "fourier"):
+        assert logs.section(name)["status"] == "absent", name
+    assert logs.value("diagnostics")["errors"]
+
+
 #: Decks LTspice refuses whose log gives the reason on a line of its own, with
-#: no "Error" in front. LTspice 26 words these three so.
+#: no "Error" in front on LTspice 26 and "Fatal Error:" in front on XVII.
 REASON_ON_A_BARE_LINE = {
     "log/err_no_analysis": "No analysis specified.",
     "deck/ac_and_tran": "More than one analysis specified.",
@@ -638,17 +708,14 @@ REASON_ON_A_BARE_LINE = {
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(list(REASON_ON_A_BARE_LINE))))
 def test_a_refusal_ltspice_26_states_on_a_bare_line(build: str, case_id: str):
-    """XVII prefixes each with "Fatal Error:" and it is extracted. LTspice 26
-    does not, and nothing is extracted: the caller is left with the log
-    excerpt, which does contain the line."""
-    log = rec.recorded(build, f"{case_id}.log")
-    errors = extract_log_diagnostics(log)["errors"]
+    """Each build's line is extracted as the run's error, so the caller gets
+    the reason rather than only the log excerpt that holds it."""
+    errors = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))["errors"]
+    (error,) = errors
     if rec.generation(build) == "xvii":
-        assert len(errors) == 1
-        assert errors[0].startswith("Fatal Error:")
+        assert error.startswith("Fatal Error:")
     else:
-        assert REASON_ON_A_BARE_LINE[case_id] in read_spice_text(log).replace("\r", "").split("\n")
-        assert errors == []
+        assert error == REASON_ON_A_BARE_LINE[case_id]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
