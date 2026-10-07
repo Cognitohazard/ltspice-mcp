@@ -123,6 +123,13 @@ above. This server reaches your LTspice window through the bridge program
 LTspice installs, by itself, and only attaches to an LTspice you already have
 running.
 
+One thing is worth having both for. LTspice lets you plot a net by clicking it
+on the sheet only after a run made in that window. A job's results open and
+draw in the window, but clicking the sheet adds nothing to them. An assistant
+with both servers can start that one run through LTspice's
+(`start_simulation`) and measure what it leaves beside the sheet through this
+one; with only this server, press Run yourself and it does the same.
+
 If you registered this server as `ltspice`, rename the entry to
 `spice`. In the Claude Code plugin the rename is already made, so the tool
 names an assistant sees change once, from `…_ltspice__run_experiments` to

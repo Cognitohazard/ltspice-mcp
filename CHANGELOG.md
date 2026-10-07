@@ -579,6 +579,13 @@ recording that showed it.
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says
   when that is not the file that was checked.
+- The guide says what to do when a person wants to plot nets by clicking the
+  sheet in LTspice. LTspice offers that only after a run made in its own
+  window, and a job's results opened there are drawn but not tied to the
+  sheet. So that one run is started through LTspice's own MCP server where it
+  is connected, or by the person, and measured by path with
+  `analyze_results(raw_path)`. Such a run simulates the window's copy of the
+  sheet, not the file.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 

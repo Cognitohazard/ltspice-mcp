@@ -366,6 +366,12 @@ summary = "That LTspice loads the plot settings file beside a results file as it
 model = ["lib/plot_settings.py", "lib/ltspice_window.py", "tools/analysis.py"]
 unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded instead is around it, in tests/fixtures/ltspice_bridge_recorded: the shape of the plot settings files LTspice ships with its examples (manifest: plot_settings), and that reading a results file's description opens it and leaves it the one in front (conversation.json). LTspice XVII has no bridge to open a file through."
 
+[behaviour.window-run]
+summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it; and that only such a run's waveform pane is tied to the sheet, so that clicking a net plots it."
+model = ["assets/guide/schematics.md"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the three facts noted after 'run the sheet in the window', made with the window holding one resistor value and the file another"
+unrecordable = "The tie between a pane and a sheet is seen and not reported: nothing lists what a click added. It was looked at on LTspice 26.1.1, on a desktop of its own, by posting the same grid of clicks to the sheet's view and capturing the window. After a run made in the window the clicks added traces, with the panes tiled or with the sheet covering the results. With results from a batch run of the same sheet, beside it under its name and opened in the window, they added none in either layout."
+
 [behaviour.reference-documents]
 summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."
 model = ["lib/simulator_docs.py"]

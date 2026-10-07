@@ -31,6 +31,23 @@ in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
 `ltspice` block says `differs_from_file: true`, the window already had the
 sheet open and is showing an older copy, not the one you checked: tell them.
 
+When they want to plot nets by clicking the sheet in LTspice, a job cannot
+give them that. LTspice ties a waveform pane to a sheet only for a run made in
+that window: a job's results open and draw there (`plot_waveform(...,
+in_ltspice=true)`), but a click on the sheet adds nothing to them, even with
+the results put beside the sheet. So that one run is made in the window. If
+LTspice's own MCP server is connected in this session (LTspice registers it as
+`ltspice`; its tools include `start_simulation`), call
+`start_simulation(path=...)`, then `is_simulation_running(path=...)` until it
+answers false; otherwise ask the user to run the sheet in LTspice themselves.
+Either way LTspice simulates the window's copy of the sheet, which is not the
+file when `differs_from_file` is true, and leaves `<sheet>.raw` and
+`<sheet>.log` beside the sheet without saving it. Measure them with
+`analyze_results(sources=[{"raw_path": ...}])`. That run is not a job: it has
+no record, no variations and nothing for `jobs` to wait on or cancel, and its
+analysis carries the observation `raw_path_without_deck_provenance`. Use it
+for the look in the window, and `run_experiments` for everything else.
+
 A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
 in step: a commit's reply lists the window under `open_in_ltspice`, and with
 `shown: true` the user is already looking at the edit. `shown: false` means

@@ -117,6 +117,10 @@ class TestRecording:
             "the window then reads back exactly what it was given": True,
             "the file is as it was": True,
             "after the file is rewritten the window still holds its own copy": True,
+            # The window held 2k and the file 3k when the run was made.
+            "a run in the window is of the window's copy and not of the file": "2k",
+            "the run did not write the sheet": True,
+            "what the run left beside the sheet": [".asc", ".log", ".net", ".op.raw", ".raw"],
             "the results file is then the one LTspice has in front": True,
             "no LTspice was started in its place": True,
         }

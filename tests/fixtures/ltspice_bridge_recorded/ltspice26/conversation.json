@@ -285,6 +285,24 @@
   }
  },
  {
+  "note": "a run in the window is of the window's copy and not of the file",
+  "observed": "2k"
+ },
+ {
+  "note": "the run did not write the sheet",
+  "observed": true
+ },
+ {
+  "note": "what the run left beside the sheet",
+  "observed": [
+   ".asc",
+   ".log",
+   ".net",
+   ".op.raw",
+   ".raw"
+  ]
+ },
+ {
   "note": "open a results file",
   "call": "get_raw_info",
   "arguments": {

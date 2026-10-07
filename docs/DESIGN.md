@@ -146,6 +146,18 @@ sheet, which differs from the file in ways that change nothing, so the
 comparison reads content and not text. Only the bridge's stdio interface is
 used; the loopback protocol behind it is not documented and is left alone.
 
+One thing stays with LTspice's server: a run made in the window. It is the
+only run whose waveform pane LTspice ties to the sheet, so that clicking a net
+plots it. A job's results opened in the window are drawn and not tied, and
+putting them beside the sheet under its name changes nothing (26.1.1, looked
+at in all four combinations of where the results came from and how the panes
+were laid out). Such a run is also of the window's copy and not of the file,
+and leaves no record: the opposite of a job on each count the job system
+exists for. So this server does not start one. The guide tells a session to
+use LTspice's `start_simulation` for it when that server is connected, or to
+ask the person to run the sheet, and then to measure the results it leaves
+beside the sheet by path, which is what `analyze_results(raw_path)` is for.
+
 Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,
 `set_component_value`, `set_component_attribute`, `wire_pins`,

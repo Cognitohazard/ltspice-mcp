@@ -578,7 +578,20 @@ that the call the server uses opens a results file and leaves it in front. If
 that needs checking again, capture the window; `PrintWindow` works on a window
 of another desktop when the capturing process is started on that desktop.
 
-A second observation is behind a refusal. Handed a document with a NUL
+A second is behind a paragraph of the guide and no code: that LTspice ties a
+waveform pane to a sheet, so that clicking a net plots it, only for a run made
+in that window. The same grid of clicks was posted to the sheet's view in four
+windows and each captured. After a run made in the window the clicks added
+traces, whether the panes were tiled or the sheet covered the results; with a
+batch run's results beside the sheet under its name and opened in the window,
+they added none in either layout. That is why `plot_waveform(in_ltspice=true)`
+leaves a job's results where the job wrote them, and why the guide sends a
+session to a run in the window when a person wants to probe by clicking. What
+such a run simulates is recorded: the recorder makes its run with the window
+holding one resistor value and the file another, and notes which the netlist
+beside the sheet carries, and that the sheet was not written.
+
+A third observation is behind a refusal. Handed a document with a NUL
 character in it, LTspice 26.1.1 stops answering for good, which in a window is
 every document a person has open; it was seen by pushing a UTF-16 sheet read as
 an 8-bit one. The client refuses to send such text (`replace_design_text`), so
