@@ -407,6 +407,12 @@ REFUSED = {
     "deck/default_models": {"model-missing"},
     # LTspice runs it and the measurement fails for want of the unsaved node.
     "deck/save_omits_meas": {"save-meas-coverage"},
+    # "More than one analysis specified."
+    "deck/ac_and_tran": {"analysis-count-ltspice"},
+    # Functions only LTspice's waveform viewer has.
+    "deck/meas_function_vdb": {"meas-function-ltspice"},
+    "deck/meas_function_phase": {"meas-function-ltspice"},
+    "deck/meas_function_group_delay": {"meas-function-ltspice"},
 }
 
 FORMS = sorted(rec.cases_of("deck-forms"))
@@ -439,22 +445,9 @@ def test_a_form_the_checks_accept_ran_on_ltspice(build: str, case_id: str):
     ``IC=`` values, ``Q=`` and ``Flux=``, a value keyed ``R=``, ``params:`` on a
     subcircuit, trailing area factors, the ``.tran`` shorthands, ``.op`` beside
     ``.tran``."""
-    if case_id in REFUSED or case_id in NOT_REFUSED_YET:
+    if case_id in REFUSED:
         pytest.skip("not a form the checks accept")
     assert ran(build, case_id)
-
-
-#: Decks LTspice refuses that no check turns away before the run.
-NOT_REFUSED_YET = {
-    # "More than one analysis specified." The one-analysis rule is written
-    # down in spice_validator.EXCLUSIVE_ANALYSIS_KINDS and enforced nowhere.
-    "deck/ac_and_tran",
-    # vdb(), phase() and group_delay() in a .meas: caught by the directive
-    # check below, which is not part of the lint.
-    "deck/meas_function_vdb",
-    "deck/meas_function_phase",
-    "deck/meas_function_group_delay",
-}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -600,8 +593,8 @@ def test_an_include_beside_the_deck_is_found(build: str, tmp_path: Path):
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_ltspice_reads_a_lib_section_name_as_part_of_the_file_name(build: str):
     """``.lib corners.lib tt`` selects a section in ngspice. LTspice has no
-    sections: it looks for a file called ``corners.lib tt`` and stops. Nothing
-    in the lint says so before the run."""
+    sections: it looks for a file called ``corners.lib tt`` and stops. The lint
+    refuses the deck before the run."""
     assert not ran(build, "deck/lib_section")
     log = read_spice_text(rec.recorded(build, "deck/lib_section.log"))
     if rec.generation(build) == "xvii":
@@ -611,4 +604,4 @@ def test_ltspice_reads_a_lib_section_name_as_part_of_the_file_name(build: str):
         assert ".lib corners.lib tt" in log
     path = INPUTS / "deck/lib_section.cir"
     findings = lint_deck(deck_text("deck/lib_section"), path, "ltspice", "LTspice")
-    assert [f["rule_id"] for f in findings if f["severity"] == "error"] == []
+    assert [f["rule_id"] for f in findings if f["severity"] == "error"] == ["lib-section-ltspice"]

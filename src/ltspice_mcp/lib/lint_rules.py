@@ -27,15 +27,17 @@ from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, v
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
+    EXCLUSIVE_ANALYSIS_KINDS,
     PROBE_REF_RE,
     drop_title_card,
+    validate_directive,
     validate_netlist_arity,
 )
 
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "4"
+linter_version = "5"
 
 _SIGNAL_RE = PROBE_REF_RE
 # A capital M straight after a number is milli unless the letters after it
@@ -259,6 +261,114 @@ def _lib_section_ngspice(
                         'file. Set [simulator] ngbehavior = "hsa" in the server '
                         "config (or LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the "
                         "server; ngspice then loads the section."
+                    ),
+                },
+            )
+        )
+    return findings
+
+
+def _analysis_count_ltspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    """LTspice runs one analysis a deck, with ``.op`` allowed beside it; two
+    stop the run ("More than one analysis specified." on LTspice 26, a fatal
+    error on XVII, recorded on both)."""
+    if context.family != "ltspice":
+        return []
+    analyses = [
+        (context.path, card)
+        for card in context.cards
+        if card.kind == "directive" and _directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
+    ] + [
+        (path, card)
+        for path, _text, cards in context.include_cards
+        for card in cards
+        if card.kind == "directive" and _directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
+    ]
+    if len(analyses) < 2:
+        return []
+    path, second = analyses[1]
+    return [
+        _finding(
+            context,
+            rule,
+            line=second.line_start,
+            file=path,
+            subject=_directive_head(second),
+            evidence={
+                "directives": [card.body for _, card in analyses],
+                "reason": (
+                    "LTspice runs one analysis per deck (.op may sit beside it) and "
+                    "refuses a deck with more. Keep one, and run the others as "
+                    "separate circuits or a variation."
+                ),
+            },
+        )
+    ]
+
+
+def _meas_function_ltspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    """A ``.meas`` calling a function only LTspice's waveform viewer has: LTspice
+    26 stops at the directive and takes no measurement, XVII fails that one
+    (recorded on both)."""
+    if context.family != "ltspice":
+        return []
+    findings = []
+    for card in context.cards:
+        if card.kind != "meas":
+            continue
+        error = validate_directive(card.body, SIMULATOR_DISPLAY[context.family])
+        if error is None or not error.rule_name.endswith("_in_meas"):
+            continue
+        findings.append(
+            _finding(
+                context,
+                rule,
+                line=card.line_start,
+                subject=error.rule_name.removesuffix("_in_meas"),
+                evidence={
+                    "directive": card.body,
+                    "reason": f"{error.message} {error.suggestion}",
+                },
+            )
+        )
+    return findings
+
+
+def _lib_section_ltspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    """``.lib file section`` selects a section in ngspice. LTspice has no sections:
+    it looks for a file named ``file section`` and stops (recorded on both
+    builds)."""
+    if context.family != "ltspice":
+        return []
+    findings = []
+    for card in context.cards:
+        if card.kind != "directive":
+            continue
+        tokens = tokenize_body(card.body)
+        if len(tokens) < 3 or tokens[0].text.casefold() != ".lib":
+            continue
+        findings.append(
+            _finding(
+                context,
+                rule,
+                line=card.line_start,
+                subject=tokens[2].text.strip("\"'"),
+                evidence={
+                    "directive": card.body,
+                    "reason": (
+                        "LTspice has no library sections: it reads the rest of the "
+                        "line as one file name and stops when no such file exists. "
+                        "Include the file the section's models are in, or a copy "
+                        "holding only that section."
                     ),
                 },
             )
@@ -589,6 +699,11 @@ RULES: tuple[LintRule, ...] = (
     # skip. Refusing the deck would cost the caller the rest of the run.
     LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch),
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
+    # Blocking: LTspice refuses each of these decks before it runs, or, on XVII
+    # for a .meas function, fails the measurement the caller asked for.
+    LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice),
+    LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice),
+    LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice),
     LintRule("model-missing", "blocking", _model_missing),
     # One rule per validate_netlist_arity check, each at the disposition its
     # declared severity names, so suppressing one never silences another.
