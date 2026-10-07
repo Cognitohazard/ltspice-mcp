@@ -485,6 +485,16 @@ class TestExportEncoding:
 class TestExportedNames:
     """How an instance is named on its card."""
 
+    #: ``export/instance_names``'s instances as the sheet names them, the way
+    #: a netlist written by hand would.
+    WRITTEN = (
+        "* the sheet's instances as named\n"
+        "R1 NC_01 NC_02 1k\nRLoad NC_03 NC_04 2k\nr3 NC_05 NC_06 3k\n"
+        "XU1 NC_07 NC_08 NC_09 NC_10 cell4\n"
+        "X2 NC_11 NC_12 NC_13 NC_14 cell4\n"
+        "x3 NC_15 NC_16 NC_17 NC_18 cell4\n.end\n"
+    )
+
     @pytest.mark.parametrize("sheet", ["instance_names", "block_symbol"])
     def test_every_spelling_of_a_name_is_one_reference_to_the_comparison(
         self, build: str, sheet: str
@@ -522,15 +532,8 @@ class TestExportedNames:
         ``x3``, ``RLoad``) is the export's circuit: the ``X`` LTspice puts in
         front of a subcircuit instance pairs as a rename, not as one removed
         part and one added."""
-        written = (
-            "* the sheet's instances as named\n"
-            "R1 NC_01 NC_02 1k\nRLoad NC_03 NC_04 2k\nr3 NC_05 NC_06 3k\n"
-            "XU1 NC_07 NC_08 NC_09 NC_10 cell4\n"
-            "X2 NC_11 NC_12 NC_13 NC_14 cell4\n"
-            "x3 NC_15 NC_16 NC_17 NC_18 cell4\n.end\n"
-        )
         export = rec.export_text(build, "export/instance_names")
-        result = compare_graphs(written, export)
+        result = compare_graphs(self.WRITTEN, export)
         assert (result.added, result.removed) == ([], [])
         # References are compared without the marker, as LTspice 26 names them.
         assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [
@@ -544,15 +547,8 @@ class TestExportedNames:
         lists them as renamed, and counts no difference for them."""
         from ltspice_mcp.tools.verify import compare_structural
 
-        written = (
-            "* the sheet's instances as named\n"
-            "R1 NC_01 NC_02 1k\nRLoad NC_03 NC_04 2k\nr3 NC_05 NC_06 3k\n"
-            "XU1 NC_07 NC_08 NC_09 NC_10 cell4\n"
-            "X2 NC_11 NC_12 NC_13 NC_14 cell4\n"
-            "x3 NC_15 NC_16 NC_17 NC_18 cell4\n.end\n"
-        )
         comparison, _, failure, warnings = compare_structural(
-            written, rec.export_text(build, "export/instance_names")
+            self.WRITTEN, rec.export_text(build, "export/instance_names")
         )
         assert (failure, warnings) == (None, [])
         assert comparison is not None

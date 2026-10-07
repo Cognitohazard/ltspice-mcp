@@ -932,8 +932,8 @@ def build_simulation_summary(
         # always-terminal failures (iteration limit) aren't candidates. Demote
         # only when the raw covers the WHOLE run: a single solve block
         # (op_solve_count <= 1) written to a single-step raw (step_count <= 1). A
-        # stepped .op (only its first point read, log shows >1 solve) or a
-        # multi-step raw (later steps not checked here) keeps the error — the
+        # stepped .op (the log shows >1 solve) or a multi-step raw (later steps
+        # not checked here) keeps the error — the
         # first step's finite data can't clear a failure that belongs to another.
         errs = summary.get("errors")
         if errs:
