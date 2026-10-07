@@ -10,8 +10,9 @@ import logging
 import re
 import tempfile
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from spicelib.log.ltsteps import LTSpiceLogReader
@@ -140,7 +141,14 @@ _BARE_ERROR_PHRASES = [
     "time step too small",
     "no convergence",
     "questionable use of curly braces",
+    # LTspice 26 refuses a deck with these on a line of their own, where XVII
+    # writes "Fatal Error:" in front of them (recorded on both).
+    "no analysis specified.",
+    "more than one analysis specified.",
 ]
+# LTspice 26 refuses a component's value on a bare line naming the component
+# ("R1: Resistance must not be zero."); XVII puts "Fatal Error:" in front.
+_RE_COMPONENT_REFUSAL = re.compile(r"^[A-Za-z][\w.:§]*: [A-Za-z][\w ]* must not be zero\.$")
 # LTspice names an unsolvable matrix two ways that the bare phrase above
 # cannot reach: a source/inductor loop reports "…matrix is singular" and
 # paralleled ideal sources report an "over-defined circuit matrix", both
@@ -798,7 +806,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             errors.append(stripped)
             i += 1
             continue
-        if _RE_UNSOLVABLE_MATRIX.search(stripped):
+        if _RE_UNSOLVABLE_MATRIX.search(stripped) or _RE_COMPONENT_REFUSAL.match(stripped):
             errors.append(stripped)
             i += 1
             continue
@@ -1183,7 +1191,7 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
         # codecs and gives up on an 8-bit log holding a byte none of them
         # defines. LTspice XVII writes one when the deck's title holds text
         # in a double-byte code page.
-        if content.startswith("Circuit:") or "\nCircuit:" in content:
+        if has_circuit_line(content):
             candidates.append(content)
 
         for candidate in candidates:
@@ -1193,6 +1201,50 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
                 except Exception:
                     continue
         raise ResultError(f"Could not parse log file: {first_err}") from first_err
+
+
+#: How far from the real axis a printed angle of 0 or 180 degrees lands once
+#: spicelib has turned it into a complex number (sin(pi) is not exactly 0).
+_REAL_ANGLE_TOLERANCE = 1e-9
+
+
+def _complex_measurement(value: complex) -> float:
+    """One AC .meas result, which LTspice prints as ``(<magnitude>dB,<angle>°)``.
+
+    A real result (``ph()``, ``re()``, ``im()``) is printed at 0 or 180
+    degrees, and a negative one has its absolute value for a magnitude: the
+    angle is its sign, so it is read as the signed real number. Any other
+    angle is a complex result, read as its magnitude.
+    """
+    magnitude = abs(value)
+    if abs(value.imag) <= _REAL_ANGLE_TOLERANCE * magnitude:
+        return float(value.real)
+    return float(magnitude)
+
+
+def has_circuit_line(text: str) -> bool:
+    """``text`` has the ``Circuit:`` line a log of a run that began opens with.
+
+    A run the simulator refused before it began has none.
+    """
+    return text.startswith("Circuit:") or "\nCircuit:" in text
+
+
+def empty_measurements(
+    diagnostics: Mapping[str, Any], failed: Sequence[str] = ()
+) -> MeasurementsOutput:
+    """The table of a log with no measurement results.
+
+    The log's errors and warnings say why, and a FAIL'ed measurement is listed
+    with no value rather than left out, so its absence is never silent.
+    """
+    return {
+        "measurements": {name: {"values": [None]} for name in failed},
+        "step_count": 0,
+        "errors": diagnostics.get("errors") or None,
+        "warnings": diagnostics.get("warnings") or None,
+        "failed_measurements": list(failed),
+    }
 
 
 def parse_measurements(
@@ -1247,22 +1299,7 @@ def parse_measurements(
         # mode" is a *warning*-class diagnostic; without carrying it, callers
         # (e.g. measurement_stats) report "no diagnostics" while every other
         # tool surfaces the reason.
-        diagnostics = extract_log_diagnostics(log_path)
-        errors_list = diagnostics["errors"] or None
-        warnings_list = diagnostics["warnings"] or None
-        # Even when spicelib reports no measurements, FAIL'ed names still
-        # need to show up in ``measurements`` (value=None) so consumers
-        # don't see a silent absence.
-        measurements: dict[str, MeasurementEntry] = {
-            name: {"values": [None]} for name in failed_names
-        }
-        return {
-            "measurements": measurements,
-            "step_count": 0,
-            "errors": errors_list,
-            "warnings": warnings_list,
-            "failed_measurements": failed_names,
-        }
+        return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
     def _coerce(values: list) -> list[float | None]:
         out: list[float | None] = []
@@ -1270,7 +1307,7 @@ def parse_measurements(
             if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
                 out.append(None)
             elif isinstance(val, complex):
-                out.append(float(abs(val)))
+                out.append(_complex_measurement(val))
             elif hasattr(val, "item") and not isinstance(val, str):
                 out.append(float(val.item()))  # numpy scalar
             else:

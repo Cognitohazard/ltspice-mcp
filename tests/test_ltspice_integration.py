@@ -22,7 +22,7 @@ from ltspice_mcp.lib import hidden_desktop
 from ltspice_mcp.lib.hidden_desktop import DialogError
 from ltspice_mcp.lib.simulator import SIMULATORS, bind_named_executable, detect_simulators
 from ltspice_mcp.state import SessionState
-from tests.conftest import terminal_experiment
+from tests.conftest import LIVENESS_S, terminal_experiment
 from tests.test_hidden_desktop import windows_only
 
 # Path to the test fixture .asc schematic
@@ -243,10 +243,9 @@ class TestMeasExtraction:
             {"key": "meas", "metric": "measurements"},
             include={"per_run": {"limit": 1}},
         )
-        stats = data["results"]["meas"]["per_run"]["items"][0]["value"]["stats"]
-        fc = stats["fc"]
-        assert fc["valid_count"] == 1
-        assert fc.get("at", fc["mean"]) == pytest.approx(
+        value = data["results"]["meas"]["per_run"]["items"][0]["value"]
+        assert "failed_measurements" not in value
+        assert value.get("at", {}).get("fc", value["measured"]["fc"]) == pytest.approx(
             1 / (2 * math.pi * 1e3 * 100e-9), rel=0.005
         )
 
@@ -260,9 +259,9 @@ class TestMeasExtraction:
             {"key": "meas", "metric": "measurements"},
             include={"per_run": {"limit": 1}},
         )
-        stats = data["results"]["meas"]["per_run"]["items"][0]["value"]["stats"]
-        assert stats["vout_max"]["valid_count"] == 1
-        assert stats["vout_max"]["mean"] == pytest.approx(1 - math.exp(-5), abs=0.002)
+        value = data["results"]["meas"]["per_run"]["items"][0]["value"]
+        assert "failed_measurements" not in value
+        assert value["measured"]["vout_max"] == pytest.approx(1 - math.exp(-5), abs=0.002)
 
 
 @pytest.mark.asyncio
@@ -587,6 +586,53 @@ class _WindowWatch:
                 return
 
 
+def _recovery_run(simulator: type, work_dir: Path) -> _WindowWatch:
+    """One run through the audited recovery launch, watched; skips where that
+    launch cannot run here."""
+    from ltspice_mcp.lib import controlled_ltspice as controlled
+    from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError, StartupPolicy
+    from ltspice_mcp.lib.simulator_build import executable_identity
+
+    identity = executable_identity(simulator)
+    if identity is None or identity.sha256 != controlled.AUDITED_EXECUTABLE_SHA256:
+        pytest.skip("the installed LTspice is not the build the recovery launch was audited on")
+    root = work_dir.resolve() / "lineage"
+    try:
+        template = controlled.capture_ini_template(
+            Path(os.environ["APPDATA"]) / "LTspice.ini", root / "startup" / "template.ini", root
+        )
+    except (KeyError, RecoveryError) as exc:
+        pytest.skip(f"no established LTspice profile to recover with: {exc}")
+    execution = ExecutionRecord(
+        run_timeout_s=None,
+        timeout_source="test",
+        max_parallel=1,
+        job_deadline_s=None,
+        kill_grace_s=5,
+        simulator_argv=(identity.path,),
+        executable=identity,
+        ngbehavior=None,
+        platform="win32",
+        startup=StartupPolicy(controlled.STARTUP_VERSION, False, ini_template=template),
+    )
+    ini = root / "startup" / "attempt" / "LTspice.ini"
+    controlled.prepare_attempt_ini(template, ini, root)
+    adapter = controlled.controlled_ltspice(execution, ini, lambda: None)
+    deck = work_dir.resolve() / "recovery_run.cir"
+    deck.write_text(
+        "* long enough to be seen\n"
+        "R1 in out 1k\n"
+        "C1 out 0 100n\n"
+        "V1 in 0 PULSE(0 1 0 1n 1n 0.5m 1m)\n"
+        ".tran 0 300m 0 1u\n"
+        ".END\n"
+    )
+    with _WindowWatch(work_dir) as watch:
+        assert adapter.run(deck, timeout=LIVENESS_S, cwd=deck.parent) == 0
+    assert deck.with_suffix(".raw").is_file()
+    return watch
+
+
 @windows_only
 @pytest.mark.asyncio
 class TestWindowStaysOffTheDesktop:
@@ -612,6 +658,18 @@ class TestWindowStaysOffTheDesktop:
         )
         with _WindowWatch(work_dir) as watch:
             await _run_deck(ltspice_state, "off-desktop-run", deck.name)
+        self._assert_kept_away(watch)
+
+    async def test_a_recovery_run_has_no_window_here(
+        self, ltspice_state: SessionState, work_dir: Path
+    ):
+        """The audited recovery launch (``lib/controlled_ltspice.py``) starts
+        the audited build with a copy of an established profile. It too runs
+        on the server's desktop. Runs only where the installed LTspice is that
+        build and the profile in ``%APPDATA%`` is an established one."""
+        watch = await asyncio.to_thread(
+            _recovery_run, ltspice_state.available_simulators["ltspice"], work_dir
+        )
         self._assert_kept_away(watch)
 
     async def test_an_export_has_no_window_here(self, ltspice_state: SessionState, work_dir: Path):

@@ -84,6 +84,20 @@ _WINDOWS_1252_OVER_LATIN_1 = {
 }
 
 
+_LATIN_1_OVER_WINDOWS_1252 = {ord(char): byte for byte, char in _WINDOWS_1252_OVER_LATIN_1.items()}
+
+
+def latin1_reading(text: str) -> str:
+    """``text`` decoded from an 8-bit file, as LTspice reads the same bytes.
+
+    Both recorded builds read an 8-bit deck as Latin-1: every byte from 0x80
+    to 0x9F is the control character of the same number, where the table this
+    module decodes with shows cp1252's character (``€``, curly quotes,
+    dashes). Every other character is the same either way.
+    """
+    return text.translate(_LATIN_1_OVER_WINDOWS_1252)
+
+
 def _decode(raw: bytes, errors: str) -> tuple[str, str]:
     for bom, encoding in _BOM_ENCODINGS:
         if raw.startswith(bom):
