@@ -116,6 +116,13 @@ class Observation(TypedDict, total=False):
     evidence: dict[str, Any]
 
 
+#: A count on a ``.four`` card. LTspice's form is ``.four <freq> [Nharmonics]
+#: [Nperiods] <trace> ...``, so up to two integers (Nperiods may be -1, the
+#: whole run) sit between the frequency and the traces; a trace is never a
+#: bare integer.
+_FOUR_COUNT_RE = re.compile(r"[+-]?\d+")
+
+
 def parse_requested_outputs(netlist_text: str) -> dict[str, list[str]]:
     """Extract requested ``.meas``/``.four`` names from a netlist deck.
 
@@ -138,8 +145,11 @@ def parse_requested_outputs(netlist_text: str) -> dict[str, list[str]]:
             if name:
                 meas.append(name)
         elif head in (".four", ".fourier"):
-            # ``.four <freq> <signal> [signal ...]`` — signals start at token 2.
-            four.extend(tokens[2:])
+            rest = tokens[2:]
+            counts = 0
+            while counts < min(2, len(rest)) and _FOUR_COUNT_RE.fullmatch(rest[counts]):
+                counts += 1
+            four.extend(rest[counts:])
     return {"meas": meas, "four": four}
 
 

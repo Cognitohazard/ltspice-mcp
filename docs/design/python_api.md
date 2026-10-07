@@ -462,6 +462,19 @@ prove them. There are no fabricated plot or step identities; measurement
 vector ordinals are not RAW steps. Rows and metadata are detached plain values,
 so agent code can arrange arrays or export them without another result class.
 
+The `measurements` recipe's rows are the MCP rows, rendered by the same code.
+A run that holds one value per `.meas`, such as one case of a sweep, reads as
+`row["value"]["measured"][name]`, null where the log holds no number for that
+name, which is then listed in `row["value"]["failed_measurements"]`. Any
+crossing or `AT` point the log printed is under `row["value"]["at"][name]`. Its
+per-name `stats` block is left off the default row; `include={"fields":
+["value"]}` returns it. A stepped run's row carries `stats` alone. Reductions
+read `stats` either way, so `reduced` does not depend on which rendering a row
+was given. A name the log holds no number for is counted, not skipped: its
+reduced rows carry `no_value_count`, a spec on it carries the same count beside
+`pass_count` and `fail_count` and is `"indeterminate"` unless
+`allow_incomplete`, and the dict the API returns is the MCP result's.
+
 Direct log imports capture no RAW sibling, even when one exists. Log views
 require `plot_index` omission. Analysis and attached analysis accept an omitted
 selector; it selects plot zero only for a RAW recipe. Whole-log measurements run
@@ -493,8 +506,8 @@ and real axes.
   `integrate_noise`, `classify_filter`, `analyze_ac_structure`.
 - Transient: `window_and_clean`, `analyze_edge`, `analyze_pulse_response`,
   `analyze_disturbance_response`, `analyze_timing_between`, `analyze_periodic`,
-  `analyze_thd`, `compute_signal_stats`, `time_weighted_quantiles`,
-  `compute_measurement_stats`.
+  `analyze_thd`, `analyze_tone`, `compute_signal_stats`,
+  `time_weighted_quantiles`, `compute_measurement_stats`.
 - Also `parse_spice_value`, which is not a metric but a value reader: variation
   values cross the boundary as SPICE literals (`'5p'`) in both directions, and
   nothing else on the facade parses one.
@@ -529,7 +542,7 @@ the literal typing surface:
   `ResonancesOutput` (`ResonancePeak`), `NoiseIntegralOutput`,
   `EdgeMetricsOutput`, `PulseResponseOutput`, `DisturbanceResponseOutput`,
   `TimingBetweenOutput`, `PeriodicMetricsOutput`, `SignalStatsOutput`,
-  `TimeWeightedQuantilesOutput`, `ThdOutput` (`HarmonicEntry`),
+  `TimeWeightedQuantilesOutput`, `ThdOutput` (`HarmonicEntry`), `ToneOutput`,
   `MeasurementStatsEntry`, `HistogramBin`, `AcStructureResult`, `Corner`,
   `Observation`.
 
@@ -554,7 +567,7 @@ module so that `__all__` stays the pinned stability boundary and does not move.
   MCP pages" is impossible past an irreversible cap: (a) neutral evaluator
   output equals Python output; (b) MCP output equals the documented projection
   or cap of that neutral output; (c) every omitted record reconciles through
-  totals and truncation observations.
+  totals, the `count` on a collapsed failure row, and truncation observations.
 - **Collectors.** More than 50 runs; more than 100 analyze rows or failures;
   more than 25 verify findings per rule; more than 100 pin rows on one edit; a
   batched `inspect` with several live cursors; an `.asc` net with pins *and*
