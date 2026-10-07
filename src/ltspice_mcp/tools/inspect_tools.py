@@ -60,6 +60,22 @@ than a hunt.
   core a session reads first and the index of topic sections and task
   playbooks; with one, that section. It records on the session that the guide
   was read, which retires the one read-the-guide reminder.
+* ``simulator_docs`` — the reference documents the simulator's vendor installs
+  with it (``lib/simulator_docs.py``): for LTspice 26.1 and later, its own
+  account of the keyboard shortcuts, menus, schematic file format, ``.MEAS``
+  and waveform viewer. With no ``name`` it lists them; with one it returns
+  that document in sections, paged at its headings. They are read from the
+  install, never packaged, and are the authority on the program itself where
+  the guide is about this server.
+* ``open_in_ltspice`` — the documents open in the LTspice windows on this
+  machine, and which is in front in its window: where a request about "this
+  circuit" starts when no path was given. A sheet inside the sandbox comes
+  with its ``sha256`` and with whether the window's copy differs from the file
+  (unsaved changes, or a file that changed after it was opened), which is what
+  ``edit_schematic`` refuses on. A document outside the sandbox is listed and
+  not read. It is asked of LTspice itself, through the bridge it ships from
+  26.1; where that cannot be reached the query fails, saying why, since
+  "nothing is open" would be a different answer.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
@@ -80,6 +96,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import sys
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
@@ -104,7 +121,14 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, guide, response_budget, services
+from ltspice_mcp.lib import (
+    NETLIST_SUFFIX_TEXT,
+    NETLIST_SUFFIXES,
+    guide,
+    response_budget,
+    services,
+    simulator_docs,
+)
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -118,6 +142,8 @@ from ltspice_mcp.lib.library_manager import (
     rank_models,
 )
 from ltspice_mcp.lib.lint_rules import linter_version
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
+from ltspice_mcp.lib.ltspice_window import OpenDesign, WindowsUnavailable
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
@@ -159,6 +185,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     HINT_SCHEMA,
+    LTSPICE_WINDOW_PROPERTIES,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
     OptionalRawSelectionFields,
@@ -174,6 +201,7 @@ from ltspice_mcp.tools._base import (
     safe_library_path,
     safe_path,
     symbol_resolver_for,
+    window_difference,
 )
 from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
 
@@ -450,6 +478,7 @@ CapabilityField: TypeAlias = Literal[
     "default_simulator",
     "exporter_available",
     "render",
+    "open_window_sync",
     "dialects",
     "diagnostics",
     "ngbehavior",
@@ -712,6 +741,24 @@ class GuideQuery(StrictModel):
     )
 
 
+class SimulatorDocsQuery(StrictModel):
+    """The simulator vendor's own reference documents (LTspice 26.1 and later):
+    keyboard shortcuts, menus, the .asc format, .MEAS, the waveform viewer."""
+
+    kind: Literal["simulator_docs"]
+    name: str | None = Field(
+        default=None,
+        description="A listed document, e.g. 'MEAS-REFERENCE.md'; omit it for the list.",
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+
+
+class OpenInLtspiceQuery(StrictModel):
+    """List the sheets and netlists open in LTspice windows, and which one is in front."""
+
+    kind: Literal["open_in_ltspice"]
+
+
 Query: TypeAlias = Annotated[
     CapabilitiesQuery
     | SymbolsQuery
@@ -722,7 +769,9 @@ Query: TypeAlias = Annotated[
     | ModelQuery
     | ResultsQuery
     | ReferenceQuery
-    | GuideQuery,
+    | GuideQuery
+    | SimulatorDocsQuery
+    | OpenInLtspiceQuery,
     Field(discriminator="kind"),
 ]
 
@@ -890,6 +939,8 @@ COLLECTION_COUNTERS: dict[str, tuple[str, str, str | None]] = {
     "components": ("total", "returned", None),
     "instances": ("total", "returned", None),
     "results": ("total", "returned", None),
+    "docs": ("total", "returned", None),
+    "sections": ("total", "returned", None),
 }
 
 
@@ -1064,6 +1115,12 @@ def _do_capabilities(
         # inline. Asked here so an agent that cannot read files knows before it
         # renders whether it will see the picture, and what to install if not.
         "render": asdict(raster),
+        # Whether edit_schematic can keep a sheet that is open in an LTspice
+        # window in step with the file, and if not, what is missing.
+        "open_window_sync": {
+            "available": state.open_windows.available,
+            "reason": state.open_windows.unavailable,
+        },
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
@@ -1784,6 +1841,171 @@ def _do_reference(q: ReferenceQuery, view: _View, served: frozenset[str]) -> dic
 
 
 # ---------------------------------------------------------------------------
+# simulator_docs
+# ---------------------------------------------------------------------------
+
+
+def _reference_directory(state: SessionState) -> Path:
+    """Where the detected LTspice keeps its reference documents, the default
+    simulator's first. Reads the filesystem: call off the loop."""
+    candidates = [
+        state.default_simulator,
+        *state.available_simulators.values(),
+        *state.named_simulators.values(),
+    ]
+    for simulator in candidates:
+        directory = simulator_docs.reference_directory(simulator_library_roots(simulator))
+        if directory is not None:
+            return directory
+    raise _QueryError(
+        "simulator_docs_unavailable",
+        "No reference documents are installed here: LTspice 26.1 and later installs "
+        "them in a 'reference' directory beside its library, and no detected simulator "
+        "has one. The guide (inspect kind 'guide') is this server's own.",
+    )
+
+
+def _simulator_docs_page(
+    q: SimulatorDocsQuery, state: SessionState, view: _View
+) -> dict[str, Any]:
+    """The list of reference documents, or one of them in sections. Blocking."""
+    directory = _reference_directory(state)
+    if q.name is None:
+        rows = [
+            {"name": doc.name, "title": doc.title, "description": doc.description}
+            for doc in simulator_docs.documents(directory)
+        ]
+        page = _paginate(rows, "simulator_docs", {"name": None}, q.cursor, (), view)
+        return {
+            "data": {
+                "source": str(directory),
+                "docs": page["items"],
+                "total": page["total"],
+                "returned": page["returned"],
+                "hint": (
+                    "Read one with name. These are the vendor's own reference, the "
+                    "authority on the program itself; the guide is about this server."
+                ),
+            },
+            "next_cursor": page["next_cursor"],
+            "page": _page_meta(page, "docs"),
+        }
+    found = simulator_docs.read(directory, q.name)
+    if found is None:
+        raise _QueryError(
+            "unknown_document",
+            f"No reference document is called {q.name!r}.",
+            supported=simulator_docs.names(directory),
+        )
+    document, sections = found
+    rows = [{"heading": section.heading, "text": section.text} for section in sections]
+    page = _paginate(
+        rows, "simulator_docs", {"name": document.name}, q.cursor, (document.path,), view
+    )
+    return {
+        "data": {
+            "name": document.name,
+            "title": document.title,
+            "sections": page["items"],
+            "total": page["total"],
+            "returned": page["returned"],
+        },
+        "next_cursor": page["next_cursor"],
+        "page": _page_meta(page, "sections"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# open_in_ltspice
+# ---------------------------------------------------------------------------
+
+#: The most documents one reply lists; the rest are counted.
+_OPEN_DESIGNS_LIMIT = 100
+
+
+def _sandboxed(spelled: str, state: SessionState) -> Path | None:
+    """``spelled`` as a path this server may read, or None when it may not."""
+    try:
+        return safe_path(spelled, state)
+    except (LTSpiceMCPError, OSError, ValueError):
+        return None
+
+
+def _design_kind(spelled: str) -> str:
+    suffix = Path(spelled).suffix.lower()
+    if suffix == ".asc":
+        return "schematic"
+    return "netlist" if suffix in NETLIST_SUFFIXES else "other"
+
+
+def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
+    """One open document as the reply lists it; ``resolved`` is its path where
+    the sandbox admits it. Reads the file: call off the loop."""
+    row: dict[str, Any] = {
+        "path": design.path,
+        "kind": _design_kind(design.path),
+        "active": design.active,
+        "pid": design.pid,
+        "version": design.version,
+        "in_sandbox": resolved is not None,
+    }
+    if resolved is None or design.text is None or not resolved.is_file():
+        return row
+    on_disk = resolved.read_bytes()
+    row["sha256"] = hashlib.sha256(on_disk).hexdigest()
+    row.update(window_difference(on_disk, design.text))
+    return row
+
+
+async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
+    """What LTspice has open, asked of LTspice (``OpenWindows.designs``).
+
+    A sheet's copy in the window is read only for a file the sandbox admits,
+    and compared with that file by content. Both the bridge and the files are
+    read off the loop.
+    """
+
+    def read() -> tuple[int, int, list[dict[str, Any]]]:
+        # Where the sandbox admits each document, decided once: it says which
+        # copies a window is asked for and which files are then read.
+        admitted: dict[str, Path | None] = {}
+
+        def is_readable_sheet(spelled: str) -> bool:
+            admitted[spelled] = _sandboxed(spelled, state)
+            return admitted[spelled] is not None and _design_kind(spelled) == "schematic"
+
+        count, designs = state.open_windows.designs(is_readable_sheet)
+        listed = designs[:_OPEN_DESIGNS_LIMIT]
+        return count, len(designs), [_design_row(d, admitted[d.path]) for d in listed]
+
+    try:
+        count, total, rows = await asyncio.to_thread(read)
+    except WindowsUnavailable as exc:
+        raise _QueryError(
+            "open_windows_unavailable",
+            f"{exc}. inspect(kind='capabilities') reports this under open_window_sync.",
+        ) from exc
+    except BridgeError as exc:
+        raise _QueryError(
+            "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
+        ) from exc
+    data: dict[str, Any] = {"windows": count, "designs": rows, "total": total}
+    hints: list[str] = []
+    if any(row.get("differs_from_file") for row in rows):
+        hints.append(
+            "A sheet whose window differs from its file is refused by edit_schematic until "
+            "it is saved or closed in LTspice; a run or a check reads the file, not the window."
+        )
+    if any(not row["in_sandbox"] for row in rows):
+        hints.append(
+            "A document outside the sandbox is listed and not read. " + state.sandbox_guidance()
+        )
+    if hints:
+        data["hint"] = " ".join(hints)
+    return {"data": data}
+
+
+# ---------------------------------------------------------------------------
 # guide
 # ---------------------------------------------------------------------------
 
@@ -2115,6 +2337,10 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
         return _do_reference(query, view, frozenset(state.tool_dispatch))
     if isinstance(query, GuideQuery):
         return _do_guide(query, state)
+    if isinstance(query, SimulatorDocsQuery):
+        return await asyncio.to_thread(_simulator_docs_page, query, state, view)
+    if isinstance(query, OpenInLtspiceQuery):
+        return await _do_open_in_ltspice(state)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -2219,6 +2445,73 @@ _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "text": {"type": "string", "description": "Markdown."},
 }
 
+#: The ``simulator_docs`` kind's payload: the list, or one document's sections.
+_SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
+    "source": {"type": "string", "description": "The directory the documents are read from."},
+    "docs": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "What to pass as name."},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+            },
+            "required": ["name", "title", "description"],
+        },
+    },
+    "sections": {
+        "type": "array",
+        "description": "The document in order, cut at its second-level headings.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "heading": {"type": "string"},
+                "text": {"type": "string", "description": "Markdown, heading line included."},
+            },
+            "required": ["heading", "text"],
+        },
+    },
+}
+
+#: The ``open_in_ltspice`` kind's payload.
+_OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
+    "windows": {"type": "integer", "description": "How many LTspice windows are running."},
+    "total": {"type": "integer", "description": "How many documents they have open in all."},
+    "designs": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "As LTspice spells it."},
+                "kind": {"enum": ["schematic", "netlist", "other"]},
+                "active": {
+                    "type": "boolean",
+                    "description": "The document in front in its window.",
+                },
+                **LTSPICE_WINDOW_PROPERTIES,
+                "in_sandbox": {
+                    "type": "boolean",
+                    "description": "Whether this server may read and edit the file.",
+                },
+                "sha256": {
+                    "type": "string",
+                    "description": "Of the file: what edit_schematic takes as expected_sha256.",
+                },
+                "differs_from_file": {
+                    "type": "boolean",
+                    "description": (
+                        "The window's copy is not the file's: unsaved changes, or a "
+                        "file that changed after it was opened. A sheet in the sandbox only."
+                    ),
+                },
+                "difference": {"type": "string"},
+            },
+            "required": ["path", "kind", "active", "pid", "version", "in_sandbox"],
+        },
+    },
+}
+
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -2246,6 +2539,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         "properties": {
                             **_REFERENCE_DATA_PROPERTIES,
                             **_GUIDE_DATA_PROPERTIES,
+                            **_SIMULATOR_DOCS_DATA_PROPERTIES,
+                            **_OPEN_DESIGNS_DATA_PROPERTIES,
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
                             "dialect": {"type": "string"},
@@ -2342,7 +2637,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 INSPECT_DESCRIPTION = (
     "Read-only lookups over the server and the circuits it can reach, batched as "
     "independent 'queries'. Kinds: 'capabilities', 'symbols', 'symbol', 'net', "
-    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide' — each with its own arguments, "
+    "'components', 'hierarchy', 'model', 'results', 'reference', 'guide', 'simulator_docs', "
+    "'open_in_ltspice' "
+    "— each with its own arguments, "
     "described on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
     "returns the guide's core, or one 'section' its index names. A "

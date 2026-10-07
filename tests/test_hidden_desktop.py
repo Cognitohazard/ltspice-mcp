@@ -21,7 +21,7 @@ import pytest
 from ltspice_mcp.lib import hidden_desktop
 from ltspice_mcp.lib.hidden_desktop import BoxWatch, DialogError, HiddenDesktop
 from ltspice_mcp.lib.windows_job import python_launch
-from tests.conftest import identify, process_running, wait_until, written
+from tests.conftest import LIVENESS_S, identify, process_running, wait_until, written
 
 
 def _no_desktop_here() -> str | None:
@@ -155,6 +155,26 @@ class TestStart:
             desktop.run(probe("report"), env=environment(), stdout=to_out, stderr=to_err)
         assert out.read_bytes().strip() == b"to stdout"
         assert err.read_bytes().strip() == b"to stderr"
+
+    def test_a_program_reads_the_input_it_is_given(self, desktop: HiddenDesktop, tmp_path: Path):
+        """And only this process holds the end that is written: the program reads
+        to the end of its input, which comes when that end is closed and never
+        would if the program had inherited a copy of it."""
+        python, _ = python_launch()
+        echo = "import sys; sys.stdout.write(sys.stdin.read().upper())"
+        reads, writes = os.pipe()
+        out = tmp_path / "out.log"
+        with (
+            open(out, "wb") as to_out,
+            desktop.start(
+                [python, "-c", echo], env=environment(), stdin=reads, stdout=to_out
+            ) as process,
+        ):
+            os.close(reads)
+            with os.fdopen(writes, "wb") as given:
+                given.write(b"read from a pipe")
+            assert process.wait(LIVENESS_S) == 0
+        assert out.read_bytes() == b"READ FROM A PIPE"
 
     def test_a_handle_not_named_is_not_inherited(
         self, desktop: HiddenDesktop, probe, tmp_path: Path

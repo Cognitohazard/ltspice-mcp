@@ -1,14 +1,15 @@
 # Alias packages
 
-`circuit-mcp` and `ngspice-mcp` are aliases for the canonical `ltspice-mcp`
-package, so the server is discoverable and installable under more than one
-name. Each depends on `ltspice-mcp` and provides a console script that runs
-the same server, so `uvx circuit-mcp` and `uvx ngspice-mcp` run the same
-server as `uvx ltspice-mcp`.
+`circuit-mcp`, `ngspice-mcp` and `osic-mcp` are aliases for the canonical
+`ltspice-mcp` package, so the server is discoverable and installable under
+more than one name. Each depends on `ltspice-mcp` and provides a console script
+that runs the same server, so `uvx circuit-mcp`, `uvx ngspice-mcp` and
+`uvx osic-mcp` run the same server as `uvx ltspice-mcp`. `osic-mcp` (open-source
+IC) is the name the project may move to as it grows past LTspice.
 
 Their version tracks the canonical release: each derives its version from the
 same git tag via `hatch-vcs`, so a `v0.3.0` tag ships `ltspice-mcp`,
-`circuit-mcp`, and `ngspice-mcp` all at `0.3.0`.
+`circuit-mcp`, `ngspice-mcp` and `osic-mcp` all at `0.3.0`.
 
 ## Publishing
 
@@ -25,7 +26,7 @@ Before the first run, add a **pending publisher** on PyPI for each project name
 
 | Field | Value |
 |-|-|
-| PyPI Project Name | `circuit-mcp` / `ngspice-mcp` |
+| PyPI Project Name | `circuit-mcp` / `ngspice-mcp` / `osic-mcp` |
 | Owner | `cognitohazard` |
 | Repository name | `ltspice-mcp` |
 | Workflow name | `publish-aliases.yml` |
@@ -34,6 +35,10 @@ Before the first run, add a **pending publisher** on PyPI for each project name
 "Workflow name" is the file name (`publish-aliases.yml`), not the YAML `name:`.
 The "Environment name" must match the workflow's `environment:` (`pypi`); leaving
 it blank on PyPI (shown as *Any*) also works, since blank imposes no constraint.
+
+A pending publisher holds nothing: the name on PyPI is taken by the first
+upload, so a new alias is not reserved until a release tag that contains its
+folder has been published.
 
 Use manual dispatch (Actions tab → Run workflow) if an alias's trusted
 publisher is registered only after a release: run the workflow against that
