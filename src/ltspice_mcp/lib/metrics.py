@@ -159,10 +159,10 @@ def parse_time(s: str | None, name: str) -> float | None:
 def parse_freq(s: str, name: str = "frequency") -> float:
     """Parse a SPICE-notation frequency into a finite positive float.
 
-    Tolerates a trailing ``Hz`` unit — ``'159Hz'`` and ``'15.9kHz'`` are the
-    natural way to write a frequency, but the SPICE value parser only knows SI
-    prefixes (k, meg, …). Strip a trailing ``hz`` before parsing so the unit is
-    accepted rather than rejected with a confusing error.
+    Tolerates a trailing ``Hz`` unit, spaced or not: ``'159Hz'``, ``'15.9kHz'``
+    and ``'159 Hz'`` are the natural ways to write a frequency. The value parser
+    reads a unit written against the number as LTspice does; the strip also
+    takes the spaced one.
     """
     cleaned = s.strip()
     if cleaned[-2:].lower() == "hz":
