@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    read_spice_text,
+    rewrite_codec,
+)
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -283,15 +287,31 @@ def test_byte_85_in_a_comment_ends_the_line_for_ltspice_26_alone(build: str, tmp
     it is half of many double-byte characters. LTspice 26 ends the comment
     there, and what follows is a card: the deck has a third resistor. XVII
     reads one comment. The server reads it as XVII does, so on LTspice 26 the
-    circuit it describes is not the one that ran, and no check says so."""
+    circuit it describes is not the one that ran; the linter says so unless
+    the session's LTspice is known to be XVII."""
     case_id = "deck/byte_85_in_comment"
     traces = set(rec.operating_point(build, case_id, tmp_path))
     assert ("i(r3)" in traces) == (rec.generation(build) != "xvii")
     cards = drop_title_card(lex(deck_text(case_id)).cards)
     assert {card.name for card in cards if card.kind == "instance"} == {"V1", "R1", "R2"}
     path = INPUTS / rec.CASES.case(case_id).source
-    findings = lint_deck(deck_text(case_id), path, "ltspice", "LTspice")
-    assert [finding["rule_id"] for finding in findings] == []
+    text, encoding = decode_spice_bytes_with_encoding(path.read_bytes())
+    xvii = rec.generation(build) == "xvii"
+    findings = lint_deck(
+        text,
+        path,
+        "ltspice",
+        "LTspice",
+        codecs={path: rewrite_codec(encoding)},
+        cp1252_reader=rec.manifest(build)["reported_build"] if xvii else None,
+    )
+    if xvii:
+        assert findings == []
+    else:
+        (finding,) = findings
+        assert finding["rule_id"] == "byte-85-ltspice"
+        assert finding["at"]["line"] == 5
+        assert finding["evidence"]["read_as_cards"] == ["R3 b 0 1k"]
 
 
 # --------------------------------------------------------------------------

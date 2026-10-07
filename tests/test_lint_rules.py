@@ -20,12 +20,10 @@ def _ids(
     simulator: str = "LTspice",
     suppress=(),
 ) -> set[str]:
+    path = tmp_path / "deck.cir"
+    # Read as an 8-bit file, the one kind that can hold a byte UTF-8 would not.
     findings = lint_deck(
-        text,
-        tmp_path / "deck.cir",
-        dialect,
-        simulator,
-        suppress=suppress,
+        text, path, dialect, simulator, suppress=suppress, codecs={path: "cp1252"}
     )
     return {finding["rule_id"] for finding in findings}
 
@@ -70,6 +68,12 @@ _SEED_CASES = [
     (
         "meas-function-ltspice",
         "V1 in 0 AC 1\nR1 in 0 1k\n.ac dec 10 1 1k\n.meas ac g FIND vdb(in) AT 100\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "byte-85-ltspice",
+        "* t\nV1 a 0 1\nR1 a 0 1k\n* 1k to 10k\u2026R2 a 0 1k\n.op\n.end\n",
         None,
         "LTspice",
     ),
@@ -698,3 +702,42 @@ def test_rule_metadata_is_limited_to_fields_something_reads():
 def test_linter_version_is_stable_nonempty_string():
     assert isinstance(linter_version, str)
     assert linter_version
+
+
+_BYTE_85_DECK = "* t\nV1 a 0 1\nR1 a 0 1k\n* 1k to 10k…R2 a 0 1k\n.op\n.end\n"
+
+
+def test_an_ellipsis_in_a_utf8_deck_is_no_byte_85(tmp_path: Path):
+    """UTF-8 spells an ellipsis E2 80 A6; only an 8-bit file holds byte 0x85."""
+    path = tmp_path / "deck.cir"
+    findings = lint_deck(_BYTE_85_DECK, path, None, "LTspice", codecs={path: "utf-8"})
+    assert "byte-85-ltspice" not in {finding["rule_id"] for finding in findings}
+
+
+def test_byte_85_is_one_line_to_a_known_xvii(tmp_path: Path):
+    path = tmp_path / "deck.cir"
+    findings = lint_deck(
+        _BYTE_85_DECK, path, None, "LTspice", codecs={path: "cp1252"}, cp1252_reader="XVIIx64.exe"
+    )
+    assert "byte-85-ltspice" not in {finding["rule_id"] for finding in findings}
+
+
+def test_byte_85_before_a_comment_or_the_line_end_changes_no_card(tmp_path: Path):
+    deck = "* t\nV1 a 0 1\nR1 a 0 1k ; ten…\n* one…* two\n.op\n.end\n"
+    assert "byte-85-ltspice" not in _ids(deck, tmp_path)
+
+
+def test_byte_85_in_an_include_is_found_in_the_include(tmp_path: Path):
+    deck = tmp_path / "deck.cir"
+    include = tmp_path / "parts.lib"
+    findings = lint_deck(
+        '* t\n.inc "parts.lib"\nV1 a 0 1\n.op\n.end\n',
+        deck,
+        None,
+        "LTspice",
+        includes=[(include, "* parts…R9 a 0 1k\n")],
+        codecs={deck: "utf-8", include: "cp1252"},
+    )
+    (finding,) = [f for f in findings if f["rule_id"] == "byte-85-ltspice"]
+    assert finding["at"] == {"file": str(include), "line": 1}
+    assert finding["evidence"]["read_as_cards"] == ["R9 a 0 1k"]

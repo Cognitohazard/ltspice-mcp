@@ -1839,6 +1839,34 @@ class TestLintModes:
         ]
         assert finding["evidence"]["likely_intended"] == "23u"
 
+    async def test_byte_85_in_an_8bit_deck_is_named_and_the_deck_still_runs(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The recorded deck whose comment holds byte 0x85: LTspice 26 ran a
+        third resistor after it. The staged deck's codec reaches the linter,
+        which names the card; a warning, so the deck is still submitted."""
+        from tests.ltspice_recorder import INPUTS
+
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = work_dir / "byte_85.cir"
+        deck.write_bytes((INPUTS / "deck" / "byte_85_in_comment.cir").read_bytes())
+
+        data = _assert_schema(await handle_run_experiments(_args(deck, "byte-85"), state_with_sim))
+
+        assert len(submissions) == 1
+        (finding,) = [
+            finding
+            for block in data["lint"]
+            for finding in block["findings"]
+            if finding["rule_id"] == "byte-85-ltspice"
+        ]
+        assert finding["severity"] == "warning"
+        assert finding["evidence"]["read_as_cards"] == ["R3 b 0 1k"]
+
     async def test_valid_ltspice_device_forms_reach_the_simulator(
         self,
         state_with_sim: SessionState,
