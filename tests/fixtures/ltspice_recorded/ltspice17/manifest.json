@@ -3407,6 +3407,34 @@
         ".raw"
       ]
     },
+    "log/meas_db": {
+      "behaviour": "log-meas-db",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_db.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_db.cir": "4bd65fb6b94e454bcc2f0a546d98e0b912d981f4e1a0d2a43910b5bd3df7cf4c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_db.log": {
+          "bytes": 516,
+          "sha256": "99686abbf965dc277620297208b17b0c67df7405b928c7f7d6654df569ba041c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/meas_failed": {
       "behaviour": "log-meas-failed",
       "command": [
@@ -3455,6 +3483,151 @@
         "log/meas_forms.log": {
           "bytes": 944,
           "sha256": "5bf264bab4815e925981b7fe69f86d8010e2ef579f08037d631cab00575fd519"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_e": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_e.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_e.cir": "a7af4622273670d818a754be59c45290cfc97a4a8e0dc0de750f3606fd947318"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_e.log": {
+          "bytes": 508,
+          "sha256": "2b0b51cca922e0738153f5b0d7adbc7af8d26ca995408deb5c13707540e525e6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_k": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_k.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_k.cir": "eb23e8893e0f813902515813b273db56922893fe7618716c0c21446ebc9fbeab"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_k.log": {
+          "bytes": 508,
+          "sha256": "9108c050a94b3ce2cd3b00d8c21d414816793037438325d5186e0a6924d38e6c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_other": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_other.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_other.cir": "4e320c8b2c8a55afaf8f82664b702128669c4aaae4f2553c907f4d05ab9ebe39"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_other.log": {
+          "bytes": 731,
+          "sha256": "26632c16e91f3395233576a813e217c1a319bd666d3e7061c2c70862eafadc67"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_pi": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_pi.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_pi.cir": "e7a65103c34bea1c8fbf518d66a08ddc2e69cae8699823c39c76c97c215d5954"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_pi.log": {
+          "bytes": 511,
+          "sha256": "4ae569b92b526efe4d2b109250db7e79cdd0dfffc32e49dd4580b8d4317cb90d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_q": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_q.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_q.cir": "bdfd22b9ba75029e2f8f6744fe88db219e63102236ccbe3f4d5f11b7d3ef6c72"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_q.log": {
+          "bytes": 508,
+          "sha256": "de342b6d42092ad95626c9f93a8dccfd64a49f2fcada9745ac47615b733a9164"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

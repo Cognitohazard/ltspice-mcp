@@ -40,8 +40,23 @@ recording that showed it.
   `meas-trig-degrees`, blocking; `linter_version` 5) and `verify_circuit`'s
   `syntax` check reports it as `meas_trig_degrees`, both naming the B-source
   form whose unit does not depend on the setting. The `vdb()`, `phase()` and
-  `group_delay()` refusals also see a call written after an operator now
-  (`2*vdb(out)`), which they missed.
+  `group_delay()` refusals also see a call written after an operator
+  (`2*vdb(out)`) or an equals sign (`WHEN time=cos(1)`, `TD={atan(1)}`) now,
+  which they missed.
+- An AC `.meas` whose result is a negative real number came back positive.
+  LTspice prints every AC result as a magnitude and an angle, and a negative
+  `ph()`, `re()` or `im()` as its absolute value at 180°: the phase at the
+  corner of an RC low-pass, -45 degrees, was read as 45. A result printed at
+  0° or 180° is now read as the signed number; any other angle is still read
+  as the magnitude. That also makes `db(mag(V(out)))` read as the gain in dB;
+  `db(V(out))` in an AC `.meas` is LTspice's complex logarithm, read as its
+  magnitude, and the guide now says to write the former.
+- A `.meas` named `e`, `k`, `pi` or `q` was accepted. Those are constants of
+  LTspice's expression engine: LTspice 26 refuses the whole deck and XVII
+  skips the measurement. The directive check behind `verify_circuit`'s
+  `syntax` check and `edit_schematic`'s directives now refuses them
+  (`meas_reserved_name`), and the fix rides on the error relayed from a run
+  LTspice 26 refused.
 - Results from LTspice 26 could not be read for a deck with two or more
   subcircuit instances. LTspice 24 and later write one `Backannotation:` line
   in the raw header for each instance, and the raw preflight refused a header

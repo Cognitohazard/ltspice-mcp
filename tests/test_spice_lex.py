@@ -1433,10 +1433,17 @@ class TestMeasCard:
         view = MeasCard.from_card(card)
         assert any(fc.name.lower() == "vdb" for fc in view.function_calls)
 
-    def test_a_call_after_an_operator_is_named_without_it(self) -> None:
-        card = lex(".MEAS TRAN x INTEG V(s)*cos(2*pi*fo*time)+0.5*SIN(1)\n").cards[0]
-        view = MeasCard.from_card(card)
-        assert [fc.name for fc in view.function_calls] == ["V", "cos", "SIN"]
+    @pytest.mark.parametrize(
+        ("directive", "names"),
+        [
+            (".MEAS TRAN x INTEG V(s)*cos(2*pi*fo*time)+0.5*SIN(1)", ["V", "cos", "SIN"]),
+            (".MEAS TRAN x FIND V(a) WHEN time=cos(1) TD={atan(1)}", ["V", "cos", "atan"]),
+        ],
+        ids=["after-an-operator", "after-an-equals-sign"],
+    )
+    def test_a_call_inside_an_expression_is_named(self, directive: str, names: list[str]) -> None:
+        view = MeasCard.from_card(lex(directive + "\n").cards[0])
+        assert [fc.name for fc in view.function_calls] == names
 
     def test_set_label_rerenders(self) -> None:
         cards = lex(".MEAS TRAN vmax MAX V(out)\n").cards

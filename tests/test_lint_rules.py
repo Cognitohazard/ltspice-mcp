@@ -505,12 +505,6 @@ class TestMeasTrigDegrees:
     defaults, and in a B source in radians (recorded:
     test_recorded_ltspice_results.py::TestMeasurementAngleUnit)."""
 
-    def _findings(self, deck: str, tmp_path: Path, **kwargs) -> list[dict]:
-        kwargs.setdefault("dialect", None)
-        kwargs.setdefault("simulator", "LTspice")
-        findings = lint_deck(deck, tmp_path / "deck.cir", **kwargs)
-        return [f for f in findings if f["rule_id"] == "meas-trig-degrees"]
-
     def test_each_measurement_names_the_angle_functions_it_calls(self, tmp_path: Path):
         deck = (
             "* phase of the fundamental\n"
@@ -522,7 +516,11 @@ class TestMeasTrigDegrees:
             ".tran 2m\n"
             ".end\n"
         )
-        findings = self._findings(deck, tmp_path)
+        findings = [
+            f
+            for f in lint_deck(deck, tmp_path / "deck.cir", None, "LTspice")
+            if f["rule_id"] == "meas-trig-degrees"
+        ]
 
         assert [(f["subject"], f["evidence"]["functions"]) for f in findings] == [
             ("a", ["cos"]),
@@ -530,7 +528,6 @@ class TestMeasTrigDegrees:
             ("ph", ["atan2", "cos", "atan"]),
         ]
         assert {f["severity"] for f in findings} == {"error"}
-        assert RULES_BY_ID["meas-trig-degrees"].disposition == "blocking"
         reason = findings[0]["evidence"]["reason"]
         assert "RadianMeasure" in reason
         assert "B source" in reason
@@ -547,13 +544,13 @@ class TestMeasTrigDegrees:
     def test_quiet_without_an_angle_function(self, tmp_path: Path, card: str):
         deck = f"* t\nV1 cos 0 1\nB1 sin_out 0 V=cos(2*pi*1k*time)\n{card}\n.tran 1m\n.end\n"
 
-        assert self._findings(deck, tmp_path) == []
+        assert "meas-trig-degrees" not in _ids(deck, tmp_path)
 
     def test_quiet_on_ngspice(self, tmp_path: Path):
         deck = "V1 in 0 1\n.meas tran p PARAM atan2(1,1)\n.tran 1m\n.end\n"
 
-        assert (
-            self._findings(deck, tmp_path, dialect="ngspice", simulator="NGspiceSimulator") == []
+        assert "meas-trig-degrees" not in _ids(
+            deck, tmp_path, dialect="ngspice", simulator="NGspiceSimulator"
         )
 
 

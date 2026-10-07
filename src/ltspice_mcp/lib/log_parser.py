@@ -1195,6 +1195,25 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
         raise ResultError(f"Could not parse log file: {first_err}") from first_err
 
 
+#: How far from the real axis a printed angle of 0 or 180 degrees lands once
+#: spicelib has turned it into a complex number (sin(pi) is not exactly 0).
+_REAL_ANGLE_TOLERANCE = 1e-9
+
+
+def _complex_measurement(value: complex) -> float:
+    """One AC .meas result, which LTspice prints as ``(<magnitude>dB,<angle>°)``.
+
+    A real result (``ph()``, ``re()``, ``im()``) is printed at 0 or 180
+    degrees, and a negative one has its absolute value for a magnitude: the
+    angle is its sign, so it is read as the signed real number. Any other
+    angle is a complex result, read as its magnitude.
+    """
+    magnitude = abs(value)
+    if abs(value.imag) <= _REAL_ANGLE_TOLERANCE * magnitude:
+        return float(value.real)
+    return float(magnitude)
+
+
 def parse_measurements(
     log_path: Path, reader: LTSpiceLogReader | None = None
 ) -> MeasurementsOutput:
@@ -1270,7 +1289,7 @@ def parse_measurements(
             if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
                 out.append(None)
             elif isinstance(val, complex):
-                out.append(float(abs(val)))
+                out.append(_complex_measurement(val))
             elif hasattr(val, "item") and not isinstance(val, str):
                 out.append(float(val.item()))  # numpy scalar
             else:

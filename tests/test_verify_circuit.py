@@ -439,13 +439,14 @@ _SIMULATOR_SPECIFIC = (
     "R1 out 0 1k\n"
     ".tran 0 1m\n"
     ".meas ac g FIND vdb(out) AT=1k\n"
+    ".meas tran p PARAM atan2(1,1)\n"
     ".end\n"
 )
 
 
 async def test_syntax_checks_against_an_ngspice_default(config, work_dir):
     """An ngspice session is told about ngspice faults (a zero .tran step) and
-    not about LTspice ones (vdb() in .meas, C= as the value)."""
+    not about LTspice ones (vdb() in .meas, C= as the value, trig in .meas)."""
     from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
     state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
@@ -464,6 +465,7 @@ async def test_syntax_checks_against_an_ltspice_default(state_no_sim, work_dir):
     assert sorted(f["subject"] for f in data["findings"]) == [
         ".meas ac g FIND vdb(out) AT=1k",
         "C1 in out C=1n",
+        "p",
     ]
 
 
@@ -492,17 +494,6 @@ async def test_syntax_flags_trig_in_a_measurement_on_ltspice(state_no_sim, work_
     ]
     assert {f["severity"] for f in found} == {"error"}
     assert found[0]["evidence"]["reason"] == MEAS_ANGLE_REASON
-
-
-async def test_syntax_does_not_flag_trig_in_a_measurement_on_ngspice(config, work_dir):
-    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
-
-    state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
-    deck = _write(work_dir, "trig.cir", _TRIG_MEAS)
-
-    data = await _run(state, path=str(deck), checks=["syntax"])
-
-    assert [f for f in data["findings"] if f["rule_id"] == "meas_trig_degrees"] == []
 
 
 async def test_export_stage_reports_micro_signs_in_the_exported_netlist(

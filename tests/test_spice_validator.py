@@ -120,6 +120,26 @@ class TestGroupDelayInMeas:
         assert err.rule_name == "group_delay_in_meas"
 
 
+class TestMeasReservedName:
+    """e, k, pi and q are constants of LTspice's expression engine (recorded:
+    test_recorded_ltspice_results.py::test_a_measurement_named_for_a_constant)."""
+
+    @pytest.mark.parametrize("name", ["e", "k", "pi", "q", "K", "Pi"])
+    def test_a_constant_is_refused_as_a_name(self, name: str):
+        err = validate_directive(f".meas tran {name} MAX V(out)")
+        assert err is not None
+        assert err.rule_name == "meas_reserved_name"
+        assert f'"{name}"' in err.message
+        assert f"{name}_meas" in err.suggestion
+
+    @pytest.mark.parametrize("name", ["time", "temp", "boltz", "kk", "pi2", "qx"])
+    def test_other_names_are_accepted(self, name: str):
+        assert validate_directive(f".meas tran {name} MAX V(out)") is None
+
+    def test_ngspice_is_not_held_to_it(self):
+        assert validate_directive(".meas tran k MAX V(out)", "ngspice") is None
+
+
 class TestTranTstepZero:
     """``.tran 0 <tstop>`` (zero step time, auto-timestep) runs on LTspice but
     ngspice rejects it. Flagged only for the ngspice target so a clean LTspice
