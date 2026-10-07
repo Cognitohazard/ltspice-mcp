@@ -14,6 +14,7 @@ needs, without ever observing a later job transition.
 from __future__ import annotations
 
 import copy
+import functools
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -34,7 +35,6 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
-from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
@@ -434,13 +434,18 @@ def jobs_rows(data: dict[str, Any]) -> list[Any]:
     return [row for page in _receipt_row_pages(data) for row in page["items"]]
 
 
+def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
+    """The attached analysis's rendered result, when the receipt carries one."""
+    analysis_block = data.get("analysis")
+    result = analysis_block.get("result") if isinstance(analysis_block, dict) else None
+    return result if isinstance(result, dict) else None
+
+
 def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
     rows = jobs_rows(data)
-    analysis_block = data.get("analysis")
-    if isinstance(analysis_block, dict):
-        result = analysis_block.get("result")
-        if isinstance(result, dict):
-            rows.extend(analyze.analysis_rows(result))
+    result = _attached_result(data)
+    if result is not None:
+        rows.extend(analyze.analysis_rows(result))
     return rows
 
 
@@ -454,10 +459,9 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[s
         # Removes an empty block only, so it never empties anything a note
         # would have to name.
         response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT)
-        analysis_block = data.get("analysis")
-        result = analysis_block.get("result") if isinstance(analysis_block, dict) else None
-        if isinstance(result, dict):
-            emptied.extend(f"analysis.result.{key}" for key in analyze.trim_analysis(result))
+        result = _attached_result(data)
+        if result is not None:
+            emptied = [f"analysis.result.{key}" for key in analyze.trim_analysis(result)]
     if rung.answer_channel:
         for page in _receipt_row_pages(data):
             for row in page["items"]:
@@ -474,70 +478,49 @@ async def negotiate_receipt(
     *,
     rows: _ReceiptRows,
     notes: response_budget.Notes,
-    min_rows: int,
 ) -> ReceiptBuilt:
     """Render a receipt at the mildest shared budget rung that fits.
 
-    The shrink rung starts from the shared one-measurement estimate and, when
-    that page is still over, searches below it for the largest page limit that
-    fits, down to ``min_rows``. The estimate is not enough on its own here: it
-    counts the rows every surface shows, but one limit caps each surface — the
-    run page and every attached recipe's rows — so a receipt with several
-    surfaces could be priced as fitting at a limit that cut nothing.
-
-    ``min_rows`` is the floor that search may reach. A receipt passes 0: its run
-    page and attached-analysis rows are previews of surfaces other calls page
-    (``jobs(runs)``, ``analyze_results``), so at the floor they carry none and
-    ``completeness``, ``runs.total`` and the cursor carry the rest, which keeps
-    the floor the same size however many cases the job ran. A page whose cursor
-    continues itself passes 1: an empty page there would hand back a cursor at
-    the offset it was asked for.
+    The shrink rung measures rather than trusting the shared estimate, which
+    counts every surface's rows but becomes one limit on each — the run page and
+    every attached recipe's rows — so it can price a page that cut nothing as
+    fitting. Its search goes down to a limit of zero: a receipt's rows preview
+    surfaces other calls page (``jobs(runs)``, ``analyze_results``), so at the
+    floor ``completeness``, ``runs.total`` and the cursor stand in for them and
+    the floor is the same size however many cases the job ran. A page whose
+    cursor continues itself floors its own limit at one row.
     """
     text = ""
     rendered: dict[str, Any] = {}
-    # What the standing render was built for. The undegraded rung and the trim
-    # rung build the same thing, so the trim rung degrades that render in place.
-    built_for: bool | None = None
 
     def candidate(limit: int, rung: response_budget.Rung) -> tuple[dict[str, Any], str, list[str]]:
         data, line = build(limit, rung)
         return data, line, _degrade_receipt(data, rung)
 
     def at_shrink(rung: response_budget.Rung) -> tuple[dict[str, Any], str, list[str]]:
+        @functools.cache
+        def probe(limit: int) -> tuple[tuple[dict[str, Any], str, list[str]], int]:
+            built = candidate(limit, rung)
+            return built, response_budget.estimate_tokens(built[0])
+
         measure = response_budget.RowMeasure.of(rows(rendered))
         limit = measure.fit_limit(page_limit, rung)
-        tried = {limit: candidate(limit, rung)}
-
-        def fits(cap: int) -> bool:
-            if cap not in tried:
-                tried[cap] = candidate(cap, rung)
-            return response_budget.estimate_tokens(tried[cap][0]) <= rung.body_budget
-
-        if measure.shown > 0 and not fits(limit):
-            # Bisect for the largest limit that fits; `low` is the floor until
-            # some limit is shown to fit, so the search ends on a page that fits
-            # or on the floor, never on an untried limit above it.
-            low, high = min_rows, limit - 1
-            while low < high:
-                middle = (low + high + 1) // 2
-                if fits(middle):
-                    low = middle
-                else:
-                    high = middle - 1
-            fits(low)
-            limit = low
-        return tried[limit]
+        # With no rows shown, every limit renders the same page.
+        if measure.shown > 0:
+            limit = response_budget.largest_fitting(
+                limit, lambda cap: probe(cap)[1] <= rung.body_budget
+            )
+        return probe(limit)[0]
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered, built_for
+        nonlocal text, rendered
         if rung.shrink:
             rendered, text, cut = at_shrink(rung)
-            built_for = None
-        elif built_for != rung.answer_channel:
-            rendered, text, cut = candidate(page_limit, rung)
-            built_for = rung.answer_channel
-        else:
+        elif rung.level == response_budget.RUNG_TRIM:
+            # The undegraded rung built this same page; degrade it in place.
             cut = _degrade_receipt(rendered, rung)
+        else:
+            rendered, text, cut = candidate(page_limit, rung)
         rung.cut.extend(cut)
         return rendered
 
@@ -562,7 +545,6 @@ async def render_run_receipt(
             _RUN_PAGE_LIMIT,
             rows=_run_receipt_rows,
             notes=_RUN_BUDGET_NOTES,
-            min_rows=0,
         )
     result = format_response(text, data)
     result.is_error = is_error
@@ -633,6 +615,12 @@ class ReceiptSnapshot:
         """Receipt outcome derived only from copied status and completeness."""
         return _terminal_outcome(self)
 
+    @functools.cached_property
+    def rendered_failures(self) -> tuple[dict[str, Any], ...]:
+        """The failure rows, collapsed once: a budget re-renders the receipt
+        once per limit it tries, and no limit changes these."""
+        return tuple(_render_failures(self.failures, self.path_denied_hint))
+
 
 def render_receipt_snapshot(
     snapshot: ReceiptSnapshot,
@@ -671,7 +659,7 @@ def render_receipt_snapshot(
         "completeness": snapshot.completeness,
         "lint": list(snapshot.lint),
         "runs": runs,
-        "failures": _render_failures(snapshot.failures, snapshot.path_denied_hint),
+        "failures": list(snapshot.rendered_failures),
         "observations": list(snapshot.observations),
         "warnings": [],
         "artifacts": list(snapshot.artifacts),
@@ -907,17 +895,13 @@ def project_receipt_runs(
     ``offset`` is already decoded from the caller's cursor — a malformed one is
     that tool's error to raise, not this renderer's.
 
-    ``limit=0`` is a receipt's budget floor: no row inline, and a cursor that
-    starts ``jobs(runs)`` at ``offset``. Only a receipt asks for it — its rows
-    are a preview of that surface — never ``jobs(runs)`` itself, where an
-    empty page would hand back the cursor it was given.
+    ``limit=0`` is a receipt's budget floor, no row inline; ``jobs(runs)``
+    floors its own limit at one row.
     """
     rows = list(snapshot.runs_by_key.values())
-    if limit == 0:
-        start = min(max(offset, 0), len(rows))
-        return page_of([], offset=start, total=len(rows))
-    page_limit = max(1, len(rows)) if limit is None else limit
-    page = _page(rows, offset=offset, limit=page_limit)
+    start = min(max(offset, 0), len(rows))
+    end = len(rows) if limit is None else start + limit
+    page = page_of(rows[start:end], offset=start, total=len(rows))
     page["items"] = _project_run_rows(
         [dict(row) for row in page["items"]],
         run_fields,
@@ -956,15 +940,13 @@ def _terminal_hint(snapshot: ReceiptSnapshot, runs: Mapping[str, Any]) -> str:
     floor pages every receipt, failed ones included.
     """
     routes: list[str] = []
-    if runs["truncated"] and not runs["returned"]:
-        routes.append(
-            "No run row is inline at this budget; completeness and runs.total count "
-            f"them, and jobs(runs) with job_id {snapshot.job_id} pages them."
-        )
-    elif runs["truncated"]:
+    if runs["truncated"]:
         routes.append(
             f"The inline run page is truncated; use jobs(runs) with job_id "
             f"{snapshot.job_id} for the remaining cases."
+            if runs["returned"]
+            else "No run row is inline at this budget; completeness and runs.total "
+            f"count them, and jobs(runs) with job_id {snapshot.job_id} pages them."
         )
     routes.extend(_recovery_routes(snapshot))
     if not routes:

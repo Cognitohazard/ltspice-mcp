@@ -619,12 +619,22 @@ def test_analyze_drives_neutral_continuations_without_flipping_request_fields(
     assert all(len(request.recipes or []) == 2 for request in seen_requests)
 
 
+def _complete_and_wire(
+    state: SessionState, work_dir: Path, recipes: list[dict[str, Any]]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One analysis through the API twice: its complete result, and one MCP page."""
+    api = SyncApi(state)
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    sources = [{"raw_path": str(raw), "label": "dut"}]
+    complete = api.analyze_results(sources=sources, recipes=recipes)
+    wire = api.analyze_results(raw_page=True, sources=sources, recipes=recipes)
+    return complete, wire
+
+
 def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
     state_no_sim: SessionState,
     work_dir: Path,
 ) -> None:
-    api = SyncApi(state_no_sim)
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     # Each recipe names a label of its own, so each fails for its own reason:
     # 107 distinct rows, which the wire page cannot collapse below its cap.
     recipes = [
@@ -636,9 +646,7 @@ def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
         }
         for index in range(107)
     ]
-    sources = [{"raw_path": str(raw), "label": "dut"}]
-    complete = api.analyze_results(sources=sources, recipes=recipes)
-    wire = api.analyze_results(raw_page=True, sources=sources, recipes=recipes)
+    complete, wire = _complete_and_wire(state_no_sim, work_dir, recipes)
 
     assert len(complete["failures"]) == 107
     assert complete["next"] is None
@@ -656,12 +664,8 @@ def test_analyze_complete_failure_inventory_uncollapses_the_wire_rows(
 ) -> None:
     """The page counts a repeated failure in one row; the complete result keeps
     every record, so the two interfaces reconcile to the same failures."""
-    api = SyncApi(state_no_sim)
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     recipes = [{"key": f"invalid-{index}", "metric": "not_a_recipe"} for index in range(107)]
-    sources = [{"raw_path": str(raw), "label": "dut"}]
-    complete = api.analyze_results(sources=sources, recipes=recipes)
-    wire = api.analyze_results(raw_page=True, sources=sources, recipes=recipes)
+    complete, wire = _complete_and_wire(state_no_sim, work_dir, recipes)
 
     assert len(complete["failures"]) == 107
     assert all("count" not in row for row in complete["failures"])

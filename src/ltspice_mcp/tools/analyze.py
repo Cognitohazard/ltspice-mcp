@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import functools
 import math
 import os
 import re
@@ -257,6 +258,12 @@ class Failure:
     message: str
     python_route: bool = False
 
+    @functools.cached_property
+    def reason(self) -> tuple[str, str, str]:
+        """What a collapsed failure row groups this one under, read once: a
+        budget assembles the same failures once per rung it tries."""
+        return (self.code, self.stage, diagnostic_collapse_key(self.message))
+
     def wire(self, served: Collection[str] | None = None) -> dict[str, Any]:
         message = self.message
         if self.python_route and served is not None:
@@ -304,8 +311,7 @@ def _collapse_failures(
     """
     grouped: dict[tuple[str, str, str], list[Failure]] = {}
     for failure in failures:
-        key = (failure.code, failure.stage, diagnostic_collapse_key(failure.message))
-        grouped.setdefault(key, []).append(failure)
+        grouped.setdefault(failure.reason, []).append(failure)
     rows: list[dict[str, Any]] = []
     for members in grouped.values():
         ordered = sorted(members, key=lambda failure: _place_order(failure.where))
