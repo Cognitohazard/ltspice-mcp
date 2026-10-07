@@ -289,10 +289,11 @@ async def test_montecarlo_without_meas_reports_no_measurements(
         assert 950.0 <= item["assignments"]["random:component:R2"] <= 1050.0
 
     # Nothing was fabricated for the .meas a batch-mode ngspice never evaluated:
-    # no 'measured' result at all, and one explanatory failure per case.
+    # no 'measured' result at all, and one explanatory failure per case — counted
+    # on one row where the cases say the same thing.
     assert "measured" not in data["results"]
     meas_failures = [f for f in data["failures"] if "No .MEAS results" in f["message"]]
-    assert len(meas_failures) == 3, data["failures"]
+    assert sum(f.get("count", 1) for f in meas_failures) == 3, data["failures"]
     assert all(f["code"] == "recipe_failed" for f in meas_failures)
 
 
