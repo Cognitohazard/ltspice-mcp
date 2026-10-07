@@ -2176,7 +2176,9 @@ does not establish reproducibility for every stochastic function or analysis.
 symbol with no library: it looks for the sheet where spicelib does and, when
 there is none, leaves the instance without a resolved subcircuit, as spicelib
 already does for a cell symbol with no library. A sheet that is there opens as
-an `_AscEditor` too, so a block further down is read the same way.
+an `_AscEditor` too, so a block further down is read the same way. spicelib's
+search walks every folder it is given and is not cached, so the override looks
+for each missing sheet once per open, not once per instance.
 
 ### Summary
 

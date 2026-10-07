@@ -31,7 +31,6 @@ import asyncio
 import importlib
 import itertools
 import math
-import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
@@ -1139,18 +1138,31 @@ class _AscEditor(AscEditor):
     these, so a block nested further down is read the same way.
     """
 
+    def __init__(
+        self,
+        asc_file: str | Path,
+        encoding: str = "autodetect",
+        *,
+        searched: dict[tuple[str, str], str | None] | None = None,
+    ) -> None:
+        # Where each sheet not beside its symbol was found, shared with the
+        # sheets this one opens: a search walks every folder it is given, and
+        # a sheet may place the same block many times.
+        self._searched = {} if searched is None else searched
+        super().__init__(asc_file, encoding)
+
     def _get_subcircuit(self, symbol: Any) -> Any:
         if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
             return super()._get_subcircuit(symbol)
         sheet = symbol.get_schematic_file()
         if not sheet.exists():
-            sheet = search_file_in_containers(
-                sheet.stem + os.path.extsep + "asc",
-                os.path.split(self.asc_file_path)[0],
-                os.path.curdir,
-                *self.custom_lib_paths,
-            )
-        return None if sheet is None else type(self)(sheet)
+            folder = str(self.asc_file_path.parent)
+            if (sheet.name, folder) not in self._searched:
+                self._searched[sheet.name, folder] = search_file_in_containers(
+                    sheet.name, folder, ".", *self.custom_lib_paths
+                )
+            sheet = self._searched[sheet.name, folder]
+        return None if sheet is None else type(self)(sheet, searched=self._searched)
 
 
 def make_editor(path: Path) -> Editor:
@@ -1166,7 +1178,7 @@ def make_editor(path: Path) -> Editor:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
         # The schematic itself opened, so what is missing is something it
-        # refers to: a symbol, a hierarchical sub-sheet, or a model library.
+        # refers to: a symbol or a model library.
         # Which one it is comes from the file that is there, not from whether
         # the editor's message happened to spell ".asy".
         raise SymbolResolutionError(
