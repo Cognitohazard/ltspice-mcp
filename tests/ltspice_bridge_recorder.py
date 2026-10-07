@@ -3,8 +3,8 @@
 ``lib/ltspice_bridge.py`` and ``lib/ltspice_window.py`` encode how a running
 LTspice answers through ``ltspice-mcp-bridge.exe``: what a window hands back
 for a sheet it has open, that replacing it leaves the file alone, that it
-never reads the file again, and that a bridge told where LTspice is not cannot
-start one. Each of those is recorded here from an installed build, under
+never reads the file again, that a run in the window is of the window's copy,
+and that a bridge told where LTspice is not cannot start one. Each of those is recorded here from an installed build, under
 ``tests/fixtures/ltspice_bridge_recorded/<build>/``:
 
 - ``sheets/<name>.asc``: the window's copy of ``inputs/<name>.asc``, as UTF-8;
@@ -38,6 +38,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.guide import split_front_matter
 from ltspice_mcp.lib.hidden_desktop import HiddenDesktop
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
@@ -186,6 +187,21 @@ def _run_in_window(session: BridgeSession, recording: _Recording, sheet: Path) -
     return results
 
 
+def _resistor_value(netlist: Path) -> str | None:
+    """The value of R1 in the netlist a run in the window wrote beside its sheet.
+
+    When the run is made the window holds ``2k`` and the file ``3k``, so this
+    says which of the two LTspice simulated.
+    """
+    if not netlist.is_file():
+        return None
+    for line in decode_spice_bytes(netlist.read_bytes()).splitlines():
+        words = line.split()
+        if words and words[0] == "R1":
+            return words[-1]
+    return None
+
+
 def plot_settings_record(build: Build) -> dict[str, Any] | None:
     """The shape of the plot settings files ``build`` ships with its examples:
     the names of their sections and the words their lines begin with. They are
@@ -299,7 +315,8 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     session.design_text(str(edited)) == changed,
                 )
                 recording.fact("the file is as it was", edited.read_bytes() == on_disk)
-                edited.write_bytes(on_disk.replace(b"SYMATTR Value 1k", b"SYMATTR Value 3k"))
+                rewritten = on_disk.replace(b"SYMATTR Value 1k", b"SYMATTR Value 3k")
+                edited.write_bytes(rewritten)
                 recording.fact(
                     "after the file is rewritten the window still holds its own copy",
                     session.design_text(str(edited)) == changed,
@@ -319,6 +336,15 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 )
 
                 results = _run_in_window(session, recording, edited)
+                recording.fact(
+                    "a run in the window is of the window's copy and not of the file",
+                    _resistor_value(edited.with_suffix(".net")),
+                )
+                recording.fact("the run did not write the sheet", edited.read_bytes() == rewritten)
+                recording.fact(
+                    "what the run left beside the sheet",
+                    sorted(path.name[len(EDITED) :] for path in work.glob(f"{EDITED}.*")),
+                )
                 recording.call(session, "open a results file", "get_raw_info", path=str(results))
                 recording.call(session, "put it in front", "bring_to_front", path=str(results))
                 recording.fact(
