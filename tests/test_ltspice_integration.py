@@ -23,6 +23,7 @@ from ltspice_mcp.lib.hidden_desktop import DialogError
 from ltspice_mcp.lib.simulator import SIMULATORS, bind_named_executable, detect_simulators
 from ltspice_mcp.state import SessionState
 from tests.conftest import terminal_experiment
+from tests.test_hidden_desktop import windows_only
 
 # Path to the test fixture .asc schematic
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -588,10 +589,7 @@ class _WindowWatch:
                 return
 
 
-@pytest.mark.skipif(
-    sys.platform != "win32",
-    reason="LTspice is started on a desktop of its own on native Windows only",
-)
+@windows_only
 @pytest.mark.asyncio
 class TestWindowStaysOffTheDesktop:
     """LTspice opens a window for every run and export and takes the keyboard
@@ -636,10 +634,7 @@ class TestWindowStaysOffTheDesktop:
         self._assert_kept_away(watch)
 
 
-@pytest.mark.skipif(
-    sys.platform != "win32",
-    reason="LTspice is started on a desktop of its own on native Windows only",
-)
+@windows_only
 @pytest.mark.asyncio
 class TestMessageBoxWhereNobodyCanAnswer:
     """On a desktop nobody sees, a message box would hold LTspice until the

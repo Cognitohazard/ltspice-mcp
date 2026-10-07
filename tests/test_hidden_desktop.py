@@ -22,9 +22,19 @@ from ltspice_mcp.lib.hidden_desktop import DialogError, HiddenDesktop
 from ltspice_mcp.lib.windows_job import python_launch
 from tests.conftest import identify, process_running, wait_until, written
 
-windows_only = pytest.mark.skipif(
-    sys.platform != "win32", reason="a desktop of one's own is a Windows facility"
-)
+
+def _no_desktop_here() -> str | None:
+    """Why no desktop can be made here, or None when one can."""
+    if sys.platform != "win32":
+        return "a desktop of one's own is a Windows facility"
+    with HiddenDesktop(f"ltspice-mcp-test-probe-{os.getpid()}") as made:
+        if not made.available:
+            return "Windows refuses this session a desktop of its own (it is not interactive)"
+    return None
+
+
+# Where the launch falls back to the ordinary one, there is nothing to test.
+windows_only = pytest.mark.skipif(_no_desktop_here() is not None, reason=_no_desktop_here() or "")
 
 # A program that says where it is running, then does what its first argument
 # names: report and exit 7, wait to be ended, or put up a message box.
