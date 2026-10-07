@@ -430,8 +430,6 @@ def _receipt_row_pages(data: dict[str, Any]) -> list[dict[str, Any]]:
     return pages
 
 
-def jobs_rows(data: dict[str, Any]) -> list[Any]:
-    return [row for page in _receipt_row_pages(data) for row in page["items"]]
 
 
 def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -441,8 +439,11 @@ def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
-    rows = jobs_rows(data)
+def receipt_rows(data: dict[str, Any]) -> list[Any]:
+    """Every row a receipt-shaped response shows: its run pages, and the
+    attached analysis's rows when it carries one. The one measure every
+    receipt is shrunk against, whichever tool returns it."""
+    rows = [row for page in _receipt_row_pages(data) for row in page["items"]]
     result = _attached_result(data)
     if result is not None:
         rows.extend(analyze.analysis_rows(result))
@@ -543,7 +544,7 @@ async def render_run_receipt(
             budget,
             build,
             _RUN_PAGE_LIMIT,
-            rows=_run_receipt_rows,
+            rows=receipt_rows,
             notes=_RUN_BUDGET_NOTES,
         )
     result = format_response(text, data)
