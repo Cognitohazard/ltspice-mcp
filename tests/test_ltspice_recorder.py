@@ -237,6 +237,12 @@ class TestSettingsCopy:
             b"[Options]\r\nLastRunVersion=26.1.1\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
         )
 
+    def test_the_waveform_grid_is_removed(self):
+        # With grid=on in the recording user's LTspice XVII settings, every
+        # pane the build made for itself was saved with a GridStyle line.
+        source = self.ANSI.replace(b"SchFontSize=28\r\n", b"SchFontSize=28\r\ngrid=on\r\n")
+        assert neutral_settings(source, {}) == neutral_settings(self.ANSI, {})
+
     def test_the_copy_is_never_empty_of_what_marks_a_used_install(self):
         # A build that starts on an empty settings file runs its first-launch
         # steps; what says the build has run before must survive the copy.

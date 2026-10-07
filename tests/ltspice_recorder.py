@@ -90,9 +90,10 @@ NEUTRAL_HOME = "C:\\Users\\user"
 #: day, so the builds' different padding of a one-digit day does not arise.
 NEUTRAL_DATE = "Thu Jan 15 00:00:00 2026"
 
-#: Settings that change what a run or an export produces. They are removed from
-#: the copy of the settings file a case runs against, so the build falls back
-#: to its own default for each; a case sets one back with ``ini = {...}``.
+#: Settings that change what a run, an export or a saved plot settings file
+#: holds. They are removed from the copy of the settings file a case runs
+#: against, so the build falls back to its own default for each; a case sets
+#: one back with ``ini = {...}``.
 BEHAVIOUR_KEYS = frozenset(
     key.casefold()
     for key in (
@@ -134,6 +135,7 @@ BEHAVIOUR_KEYS = frozenset(
         "WarnOnNoIndRser",
         "AutoDeleteRawFiles",
         "FastAccessRAM",
+        "grid",
     )
 )
 
