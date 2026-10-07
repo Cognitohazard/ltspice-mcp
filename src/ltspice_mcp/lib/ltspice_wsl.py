@@ -53,7 +53,7 @@ class LTspiceWSL(LTspice):
 
         if exe_log:
             log_exe_file = netlist_file.with_suffix(".exe.log")
-            with open(log_exe_file, "w") as outfile:
+            with open(log_exe_file, "wb") as outfile:
                 error = run_function(
                     cmd_run,
                     timeout=timeout,

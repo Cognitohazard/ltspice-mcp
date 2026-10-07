@@ -66,6 +66,12 @@ recording that showed it.
   held one of those bytes. XVII copies the title into its log, and the log was
   refused as undecodable; `.meas` results failed the same way inside the log
   reader the server uses. Both read the log now.
+- Under WSL, LTspice was not found, and its symbols not loaded, for a Windows
+  user whose profile directory is not ASCII. `%LOCALAPPDATA%` was read from
+  `cmd.exe` in the console's code page, where such a name is not UTF-8 and a
+  letter the code page lacks is a question mark; it is read as UTF-16 now. On
+  a Windows whose display language is not English, cancelling a run could
+  raise after the simulator had been stopped, on `taskkill`'s own message.
 
 - `run_experiments` refused valid decks under its default `lint: "block"`, and
   an `.asc` is linted through its exported netlist, so schematics were refused

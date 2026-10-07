@@ -88,7 +88,9 @@ class TestResolveWinEnvRetries:
                 cmd_calls["n"] += 1
                 if cmd_calls["n"] == 1:
                     raise subprocess.TimeoutExpired("cmd.exe", 15)
-                return MagicMock(stdout="C:\\Users\\me\\AppData\\Local\n", stderr="", returncode=0)
+                # cmd.exe /U writes UTF-16 to a pipe; wslpath writes UTF-8 text.
+                echoed = "C:\\Users\\me\\AppData\\Local\r\n".encode("utf-16-le")
+                return MagicMock(stdout=echoed, stderr=b"", returncode=0)
             return MagicMock(stdout="/mnt/c/Users/me/AppData/Local\n", stderr="", returncode=0)
 
         with patch("ltspice_mcp.lib.wsl.subprocess.run", side_effect=fake_run):
