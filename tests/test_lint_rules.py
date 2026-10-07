@@ -56,6 +56,24 @@ _SEED_CASES = [
         "NGspiceSimulator",
     ),
     (
+        "lib-section-ltspice",
+        '* t\n.lib "models.lib" TT\n.op\n.end\n',
+        None,
+        "LTspice",
+    ),
+    (
+        "analysis-count-ltspice",
+        "V1 in 0 AC 1\nR1 in 0 1k\n.ac dec 10 1 1k\n.tran 1m\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "meas-function-ltspice",
+        "V1 in 0 AC 1\nR1 in 0 1k\n.ac dec 10 1 1k\n.meas ac g FIND vdb(in) AT 100\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "step-ngspice",
         "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
         "ngspice",
