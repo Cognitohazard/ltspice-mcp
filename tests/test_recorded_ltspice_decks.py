@@ -76,26 +76,13 @@ SUFFIX_DECKS = [
 ]
 
 #: Spellings the server's parser refused until it read values as LTspice
-#: does, with what LTspice makes of each (the same on both recorded builds):
-#: a letter that is no scale suffix, which LTspice skips with what follows it,
-#: and the "3k4" shorthand that puts the suffix where the decimal point goes.
-ONCE_REFUSED = {
-    "2Hz": 2.0,
-    "3V": 3.0,
-    "2ohm": 2.0,
-    "2A": 2.0,
-    "7x": 7.0,
-    "5s": 5.0,
-    "2Ohms": 2.0,
-    "4H": 4.0,
-    "6W": 6.0,
-    "9V1": 9.0,
-    "1k5": 1500.0,
-    "4R7": 4.7,
-    "2M2": 2.2e-3,
-    "3u3": 3.3e-6,
-    "1Meg5": 1.5e6,
-}
+#: does: a letter that is no scale suffix, which LTspice skips with what
+#: follows it, and the "3k4" shorthand that puts the suffix where the decimal
+#: point goes. What LTspice made of each is the recording's to say.
+ONCE_REFUSED = frozenset(
+    {"2Hz", "3V", "2ohm", "2A", "7x", "5s", "2Ohms", "4H", "6W", "9V1"}
+    | {"1k5", "4R7", "2M2", "3u3", "1Meg5"}
+)
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
@@ -124,9 +111,7 @@ def test_the_spellings_once_refused_are_all_recorded():
         for spelling in resistances(case_id).values()
         if spelling in ONCE_REFUSED
     }
-    assert spellings == set(ONCE_REFUSED)
-    for spelling, value in ONCE_REFUSED.items():
-        assert parse_spice_value(spelling) == pytest.approx(value), spelling
+    assert spellings == ONCE_REFUSED
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
