@@ -79,39 +79,59 @@ def _first_heading(body: str) -> str | None:
     return None
 
 
+def _listed(directory: Path) -> list[Path]:
+    return sorted(
+        (
+            path
+            for path in directory.iterdir()
+            if path.suffix.lower() == _SUFFIX and path.is_file()
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
+def _document(path: Path) -> tuple[Document, str]:
+    """``path`` as a document, and its text after the front matter. One read."""
+    fields, body = split_front_matter(_read(path))
+    document = Document(
+        name=path.name,
+        title=fields.get("title") or _first_heading(body) or path.stem,
+        description=fields.get("description", ""),
+        path=path,
+    )
+    return document, body
+
+
+def names(directory: Path) -> list[str]:
+    """The name of every reference document in ``directory``. Reads no file."""
+    return [path.name for path in _listed(directory)]
+
+
 def documents(directory: Path) -> list[Document]:
-    """Every reference document in ``directory``, by name. Reads each file's head."""
-    found: list[Document] = []
-    for path in sorted(directory.iterdir(), key=lambda entry: entry.name.casefold()):
-        if path.suffix.lower() != _SUFFIX or not path.is_file():
-            continue
-        fields, body = split_front_matter(_read(path))
-        found.append(
-            Document(
-                name=path.name,
-                title=fields.get("title") or _first_heading(body) or path.stem,
-                description=fields.get("description", ""),
-                path=path,
-            )
-        )
-    return found
+    """Every reference document in ``directory``, by name. Reads each file."""
+    return [_document(path)[0] for path in _listed(directory)]
 
 
-def find(listed: list[Document], name: str) -> Document | None:
-    """The document called ``name`` among ``listed``, with or without its suffix."""
-    wanted = name.strip().casefold()
-    for document in listed:
-        if wanted in (document.name.casefold(), document.path.stem.casefold()):
-            return document
-    return None
+def read(directory: Path, name: str) -> tuple[Document, list[Section]] | None:
+    """The document called ``name`` in ``directory``, cut at its second-level headings.
 
-
-def sections(document: Document) -> list[Section]:
-    """``document`` cut at its second-level headings, front matter left out.
-
-    A heading inside a fenced code block is code, not a heading.
+    ``name`` is taken with or without its suffix and looked up only among the
+    files the directory lists; None when it lists none of that name. Reads
+    that one file, once. The front matter is left out, and a heading inside a
+    fenced code block is code, not a heading.
     """
-    _fields, body = split_front_matter(_read(document.path))
+    wanted = name.strip().casefold()
+    path = next(
+        (
+            listed
+            for listed in _listed(directory)
+            if wanted in (listed.name.casefold(), listed.stem.casefold())
+        ),
+        None,
+    )
+    if path is None:
+        return None
+    document, body = _document(path)
     cut: list[Section] = []
     heading = document.title
     lines: list[str] = []
@@ -131,4 +151,4 @@ def sections(document: Document) -> list[Section]:
             lines = []
         lines.append(line)
     close()
-    return cut
+    return document, cut

@@ -27,7 +27,6 @@ LTspice XVII has no bridge, so only builds from 26.1 on are recorded.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import os
 import re
@@ -42,23 +41,26 @@ from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.guide import split_front_matter
 from ltspice_mcp.lib.hidden_desktop import HiddenDesktop
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
+from tests import ltspice_recorder
 from tests.ltspice_recorder import (
+    MANIFEST,
+    NEUTRAL_DIR,
     Build,
     RecorderError,
     assert_private,
     discover_builds,
     neutral_settings,
     private_strings,
+    sha256_bytes,
     unavailable_reason,
 )
+from tests.ltspice_recorder import load_manifest as load_manifest
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_bridge_recorded"
 INPUTS = FIXTURES / "inputs"
-MANIFEST = "manifest.json"
 CONVERSATION = "conversation.json"
 MANIFEST_SCHEMA = 1
 
-NEUTRAL_DIR = "C:\\recording"
 NEUTRAL_PID = 1000
 NEUTRAL_PORT = 50000
 NOT_A_PROCESS = 999999
@@ -67,20 +69,12 @@ EDITED = "older_version"
 _STARTED_S = 60.0
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def input_names() -> list[str]:
     return sorted(path.stem for path in INPUTS.glob("*.asc"))
 
 
-def recorded_builds(root: Path = FIXTURES) -> list[str]:
-    return sorted(path.parent.name for path in root.glob(f"*/{MANIFEST}"))
-
-
-def load_manifest(directory: Path) -> dict[str, Any]:
-    return json.loads((directory / MANIFEST).read_text(encoding="utf-8"))
+def recorded_builds() -> list[str]:
+    return ltspice_recorder.recorded_builds(FIXTURES)
 
 
 def load_conversation(directory: Path) -> list[dict[str, Any]]:
@@ -108,7 +102,7 @@ class _Scrub:
         if isinstance(value, str):
             return self.text(value)
         if isinstance(value, int) and not isinstance(value, bool):
-            if key.lower().endswith("pid") and value in (self.pid,):
+            if key.lower().endswith("pid") and value == self.pid:
                 return NEUTRAL_PID
             if key == "port" and value == self.port:
                 return NEUTRAL_PORT
@@ -149,7 +143,7 @@ class _Recording:
         self.steps.append({"note": note, "observed": value})
 
 
-def wait_for_window(command: Sequence[str], pid: int, sheet: Path) -> tuple[int, int]:
+def wait_for_window(command: Sequence[str], pid: int, sheet: Path) -> int:
     """The port of the window ``pid`` once it has ``sheet`` open.
 
     LTspice offers a window to the bridge before it has finished opening the
@@ -164,7 +158,7 @@ def wait_for_window(command: Sequence[str], pid: int, sheet: Path) -> tuple[int,
                     continue
                 session.attach(pid)
                 if any(Path(spelled) == sheet for spelled in session.open_designs()):
-                    return pid, int(row["port"])
+                    return int(row["port"])
         time.sleep(0.25)  # timing: between two looks; what is waited for is the listing
     raise RecorderError(f"LTspice process {pid} never offered its window to the bridge")
 
@@ -212,14 +206,14 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
     with tempfile.TemporaryDirectory(prefix="ltspice-bridge-rec-") as scratch:
         work = Path(scratch).resolve() / "sheets"
         work.mkdir()
-        for name in input_names():
+        names = input_names()
+        for name in names:
             shutil.copyfile(INPUTS / f"{name}.asc", work / f"{name}.asc")
         ini = work.parent / settings.name
         ini.write_bytes(neutral_settings(settings.read_bytes(), {}))
         scrub = _Scrub(work)
         recording = _Recording(scrub)
         sheets: dict[str, bytes] = {}
-        names = input_names()
         first = work / f"{names[0]}.asc"
 
         with BridgeSession(command) as session:
@@ -233,7 +227,8 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
 
         window = desktop.start([str(build.exe), str(first), "-ini", str(ini)])
         try:
-            scrub.pid, scrub.port = wait_for_window(command, window.pid, first)
+            scrub.pid = window.pid
+            scrub.port = wait_for_window(command, window.pid, first)
             with BridgeSession(command) as session:
                 recording.call(session, "one window is open", "status")
                 recording.call(session, "attach to the window", "attach", pid=window.pid)

@@ -710,8 +710,8 @@ recording that showed it.
 - `plot_waveform(in_ltspice=true)` opens the run in the LTspice window that is
   already running. For a transient or AC run the plotted traces are drawn: it
   writes the plot settings file LTspice loads beside the results, in the form
-  `set_plot_panes` writes one. Settings a person saved from LTspice are left
-  alone.
+  `set_plot_panes` writes one, and keeps the file's other analyses. Settings a
+  person saved from LTspice are left alone.
 - `verify_circuit(in_ltspice=true)` opens the checked sheet or netlist in the
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says

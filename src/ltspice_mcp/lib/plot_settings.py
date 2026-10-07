@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Literal
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
 
 PlotAnalysis = Literal["tran", "ac"]
@@ -355,3 +356,38 @@ def holds_only_panes(data: bytes) -> bool:
     except NetlistError:
         return False
     return write_plot_settings(rebuilt) == data
+
+
+def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) -> str | None:
+    """Write the panes a results file opens with into the ``.plt`` beside it.
+
+    ``plot_name`` is the plot name the results file carries and ``panes`` the
+    traces of each pane, top first; they get the scales a build gives that
+    analysis. The analysis's section is replaced and the file's others are
+    kept, as for a sheet's. Returns None once written, and otherwise why
+    nothing was: the analysis's section is not recorded, or the file there
+    was saved by a build, which is a person's and is left alone. Raises
+    ``NetlistError`` for a trace the file cannot carry and ``OSError`` when it
+    cannot be written.
+    """
+    analysis = analysis_of(plot_name)
+    if analysis is None:
+        return (
+            f"no traces are drawn, because how LTspice reads the plot settings of a "
+            f"{plot_name} plot is not recorded"
+        )
+    target = plot_settings_path(results)
+    existing = target.read_bytes() if target.is_file() else b""
+    if not holds_only_panes(existing):
+        return (
+            f"{target.name} was saved from LTspice and is left as it is, so the "
+            "window shows the traces saved in it"
+        )
+    scales = DEFAULT_SCALES[analysis]
+    drawn = with_panes(
+        read_plot_settings(existing),
+        analysis,
+        [PlotPane(tuple(names), scales) for names in panes],
+    )
+    atomic_write_bytes(target, write_plot_settings(drawn), durable=False)
+    return None

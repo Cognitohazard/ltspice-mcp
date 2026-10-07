@@ -9,34 +9,24 @@ against a recording of LTspice 26.1.1 in ``test_ltspice_bridge.py``).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
-from ltspice_mcp.lib.encoding import decode_windows_1252
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-from tests.conftest import LIVENESS_S
-from tests.test_ltspice_bridge import fake_command, write_world
-
-PID = 4242
-
-
-def as_ltspice_reads(sheet: Path) -> str:
-    return decode_windows_1252(sheet.read_bytes())
+from tests._ltspice_window import PID, a_window, as_ltspice_reads, put_windows, read_world
 
 
 def window_of(world: Path) -> dict[str, Any]:
-    return json.loads(world.read_text(encoding="utf-8"))["windows"][0]
+    return read_world(world)["windows"][0]
 
 
-def a_window(state: SessionState, world: Path, designs: dict[str, str] | None = None) -> None:
-    write_world(world, [{"pid": PID, "version": "26.1.1", "designs": designs or {}}])
-    state.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
+def one_window(state: SessionState, world: Path, designs: dict[str, str] | None = None) -> None:
+    put_windows(state, world, [a_window(designs)])
 
 
 async def check(state: SessionState, path: Path, **arguments: Any) -> dict[str, Any]:
@@ -53,7 +43,7 @@ async def test_the_sheet_is_opened_in_the_window_and_put_in_front(
     asc_state: SessionState, asc_file: Path, tmp_path: Path
 ):
     world = tmp_path / "world.json"
-    a_window(asc_state, world)
+    one_window(asc_state, world)
 
     data = await check(asc_state, asc_file, in_ltspice=True)
 
@@ -77,7 +67,9 @@ async def test_a_sheet_the_window_already_has_is_put_in_front_as_it_holds_it(
 ):
     world = tmp_path / "world.json"
     other = str(asc_file.with_name("other.asc"))
-    a_window(asc_state, world, {str(asc_file): as_ltspice_reads(asc_file), other: "Version 4.1\n"})
+    one_window(
+        asc_state, world, {str(asc_file): as_ltspice_reads(asc_file), other: "Version 4.1\n"}
+    )
     assert window_of(world).get("active") is None  # the other sheet is the one in front
 
     data = await check(asc_state, asc_file, in_ltspice=True)
@@ -101,7 +93,7 @@ async def test_a_window_showing_another_sheet_than_the_file_is_said_to(
     something else than was checked."""
     held = as_ltspice_reads(asc_file).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
     world = tmp_path / "world.json"
-    a_window(asc_state, world, {str(asc_file): held})
+    one_window(asc_state, world, {str(asc_file): held})
 
     data = await check(asc_state, asc_file, in_ltspice=True)
 
@@ -120,7 +112,7 @@ async def test_a_netlist_is_opened_too(asc_state: SessionState, work_dir: Path, 
     deck = work_dir / "amp.cir"
     deck.write_text("* amp\nR1 in out 1k\nV1 in 0 1\n.op\n.end\n", encoding="utf-8")
     world = tmp_path / "world.json"
-    a_window(asc_state, world)
+    one_window(asc_state, world)
 
     result = await handle_verify_circuit(
         VerifyCircuitInput(path=str(deck), checks=["syntax"], in_ltspice=True), asc_state
@@ -141,8 +133,7 @@ async def test_with_no_window_open_nothing_is_started(
     asc_state: SessionState, asc_file: Path, tmp_path: Path
 ):
     world = tmp_path / "world.json"
-    write_world(world, [])
-    asc_state.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
+    put_windows(asc_state, world, [])
 
     data = await check(asc_state, asc_file, in_ltspice=True)
 
@@ -172,7 +163,7 @@ async def test_without_the_argument_ltspice_is_not_asked(
     asc_state: SessionState, asc_file: Path, tmp_path: Path
 ):
     world = tmp_path / "world.json"
-    a_window(asc_state, world)
+    one_window(asc_state, world)
 
     data = await check(asc_state, asc_file)
 

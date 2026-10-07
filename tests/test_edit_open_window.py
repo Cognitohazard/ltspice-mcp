@@ -13,7 +13,6 @@ recorded ones.
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 import sys
 from pathlib import Path
@@ -27,11 +26,18 @@ from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
-from tests.conftest import LIVENESS_S
+from tests._ltspice_window import (
+    PID,
+    a_window,
+    as_ltspice_reads,
+    digest,
+    fake_command,
+    put_windows,
+    read_world,
+    write_world,
+)
 from tests.ltspice_bridge_recorder import FIXTURES, INPUTS
-from tests.test_ltspice_bridge import fake_command, write_world
 
-PID = 4242
 #: The stand-in bridge runs under this interpreter, which is what a message names.
 BRIDGE_PROGRAM = Path(sys.executable).name
 SET_VALUE = [{"op": "set_component_value", "reference": "R1", "value": "2.2k"}]
@@ -39,14 +45,6 @@ SET_VALUE = [{"op": "set_component_value", "reference": "R1", "value": "2.2k"}]
 
 def file_bytes(sheet: Path) -> bytes:
     return sheet.read_bytes()
-
-
-def digest(sheet: Path) -> str:
-    return hashlib.sha256(sheet.read_bytes()).hexdigest()
-
-
-def as_ltspice_reads(sheet: Path) -> str:
-    return decode_windows_1252(sheet.read_bytes())
 
 
 def as_the_server_reads(sheet: Path) -> str:
@@ -71,21 +69,25 @@ class Window:
     """One LTspice window, as the stand-in bridge reports it."""
 
     def __init__(self, state: SessionState, world: Path) -> None:
+        self._state = state
         self._world = world
-        self.shows(None, "")
-        state.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
+        put_windows(state, world, [a_window()])
 
     def shows(self, sheet: Path | None, text: str, **extra: Any) -> None:
         """Have the window hold ``text`` for ``sheet``; with no sheet, nothing is open."""
-        designs = {} if sheet is None else {str(sheet): text}
-        write_world(self._world, [{"pid": PID, "version": "26.1.1", "designs": designs}], **extra)
+        write_world(
+            self._world, [a_window(None if sheet is None else {str(sheet): text})], **extra
+        )
+
+    def answers_within(self, seconds: float) -> None:
+        """Give the bridge ``seconds`` for a whole session, for a test of the deadline."""
+        self._state.open_windows = OpenWindows(fake_command(self._world), timeout=seconds)
 
     def closes(self) -> None:
         write_world(self._world, [])
 
     def text(self, sheet: Path) -> str:
-        world = json.loads(self._world.read_text(encoding="utf-8"))
-        return world["windows"][0]["designs"][str(sheet)]
+        return read_world(self._world)["windows"][0]["designs"][str(sheet)]
 
 
 @pytest.fixture
@@ -214,6 +216,31 @@ async def test_a_sheet_no_window_has_open_is_edited_as_before(
     assert data["observations"] == []
 
 
+@pytest.mark.parametrize(
+    "ops",
+    [[], [{"op": "set_plot_panes", "analysis": "tran", "panes": [{"traces": ["V(out)"]}]}]],
+    ids=["no ops", "plot panes only"],
+)
+async def test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window(
+    asc_state: SessionState, asc_file: Path, window: Window, ops: list[dict]
+):
+    """A window with unsaved changes stops a commit that would replace the
+    sheet under it. A read, or a batch that writes only the plot settings
+    beside the sheet, replaces nothing, so it is not stopped and not asked."""
+    before = file_bytes(asc_file)
+    held = decode_windows_1252(before).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+    window.shows(asc_file, held)
+
+    data = await edit(asc_state, asc_file, ops=ops)
+
+    assert data["outcome"] == "complete"
+    assert data["observations"] == []
+    assert "open_in_ltspice" not in data
+    assert "window_check" not in [stage["stage"] for stage in data["stages"]]
+    assert file_bytes(asc_file) == before
+    assert window.text(asc_file) == held
+
+
 async def test_a_new_sheet_asks_no_window(asc_state: SessionState, work_dir: Path, window: Window):
     """Nothing can have a file open that does not exist yet, so nothing is asked:
     a bridge that never answers would otherwise stop this build."""
@@ -235,8 +262,7 @@ async def test_a_window_that_cannot_be_updated_is_reported_and_the_commit_stands
     asc_state: SessionState, asc_file: Path, window: Window
 ):
     window.shows(asc_file, as_ltspice_reads(asc_file), silent_on="set_design_content")
-    silent = asc_state.open_windows._command
-    asc_state.open_windows = OpenWindows(silent, timeout=1.0)  # timing: the deadline under test
+    window.answers_within(1.0)  # timing: the deadline under test
     before = file_bytes(asc_file)
 
     data = await edit(asc_state, asc_file)
@@ -261,8 +287,7 @@ async def test_a_bridge_that_cannot_say_does_not_stop_the_edit(
     asc_state: SessionState, asc_file: Path, window: Window
 ):
     window.shows(asc_file, as_ltspice_reads(asc_file), silent_on="status")
-    silent = asc_state.open_windows._command
-    asc_state.open_windows = OpenWindows(silent, timeout=1.0)  # timing: the deadline under test
+    window.answers_within(1.0)  # timing: the deadline under test
 
     data = await edit(asc_state, asc_file)
 

@@ -143,7 +143,7 @@ from ltspice_mcp.lib.library_manager import (
 )
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
-from ltspice_mcp.lib.ltspice_window import OpenDesign, file_difference
+from ltspice_mcp.lib.ltspice_window import OpenDesign, WindowsUnavailable
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
@@ -185,6 +185,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     HINT_SCHEMA,
+    LTSPICE_WINDOW_PROPERTIES,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
     OptionalRawSelectionFields,
@@ -200,6 +201,7 @@ from ltspice_mcp.tools._base import (
     safe_library_path,
     safe_path,
     symbol_resolver_for,
+    window_difference,
 )
 from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
 
@@ -1868,11 +1870,10 @@ def _simulator_docs_page(
 ) -> dict[str, Any]:
     """The list of reference documents, or one of them in sections. Blocking."""
     directory = _reference_directory(state)
-    listed = simulator_docs.documents(directory)
     if q.name is None:
         rows = [
             {"name": doc.name, "title": doc.title, "description": doc.description}
-            for doc in listed
+            for doc in simulator_docs.documents(directory)
         ]
         page = _paginate(rows, "simulator_docs", {"name": None}, q.cursor, (), view)
         return {
@@ -1889,17 +1890,15 @@ def _simulator_docs_page(
             "next_cursor": page["next_cursor"],
             "page": _page_meta(page, "docs"),
         }
-    document = simulator_docs.find(listed, q.name)
-    if document is None:
+    found = simulator_docs.read(directory, q.name)
+    if found is None:
         raise _QueryError(
             "unknown_document",
             f"No reference document is called {q.name!r}.",
-            supported=[doc.name for doc in listed],
+            supported=simulator_docs.names(directory),
         )
-    rows = [
-        {"heading": section.heading, "text": section.text}
-        for section in simulator_docs.sections(document)
-    ]
+    document, sections = found
+    rows = [{"heading": section.heading, "text": section.text} for section in sections]
     page = _paginate(
         rows, "simulator_docs", {"name": document.name}, q.cursor, (document.path,), view
     )
@@ -1939,26 +1938,22 @@ def _design_kind(spelled: str) -> str:
     return "netlist" if suffix in NETLIST_SUFFIXES else "other"
 
 
-def _design_row(design: OpenDesign, state: SessionState) -> dict[str, Any]:
-    """One open document as the reply lists it. Reads the file: call off the loop."""
+def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
+    """One open document as the reply lists it; ``resolved`` is its path where
+    the sandbox admits it. Reads the file: call off the loop."""
     row: dict[str, Any] = {
         "path": design.path,
         "kind": _design_kind(design.path),
         "active": design.active,
         "pid": design.pid,
         "version": design.version,
+        "in_sandbox": resolved is not None,
     }
-    resolved = _sandboxed(design.path, state)
-    row["in_sandbox"] = resolved is not None
-    if resolved is None or row["kind"] != "schematic" or not resolved.is_file():
+    if resolved is None or design.text is None or not resolved.is_file():
         return row
     on_disk = resolved.read_bytes()
     row["sha256"] = hashlib.sha256(on_disk).hexdigest()
-    if design.text is not None:
-        difference = file_difference(on_disk, design.text)
-        row["differs_from_file"] = difference is not None
-        if difference is not None:
-            row["difference"] = difference
+    row.update(window_difference(on_disk, design.text))
     return row
 
 
@@ -1969,26 +1964,32 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
     and compared with that file by content. Both the bridge and the files are
     read off the loop.
     """
-    windows = state.open_windows
-    if not windows.available:
-        raise _QueryError(
-            "open_windows_unavailable",
-            f"LTspice windows cannot be read here: {windows.unavailable}. "
-            "inspect(kind='capabilities') reports this under open_window_sync.",
-        )
 
-    def is_readable_sheet(spelled: str) -> bool:
-        return _design_kind(spelled) == "schematic" and _sandboxed(spelled, state) is not None
+    def read() -> tuple[int, int, list[dict[str, Any]]]:
+        # Where the sandbox admits each document, decided once: it says which
+        # copies a window is asked for and which files are then read.
+        admitted: dict[str, Path | None] = {}
+
+        def is_readable_sheet(spelled: str) -> bool:
+            admitted[spelled] = _sandboxed(spelled, state)
+            return admitted[spelled] is not None and _design_kind(spelled) == "schematic"
+
+        count, designs = state.open_windows.designs(is_readable_sheet)
+        listed = designs[:_OPEN_DESIGNS_LIMIT]
+        return count, len(designs), [_design_row(d, admitted[d.path]) for d in listed]
 
     try:
-        count, designs = await asyncio.to_thread(windows.designs, is_readable_sheet)
+        count, total, rows = await asyncio.to_thread(read)
+    except WindowsUnavailable as exc:
+        raise _QueryError(
+            "open_windows_unavailable",
+            f"{exc}. inspect(kind='capabilities') reports this under open_window_sync.",
+        ) from exc
     except BridgeError as exc:
         raise _QueryError(
             "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
         ) from exc
-    listed = designs[:_OPEN_DESIGNS_LIMIT]
-    rows = await asyncio.to_thread(lambda: [_design_row(design, state) for design in listed])
-    data: dict[str, Any] = {"windows": count, "designs": rows, "total": len(designs)}
+    data: dict[str, Any] = {"windows": count, "designs": rows, "total": total}
     hints: list[str] = []
     if any(row.get("differs_from_file") for row in rows):
         hints.append(
@@ -2488,8 +2489,7 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
                     "type": "boolean",
                     "description": "The document in front in its window.",
                 },
-                "pid": {"type": "integer", "description": "The LTspice process."},
-                "version": {"type": "string"},
+                **LTSPICE_WINDOW_PROPERTIES,
                 "in_sandbox": {
                     "type": "boolean",
                     "description": "Whether this server may read and edit the file.",

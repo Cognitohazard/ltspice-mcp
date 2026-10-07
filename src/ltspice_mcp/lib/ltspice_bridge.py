@@ -48,7 +48,6 @@ import queue
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,7 +186,6 @@ class BridgeSession:
 
     def __init__(self, command: Sequence[str], *, timeout: float = DEFAULT_TIMEOUT_S) -> None:
         self._name = Path(command[0]).name
-        self._deadline = time.monotonic() + timeout
         self._timeout = timeout
         self._expired = False
         self._requests = 0
@@ -238,6 +236,9 @@ class BridgeSession:
 
     def _expire(self) -> None:
         self._expired = True
+        # Wakes a request that is waiting, whether or not Windows lets the
+        # bridge be ended: a refused end leaves its output open.
+        self._replies.put(None)
         self._end()
 
     def _end(self) -> None:
@@ -281,14 +282,9 @@ class BridgeSession:
         wanted = self._requests
         self._send({"jsonrpc": "2.0", "id": wanted, "method": method, "params": params})
         while True:
-            # The watchdog ends the bridge at the deadline, which closes its
-            # output and so ends this wait; the second is for an end that
-            # Windows refused.
-            remaining = self._deadline - time.monotonic() + 1.0
-            try:
-                reply = self._replies.get(timeout=max(remaining, 0.0))
-            except queue.Empty:
-                raise self._gave_up() from None
+            # Ended by a reply, by the bridge closing its output, or by the
+            # watchdog at the deadline.
+            reply = self._replies.get()
             if reply is None:
                 # Left for whoever asks next: the output does not close twice.
                 self._replies.put(None)
@@ -305,7 +301,17 @@ class BridgeSession:
             return result if isinstance(result, dict) else {}
 
     def call(self, name: str, **arguments: Any) -> dict[str, Any]:
-        """One of the bridge's tools by name; its reply as the object it sent."""
+        """One of the bridge's tools by name; its reply as the object it sent.
+
+        Text holding a NUL character is refused here and not sent, whatever
+        the tool: LTspice stops answering for good when it is given one.
+        """
+        for argument, value in arguments.items():
+            if isinstance(value, str) and _NEVER_ANSWERED in value:
+                raise BridgeError(
+                    f"the {argument} for {name} holds a NUL character, and LTspice stops "
+                    "answering when it is handed text with one"
+                )
         result = self._request("tools/call", {"name": name, "arguments": arguments})
         content = result.get("content")
         text = "\n".join(
@@ -323,6 +329,16 @@ class BridgeSession:
         if not isinstance(value, dict):
             raise BridgeError(f"{name} answered with something other than a JSON object")
         return value
+
+    def _accepted(
+        self, name: str, otherwise: str, path: str, text: str | None = None
+    ) -> dict[str, Any]:
+        """A call on the document at ``path`` whose reply must say ``ok``."""
+        arguments = {"path": path} if text is None else {"path": path, "text": text}
+        reply = self.call(name, **arguments)
+        if reply.get("status") != "ok":
+            raise BridgeError(str(reply.get("message") or otherwise))
+        return reply
 
     # ------------------------------------------------------------------
     # What a caller asks
@@ -382,31 +398,19 @@ class BridgeSession:
         """Replace the open document at ``path``; False when it already read so.
 
         The window changes and the file does not. LTspice records the change
-        as one step of that document's undo history. Text holding a NUL
-        character is refused here and not sent: LTspice stops answering for
-        good when it is given one.
+        as one step of that document's undo history.
         """
-        if _NEVER_ANSWERED in text:
-            raise BridgeError(
-                "the sheet holds a NUL character, and LTspice stops answering when it "
-                "is handed text with one"
-            )
-        reply = self.call("set_design_content", path=path, text=text)
-        if reply.get("status") != "ok":
-            raise BridgeError(str(reply.get("message") or f"LTspice did not take {path}"))
+        reply = self._accepted("set_design_content", f"LTspice did not take {path}", path, text)
         return str(reply.get("unchanged")).lower() != "true"
 
-    def open_design(self, path: str) -> bool:
+    def open_design(self, path: str) -> None:
         """Open the sheet or netlist at ``path`` in the attached window.
 
-        True when the window already had it open, in which case nothing is
-        read from the file: the window keeps the copy it holds. LTspice's
-        refusal of a file it cannot open is raised with what it said.
+        A window that already had it open keeps the copy it holds: nothing is
+        read from the file. LTspice's refusal of a file it cannot open is
+        raised with what it said.
         """
-        reply = self.call("open_design", path=path)
-        if reply.get("status") != "ok":
-            raise BridgeError(str(reply.get("message") or f"LTspice did not open {path}"))
-        return str(reply.get("already_open")).lower() == "true"
+        self._accepted("open_design", f"LTspice did not open {path}", path)
 
     def bring_to_front(self, path: str) -> None:
         """Put the open document or results file at ``path`` in front in its window."""

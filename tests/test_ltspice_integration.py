@@ -10,6 +10,7 @@ import math
 import os
 import shutil
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -724,7 +725,7 @@ def _open_window_skip_reason() -> str | None:
     from ltspice_mcp.lib.ltspice_bridge import bridge_command
     from ltspice_mcp.lib.simulator_build import executable_path
 
-    with __import__("tempfile").TemporaryDirectory() as scratch:
+    with tempfile.TemporaryDirectory() as scratch:
         state = _make_ltspice_state(Path(scratch))
     exe = executable_path(state.default_simulator) if state is not None else None
     if exe is None or bridge_command(exe) is None:
@@ -732,10 +733,23 @@ def _open_window_skip_reason() -> str | None:
     return None
 
 
-@pytest.mark.skipif(
-    _skip_reason is None and _open_window_skip_reason() is not None,
-    reason="no LTspice with a bridge to reach its window through",
-)
+# Asked only where the tier runs at all: the module's own mark skips the rest.
+_window_skip_reason = _open_window_skip_reason() if _skip_reason is None else None
+
+
+def _bridge_of(state: SessionState) -> list[str]:
+    """The command of the bridge beside the LTspice ``state`` runs."""
+    from ltspice_mcp.lib.ltspice_bridge import bridge_command
+    from ltspice_mcp.lib.simulator_build import executable_path
+
+    exe = executable_path(state.default_simulator)
+    assert exe is not None
+    command = bridge_command(exe)
+    assert command is not None
+    return command
+
+
+@pytest.mark.skipif(_window_skip_reason is not None, reason=_window_skip_reason or "")
 class TestSheetOpenInAWindow:
     """The stand-in bridge the suite runs is held to a recording; this is the
     recording's subject itself: a real window, the real bridge, a real edit."""
@@ -869,15 +883,11 @@ class TestSheetOpenInAWindow:
         install, they are the same documents. The summaries differ: LTspice
         takes its one from the index page's table, and each document's own
         front matter, which is what is read here, says more."""
-        from ltspice_mcp.lib.ltspice_bridge import BridgeSession, bridge_command
-        from ltspice_mcp.lib.simulator_build import executable_path
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession
         from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 
         _sheet, pid = open_sheet
-        exe = executable_path(ltspice_state.default_simulator)
-        assert exe is not None
-        command = bridge_command(exe)
-        assert command is not None
+        command = _bridge_of(ltspice_state)
 
         def as_ltspice_lists_them() -> dict[str, str]:
             with BridgeSession(command) as session:
@@ -919,9 +929,8 @@ class TestSheetOpenInAWindow:
         """A job this server ran, shown in the window: the plot settings are
         written beside the run's results, and LTspice then has those results
         in front. That it draws the traces was looked at and cannot be asked."""
-        from ltspice_mcp.lib.ltspice_bridge import BridgeSession, bridge_command
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession
         from ltspice_mcp.lib.plot_settings import read_plot_settings
-        from ltspice_mcp.lib.simulator_build import executable_path
         from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 
         _sheet, pid = open_sheet
@@ -942,10 +951,7 @@ class TestSheetOpenInAWindow:
         assert [pane.traces for pane in section.panes] == [("V(out)",)]
         assert Path(shown["plot_settings"]).with_suffix(".raw") == Path(shown["results"])
 
-        exe = executable_path(ltspice_state.default_simulator)
-        assert exe is not None
-        command = bridge_command(exe)
-        assert command is not None
+        command = _bridge_of(ltspice_state)
 
         def results_in_front() -> str:
             with BridgeSession(command) as session:
@@ -959,17 +965,13 @@ class TestSheetOpenInAWindow:
     async def test_a_checked_sheet_is_opened_in_the_window_and_put_in_front(
         self, ltspice_state: SessionState, open_sheet, work_dir: Path
     ):
-        from ltspice_mcp.lib.ltspice_bridge import BridgeSession, bridge_command
-        from ltspice_mcp.lib.simulator_build import executable_path
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession
         from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
         already_open, pid = open_sheet
         another = work_dir / "another.asc"
         await asyncio.to_thread(shutil.copyfile, already_open, another)
-        exe = executable_path(ltspice_state.default_simulator)
-        assert exe is not None
-        command = bridge_command(exe)
-        assert command is not None
+        command = _bridge_of(ltspice_state)
 
         def in_front() -> tuple[str, list[str]]:
             with BridgeSession(command) as session:
