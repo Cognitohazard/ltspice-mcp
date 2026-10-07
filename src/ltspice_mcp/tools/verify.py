@@ -80,7 +80,12 @@ from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.filelock import circuit_file_lock
-from ltspice_mcp.lib.lint_rules import deck_generator, rule_severity, value_suffix_evidence
+from ltspice_mcp.lib.lint_rules import (
+    deck_generator,
+    export_writer,
+    rule_severity,
+    value_suffix_evidence,
+)
 from ltspice_mcp.lib.netlist_diff import Deck, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
@@ -1046,8 +1051,8 @@ def _value_suffix_findings(
     A micro sign is micro to a reader that decodes the file in the encoding it
     was written in. It is a warning per value only when a reader this server
     knows of decodes it otherwise: an LTspice XVII the session drives
-    (``cp1252_reader``, from ``services.cp1252_ltspice``) or one the deck's own
-    header names as its writer, reading a file that is not cp1252. Otherwise
+    (``cp1252_reader``, from ``services.cp1252_ltspice``) or the one the deck
+    shows exported it (``export_writer``), reading a file that is not cp1252. Otherwise
     the file's micro signs are one observation, with their count and lines,
     which leaves the outcome alone. ``encoding`` is the codec the file decoded
     as. ``cards`` has its title card dropped already.
@@ -1056,8 +1061,9 @@ def _value_suffix_findings(
     if not sites:
         return []
     generated_by = deck_generator(text)
-    if cp1252_reader is None and generated_by and is_cp1252_ltspice_build(generated_by):
-        cp1252_reader = generated_by
+    writer = export_writer(text)
+    if cp1252_reader is None and writer and is_cp1252_ltspice_build(writer):
+        cp1252_reader = writer
     misread = cp1252_reader is not None and encoding != "cp1252"
     findings: list[dict[str, Any]] = []
     micro: list[ValueSuffixSite] = []
