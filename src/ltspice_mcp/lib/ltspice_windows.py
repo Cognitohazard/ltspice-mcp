@@ -25,10 +25,36 @@ from spicelib.simulators.ltspice_simulator import LTspice as _SpicelibLTspice
 
 from ltspice_mcp.lib import hidden_desktop
 
-SEE_THE_BOX = (
+_SEE_THE_BOX = (
     "To see LTspice's window and answer the box yourself, set [simulator] "
     "hidden_desktop = false (or LTSPICE_MCP_HIDDEN_DESKTOP=0) and restart"
 )
+
+
+def run_on_desktop(
+    desktop: hidden_desktop.HiddenDesktop,
+    command: list[str],
+    *,
+    timeout: float | None,
+    cwd: str | Path | None,
+    env: dict[str, str] | None = None,
+    stdout: Any = None,
+    stderr: Any = None,
+) -> int:
+    """Run an LTspice command line on ``desktop`` and return its exit code.
+
+    Every LTspice launch on a hidden desktop goes through here, so a message
+    box ends each one with the same word on how to see such a box.
+    """
+    return desktop.run(
+        command,
+        timeout=timeout,
+        cwd=cwd,
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+        remedy=_SEE_THE_BOX,
+    )
 
 
 def _switches(cmd_line_switches: list | str | None) -> list:
@@ -74,13 +100,13 @@ class LTspice(_SpicelibLTspice):
                 if exe_log
                 else None
             )
-            return desktop.run(
+            return run_on_desktop(
+                desktop,
                 command,
                 timeout=timeout,
                 cwd=cwd,
                 stdout=console,
                 stderr=subprocess.STDOUT,
-                remedy=SEE_THE_BOX,
             )
 
     @classmethod
