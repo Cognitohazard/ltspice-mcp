@@ -91,7 +91,7 @@ inputs = ["export/boilerplate.asc"]
 
 [behaviour.export-encoding]
 summary = "The bytes of an exported netlist: its encoding, its line endings, and how the micro sign is spelled, for a sheet stored in each encoding and with each Version header."
-model = ["lib/encoding.py", "lib/deck_prep.py", "lib/format.py", "tools/verify.py", "lib/spice_lex_ops.py"]
+model = ["lib/encoding.py", "lib/deck_prep.py", "lib/format.py", "tools/verify.py", "lib/spice_lex_ops.py", "lib/schematic_scene.py", "lib/schematic_ops.py", "tools/schematic_edit.py"]
 inputs = [
     "export/micro_cp1252.asc",
     "export/micro_utf8.asc",

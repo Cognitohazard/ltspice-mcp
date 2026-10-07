@@ -24,6 +24,7 @@ windows/text) while still reusing ``PinInfo`` and the rotation transform.
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import hashlib
 import math
@@ -516,6 +517,11 @@ class Scene:
     directives: list[Directive] = field(default_factory=list)
     sheet_graphics: list[Graphic] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
+    #: The byte order mark the file starts with, when it is one of the two that
+    #: neither LTspice build reads a sheet behind: "UTF-8" or "UTF-16 LE"
+    #: (``export/micro_utf8_bom`` and ``export/micro_utf16le_bom`` in the
+    #: recordings). The drawing decodes past it, so the scene keeps it here.
+    byte_order_mark: str | None = None
 
     def content_bbox(self) -> BBox | None:
         """Smallest box enclosing everything drawn, including text and glyphs.
@@ -839,7 +845,17 @@ class _AscDoc:
     sheet_rects: list[DrawRect] = field(default_factory=list)
     sheet_circles: list[DrawEllipse] = field(default_factory=list)
     sheet_arcs: list[AsyArc] = field(default_factory=list)
+    #: Each keyword the parse does not read, with the lines it is on.
+    unread: dict[str, list[int]] = field(default_factory=dict)
 
+
+# The records an LTspice sheet holds that the drawing has nothing to take from:
+# the header, a port's direction (its label is the FLAG before it) and a data
+# label's expression. Any other keyword it does not read is reported.
+_UNDRAWN_KEYWORDS = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
+_DRAWN_KEYWORDS = frozenset(
+    {"SYMBOL", "WINDOW", "SYMATTR", "WIRE", "FLAG", "TEXT", "LINE", "RECTANGLE", "CIRCLE", "ARC"}
+)
 
 _ROTATIONS = frozenset({"R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"})
 
@@ -848,12 +864,16 @@ def _parse_asc(text: str) -> _AscDoc:
     doc = _AscDoc()
     current: _RawSymbol | None = None
 
-    for raw in text.splitlines():
+    for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line:
             continue
         parts = line.split()
         kw = parts[0]
+        if kw not in _DRAWN_KEYWORDS:
+            if kw not in _UNDRAWN_KEYWORDS:
+                doc.unread.setdefault(kw, []).append(number)
+            continue
 
         if kw == "SYMBOL":
             # SYMBOL <name> <x> <y> <ROT>. The trailing token is the rotation
@@ -933,7 +953,6 @@ def _parse_asc(text: str) -> _AscDoc:
             c = _parse_shape_coords(parts, 8)
             if c is not None:
                 doc.sheet_arcs.append(AsyArc(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
-        # IOPIN / DATAFLAG / SHEET / Version: no geometry we render in V1.
 
     return doc
 
@@ -1202,6 +1221,28 @@ def _svg_anchor(align: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _refused_byte_order_mark(data: bytes) -> str | None:
+    """The mark ``data`` starts with, if it is one LTspice is recorded refusing."""
+    if data.startswith(codecs.BOM_UTF8):
+        return "UTF-8"
+    if data.startswith(codecs.BOM_UTF16_LE) and not data.startswith(codecs.BOM_UTF32_LE):
+        return "UTF-16 LE"
+    return None
+
+
+def _unread_note(keyword: str, lines: list[int]) -> str:
+    """What the drawing, and every check read from it, leaves out of a sheet."""
+    if len(lines) == 1:
+        return (
+            f"line {lines[0]}: a {keyword} record, which the drawing does not read; it is "
+            "not drawn and no check built on the drawing includes it"
+        )
+    return (
+        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which the drawing "
+        "does not read; they are not drawn and no check built on the drawing includes them"
+    )
+
+
 def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene:
     """Parse ``asc_path`` and build a fully-placed :class:`Scene`.
 
@@ -1217,7 +1258,13 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
     # something that was never drawn.
     data = asc_path.read_bytes()
     doc = _parse_asc(decode_spice_bytes(data))
-    scene = Scene(source=asc_path, source_sha256=hashlib.sha256(data).hexdigest())
+    scene = Scene(
+        source=asc_path,
+        source_sha256=hashlib.sha256(data).hexdigest(),
+        byte_order_mark=_refused_byte_order_mark(data),
+    )
+    for keyword, lines in doc.unread.items():
+        scene.diagnostics.append(_unread_note(keyword, lines))
 
     for raw in doc.symbols:
         proto = resolver.load(raw.symbol)
