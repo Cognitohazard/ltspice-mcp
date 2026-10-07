@@ -123,19 +123,20 @@ _RULES: tuple[_Rule, ...] = (
 MEAS_RESERVED_NAMES = frozenset({"e", "k", "pi", "q"})
 
 
-def _validate_meas_name(meas: MeasCard, simulator: str) -> ValidationError | None:
-    if simulator != "LTspice" or meas.name.casefold() not in MEAS_RESERVED_NAMES:
+def _validate_meas_name(card: SpiceCard, simulator: str) -> ValidationError | None:
+    name = card.name or ""
+    if simulator != "LTspice" or name.casefold() not in MEAS_RESERVED_NAMES:
         return None
     names = ", ".join(sorted(MEAS_RESERVED_NAMES))
     return ValidationError(
         rule_name="meas_reserved_name",
         message=(
-            f'"{meas.name}" is one of the constants LTspice\'s expression engine '
+            f'"{name}" is one of the constants LTspice\'s expression engine '
             f"defines ({names}), so a .meas cannot take it as a name: LTspice 26 "
             "refuses the deck and runs nothing, and LTspice XVII skips the "
             "measurement."
         ),
-        suggestion=f"Rename the measurement, for example to {meas.name}_meas.",
+        suggestion=f"Rename the measurement, for example to {name}_meas.",
     )
 
 
@@ -352,24 +353,28 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     meas_cards = [c for c in cards if c.kind == "meas"]
     if not meas_cards:
         return None
-    try:
-        meas = MeasCard.from_card(meas_cards[0])
-    except SpiceLexError:
-        return None
-
-    if (error := _validate_meas_name(meas, simulator)) is not None:
+    if (error := _validate_meas_name(meas_cards[0], simulator)) is not None:
         return error
+    refused = meas_functions_refused(meas_cards[0], simulator)
+    return refused[0][1] if refused else None
+
+
+def meas_functions_refused(
+    card: SpiceCard, simulator: str = "LTspice"
+) -> list[tuple[str, ValidationError]]:
+    """Each function a lexed ``.meas`` card calls that ``simulator`` does not
+    take in a measurement, with its error, in rule order."""
+    try:
+        meas = MeasCard.from_card(card)
+    except SpiceLexError:
+        return []
     called = {fc.name.lower() for fc in meas.function_calls}
-    for rule in _RULES:
-        if rule.simulators and simulator not in rule.simulators:
-            continue
-        if rule.blocked_function.lower() in called:
-            return ValidationError(
-                rule_name=rule.name,
-                message=rule.message,
-                suggestion=rule.suggestion,
-            )
-    return None
+    return [
+        (rule.blocked_function, ValidationError(rule.name, rule.message, rule.suggestion))
+        for rule in _RULES
+        if (not rule.simulators or simulator in rule.simulators)
+        and rule.blocked_function.lower() in called
+    ]
 
 
 # The checks ``validate_netlist_arity`` runs, each with the severity of every

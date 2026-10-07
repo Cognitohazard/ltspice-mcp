@@ -933,6 +933,12 @@ async def _prepare_circuit(
             # ngspice's Windows file reader cannot open the long paths produced
             # by the full PDK layout. Compact only the audited pinned models.
             compact_digests = frozenset((await asyncio.to_thread(profile_pins)).values())
+        # A micro sign spelled 'u' changes what a value means only to an
+        # LTspice that decodes decks as cp1252, so only then is it reported.
+        # The identity is cached per executable, so this is a stat here.
+        cp1252_reader = cp1252_ltspice(
+            state, await asyncio.to_thread(executable_identity, simulator)
+        )
         staged = await asyncio.to_thread(
             stage_deck,
             runnable,
@@ -951,12 +957,7 @@ async def _prepare_circuit(
             # so without this no transistor sheet stages under a default
             # sandbox. Resolved per run from the simulator this job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
-            # A micro sign spelled 'u' changes what a value means only to an
-            # LTspice that decodes decks as cp1252, so only then is it reported.
-            # The identity is cached per executable, so this is a stat here.
-            cp1252_reader=cp1252_ltspice(
-                state, await asyncio.to_thread(executable_identity, simulator)
-            ),
+            cp1252_reader=cp1252_reader,
         )
         findings = (
             []
@@ -972,8 +973,13 @@ async def _prepare_circuit(
                 # staging route the deck's rewritten references cannot be
                 # re-read from the Linux side, and a model defined in an
                 # include must not lint as missing.
-                includes=[(included.staged_path, included.text) for included in staged.includes],
+                includes=[
+                    (included.staged_path, included.text, included.codec)
+                    for included in staged.includes
+                ],
                 ngbehavior=NGBEHAVIOR if native is not None else None,
+                codec=staged.codec,
+                cp1252_reader=cp1252_reader,
             )
         )
         source = SourceRecord(

@@ -68,14 +68,14 @@ _SCALE_FACTORS: list[tuple[str, float]] = [
     ("f", 1e-15),
 ]
 
-# Numeric prefix + optional alpha tail. The tail covers both the scale suffix
-# ('k', 'meg', ...) and any unit annotation that follows it ('1ms' -> tail
-# 'ms', '1uF' -> tail 'uf'). Anchored so '1k1' or 'foo' don't slip through.
-# The micro sign (µ, U+00B5) is how LTspice's exporter spells 'u' in a
-# netlist, and the Greek mu (μ, U+03BC) is what a keyboard produces; both are
-# admitted to the tail and folded to 'u' before the suffix table is read.
+# A number followed by a tail that starts with a letter. The micro sign (µ,
+# U+00B5) is how LTspice's exporter spells 'u' in a netlist, and the Greek mu
+# (μ, U+03BC) is what a keyboard produces; both are folded to 'u' before the
+# suffix table is read.
 _MANTISSA = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
-_NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ]+)$")
+_NUM_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ].*)$")
+# A number followed by letters only, for the plain reading.
+_LETTER_TAIL_RE = re.compile(rf"^({_MANTISSA})([a-zA-Zµμ]+)$")
 # A number with at most a scale suffix and nothing after it.
 _SCALED_NUMBER_RE = re.compile(
     rf"{_MANTISSA}(?:{'|'.join(suffix for suffix, _ in _SCALE_FACTORS)})?", re.IGNORECASE
@@ -89,7 +89,7 @@ def is_scaled_number(text: str) -> bool:
     """``text`` is a SPICE number with at most a scale suffix (``8``, ``2.5k``,
     ``1meg``) and nothing after it.
 
-    Stricter than ``parse_spice_value``, which also reads a unit after the
+    Stricter than ``parse_plain_value``, which also reads a unit after the
     suffix (``1uF``) and so would take a name such as ``2NPN`` for a number.
     """
     return _SCALED_NUMBER_RE.fullmatch(text) is not None
@@ -103,50 +103,79 @@ def fold_micro_sign(text: str) -> str:
 
 
 def parse_spice_value(s: str) -> float:
-    """Parse a SPICE notation value to float.
+    """Parse a SPICE value to a float, as LTspice reads it.
 
-    Handles scale factors (case-insensitive): T, G, Meg, k, mil, m, u, n, p, f.
-    'mil' is 25.4e-6 (one thousandth of an inch in metres).
-    Per SPICE convention, both 'm' and 'M' mean milli (1e-3); mega is 'Meg'.
-    Trailing unit annotations after a recognised suffix are ignored, so
-    '1ms', '1uF', '10MegHz', '1mV' all parse — '1ms' is treated as 1e-3
-    (milli + seconds annotation), not as an unknown suffix.
+    A scale suffix follows the number, in any case: T, G, Meg, k, mil, m, u,
+    n, p, f, with 'mil' 25.4e-6 and both 'm' and 'M' milli (mega is 'Meg').
+    What follows is read the way LTspice 26 and XVII were recorded reading
+    it (``tests/test_recorded_ltspice_decks.py``):
 
-    Examples: '1k' -> 1000.0, '10Meg' -> 1e7, '4.7u' -> 4.7e-6,
-    '1K' -> 1000.0, '1ms' -> 1e-3, '10MegHz' -> 1e7
-
-    Args:
-        s: Value string (with or without scale factor and unit annotation)
-
-    Returns:
-        Parsed float value
+    - digits right after a suffix are the fraction it stands in for, and an
+      'R' does the same with no scale: '1k5' is 1500, '4R7' is 4.7, '2M2' is
+      2.2e-3;
+    - any other letters end the number, and the rest is skipped: '1uF' is
+      1e-6, '10MegHz' 1e7, '1MHz' a millihertz, '2Hz' 2, '9V1' 9.
 
     Raises:
-        ValueError: If string cannot be parsed as a number, or if there is
-            a trailing alpha tail with no recognised SPICE suffix at its
-            start (e.g. '1Hz', '1ohm' — no suffix, only a unit).
+        ValueError: If ``s`` does not start with a number, or the number is
+            followed by something other than a letter (``8%``).
     """
     s = s.strip()
 
-    # Try direct float conversion first
     try:
         return float(s)
     except ValueError:
         pass
 
     m = _NUM_TAIL_RE.match(s)
-    if m is not None:
-        # group(1) is always a valid float literal by construction of the regex.
-        mantissa = float(m.group(1))
-        tail = fold_micro_sign(m.group(2)).lower()
-        for suffix, multiplier in _SCALE_FACTORS:
-            if tail.startswith(suffix):
-                return mantissa * multiplier
-
-    raise ValueError(
-        f"Cannot parse '{s}' as SPICE value. "
-        f"Expected number or number with suffix: {', '.join(suf for suf, _ in _SCALE_FACTORS)}"
+    if m is None:
+        raise ValueError(
+            f"Cannot parse '{s}' as SPICE value. Expected a number, optionally followed "
+            f"by a suffix: {', '.join(suf for suf, _ in _SCALE_FACTORS)}"
+        )
+    # group(1) is always a valid float literal by construction of the regex.
+    mantissa = m.group(1)
+    tail = fold_micro_sign(m.group(2)).lower()
+    # No scale suffix starts with 'r', so where it stands in the list is moot.
+    suffix, multiplier = next(
+        (
+            (suffix, scale)
+            for suffix, scale in (*_SCALE_FACTORS, ("r", 1.0))
+            if tail.startswith(suffix)
+        ),
+        ("", 1.0),
     )
+    rest = tail[len(suffix) :]
+    digits = rest[: len(rest) - len(rest.lstrip("0123456789"))]
+    if digits and mantissa.isdigit():
+        return float(f"{mantissa}.{digits}") * multiplier
+    return float(mantissa) * multiplier
+
+
+def parse_plain_value(s: str) -> float:
+    """A value written the way every SPICE reads it, as a float.
+
+    A number, a scale suffix if any, and letters after the suffix (``1k``,
+    ``4.7uF``, ``10MegHz``). Not LTspice's further readings: digits after a
+    suffix and a bare unit are refused, so a name such as ``2N2222`` or
+    ``1N4148`` is not a number here. For a caller that tells a value from a
+    name; ``parse_spice_value`` is the reading of a value LTspice will run.
+
+    Raises:
+        ValueError: If ``s`` is not written that way.
+    """
+    s = s.strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    m = _LETTER_TAIL_RE.match(s)
+    if m is not None:
+        tail = fold_micro_sign(m.group(2)).lower()
+        for suffix, scale in _SCALE_FACTORS:
+            if tail.startswith(suffix):
+                return float(m.group(1)) * scale
+    raise ValueError(f"Cannot read '{s}' as a number with a scale suffix")
 
 
 def unique_name(

@@ -71,12 +71,13 @@ verdict is unaffected.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TypeVar
 
 from ltspice_mcp.lib.deck_staging import resolve_reference
-from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
+from ltspice_mcp.lib.format import fold_micro_sign, parse_plain_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
     SpiceCard,
@@ -306,6 +307,19 @@ class ComponentDelta:
 
 
 @dataclass(frozen=True)
+class RenamedInstance:
+    """A subcircuit instance matched across the ``X`` LTspice puts in front of it.
+
+    LTspice exports a subcircuit symbol's instance with an ``X`` before its
+    name whatever the name is: ``Xe`` is ``X§Xe`` from LTspice 24 on and ``XXe``
+    from XVII. A netlist written by hand names it ``Xe``. Not a difference.
+    """
+
+    reference_ref: str
+    candidate_ref: str
+
+
+@dataclass(frozen=True)
 class RetypeDiff:
     """A matched component whose element type or model/subckt name changed."""
 
@@ -366,11 +380,37 @@ class AnchorViolation:
 
 @dataclass(frozen=True)
 class ArityError:
-    """A matched component whose terminal count differs between the two sides."""
+    """A terminal count that does not agree, with what disagrees in ``detail``.
+
+    Two cases. A component matched across the two sides with a different
+    terminal count: ``side`` is None and the arities are the two sides'. A
+    subcircuit instance whose node count is not its subcircuit's port count,
+    within one netlist: ``side`` names that netlist, ``reference_arity`` is the
+    instance's node count and ``candidate_arity`` the subcircuit's port count.
+    """
 
     ref: str
     reference_arity: int
     candidate_arity: int
+    detail: str
+    side: str | None = None
+
+
+def _instance_port_detail(
+    ref: str, nodes: tuple[str, ...], subckt: str, ports: tuple[str, ...]
+) -> str:
+    detail = (
+        f"{ref} connects {len(nodes)} node(s) ({', '.join(nodes)}) but subcircuit "
+        f"{subckt} declares {len(ports)} port(s) ({', '.join(ports)})."
+    )
+    repeated = [node for node in nodes if node.casefold() == subckt.casefold()]
+    if repeated:
+        detail += (
+            f" Node {repeated[0]!r} is the subcircuit's own name, so the card names "
+            "the subcircuit twice, as a symbol does that gives the name both as its "
+            "value and as its model."
+        )
+    return detail
 
 
 @dataclass
@@ -388,6 +428,8 @@ class GraphComparison:
     structurally_equivalent: bool
     added: list[ComponentDelta] = field(default_factory=list)
     removed: list[ComponentDelta] = field(default_factory=list)
+    # Fact-level, like the subckt facts below: a pairing, not a difference.
+    renamed: list[RenamedInstance] = field(default_factory=list)
     retyped: list[RetypeDiff] = field(default_factory=list)
     value_mismatches: list[ValueDiff] = field(default_factory=list)
     param_mismatches: list[ParamDiff] = field(default_factory=list)
@@ -406,6 +448,7 @@ class GraphComparison:
             "structurally_equivalent": self.structurally_equivalent,
             "added": [vars(d) for d in self.added],
             "removed": [vars(d) for d in self.removed],
+            "renamed": [vars(d) for d in self.renamed],
             "retyped": [vars(d) for d in self.retyped],
             "value_mismatches": [vars(d) for d in self.value_mismatches],
             "param_mismatches": [vars(d) for d in self.param_mismatches],
@@ -472,7 +515,7 @@ def values_equal(a: str | None, b: str | None, rtol: float) -> bool:
         return a == b
     na, nb = _normalize_value_text(a), _normalize_value_text(b)
     try:
-        va, vb = parse_spice_value(na), parse_spice_value(nb)
+        va, vb = parse_plain_value(na), parse_plain_value(nb)
     except ValueError:
         return " ".join(na.lower().split()) == " ".join(nb.lower().split())
     if va == vb:
@@ -888,8 +931,8 @@ def _expand(
     sub = subckts[model_key]
     if len(comp.nodes) != len(sub.ports):
         raise PortArityMismatch(
-            f"port-arity mismatch: instance {comp.ref} connects {len(comp.nodes)} node(s) "
-            f"but .SUBCKT {sub.name} declares {len(sub.ports)} port(s)",
+            "port-arity mismatch: "
+            + _instance_port_detail(comp.ref, tuple(comp.nodes), sub.name, tuple(sub.ports)),
             line=comp.line,
         )
     if model_key in stack:
@@ -960,8 +1003,8 @@ def compare_graphs(
     cand = _coerce_capturing_arity(candidate)
 
     result = GraphComparison(equivalent=False, structurally_equivalent=False)
-    result.arity_errors.extend(ref.arity_errors)
-    result.arity_errors.extend(cand.arity_errors)
+    result.arity_errors.extend(replace(e, side="reference") for e in ref.arity_errors)
+    result.arity_errors.extend(replace(e, side="candidate") for e in cand.arity_errors)
 
     ref_flat = ref.flat
     cand_flat = cand.flat
@@ -977,6 +1020,8 @@ def compare_graphs(
     # --- per-component diffs, by reference-name matching ----------------------
     ref_by_ref = {canon_ref(c.ref): c for c in ref_flat.components}
     cand_by_ref = {canon_ref(c.ref): c for c in cand_flat.components}
+    cand_by_ref, paired = rekey_across_added_x(ref_by_ref, cand_by_ref)
+    result.renamed = _renamed_instances(ref_by_ref, cand_by_ref, paired)
 
     for key, rc in ref_by_ref.items():
         if key not in cand_by_ref:
@@ -1017,6 +1062,63 @@ def compare_graphs(
         and not result.arity_errors
     )
     return result
+
+
+_V = TypeVar("_V")
+
+
+def _without_added_x(key: str) -> str:
+    """A reference key with the ``X`` LTspice adds taken off each instance
+    segment (``xxe.r1`` is ``xe.r1``)."""
+    return ".".join(seg[1:] if seg.startswith("xx") else seg for seg in key.split("."))
+
+
+def rekey_across_added_x(
+    reference: Mapping[str, object], candidate: Mapping[str, _V]
+) -> tuple[dict[str, _V], list[str]]:
+    """``candidate`` with each key that matches a reference key only across
+    LTspice's added ``X`` re-keyed to that reference key, and those keys.
+
+    LTspice exports a subcircuit symbol's instance with an ``X`` before its
+    name whatever the name is: ``Xe`` is ``X§Xe`` from LTspice 24 on and ``XXe``
+    from XVII, where a netlist written by hand names it ``Xe``. Keys are
+    :func:`canon_ref` keys, hierarchical ones included. Only keys left unmatched
+    by name on both sides are paired, and only one to one, so a netlist that
+    really holds both ``Xe`` and ``XXe`` is compared by name. The re-keyed
+    reference keys come back sorted.
+    """
+
+    def unmatched(keys: Iterable[str], others: Mapping[str, object]) -> dict[str, list[str]]:
+        grouped: dict[str, list[str]] = {}
+        for key in keys:
+            if key not in others:
+                grouped.setdefault(_without_added_x(key), []).append(key)
+        return grouped
+
+    by_reference = unmatched(reference, candidate)
+    rekeyed = dict(candidate)
+    paired: list[str] = []
+    for stripped, cand_keys in unmatched(candidate, reference).items():
+        ref_keys = by_reference.get(stripped, [])
+        if len(cand_keys) == 1 and len(ref_keys) == 1:
+            rekeyed[ref_keys[0]] = rekeyed.pop(cand_keys[0])
+            paired.append(ref_keys[0])
+    return rekeyed, sorted(paired)
+
+
+def _renamed_instances(
+    ref_by_ref: dict[str, FlatComponent], cand_by_ref: dict[str, FlatComponent], paired: list[str]
+) -> list[RenamedInstance]:
+    """Each instance a paired leaf's path renames, named once."""
+    renamed: dict[tuple[str, str], RenamedInstance] = {}
+    for key in paired:
+        segments = zip(
+            ref_by_ref[key].ref.split("."), cand_by_ref[key].ref.split("."), strict=False
+        )
+        for ref_seg, cand_seg in segments:
+            if canon_ref(ref_seg) != canon_ref(cand_seg):
+                renamed.setdefault((ref_seg, cand_seg), RenamedInstance(ref_seg, cand_seg))
+    return sorted(renamed.values(), key=lambda d: canon_ref(d.reference_ref))
 
 
 def _unresolved_records(ref: _FlattenOutcome, cand: _FlattenOutcome) -> list[UnresolvedSubckt]:
@@ -1127,11 +1229,15 @@ def _expand_lenient(
         assert model_key is not None
         sub = subckts[model_key]
         if len(comp.nodes) != len(sub.ports):
+            ref = ".".join((*path, comp.ref))
             arity.append(
                 ArityError(
-                    ref=".".join((*path, comp.ref)),
+                    ref=ref,
                     reference_arity=len(comp.nodes),
                     candidate_arity=len(sub.ports),
+                    detail=_instance_port_detail(
+                        ref, tuple(comp.nodes), comp.model or model_key, tuple(sub.ports)
+                    ),
                 )
             )
             is_expandable = False
@@ -1189,6 +1295,11 @@ def _diff_matched_pair(
                 ref=rc.ref,
                 reference_arity=len(rc.nodes),
                 candidate_arity=len(cc.nodes),
+                detail=(
+                    f"{rc.ref} has {len(rc.nodes)} terminal(s) in the reference "
+                    f"({', '.join(rc.nodes)}) and {len(cc.nodes)} in the candidate "
+                    f"({', '.join(cc.nodes)})."
+                ),
             )
         )
     if _type_signature(rc).lower() != _type_signature(cc).lower():
