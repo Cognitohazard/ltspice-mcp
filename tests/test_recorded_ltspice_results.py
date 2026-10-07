@@ -523,23 +523,18 @@ def test_a_fourier_block_is_read_with_its_harmonics_and_distortion(build: str, t
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_the_number_after_a_fourier_frequency_is_the_harmonic_count(build: str):
+def test_the_number_after_a_fourier_frequency_is_the_harmonic_count(build: str, tmp_path: Path):
     """The deck has ``.four 1k V(out)`` and ``.four 1k 5 V(in)`` on a run five
     periods long. The 5 makes V(in)'s table five harmonics where V(out)'s has
     the default nine, and leaves both on one period: read as a period count it
     would have printed ``N-Period=5`` beside nine harmonics. No deck here gives
     a second number, so the period count's place is not recorded."""
+    fourier = rec.decode_log(build, "log/fourier", tmp_path).value("fourier")
+    counts = {block["signal"].lower(): len(block["harmonics"]) for block in fourier}
+    assert counts == {"v(out)": 9, "v(in)": 5}
+    # The decoder does not keep the period count, so it is read off the log.
     text = read_spice_text(rec.recorded(build, "log/fourier.log"))
-    # LTspice 26 prints N-Period under the table's heading, XVII above it.
-    heads = list(re.finditer(r"Fourier components of (\S+)", text))
-    tables = {}
-    for head, nxt in zip(heads, [*heads[1:], None], strict=True):
-        body = text[head.end() : nxt.start() if nxt else len(text)]
-        periods = re.findall(r"N-Period=(\d+)", text[max(0, head.start() - 20) : head.start()])
-        periods += re.findall(r"N-Period=(\d+)", body[:20])
-        rows = re.findall(r"^\s+(\d+)\s+\t", body, re.M)
-        tables[head.group(1).lower()] = (periods, len(rows))
-    assert tables == {"v(out)": (["1"], 9), "v(in)": (["1"], 5)}
+    assert re.findall(r"N-Period=(\d+)", text) == ["1", "1"]
 
 
 def _fourier_phases(build: str, signal: str, scratch: Path) -> dict[int, tuple[float, float]]:
@@ -583,7 +578,7 @@ def test_no_constant_offset_turns_one_builds_fourier_phase_into_the_others(tmp_p
     for n in strong:
         assert abs(wrapped(current[n][1] - (90.0 - xvii[n][1]))) < 2.0, n
         offset_miss = abs(wrapped(current[n][1] - (xvii[n][1] + 90.0)))
-        assert offset_miss > 178.0 if n % 2 == 0 else offset_miss < 2.0, n
+        assert abs(offset_miss - (180.0 if n % 2 == 0 else 0.0)) < 2.0, n
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

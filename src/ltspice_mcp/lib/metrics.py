@@ -157,21 +157,28 @@ def parse_time(s: str | None, name: str) -> float | None:
     return v
 
 
-def parse_freq(s: str, name: str = "frequency") -> float:
+def parse_freq(s: str | float, name: str = "frequency") -> float:
     """Parse a SPICE-notation frequency into a finite positive float.
 
     Tolerates a trailing ``Hz`` unit — ``'159Hz'`` and ``'15.9kHz'`` are the
     natural way to write a frequency, but the SPICE value parser only knows SI
     prefixes (k, meg, …). Strip a trailing ``hz`` before parsing so the unit is
     accepted rather than rejected with a confusing error.
+
+    A number is taken as given, never through SPICE text: ``spice_text``
+    rounds to ten digits, which moves a phase referred to t = 0 by up to
+    360 * f * t * 5e-10 degrees.
     """
-    cleaned = s.strip()
-    if cleaned[-2:].lower() == "hz":
-        cleaned = cleaned[:-2].strip()
-    try:
-        v = parse_spice_value(cleaned)
-    except ValueError as e:
-        raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
+    if isinstance(s, str):
+        cleaned = s.strip()
+        if cleaned[-2:].lower() == "hz":
+            cleaned = cleaned[:-2].strip()
+        try:
+            v = parse_spice_value(cleaned)
+        except ValueError as e:
+            raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
+    else:
+        v = float(s)
     if not math.isfinite(v):
         raise ResultError(f"{name} must be finite, got {s!r}")
     if v <= 0:
@@ -1744,14 +1751,7 @@ async def tone(
     t_start, t_end = window_bounds(recipe.window)
     axis, wave = await load_real_signal(source, recipe.signal, step, state)
     t, y, _ = apply_window(axis, wave, t_start, t_end)
-    # A number is taken as given: the phase is referred to t = 0, so a
-    # frequency rounded to ten digits on its way through SPICE text would move
-    # it by up to 360 * f * t_start * 5e-10 degrees.
-    frequency = (
-        parse_freq(recipe.frequency_hz, "frequency_hz")
-        if isinstance(recipe.frequency_hz, str)
-        else float(recipe.frequency_hz)
-    )
+    frequency = parse_freq(recipe.frequency_hz, "frequency_hz")
     data = await run_metric(source, state, analyze_tone, t, y, frequency)
     data["signal"] = recipe.signal
     await _label_unit(source, recipe.signal, data, state)
