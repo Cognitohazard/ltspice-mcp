@@ -591,7 +591,16 @@ such a run simulates is recorded: the recorder makes its run with the window
 holding one resistor value and the file another, and notes which the netlist
 beside the sheet carries, and that the sheet was not written.
 
-A third observation is behind a refusal. Handed a document with a NUL
+A third is what makes replacing a window's copy safe to do unasked: the
+replaced sheet is one step of the window's undo history. Undo is a key press,
+which the bridge has no call for, so it was posted to the sheet's view on the
+hidden desktop, with the Control key down in that window's own key state
+(`AttachThreadInput`, then `SetKeyboardState`), and the window's copy read
+back through the bridge. After two sheets pushed one after the other, one
+Ctrl+Z gave back the first, a second the sheet as opened, and Ctrl+Shift+Z the
+first again, with the file never written.
+
+A fourth observation is behind a refusal. Handed a document with a NUL
 character in it, LTspice 26.1.1 stops answering for good, which in a window is
 every document a person has open; it was seen by pushing a UTF-16 sheet read as
 an 8-bit one. The client refuses to send such text (`replace_design_text`), so

@@ -356,6 +356,11 @@ summary = "That a window holds its own copy of a sheet: how that copy differs in
 model = ["lib/ltspice_window.py", "tools/schematic_edit.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded (sheets/ and conversation.json), recorded from LTspice 26.1 by tests/ltspice_bridge_recorder.py, which needs a window and so is a recorder of its own; LTspice XVII has no bridge to ask"
 
+[behaviour.pushed-sheet-undo]
+summary = "That a sheet put into a window is one step of that window's undo history: Undo gives back the sheet the window held before, one push at a time, and Redo puts it back."
+model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
+unrecordable = "Undo is a key press in the window, and the bridge has no call for it. It was looked at on LTspice 26.1.1, on a desktop of its own: two changed sheets were put into a window one after the other, Ctrl+Z was posted to the sheet's view with the Control key down in that window's own key state, and the window's copy was read back through the bridge after each. One Ctrl+Z gave back the first pushed sheet, a second the sheet as opened, and Ctrl+Shift+Z the first pushed sheet again. The file was never written."
+
 [behaviour.bridge-replies]
 summary = "What ltspice-mcp-bridge.exe answers to each call the server makes, that started with --ltspice-path naming no file it attaches to a window and its launch of an LTspice fails, and that it reaches a window on a desktop it is not on."
 model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
