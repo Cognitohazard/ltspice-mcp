@@ -631,6 +631,25 @@ def test_a_failed_run_is_classified_by_its_cause(build: str, case_id: str):
     assert classify_failure_code(errors) == FAILURES[case_id]
 
 
+#: Runs both builds refused before they began: the log has no "Circuit:"
+#: line, and gives the reason as a parse or fatal error.
+REFUSED_BEFORE_THE_RUN = ["log/err_missing_include", "log/err_missing_lib", "deck/lib_section"]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(REFUSED_BEFORE_THE_RUN)))
+def test_a_run_refused_before_it_began_reports_why_not_a_parse_failure(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Such a log holds no measurement or Fourier block, so both are absent
+    and the diagnostics carry the reason. spicelib's complaint that the log
+    lacks its header is not an answer to give the caller."""
+    assert "Circuit:" not in read_spice_text(rec.recorded(build, f"{case_id}.log"))
+    logs = rec.decode_log(build, case_id, tmp_path)
+    for name in ("measurements", "fourier"):
+        assert logs.section(name)["status"] == "absent", name
+    assert logs.value("diagnostics")["errors"]
+
+
 #: Decks LTspice refuses whose log gives the reason on a line of its own, with
 #: no "Error" in front on LTspice 26 and "Fatal Error:" in front on XVII.
 REASON_ON_A_BARE_LINE = {
