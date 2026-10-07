@@ -69,7 +69,18 @@ continue them with `+`.
 Boolean: >0.5 is True, ≤0.5 is False.
 
 **Math functions:**
-- Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y,x)`, `hypot(y,x)`
+- Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y,x)`, `hypot(y,x)`.
+  In a B source an angle is in radians. Inside a `.meas` it is in degrees on
+  the default settings of LTspice 26 and XVII: `atan2(1,1)` is 45 there and
+  `cos(pi)` is 0.998497, the cosine of 3.14 degrees, so
+  `INTEG V(out)*cos(2*pi*f*time)` integrates against a waveform 57 times
+  slower than meant. `ph()` in a `.meas` gives degrees too. The `.meas` unit
+  is a per-user setting, "Use radian measure in waveform expressions", so the
+  deck does not decide it. Compute the trig in a B source and measure its
+  node (`B1 x 0 V=V(out)*cos(2*pi*f*time)`, then `.meas tran r INTEG V(x)`),
+  or work out an angle from measured values after the run. `run_experiments`
+  refuses a `.meas` that calls a trig function (lint `meas-trig-degrees`) and
+  `verify_circuit` reports it (`meas_trig_degrees`).
 - Hyperbolic: `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
 - Exp/log: `exp`, `ln`, `log` (base e), `log10`
 - Power: `sqrt`, `pow(x,y)`, `pwr(x,y)` (sign-preserving), `pwrs(x,y)`, `square`
@@ -197,6 +208,11 @@ C1 out 0 {C}
   an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`) is a
   warning, read as the bare number. These checks run on a netlist and on an
   `.asc`'s exported netlist.
+- **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
+  engine and cannot name a measurement. LTspice 26 refuses the whole deck and
+  XVII skips that measurement; the directive check behind `verify_circuit`'s
+  `syntax` check and `edit_schematic`'s directives refuses them
+  (`meas_reserved_name`). `time`, `temp` and `boltz` are accepted.
 - **Values**: digits after a scale letter or `R` are the fraction (`1k5` is
   1500, `4R7` is 4.7, `2M2` is 2.2m), and any other letters after the number
   are ignored (`2Hz` is 2, `9V1` is 9). `M` is milli wherever it stands, so

@@ -83,6 +83,11 @@ class TestVdbInMeas:
         assert err is not None
         assert err.rule_name == "vdb_in_meas"
 
+    def test_vdb_after_an_operator_blocked(self):
+        err = validate_directive(".meas AC g FIND 2*vdb(out) AT 1k")
+        assert err is not None
+        assert err.rule_name == "vdb_in_meas"
+
     def test_vdb_case_insensitive(self):
         assert validate_directive(".MEAS AC peak MAX VDB(out)") is not None
         assert validate_directive(".Meas AC peak MAX VdB(out)") is not None
@@ -113,6 +118,26 @@ class TestGroupDelayInMeas:
         err = validate_directive(".meas AC gd FIND group_delay(V(out)) AT 1k")
         assert err is not None
         assert err.rule_name == "group_delay_in_meas"
+
+
+class TestMeasReservedName:
+    """e, k, pi and q are constants of LTspice's expression engine (recorded:
+    test_recorded_ltspice_results.py::test_a_measurement_named_for_a_constant)."""
+
+    @pytest.mark.parametrize("name", ["e", "k", "pi", "q", "K", "Pi"])
+    def test_a_constant_is_refused_as_a_name(self, name: str):
+        err = validate_directive(f".meas tran {name} MAX V(out)")
+        assert err is not None
+        assert err.rule_name == "meas_reserved_name"
+        assert f'"{name}"' in err.message
+        assert f"{name}_meas" in err.suggestion
+
+    @pytest.mark.parametrize("name", ["time", "temp", "boltz", "kk", "pi2", "qx"])
+    def test_other_names_are_accepted(self, name: str):
+        assert validate_directive(f".meas tran {name} MAX V(out)") is None
+
+    def test_ngspice_is_not_held_to_it(self):
+        assert validate_directive(".meas tran k MAX V(out)", "ngspice") is None
 
 
 class TestTranTstepZero:

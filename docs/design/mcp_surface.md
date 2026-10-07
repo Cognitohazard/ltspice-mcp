@@ -1561,7 +1561,11 @@ Only deterministic harvested failures block. Suppression is per call, and
 
 Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (warning,
 ngspice: the deck runs and only the top-level `.meas` is skipped, which the run
-relays when it is read), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
+relays when it is read), `meas-trig-degrees` (blocking, LTspice: a `.meas`
+that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle
+LTspice 26 and XVII read in degrees on their default settings where a B source
+reads radians; `verify_circuit`'s `syntax` check reports the same as
+`meas_trig_degrees`), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
 mode), three LTspice refusals recorded on LTspice 26 and XVII, each blocking —
 `analysis-count-ltspice` (two of `.tran`/`.ac`/`.dc`/`.noise`; `.op` may sit
 beside one), `meas-function-ltspice` (`vdb()`, `phase()` or `group_delay()` in a
