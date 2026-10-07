@@ -357,7 +357,7 @@ def test_unsupported_execution_refused(adapter_module, tmp_path, change):
 class _Desktop:
     """The hidden desktop's launch, recorded instead of started."""
 
-    def __init__(self, outcome=0):
+    def __init__(self, outcome: int | BaseException = 0):
         self.calls: list[tuple[list[str], dict]] = []
         self._outcome = outcome
 
