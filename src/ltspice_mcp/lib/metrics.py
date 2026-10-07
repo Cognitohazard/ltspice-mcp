@@ -116,6 +116,7 @@ from ltspice_mcp.lib.signal_analysis import (
     time_weighted_quantiles,
     window_and_clean,
 )
+from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
 from ltspice_mcp.state import SessionState
 
 #: One metric's answer. See the module docstring for why this is not a
@@ -1125,7 +1126,55 @@ async def measurements(
                 entry["at"] = crossings[0]
     if recipe.names is not None:
         stats = {name: entry for name, entry in stats.items() if name in recipe.names}
-    return {"stats": stats}
+    data: MetricValue = {"stats": stats}
+    observations = await _zeros_a_failed_step_prints(source, parsed, set(stats))
+    if observations:
+        data["observations"] = observations
+    return data
+
+
+async def _zeros_a_failed_step_prints(
+    source: services.AnalysisSource, parsed: MeasurementsOutput, names: set[str]
+) -> list[dict[str, Any]]:
+    """Name the steps that read exactly 0 on a build that prints 0 for a failure.
+
+    In a stepped measurement table LTspice 24 and later print ``failed`` for a
+    step whose measurement could not be taken; LTspice XVII and earlier print
+    ``0``, which the log does not tell apart from a measurement that is 0. The
+    build is the one the run named in its own output, read from the head of
+    its log or raw. Every exact zero is named, as a fact for the caller to
+    weigh: a true zero and a failure read the same here.
+    """
+    measurements = parsed.get("measurements") or {}
+    if (parsed.get("step_count") or 0) < 2 or not measurements:
+        return []
+    zeros = {
+        name: [index for index, value in enumerate(entry.get("values") or []) if value == 0]
+        for name, entry in measurements.items()
+        if name in names
+    }
+    zeros = {name: steps for name, steps in zeros.items() if steps}
+    if not zeros:
+        return []
+    build = await asyncio.to_thread(reported_build, source.log, source.raw)
+    if build is None or not is_cp1252_ltspice_build(build):
+        return []
+    listed = "; ".join(
+        f"{name} at step(s) {', '.join(map(str, steps))}" for name, steps in zeros.items()
+    )
+    return [
+        {
+            "code": "measurement_zero_or_failed",
+            "kind": "value",
+            "detail": (
+                f"This run was written by {build}, which prints 0 in a stepped "
+                f"measurement table for a step whose measurement failed, where "
+                f"LTspice 24 and later print 'failed'. These read exactly 0 and "
+                f"may be failures: {listed} (0-based steps)."
+            ),
+            "evidence": {"build": build, "zero_steps": zeros},
+        }
+    ]
 
 
 async def value(

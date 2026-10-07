@@ -17,6 +17,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 
+from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
@@ -35,6 +36,8 @@ from ltspice_mcp.lib.raw_parser import (
     raw_writer_command,
     read_partial_raw_progress,
 )
+from ltspice_mcp.lib.recipes import MeasurementsRecipe
+from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 
@@ -488,6 +491,31 @@ class TestMeasurements:
             [1e3 * 100e-9 * math.log(2), 2e3 * 100e-9 * math.log(2)], abs=3e-6
         )
         assert crossing[2] == (0.0 if rec.generation(build) == "xvii" else None)
+
+    async def test_a_zero_xvii_may_have_printed_for_a_failure_is_named(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The measurements recipe names the steps that read exactly 0 when the
+        run's own output says XVII wrote it, and stays silent for LTspice 26,
+        which prints ``failed``. The raw beside the log is one the same build
+        wrote; XVII names itself only in a raw's ``Command:`` line."""
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        raw = log.with_suffix(".raw")
+        raw.write_bytes(rec.recorded(build, "deck/after_end.raw").read_bytes())
+        result = await metrics.measurements(
+            services.source_for_raw_path(raw, state_no_sim),
+            MeasurementsRecipe(key="meas", metric="measurements"),
+            None,
+            state_no_sim,
+        )
+        if rec.generation(build) == "xvii":
+            (observation,) = result["observations"]
+            assert observation["code"] == "measurement_zero_or_failed"
+            assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+        else:
+            assert "observations" not in result
+            assert result["stats"]["s_when"]["failure_count"] == 1
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
