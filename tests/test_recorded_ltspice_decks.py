@@ -281,6 +281,32 @@ def test_a_byte_cp1252_leaves_undefined_is_read_as_each_build_reads_it(build: st
         assert f"n{as_cp1252}{letter}" in nodes
 
 
+def test_every_node_name_holding_a_control_byte_is_named_before_the_run():
+    """Each node of ``deck/bytes_in_node_names`` holding a byte from 0x80 to
+    0x9F is a lint warning, whichever of the two readings the server shows,
+    and its ``saved_as`` is the name XVII saved (LTspice 26 refused them)."""
+    case_id = "deck/bytes_in_node_names"
+    path = INPUTS / rec.CASES.case(case_id).source
+    text, encoding = decode_spice_bytes_with_encoding(path.read_bytes())
+    findings = [
+        finding
+        for finding in lint_deck(
+            text, path, "ltspice", "LTspice", codecs={path: rewrite_codec(encoding)}
+        )
+        if finding["rule_id"] == "node-control-byte-ltspice"
+    ]
+    saved = {finding["evidence"]["saved_as"] for finding in findings}
+    expected = {
+        *(f"n{chr(byte)}{letter}" for byte, letter in UNDEFINED_IN_CP1252.items()),
+        *(
+            f"n{chr(byte)}{letter}"
+            for byte, (letter, _) in READ_AS_CP1252_BY_THE_SERVER_ONLY.items()
+        ),
+    }
+    assert saved == {name.encode("unicode_escape").decode("ascii") for name in expected}
+    assert {finding["severity"] for finding in findings} == {"warning"}
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_byte_85_in_a_comment_ends_the_line_for_ltspice_26_alone(build: str, tmp_path: Path):
     """85 is an ellipsis in cp1252 and the next-line control in Latin-1, and

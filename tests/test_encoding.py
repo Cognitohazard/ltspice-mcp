@@ -250,3 +250,15 @@ class TestRewriteCodec:
     def test_text_the_codec_cannot_spell_is_written_as_utf8(self) -> None:
         text = '.include "/stage/日本/core.inc"\n'
         assert encode_spice_text(text, "cp1252") == text.encode("utf-8")
+
+
+def test_latin1_reading_is_how_ltspice_reads_the_same_bytes():
+    """Bytes 0x80 to 0x9F are control characters to LTspice; the rest of an
+    8-bit file reads the same in both tables."""
+    from ltspice_mcp.lib.encoding import latin1_reading
+
+    raw = bytes([0x80, 0x81, 0x93, 0xB0, 0xB5, 0x41])
+    text, encoding = decode_spice_bytes_with_encoding(raw)
+    assert encoding == "cp1252"
+    assert text == "€\x81“°µA"
+    assert latin1_reading(text) == raw.decode("latin-1")
