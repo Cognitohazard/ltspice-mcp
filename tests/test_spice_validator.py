@@ -83,6 +83,11 @@ class TestVdbInMeas:
         assert err is not None
         assert err.rule_name == "vdb_in_meas"
 
+    def test_vdb_after_an_operator_blocked(self):
+        err = validate_directive(".meas AC g FIND 2*vdb(out) AT 1k")
+        assert err is not None
+        assert err.rule_name == "vdb_in_meas"
+
     def test_vdb_case_insensitive(self):
         assert validate_directive(".MEAS AC peak MAX VDB(out)") is not None
         assert validate_directive(".Meas AC peak MAX VdB(out)") is not None

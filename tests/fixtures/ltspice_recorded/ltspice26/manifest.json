@@ -3474,6 +3474,69 @@
         ".raw"
       ]
     },
+    "log/meas_phase": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase.log": {
+          "bytes": 386,
+          "sha256": "24b46207a068bf4b894ef8471764252c2fc2769cf10247b5535b46d3f28e82ed"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_phase_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase_radian.log": {
+          "bytes": 401,
+          "sha256": "9ab69f4bf684ca0865620e2b77e27cdd1d587d04e89eaa9366555dccd706a9d7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/meas_step": {
       "behaviour": "log-meas",
       "command": [
@@ -3501,6 +3564,73 @@
         ".db",
         ".log",
         ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig.log": {
+          "bytes": 1076,
+          "sha256": "64c66698dac7873860635feb3b13683baf58c2da30f977b552f1963b89476c93"
+        },
+        "log/meas_trig.raw": {
+          "bytes": 19070,
+          "sha256": "a7e5dcc9b8d065cd2b516d0f7834ba485771c9ea88a5cee2ee9ce2f5f6fb0ec7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig_radian.log": {
+          "bytes": 1136,
+          "sha256": "d7dcce282c97f8c7f690ac2b5119f26efe4dd2ab3bbe739c7eb3918cd01a6542"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
         ".op.raw",
         ".raw"
       ]

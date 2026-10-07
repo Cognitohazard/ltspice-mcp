@@ -69,7 +69,18 @@ continue them with `+`.
 Boolean: >0.5 is True, ≤0.5 is False.
 
 **Math functions:**
-- Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y,x)`, `hypot(y,x)`
+- Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y,x)`, `hypot(y,x)`.
+  In a B source an angle is in radians. Inside a `.meas` it is in degrees on
+  the default settings of LTspice 26 and XVII: `atan2(1,1)` is 45 there and
+  `cos(pi)` is 0.998497, the cosine of 3.14 degrees, so
+  `INTEG V(out)*cos(2*pi*f*time)` integrates against a waveform 57 times
+  slower than meant. `ph()` in a `.meas` gives degrees too. The `.meas` unit
+  is a per-user setting, "Use radian measure in waveform expressions", so the
+  deck does not decide it. Compute the trig in a B source and measure its
+  node (`B1 x 0 V=V(out)*cos(2*pi*f*time)`, then `.meas tran r INTEG V(x)`),
+  or work out an angle from measured values after the run. `run_experiments`
+  refuses a `.meas` that calls a trig function (lint `meas-trig-degrees`) and
+  `verify_circuit` reports it (`meas_trig_degrees`).
 - Hyperbolic: `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
 - Exp/log: `exp`, `ln`, `log` (base e), `log10`
 - Power: `sqrt`, `pow(x,y)`, `pwr(x,y)` (sign-preserving), `pwrs(x,y)`, `square`

@@ -22,9 +22,9 @@ from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     simulator_family,
 )
-from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import InstanceLine
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, MeasCard
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     PROBE_REF_RE,
@@ -35,7 +35,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "4"
+linter_version = "5"
 
 _SIGNAL_RE = PROBE_REF_RE
 # A capital M straight after a number is milli unless the letters after it
@@ -193,6 +193,67 @@ def _meas_ngspice_batch(
         for card in context.cards
         if card.kind == "meas" and card.scope == ()
     ]
+
+
+#: The functions whose angle LTspice's .meas evaluator reads or returns in the
+#: unit its RadianMeasure setting names, which is degrees on the defaults of
+#: LTspice 26 and XVII. A B source uses radians. The hyperbolic functions take
+#: no angle and give the same value in either unit.
+MEAS_ANGLE_FUNCTIONS = frozenset({"sin", "cos", "tan", "asin", "acos", "atan", "atan2"})
+
+MEAS_ANGLE_REASON = (
+    "On the default settings of LTspice 26 and XVII, sin, cos, tan, asin, acos, "
+    "atan and atan2 take and give degrees inside a .meas and radians inside a "
+    "B source: atan2(1,1) is 45 in a .meas and 0.785398 in a B source, and "
+    "cos(pi) is 0.998497 against -1. The .meas unit is the per-user setting "
+    "'Use radian measure in waveform expressions' (RadianMeasure), so the deck "
+    "does not decide it. Compute the expression in a B source and measure its "
+    "node (B1 x 0 V=V(out)*cos(2*pi*f*time), then .meas tran r INTEG V(x)), or "
+    "combine the measured values after the run."
+)
+
+
+def meas_angle_functions(card: SpiceCard) -> list[str]:
+    """The angle functions a ``.meas`` card calls, each once, in the order written."""
+    try:
+        meas = MeasCard.from_card(card)
+    except SpiceLexError:
+        return []
+    names: list[str] = []
+    for call in meas.function_calls:
+        name = call.name.casefold()
+        if name in MEAS_ANGLE_FUNCTIONS and name not in names:
+            names.append(name)
+    return names
+
+
+def _meas_trig_degrees(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    if context.family != "ltspice":
+        return []
+    findings = []
+    for card in context.cards:
+        if card.kind != "meas" or card.scope != ():
+            continue
+        functions = meas_angle_functions(card)
+        if not functions:
+            continue
+        findings.append(
+            _finding(
+                context,
+                rule,
+                line=card.line_start,
+                subject=card.name or ".meas",
+                evidence={
+                    "functions": functions,
+                    "directive": card.body,
+                    "reason": MEAS_ANGLE_REASON,
+                },
+            )
+        )
+    return findings
 
 
 def _step_ngspice(
@@ -588,6 +649,12 @@ RULES: tuple[LintRule, ...] = (
     # top-level .meas, and reading the run relays ngspice's own notice of the
     # skip. Refusing the deck would cost the caller the rest of the run.
     LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch),
+    # Blocking: on both builds' defaults a .meas that calls a trig function
+    # runs cleanly and reads its angle in degrees, where the same expression
+    # in a B source is in radians, and a user setting outside the deck can
+    # change that unit. The number that comes back is wrong without any sign
+    # in the log, which a warning under the default lint mode does not stop.
+    LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees),
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
     LintRule("model-missing", "blocking", _model_missing),
     # One rule per validate_netlist_arity check, each at the disposition its

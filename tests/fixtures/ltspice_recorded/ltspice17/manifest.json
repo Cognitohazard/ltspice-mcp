@@ -3465,6 +3465,65 @@
         ".raw"
       ]
     },
+    "log/meas_phase": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase.log": {
+          "bytes": 302,
+          "sha256": "7418139abb0e0f8d914eaff1af4cb7a052a550fd685b565b7a64024bef16c352"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_phase_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase_radian.log": {
+          "bytes": 302,
+          "sha256": "be5ebec8ac7e0ba0bdea01ef2a2376ffa28defa8ebcabb60d9de0b4510e74238"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/meas_step": {
       "behaviour": "log-meas",
       "command": [
@@ -3491,6 +3550,71 @@
       "written": [
         ".log",
         ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig.log": {
+          "bytes": 1416,
+          "sha256": "4fec55f1624c33ffe68306088f3c5e79d2619d35c6f3b0687664d1d4e5f309c4"
+        },
+        "log/meas_trig.raw": {
+          "bytes": 10818,
+          "sha256": "37d08a372eab5115ef665fb572410651056c005223d8525877c00c5d8842745c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig_radian.log": {
+          "bytes": 1435,
+          "sha256": "b0359bbbf96cb1fbc5ebd121e0715c91d0833ef50af5f96f8b2453a7ad2768b8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
         ".op.raw",
         ".raw"
       ]
