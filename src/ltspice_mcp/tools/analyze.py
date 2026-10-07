@@ -2172,10 +2172,15 @@ def _spec(
 
 
 def _group_values(
-    recipe: Recipe, records: list[Record], dimensions: list[str]
-) -> list[dict[str, Any]]:
+    recipe: Recipe, records: list[Record], dimensions: list[str], limit: int | None = None
+) -> tuple[list[dict[str, Any]], int]:
+    """The first ``limit`` groups, reduced, and how many groups there are.
+
+    Groups keep first-appearance order, so the ones a limit leaves out are
+    never reduced: the budget's shrink rung renders a page per limit it tries.
+    """
     if not dimensions:
-        return []
+        return [], 0
     grouped: dict[tuple[tuple[str, Any], ...], list[Record]] = {}
     for record in records:
         identity = record.identity
@@ -2187,14 +2192,15 @@ def _group_values(
                 value = identity.assignments.get(dimension, identity.step_values.get(dimension))
             values.append((dimension, value))
         grouped.setdefault(tuple(values), []).append(record)
+    kept = list(grouped.items())[:limit]
     return [
         {
             "by": dict(group),
             "reduced": _reduce(recipe, _tallies(recipe, group_records)),
             "count": len(group_records),
         }
-        for group, group_records in grouped.items()
-    ]
+        for group, group_records in kept
+    ], len(grouped)
 
 
 def _artifact_record(run: _ResolvedRun, value: dict[str, Any]) -> Record:
@@ -2471,20 +2477,19 @@ def _result_entry(
         "reduced": _reduce(recipe, tallies),
         "warnings": _record_warnings(records),
     }
-    groups = _group_values(recipe, records, group_by)
+    groups, group_total = _group_values(recipe, records, group_by, groups_limit)
     if groups:
-        if groups_limit is not None and len(groups) > groups_limit:
+        if group_total > len(groups):
             # Only a caller-set budget's shrink rung passes a limit here. A group
             # is an aggregate answer rather than a page of a longer list, so the
             # omission is stated rather than flagged — there is no cursor that
             # walks the rest.
             entry["warnings"].append(
                 _GROUPS_OMITTED_WARNING.format(
-                    omitted=len(groups) - groups_limit,
-                    total=len(groups),
+                    omitted=group_total - len(groups),
+                    total=group_total,
                 )
             )
-            groups = groups[:groups_limit]
         entry["groups"] = groups
     spec = _spec(
         recipe,
@@ -3471,7 +3476,9 @@ def analysis_surfaces(data: dict[str, Any]) -> list[list[Any]]:
     shrink rung neither measures nor touches, which degrades to budget_not_met
     on a response the ladder could in fact have fitted. A recipe's ``reduced``
     rows are not a surface: they are the answer, no limit shrinks them, and
-    counted as rows they would price the envelope cheaper than it is.
+    counted as rows they would price the envelope cheaper than it is. An
+    attached analysis is shrunk by :func:`render_attached_analysis`'s
+    ``row_limit`` instead, over the same surfaces.
     """
     surfaces: list[list[Any]] = []
     for entry in data["results"].values():
@@ -3522,7 +3529,7 @@ def _degrade_analysis(
     data: dict[str, Any],
     rung: response_budget.Rung,
     *,
-    preserve_provenance: bool = False,
+    preserve_provenance: bool,
 ) -> list[str]:
     """Apply the budget ladder's in-place trim rung to this envelope.
 
@@ -3572,36 +3579,27 @@ async def _negotiate_analysis(
     base = _Limits.of(a.include)
     text = ""
     rendered: dict[str, Any] = {}
-    # The answer channel the standing assembly was built for. The undegraded
-    # rung and the trim rung assemble the same thing, so the trim rung degrades
-    # that assembly in place rather than making a second pass over the work.
-    built_for: bool | None = None
+    degrade = functools.partial(_degrade_analysis, preserve_provenance=a.include.provenance)
 
-    def candidate(
-        limits: _Limits, rung: response_budget.Rung
-    ) -> tuple[dict[str, Any], tuple[str, list[str]]]:
+    def candidate(limits: _Limits, rung: response_budget.Rung) -> response_budget.Rendered:
         data, line = _assemble(a, rung, limits)
-        return data, (
-            line,
-            _degrade_analysis(data, rung, preserve_provenance=a.include.provenance),
-        )
+        return data, line, degrade(data, rung)
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered, built_for
+        nonlocal text, rendered
         if rung.shrink:
-            measure = response_budget.RowMeasure.of_surfaces(analysis_surfaces(rendered))
-            rendered, (text, cut) = response_budget.render_to_fit(
-                measure.affordable(rung),
+            rendered, text, cut = response_budget.shrink_to_fit(
+                response_budget.RowMeasure.of(analysis_surfaces(rendered), page=rung.measured),
                 lambda limit: candidate(base.capped(limit), rung),
                 rung,
                 # Its per_run and missing-cases pages continue themselves.
                 floor=1,
             )
-        elif built_for != rung.answer_channel:
-            rendered, (text, cut) = candidate(base, rung)
-            built_for = rung.answer_channel
+        elif rung.level == response_budget.RUNG_TRIM:
+            # The undegraded rung assembled this same page; degrade it in place.
+            cut = degrade(rendered, rung)
         else:
-            cut = _degrade_analysis(rendered, rung, preserve_provenance=a.include.provenance)
+            rendered, text, cut = candidate(base, rung)
         rung.cut.extend(cut)
         return rendered
 
