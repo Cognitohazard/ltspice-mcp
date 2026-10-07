@@ -32,14 +32,14 @@ uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
 ```json
 {
   "mcpServers": {
-    "ltspice": { "command": "ltspice-mcp", "args": [] }
+    "spice": { "command": "ltspice-mcp", "args": [] }
   }
 }
 ```
 
 Needs Python 3.11 or newer; `ltspice-mcp --help` confirms it installed. In
 [Claude Code](https://code.claude.com/docs/en/mcp) you can skip the JSON with
-`claude mcp add -s project ltspice -- ltspice-mcp`. The same server is also
+`claude mcp add -s project spice -- ltspice-mcp`. The same server is also
 published as `circuit-mcp` and `ngspice-mcp` — same program, in case one of
 those names is easier to remember.
 
@@ -53,13 +53,16 @@ you, so those two routes need [`uv`](https://docs.astral.sh/uv/) installed.
 **If your assistant ignores it.** Some clients don't show an assistant what a
 tool does until it picks one, so it may reach for the command line instead.
 Start with the name: the assistant sees every tool prefixed with it
-(`mcp__ltspice__run_experiments`), so a name carrying the domain reads as a
+(`mcp__spice__run_experiments`), so a name carrying the domain reads as a
 SPICE tool even before anything else loads. That name is the key in the JSON
-above, or the word after `claude mcp add`; the plugin and the extension already
-use `ltspice`. If yours is something like `sim1`, rename it. Then say so
-outright, in your project's `CLAUDE.md` (or whatever your client calls it):
+above, or the word after `claude mcp add`; the plugin already uses `spice`,
+and the extension is listed under its own name. If yours is something like
+`sim1`, rename it. If it is `ltspice`, rename that too: it is the name
+LTspice's own MCP server takes ([below](#alongside-ltspices-own-mcp-server)).
+Then say so outright, in your project's `CLAUDE.md` (or whatever your client
+calls it):
 
-> Always use the ltspice MCP server for any SPICE/circuit simulation, sweep,
+> Always use the spice MCP server for any SPICE/circuit simulation, sweep,
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
@@ -100,6 +103,31 @@ Everything operates on ordinary LTspice and SPICE files. You and the assistant c
 **With the sheet open in LTspice** (Windows, LTspice 26.1 or later): LTspice never notices a file changing under it, so the server tells it. When the assistant edits a schematic you have open, the change appears in the window at once, and Ctrl+Z there takes it back off the screen. If your window holds changes you have not saved, the assistant is refused and asks you to save or close the sheet first, so neither side's work is overwritten. This goes through the MCP bridge that ships with LTspice; the server only ever attaches to an LTspice you already have running.
 
 The same link works the other way round. Ask about "this circuit" and the assistant can see which sheet you have in front. Ask to see a run in LTspice and its results open in your LTspice window with the traces you asked about already drawn. And for questions about LTspice itself (a shortcut, a menu, the waveform viewer) the assistant reads the reference files LTspice installs.
+
+### Alongside LTspice's own MCP server
+
+From 26.1, LTspice ships an MCP server of its own, and on Windows it offers to
+add itself to Claude Code, Claude Desktop, Copilot and Cursor under the name
+`ltspice`. The two do different jobs and can be registered side by side, which
+is why this one is called `spice`.
+
+- **LTspice's** is a remote control for the LTspice window: it reads the
+  documents you have open, replaces one with text the assistant wrote, runs
+  the open design, and reads raw samples.
+- **This one** is the engineering side: schematic edits by pin with the
+  geometry checked, sweeps, corners and Monte Carlo as jobs, measurements as
+  numbers, ngspice as well as LTspice.
+
+You do not need LTspice's server registered for the window features described
+above. This server reaches your LTspice window through the bridge program
+LTspice installs, by itself, and only attaches to an LTspice you already have
+running.
+
+If you registered this server as `ltspice`, rename the entry to
+`spice`. In the Claude Code plugin the rename is already made, so the tool
+names an assistant sees change once, from `…_ltspice__run_experiments` to
+`…_spice__run_experiments`: a saved permission rule or an instruction that
+spells out the old names needs the new ones.
 
 ### When to shell out instead
 
