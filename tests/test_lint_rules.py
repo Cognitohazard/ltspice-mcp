@@ -78,6 +78,12 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "node-control-byte-ltspice",
+        "* t\nV1 n\u20acf 0 1\nR1 n\u20acf 0 1k\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "step-ngspice",
         "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
         "ngspice",
@@ -741,3 +747,11 @@ def test_byte_85_in_an_include_is_found_in_the_include(tmp_path: Path):
     (finding,) = [f for f in findings if f["rule_id"] == "byte-85-ltspice"]
     assert finding["at"] == {"file": str(include), "line": 1}
     assert finding["evidence"]["read_as_cards"] == ["R9 a 0 1k"]
+
+
+def test_a_node_name_in_a_utf8_deck_holds_no_control_byte(tmp_path: Path):
+    """In UTF-8 a euro sign is three bytes LTspice reads as one character."""
+    path = tmp_path / "deck.cir"
+    deck = "* t\nV1 n\u20acf 0 1\nR1 n\u20acf 0 1k\n.op\n.end\n"
+    findings = lint_deck(deck, path, None, "LTspice", codecs={path: "utf-8"})
+    assert "node-control-byte-ltspice" not in {finding["rule_id"] for finding in findings}

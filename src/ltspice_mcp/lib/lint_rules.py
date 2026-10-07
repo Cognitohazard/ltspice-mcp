@@ -15,7 +15,7 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
 )
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_DISPLAY,
     SIMULATORS,
@@ -24,7 +24,7 @@ from ltspice_mcp.lib.simulator import (
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import InstanceLine
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, read_instance
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
@@ -759,6 +759,55 @@ def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]
     return findings
 
 
+def _c1_control(name: str) -> bool:
+    return any(0x80 <= ord(char) <= 0x9F for char in latin1_reading(name))
+
+
+def _node_control_byte_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A node name in an 8-bit file holding a byte from 0x80 to 0x9F.
+
+    LTspice reads each such byte as a control character, where the server
+    shows cp1252's character for most of them. LTspice 26 refuses the card
+    ("Expected node name here."); XVII runs it and saves the name with the
+    control character, which is not the name the server reads.
+    """
+    if context.family != "ltspice":
+        return []
+    findings: list[LintFinding] = []
+    files = [(context.path, context.cards), *((p, c) for p, _t, c in context.include_cards)]
+    for path, cards in files:
+        if context.codecs.get(path) != "cp1252":
+            continue
+        for card in cards:
+            line = read_instance(card) if card.kind == "instance" else None
+            for node in line.nodes if line is not None else ():
+                if not _c1_control(node):
+                    continue
+                saved = latin1_reading(node)
+                findings.append(
+                    _finding(
+                        context,
+                        rule,
+                        line=card.line_start,
+                        subject=node,
+                        file=path,
+                        evidence={
+                            "card": card.body,
+                            "saved_as": saved.encode("unicode_escape").decode("ascii"),
+                            "reason": (
+                                f"node {node!r} holds a byte from 0x80 to 0x9F, which "
+                                "LTspice reads as a control character in an 8-bit "
+                                "file. LTspice 26 refuses the card; XVII runs it and "
+                                "saves the node under that control character, so ask "
+                                "for its signal by the saved name. Rename the node "
+                                "with ASCII to avoid both."
+                            ),
+                        },
+                    )
+                )
+    return findings
+
+
 def _normalize_signal(value: str) -> str:
     return re.sub(r"\s+", "", value).casefold()
 
@@ -783,6 +832,9 @@ RULES: tuple[LintRule, ...] = (
     # the one the server reads, XVII the same one, and which build will run
     # the deck is not always known here.
     LintRule("byte-85-ltspice", "warning", _byte_85_ltspice),
+    # A warning: LTspice 26 refuses the card and says so in its log, while
+    # XVII runs it under a name the server does not spell the same way.
+    LintRule("node-control-byte-ltspice", "warning", _node_control_byte_ltspice),
     LintRule("model-missing", "blocking", _model_missing),
     # One rule per validate_netlist_arity check, each at the disposition its
     # declared severity names, so suppressing one never silences another.
