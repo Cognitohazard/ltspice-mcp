@@ -492,6 +492,7 @@ FROZEN_ERROR_CODES = (
     "max_points_not_applied",
     "meas_batch_abort",
     "meas_parse_error",
+    "measurement_zero_or_failed",
     "memory_limit",
     "merged_corners",
     "micro_sign_folded",

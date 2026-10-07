@@ -16,7 +16,9 @@ the tool re-renders one rung further down a fixed ladder:
 2. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
    is minted against what was actually returned. Never post-hoc truncation of
    an assembled page: a per_run cursor commits during evaluation, and trimming
-   rows afterwards would point it past rows the caller never saw.
+   rows afterwards would point it past rows the caller never saw. A renderer
+   that can afford to rebuild may measure instead of estimating
+   (:func:`largest_fitting`).
 
 Four rules hold at every rung:
 
@@ -206,7 +208,9 @@ class RowMeasure:
 
     A response with several row surfaces sizes them all against the same
     envelope, so the rows are measured once and each limit divides into that
-    measurement rather than re-serializing the same rows per limit.
+    measurement rather than re-serializing the same rows per limit. The count
+    it affords is for every surface together: applied to each surface as its
+    own cap, it over-fills by up to the number of surfaces.
     """
 
     shown: int
@@ -241,6 +245,26 @@ class RowMeasure:
         if self.shown <= 0 or current <= 1:
             return current
         return min(current, self.affordable(rung))
+
+
+def largest_fitting(start: int, fits: Callable[[int], bool], *, floor: int = 0) -> int:
+    """The largest limit from ``floor`` to ``start`` that ``fits``; ``floor`` if none.
+
+    ``fits`` renders and measures at one limit, so this is the measured form of
+    :meth:`RowMeasure.fit_limit`, for a renderer whose rebuild is cheap. It
+    bisects, so it assumes a smaller limit never renders a larger response, and
+    it never returns a limit above ``floor`` that it did not see fit.
+    """
+    if fits(start):
+        return start
+    low, high = floor, start - 1
+    while low < high:
+        middle = (low + high + 1) // 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle - 1
+    return low
 
 
 # --------------------------------------------------------------------------

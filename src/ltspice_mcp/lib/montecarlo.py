@@ -39,7 +39,7 @@ import random
 from dataclasses import dataclass
 from typing import Literal
 
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import parse_plain_value
 from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     emit,
@@ -705,6 +705,6 @@ def parse_value(value: str | float) -> float | None:
     if not s or "{" in s or "(" in s:
         return None
     try:
-        return parse_spice_value(s)
+        return parse_plain_value(s)
     except ValueError:
         return None

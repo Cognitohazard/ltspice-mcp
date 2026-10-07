@@ -286,6 +286,33 @@ model = ["lib/log_parser.py", "lib/result_observations.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
+[behaviour.log-meas-angle-unit]
+summary = "The angle unit inside a .meas expression: on each build's defaults sin, cos, tan, asin, acos, atan and atan2 take and give degrees and ph() gives degrees, where a B source works in radians; the RadianMeasure setting turns .meas to radians."
+model = ["lib/lint_rules.py", "assets/guide/ltspice.md"]
+# A 1 kHz sine of amplitude 1 over two whole periods: the INTEG of V(s)*cos is
+# 0 and of V(s)*sin is 1 ms when the argument is read in radians. The B
+# sources compute the same expressions, and their nodes are in the raw.
+inputs = ["log/meas_trig.cir"]
+
+[behaviour.log-meas-db]
+summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
+model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
+inputs = ["log/meas_db.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-reserved-name]
+summary = "A .meas named for a constant of the expression engine (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
+model = ["lib/spice_validator.py", "lib/log_parser.py"]
+# One deck per name: LTspice 26 stops at the first refusal.
+inputs = [
+    "log/meas_name_e.cir",
+    "log/meas_name_k.cir",
+    "log/meas_name_pi.cir",
+    "log/meas_name_q.cir",
+    "log/meas_name_other.cir",
+]
+keep = ["log"]
+
 [behaviour.log-step]
 summary = "The .step lines of a log: one parameter, two parameters, and a temperature with its degree sign."
 model = ["lib/log_parser.py", "lib/raw_decode.py"]
@@ -460,6 +487,32 @@ id = "deck/tran_modifiers"
 behaviour = "deck-forms"
 source = "deck/tran_modifiers.cir"
 keep = ["log"]
+
+# ph() at the corner of an RC low-pass is -45 degrees; the log shows the unit,
+# and the AC waveform would only add bulk.
+[[case]]
+id = "log/meas_phase"
+behaviour = "log-meas-angle-unit"
+source = "log/meas_phase.cir"
+keep = ["log"]
+
+# The settings key behind "Use radian measure in waveform expressions" (the
+# Waveforms page of the settings). Both builds default it to off.
+[[case]]
+id = "log/meas_trig_radian"
+behaviour = "log-meas-angle-unit"
+source = "log/meas_trig.cir"
+ini = { RadianMeasure = "true" }
+keep = ["log"]
+note = "The trig deck with the setting that makes waveform expressions, .meas among them, work in radians."
+
+[[case]]
+id = "log/meas_phase_radian"
+behaviour = "log-meas-angle-unit"
+source = "log/meas_phase.cir"
+ini = { RadianMeasure = "true" }
+keep = ["log"]
+note = "ph() with the same setting."
 
 [[case]]
 id = "raw/tran_fastaccess"

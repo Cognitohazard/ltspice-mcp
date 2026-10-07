@@ -1,0 +1,45 @@
+Circuit: * trig functions inside .meas, against the same functions in a B source
+
+WARNING: Less than two connections to node BCOS.  This node is used by B1.
+WARNING: Less than two connections to node BSIN.  This node is used by B2.
+WARNING: Less than two connections to node BATAN2.  This node is used by B3.
+WARNING: Less than two connections to node BCOSPI.  This node is used by B4.
+Direct Newton iteration for .op point succeeded.
+
+m_cos: INTEG(v(s)*cos(2*pi*1k*time))=9.14489e-011 FROM 0 TO 0.002
+m_sin: INTEG(v(s)*sin(2*pi*1k*time))=0.000999671 FROM 0 TO 0.002
+m_sin_fo: INTEG(v(s)*sin(2*pi*fo*time))=0.000999671 FROM 0 TO 0.002
+m_sin_30: sin(30)=-0.988032
+m_cos_pi: cos(pi)=-1
+m_tan_45: tan(45)=1.61978
+m_asin: asin(0.5)=0.523599
+m_acos: acos(0.5)=1.0472
+m_atan: atan(1)=0.785398
+m_atan2: atan2(1,1)=0.785398
+m_atan2_deg: atan2(1,1)*180/pi=45
+m_sinh: sinh(1)=1.1752
+m_tanh: tanh(1)=0.761594
+m_pi: pi=3.14159
+m_time: time=0.001 at 0.001
+b_cos: INTEG(v(bcos))=1.69733e-009 FROM 0 TO 0.002
+b_sin: INTEG(v(bsin))=0.000999956 FROM 0 TO 0.002
+b_atan2: v(batan2)=0.785398 at 0.001
+b_cos_pi: v(bcospi)=-1 at 0.001
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 437
+traniter = 434
+tranpoints = 218
+accept = 218
+rejected = 0
+matrix size = 10
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)

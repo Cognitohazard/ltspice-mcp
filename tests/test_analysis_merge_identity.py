@@ -155,8 +155,10 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
     )
     rejected = drifted.structured_content
     assert rejected is not None and "loop" not in rejected["results"]
-    assert len(rejected["failures"]) == 15
-    assert all(failure["code"] == "source_drift" for failure in rejected["failures"])
+    # One drift, fifteen sources: one row, counted.
+    (drift,) = rejected["failures"]
+    assert drift["code"] == "source_drift"
+    assert drift["count"] == 15
     assert len(operations) <= 2
     assert "load_raw" not in operations
 
@@ -224,7 +226,7 @@ async def test_unlabelled_log_continuation_echo_keeps_the_immutable_record(
     assert data is not None and data["failures"] == []
     row = data["results"]["meas"]["per_run"]["items"][0]
     assert row["source"] == raw.stem
-    assert row["value"]["stats"]["vfinal"]["mean"] == LTSPICE_TRAN_RC_VFINAL
+    assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
     manifest = data["source_hashes"][0]
     assert manifest["raw_present"] is False and manifest["log_sha256"]
     path = result_store.result_path(data["result_set_id"], work_dir)

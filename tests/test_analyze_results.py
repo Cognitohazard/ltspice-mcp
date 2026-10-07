@@ -47,12 +47,16 @@ from ltspice_mcp.tools.analyze import (
     evaluate_analysis_results,
     handle_analyze_results,
 )
+from tests import _ltspice_recorded as recorded_ltspice
 from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
+    SyncApi,
     make_experiment_job,
     stage_recorded_fixture,
 )
+from tests.test_measurement_aggregation import TCROSS_AT as SWEEP_TCROSS
+from tests.test_measurement_aggregation import VFINAL as SWEEP_VFINAL
 
 
 def _source(raw: Path, label: str = "dut") -> dict[str, Any]:
@@ -496,9 +500,11 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
             for case in evaluation.missing
             if recipe.sources is None or case.get("label") in set(recipe.sources)
         ]
+        tallies = analyze_mod._tallies(recipe, rows)
         spec = analyze_mod._spec(
             recipe,
-            rows,
+            tallies,
+            len(rows),
             incomplete=bool(unit.failures or relevant_missing),
             include_outliers=True,
             fail_case_limit=max(1, len(rows)),
@@ -514,7 +520,7 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
                 key=unit.key,
                 position=unit.position,
                 rows=tuple(rows),
-                reductions=tuple(analyze_mod._reduce(recipe, rows)),
+                reductions=tuple(analyze_mod._reduce(recipe, tallies)),
                 facts={
                     "metric": recipe.metric,
                     "warnings": analyze_mod._record_warnings(rows),
@@ -586,7 +592,9 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
             code="recipe_failed",
             stage="analyze",
             where=f"run-{index}",
-            message=f"failure {index}",
+            # A reason of its own per run (the digits inside a word are not
+            # folded), so the page has more distinct rows than its cap.
+            message=f"failure on V(n{index})",
         )
         for index in range(analyze_mod._FAILURE_CAP + 7)
     ]
@@ -2249,7 +2257,15 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     assert {failure["where"] for failure in data["failures"]} == {"dut:0"}
     assert "gain" not in data["results"]
     assert "impedance" not in data["results"]
-    assert sum("no sampled axis" in message for message in refusals) == 2
+    # The two value recipes fail on the one run for one reason: one row, counted.
+    assert (
+        sum(
+            failure.get("count", 1)
+            for failure in data["failures"]
+            if "no sampled axis" in failure["message"]
+        )
+        == 2
+    )
     reply = await inspect_tools.handle_inspect(
         inspect_tools.InspectInput.model_validate(
             {"queries": [{"kind": "results", "view": "table", "path": str(raw)}]}
@@ -2803,10 +2819,10 @@ async def test_every_metric_exposes_a_flat_numeric_headline(
     breaks this test, and an exemption for a metric that IS flat is dead
     weight that also fails."""
     # Whole-row payloads whose value is a keyed BUNDLE the caller projects by
-    # name (measurements: per-.meas stats), not a single measurement with a
-    # headline. operating_point is NOT here only because 'step'/'step_count'
+    # name (measurements: value.measured.<name>, or per-.meas stats on a stepped
+    # run), not a single measurement with a headline. operating_point is NOT here only because 'step'/'step_count'
     # are numeric — bookkeeping, not its answer, which is why the answer
-    # channel has to keep its buckets whole (_WHOLE_VALUE_METRICS) rather than
+    # channel has to keep its buckets whole (_LEAN_VALUES) rather than
     # trust this test to notice their loss.
     exempt = {"measurements"}
     raw = stage_recorded_fixture(work_dir, fixture_name)
@@ -2868,6 +2884,310 @@ async def test_measurements_recipe_bins_the_distribution_on_request(
     assert sum(item["count"] for item in entry["histogram"]) == entry["valid_count"] == 3
     plain = unbinned["results"]["m"]["per_run"]["items"][0]["value"]["stats"]["vfinal"]
     assert plain["histogram"] == []
+
+
+# One LTspice log per case of a three-case R sweep of an RC low-pass, and the
+# deck's .meas lines: vfinal is FIND V(out) AT=0.9m, tcross is WHEN V(out)=0.5,
+# whose result is the time of the crossing. SWEEP_VFINAL and SWEEP_TCROSS are
+# what each log printed.
+_SWEEP_LOGS = [FIXTURES_DIR / f"ltspice_sweep_meas_run{index}.log" for index in range(3)]
+_SWEEP_DECK = (
+    ".tran 1m\n.meas tran vfinal FIND V(out) AT=0.9m\n.meas tran tcross WHEN V(out)=0.5\n.end\n"
+)
+
+
+def _meas_job(state: SessionState, job_id: str, logs: list[Path]) -> str:
+    """A completed experiment with one case per log, run from the sweep's deck."""
+    job = make_experiment_job(state, job_id=job_id, count=len(logs))
+    for case, log in zip(job.cases, logs, strict=True):
+        assert case.log_file is not None
+        shutil.copy(log, case.log_file)
+    # The deck's own .meas lines are what tell a WHEN from a FIND.
+    job.sources[0].path.write_text(_SWEEP_DECK, encoding="utf-8")
+    return job.job_id
+
+
+def _sweep_job(state: SessionState) -> str:
+    return _meas_job(state, "exp_sweep_meas", _SWEEP_LOGS)
+
+
+def _failed_vfinal_job(state: SessionState) -> str:
+    """Three cases whose third has no vfinal.
+
+    The first two are cases of the recorded sweep. The third is LTspice XVII's
+    log of the same FIND with V(out) missing from .save, which XVII reports as
+    FAIL'ed (LTspice 26 refuses that deck instead). That log holds no tcross.
+    """
+    return _meas_job(
+        state,
+        "exp_failed_vfinal",
+        [*_SWEEP_LOGS[:2], recorded_ltspice.recorded("ltspice17", "deck/save_omits_meas.log")],
+    )
+
+
+def _meas_failed_sources(work_dir: Path) -> list[dict[str, Any]]:
+    """One log_path source per recorded build's meas_failed.log, labelled by
+    build: 'before' and 'after' measured, 'never' and 'depends' FAIL'ed."""
+    sources = []
+    for build in recorded_ltspice.BUILDS:
+        log = work_dir / f"meas_failed_{build}.log"
+        shutil.copy(recorded_ltspice.recorded(build, "log/meas_failed.log"), log)
+        sources.append({"log_path": str(log), "label": build})
+    return sources
+
+
+async def _analyze_request(state: SessionState, request: dict[str, Any]) -> dict[str, Any]:
+    reply = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state)
+    assert reply.structured_content is not None
+    return reply.structured_content
+
+
+def _reduced_by(data: dict[str, Any], key: str = "m") -> dict[tuple[str, str], dict[str, Any]]:
+    """A recipe's reduced rows by (field, stat)."""
+    return {(row["field"], row["stat"]): row for row in data["results"][key]["reduced"]}
+
+
+def _sweep_request(job_id: str, **include: Any) -> dict[str, Any]:
+    return {
+        "sources": [{"job_id": job_id, "label": "sweep"}],
+        "recipes": [{"key": "m", "metric": "measurements", "reduce": ["min", "max", "mean"]}],
+        "include": {"per_run": True, **include},
+    }
+
+
+def _sweep_rows() -> list[tuple[str, dict[str, Any]]]:
+    """Each case's id and the value its default row carries."""
+    return [
+        (
+            f"case-{index:04d}",
+            # The FIND's AT point is what the log printed beside its value.
+            {"measured": {"vfinal": vfinal, "tcross": tcross}, "at": {"vfinal": 0.0009}},
+        )
+        for index, (vfinal, tcross) in enumerate(zip(SWEEP_VFINAL, SWEEP_TCROSS, strict=True))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
+    state_no_sim: SessionState,
+):
+    """A sweep's per-run row carries one number per .meas, not a stats block.
+
+    Each case of a sweep with no .step measures every .meas once, and its row
+    carried, for each name, a stats block restating that one number as min,
+    max, mean, median, p10 and p90 beside its counts, a zero spread, step
+    indices, an empty histogram and the aggregated field: 856 characters a row
+    for two measurements, against 291 with the numbers by name. The block is
+    one include.fields away, and the cross-run reduction still reads it.
+    """
+    job_id = _sweep_job(state_no_sim)
+    request = _sweep_request(job_id)
+    data = await _analyze_request(state_no_sim, request)
+    assert data["outcome"] == "complete"
+    rows = data["results"]["m"]["per_run"]["items"]
+    assert [(row["case_id"], row["value"]) for row in rows] == _sweep_rows()
+
+    # The reduction is computed from the full values and attributed to the case.
+    reduced = _reduced_by(data)
+    assert reduced["vfinal", "min"]["value"] == min(SWEEP_VFINAL)
+    assert reduced["vfinal", "min"]["case_id"] == "case-0002"
+    assert reduced["tcross", "max"]["value"] == max(SWEEP_TCROSS)
+    assert reduced["tcross", "mean"]["value"] == pytest.approx(sum(SWEEP_TCROSS) / 3)
+
+    # The stats block is still there for the caller who names it.
+    full = await _analyze_request(state_no_sim, _sweep_request(job_id, fields=["value"]))
+    for row, vfinal in zip(full["results"]["m"]["per_run"]["items"], SWEEP_VFINAL, strict=True):
+        stats = row["value"]["stats"]["vfinal"]
+        assert (stats["total_count"], stats["mean"]) == (1, vfinal)
+        assert row["value"]["measured"]["vfinal"] == vfinal
+
+    # An analysis attached to run_experiments renders the same rows.
+    stored = await analyze_mod.capture_attached_analysis(
+        AnalyzeResultsInput.model_validate(request), state_no_sim
+    )
+    attached = analyze_mod.render_attached_analysis(stored, fields=None)
+    assert attached["results"]["m"]["per_run"]["items"] == rows
+
+
+def test_the_python_api_reads_a_sweep_row_the_same_way(state_no_sim: SessionState):
+    """One evaluator behind both interfaces: the API's complete result carries
+    the same per-run rows the MCP page does."""
+    reply = SyncApi(state_no_sim).analyze_results(**_sweep_request(_sweep_job(state_no_sim)))
+    rows = reply["results"]["m"]["per_run"]["items"]
+    assert [(row["case_id"], row["value"]) for row in rows] == _sweep_rows()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_meas_stays_on_the_row_as_a_failure(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A .meas the run reported FAIL'ed keeps its name, with null, and is named
+    as failed, so the row cannot be read as one that never measured it."""
+    data = await _analyze_request(
+        state_no_sim,
+        {
+            "sources": _meas_failed_sources(work_dir),
+            "recipes": [{"key": "m", "metric": "measurements"}],
+            "include": {"per_run": True},
+        },
+    )
+    rows = data["results"]["m"]["per_run"]["items"]
+    assert [row["source"] for row in rows] == list(recorded_ltspice.BUILDS)
+    for row in rows:
+        value = row["value"]
+        assert set(value) == {"measured", "failed_measurements"}
+        assert value["failed_measurements"] == ["never", "depends"]
+        measured = value["measured"]
+        assert set(measured) == {"before", "after", "never", "depends"}
+        assert measured["never"] is None and measured["depends"] is None
+        assert measured["before"] == pytest.approx(1.0, abs=1e-4)
+        assert measured["after"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_stepped_runs_row_keeps_its_spread(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Three .step iterations in one log are one row whose answer is the spread
+    across them, so nothing is collapsed to a single number."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    shutil.copy(FIXTURES_DIR / "ltspice_step_when.log", raw.with_suffix(".log"))
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "m", "metric": "measurements"}],
+        include={"per_run": True},
+    )
+    (row,) = data["results"]["m"]["per_run"]["items"]
+    assert set(row["value"]) == {"stats"}
+    assert row["value"]["stats"]["vfinal"]["total_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_a_reduction_counts_the_runs_that_gave_no_value(state_no_sim: SessionState):
+    """A reduction over three runs, one of which has no number for the field,
+    says so instead of reporting two runs as if they were all there were."""
+    data = await _analyze_request(
+        state_no_sim,
+        {
+            "sources": [{"job_id": _failed_vfinal_job(state_no_sim), "label": "mixed"}],
+            "recipes": [{"key": "m", "metric": "measurements", "reduce": ["min", "max", "count"]}],
+        },
+    )
+    assert data["coverage"]["runs_analyzed"] == 3
+    reduced = _reduced_by(data)
+    assert set(reduced) == {
+        (field, stat) for field in ("vfinal", "tcross") for stat in ("min", "max", "count")
+    }
+    assert reduced["vfinal", "count"]["value"] == 2
+    assert reduced["vfinal", "min"]["value"] == SWEEP_VFINAL[1]
+    assert reduced["vfinal", "min"]["case_id"] == "case-0001"
+    # The FAIL'ed run and the run whose log never had tcross are counted alike.
+    assert {row["no_value_count"] for row in reduced.values()} == {1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allow_incomplete", "verdict"), [(False, "indeterminate"), (True, "pass")]
+)
+async def test_a_spec_does_not_pass_over_a_run_it_could_not_judge(
+    allow_incomplete: bool,
+    verdict: str,
+    state_no_sim: SessionState,
+):
+    """Two runs above the limit and one with no vfinal is not a pass: the third
+    run was never judged. allow_incomplete judges what there is, and the count
+    of the run it could not judge stays on the verdict."""
+    limits = {"min": 0.9, "allow_incomplete": allow_incomplete}
+    data = await _analyze_request(
+        state_no_sim,
+        {
+            "sources": [{"job_id": _failed_vfinal_job(state_no_sim), "label": "mixed"}],
+            "recipes": [{"key": "m", "metric": "measurements", "field": "vfinal", "spec": limits}],
+        },
+    )
+    spec = data["results"]["m"]["spec"]
+    assert (spec["pass_count"], spec["fail_count"], spec["no_value_count"]) == (2, 0, 1)
+    assert spec["verdict"] == verdict
+
+
+@pytest.mark.asyncio
+async def test_a_meas_that_failed_in_every_run_is_still_reduced(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A .meas no run measured comes back as a reduction of nothing over every
+    run, not as a name missing from the result."""
+    data = await _analyze_request(
+        state_no_sim,
+        {
+            "sources": _meas_failed_sources(work_dir),
+            "recipes": [{"key": "m", "metric": "measurements", "reduce": ["count", "max"]}],
+        },
+    )
+    runs = len(recorded_ltspice.BUILDS)
+    reduced = _reduced_by(data)
+    assert {field for field, _ in reduced} == {"before", "after", "never", "depends"}
+    for field in ("never", "depends"):
+        assert reduced[field, "count"]["value"] == 0
+        assert reduced[field, "max"]["value"] is None
+        assert reduced[field, "max"]["no_value_count"] == runs
+    assert "no_value_count" not in reduced["before", "max"]
+    assert reduced["before", "count"]["value"] == runs
+
+
+@pytest.mark.asyncio
+async def test_a_named_field_no_run_reached_is_reduced_to_null(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Asked for the crossover of a loop that never reaches unity, a reduction
+    answers null over one run without a value, not with no rows at all."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "ugbw",
+                "metric": "stability",
+                "signal": "V(out)",
+                "field": "unity_gain_hz",
+                "reduce": ["max"],
+                "spec": {"min": 1e3},
+            }
+        ],
+    )
+    (row,) = data["results"]["ugbw"]["reduced"]
+    assert (row["field"], row["value"], row["no_value_count"]) == ("unity_gain_hz", None, 1)
+    spec = data["results"]["ugbw"]["spec"]
+    assert (spec["field"], spec["no_value_count"], spec["verdict"]) == (
+        "unity_gain_hz",
+        1,
+        "indeterminate",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_bare_multi_field_reduction_leaves_out_what_the_circuit_has_none_of(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A multi-field recipe's fields are a fixed table, and a lowpass has no low
+    cutoff: a field no run has a number for is not a failed measurement, so a
+    reduction that did not name it does not list it."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "f", "metric": "bode_filter", "signal": "V(out)", "reduce": ["max"]}],
+    )
+    fields = {row["field"] for row in data["results"]["f"]["reduced"]}
+    assert "cutoff_high_hz" in fields
+    assert "cutoff_low_hz" not in fields
+    assert all("no_value_count" not in row for row in data["results"]["f"]["reduced"])
 
 
 @pytest.mark.asyncio
