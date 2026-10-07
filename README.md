@@ -132,6 +132,7 @@ No configuration is required. To customize, copy `ltspice-mcp.example.toml` to `
 default = "ltspice"      # ltspice, ngspice, qspice, xyce (null = auto-detect)
 path = ""                # explicit executable path (required on WSL)
 ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
+hidden_desktop = true    # Windows: LTspice runs on a desktop of its own, so its window never takes your keyboard focus; false shows it
 
 [simulator.executables]  # more builds, run per call as execution.simulator = "ltspice:xvii"
 # xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"

@@ -342,6 +342,13 @@ summary = "Where each build keeps its library below the home directory, and the 
 model = ["lib/simulator.py", "lib/wsl.py", "lib/library_manager.py", "lib/encoding.py", "lib/library_parser.py"]
 evidence = "manifest: library.root and library.models; the .lib line of export/boilerplate"
 
+# ---------------------------------------------------------------- the launch
+
+[behaviour.launch-desktop]
+summary = "That a build started on a desktop of its own, where its window cannot take the keyboard focus, runs, exports and writes its files as on the user's desktop, and that a message box it stops on there can be read."
+model = ["lib/hidden_desktop.py", "lib/ltspice_windows.py"]
+evidence = "every case here was recorded with the build on a desktop of its own; manifest: cases.*.dialog holds the two message boxes LTspice XVII stopped on there"
+
 # ---------------------------------------------------------------- cases an input path cannot describe
 
 [[case]]

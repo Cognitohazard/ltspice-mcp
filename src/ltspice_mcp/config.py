@@ -378,6 +378,14 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_path,
     ),
     _Setting(
+        field="hidden_desktop",
+        section=SIM_SECTION,
+        key="hidden_desktop",
+        from_toml=_toml_bool("simulator.hidden_desktop"),
+        env="LTSPICE_MCP_HIDDEN_DESKTOP",
+        from_env=_env_bool("LTSPICE_MCP_HIDDEN_DESKTOP"),
+    ),
+    _Setting(
         field="enabled_simulators",
         section=SIM_SECTION,
         key=SIM_ENABLED_KEY,
@@ -607,6 +615,15 @@ class ServerConfig:
     ltspice_ini: Path | None = None
     """Established LTspice settings to capture for native Windows recovery.
     None uses the current user's APPDATA/LTspice.ini. The source is never written."""
+
+    hidden_desktop: bool = True
+    """On Windows, start LTspice on a desktop of its own. LTspice opens a
+    window for every batch run and export and takes the keyboard focus for as
+    long as it lasts; on another desktop it cannot. A message box LTspice
+    stops on there ends the run with what the box said. ``False`` starts
+    LTspice on the user's desktop, where its window and any message box can be
+    seen. No effect under WSL or Wine. ``[simulator] hidden_desktop`` or
+    ``LTSPICE_MCP_HIDDEN_DESKTOP``."""
 
     ngbehavior: str | None = None
     """ngspice compatibility mode (``ngbehavior``). ``None`` leaves spicelib's
@@ -911,6 +928,11 @@ def generate_default_config(path: Path) -> None:
     sim.add(comment("Established native Windows settings for recoverable LTspice runs."))
     sim.add(comment("Unset uses APPDATA/LTspice.ini; the original file is never written."))
     _shown_default(sim, "ltspice_ini", example="C:/SPICE/LTspice.ini")
+    sim.add(nl())
+    sim.add(comment("On Windows, start LTspice on a desktop of its own, so its window does not"))
+    sim.add(comment("take the keyboard focus on every run. false shows the window, and any"))
+    sim.add(comment("message box LTspice stops on, on your own desktop."))
+    _shown_default(sim, "hidden_desktop")
     sim.add(nl())
     sim.add(comment("ngspice compatibility mode (ngbehavior). Unset = spicelib's default"))
     sim.add(comment("'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned"))

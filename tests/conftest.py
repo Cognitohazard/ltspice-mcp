@@ -23,7 +23,7 @@ from ltspice_mcp.api import _session as _api_session
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
-from ltspice_mcp.lib import now, parser_process, parser_service, raster
+from ltspice_mcp.lib import hidden_desktop, now, parser_process, parser_service, raster
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, StagedDecks
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -1026,6 +1026,20 @@ def _close_parser_trees() -> Iterator[None]:
     """
     yield
     parser_process.close_all()
+
+
+@pytest.fixture(autouse=True)
+def _close_hidden_desktop() -> Iterator[None]:
+    """Close the desktop a test's simulator launches were made on.
+
+    A session closes it when it shuts down, which a test's session usually
+    never does, and detection takes the ``hidden_desktop`` setting from
+    whatever configuration a test loaded: both are put back, so one test's
+    choice is not the next one's.
+    """
+    yield
+    hidden_desktop.configure(enabled=True)
+    hidden_desktop.close_shared()
 
 
 @pytest.fixture
