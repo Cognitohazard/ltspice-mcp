@@ -21,7 +21,7 @@ from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
 from ltspice_mcp.lib.netlist_diff import parse_directive, read_deck, structural_delta
-from ltspice_mcp.lib.netlist_graph import canon_ref, parse_netlist_graph
+from ltspice_mcp.lib.netlist_graph import canon_ref, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     element_class,
@@ -513,6 +513,28 @@ class TestExportedNames:
             assert references == ["XU1", "XX2", "Xx3"]
         else:
             assert references == ["X§U1", "X§X2", "X§x3"]
+
+    def test_an_instance_named_as_written_matches_its_export(self, build: str):
+        """A netlist naming the sheet's instances as the sheet does (``X2``,
+        ``x3``, ``RLoad``) is the export's circuit: the ``X`` LTspice puts in
+        front of a subcircuit instance pairs as a rename, not as one removed
+        part and one added."""
+        written = (
+            "* the sheet's instances as named\n"
+            "R1 NC_01 NC_02 1k\nRLoad NC_03 NC_04 2k\nr3 NC_05 NC_06 3k\n"
+            "XU1 NC_07 NC_08 NC_09 NC_10 cell4\n"
+            "X2 NC_11 NC_12 NC_13 NC_14 cell4\n"
+            "x3 NC_15 NC_16 NC_17 NC_18 cell4\n.end\n"
+        )
+        export = rec.export_text(build, "export/instance_names")
+        result = compare_graphs(written, export)
+        assert (result.added, result.removed) == ([], [])
+        # References are compared without the marker, as LTspice 26 names them.
+        assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [
+            ("X2", "XX2"),
+            ("x3", "Xx3"),
+        ]
+        assert result.equivalent
 
     def test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened(
         self, build: str, tmp_path: Path

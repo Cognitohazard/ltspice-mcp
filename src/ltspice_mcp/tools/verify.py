@@ -372,6 +372,15 @@ _COMPONENT_DELTA_SCHEMA: dict[str, Any] = {
     "required": ["ref", "type_letter", "detail"],
 }
 
+_RENAMED_INSTANCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reference_ref": _REF,
+        "candidate_ref": _REF,
+    },
+    "required": ["reference_ref", "candidate_ref"],
+}
+
 _RETYPE_DIFF_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -469,8 +478,19 @@ _ARITY_ERROR_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "description": "Terminal count on this circuit's side.",
         },
+        "detail": {
+            "type": "string",
+            "description": "What disagrees, naming the nodes and ports.",
+        },
+        "side": {
+            "type": ["string", "null"],
+            "description": (
+                "Set when one netlist's subcircuit instance does not match its own "
+                "subcircuit's ports; the arities are then its node and port counts."
+            ),
+        },
     },
-    "required": ["ref", "reference_arity", "candidate_arity"],
+    "required": ["ref", "reference_arity", "candidate_arity", "detail"],
 }
 
 _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
@@ -559,6 +579,15 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": _COMPONENT_DELTA_SCHEMA,
             "description": "equivalence: components present only in the reference.",
+        },
+        "renamed": {
+            "type": "array",
+            "items": _RENAMED_INSTANCE_SCHEMA,
+            "description": (
+                "equivalence: subcircuit instances matched across the X LTspice puts "
+                "before an instance name on export (Xe as X§Xe, read XXe). Not a "
+                "difference."
+            ),
         },
         "retyped": {
             "type": "array",
