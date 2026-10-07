@@ -171,6 +171,21 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": "References present in the baseline but absent from the compared deck.",
     },
+    "components_renamed": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "before": {"type": "string", "description": "Its reference in the baseline."},
+                "after": {"type": "string", "description": "Its reference in the compared deck."},
+            },
+            "required": ["before", "after"],
+        },
+        "description": (
+            "Subcircuit instances matched across the X LTspice puts before an instance "
+            "name on export (Xd as X§Xd or XXd). Not a difference."
+        ),
+    },
     "components_changed": {
         "type": "array",
         "items": {
@@ -1823,7 +1838,11 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
     #
     # Keyed on the delta's own difference lists rather than ``any(diff.values())``:
     # a metadata key added to the delta later must not read as a difference.
-    equivalent = not any(diff[key] for key in STRUCTURAL_DELTA_PROPS) if both_parsed else None
+    equivalent = (
+        not any(diff[key] for key in STRUCTURAL_DELTA_PROPS if key != "components_renamed")
+        if both_parsed
+        else None
+    )
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 
 

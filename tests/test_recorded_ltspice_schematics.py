@@ -536,6 +536,32 @@ class TestExportedNames:
         ]
         assert result.equivalent
 
+    def test_an_instance_named_as_written_is_a_rename_to_the_structural_diff(self, build: str):
+        """The structural diff pairs the same names the equivalence mode does,
+        lists them as renamed, and counts no difference for them."""
+        from ltspice_mcp.tools.verify import compare_structural
+
+        written = (
+            "* the sheet's instances as named\n"
+            "R1 NC_01 NC_02 1k\nRLoad NC_03 NC_04 2k\nr3 NC_05 NC_06 3k\n"
+            "XU1 NC_07 NC_08 NC_09 NC_10 cell4\n"
+            "X2 NC_11 NC_12 NC_13 NC_14 cell4\n"
+            "x3 NC_15 NC_16 NC_17 NC_18 cell4\n.end\n"
+        )
+        comparison, _, failure, warnings = compare_structural(
+            written, rec.export_text(build, "export/instance_names")
+        )
+        assert (failure, warnings) == (None, [])
+        assert comparison is not None
+        assert (comparison["components_added"], comparison["components_removed"]) == ([], [])
+        marker = "X" if rec.generation(build) == "xvii" else "X§"
+        assert comparison["components_renamed"] == [
+            {"before": "X2", "after": f"{marker}X2"},
+            {"before": "x3", "after": f"{marker}x3"},
+        ]
+        assert comparison["components_changed"] == []
+        assert comparison["equivalent"] is True
+
     def test_a_block_symbol_with_no_sheet_of_its_own_cannot_be_opened(
         self, build: str, tmp_path: Path
     ):
