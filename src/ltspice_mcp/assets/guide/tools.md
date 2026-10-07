@@ -25,6 +25,7 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
+| amplitude and phase at one frequency | recipe `tone` (guide section 'signals') |
 | symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
 | nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |

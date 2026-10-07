@@ -244,7 +244,7 @@ they let a session pay for depth only where it needs it. The compact listing
 drops the prose for every argument — every branch's and every tool's own — on
 the bet that a session uses a handful of them; the reference lookup is what
 buys that prose back, one entry at a time, for the handful actually used. It
-covers both halves: the branch vocabulary (twenty-one recipes, eleven ops, six
+covers both halves: the branch vocabulary (twenty-two recipes, twelve ops, six
 actions, and the rest) and each tool's own top-level arguments, indexed as one
 entry per tool under the family `argument`, so `all_steps` or `expected_sha256`
 is found the same way `stability` is. Neither half of the pair stands alone.
@@ -1196,6 +1196,45 @@ accepts: relabel one side with the other's name.
 and names the wire under `snapped_to_wire`; a point where two nets' wires
 cross is refused as ambiguous rather than resolved to either.
 
+**Waveform panes.** `set_plot_panes{analysis, panes}` writes the plot
+settings file LTspice's waveform window reads when the sheet runs: the `.plt`
+beside the sheet, under the sheet's name. A sheet handed to a person should
+open with the traces that show what it does, and the file is a simulator
+format with an encoding of its own, so it is written by tested shared code
+(`lib/plot_settings.py`) rather than by each agent. `panes` is top to bottom,
+each `{traces, x_scale?, y_scale?}`; `analysis` is `tran` or `ac`, the
+sections recorded. The op replaces that analysis's section and keeps the
+file's others as they were, as LTspice itself does when it saves one; `[]`
+removes the section, and the file with its last one. Its `results` entry names
+the file (`plot_settings`) and the panes the section held (`replaced_panes`),
+in the op's own form, so passing them back as `panes` restores them: the op is
+its own inverse. The sheet's bytes are not changed and the reply's `sha256`
+stays the sheet's.
+
+Every rule the writer follows is recorded on LTspice 26 and XVII
+(`plot-settings` and `plot-settings-read` in the recorded fixtures): panes are
+listed bottom first; each build works a trace's id and axis out for itself, so
+both are written 0; a trace is read only up to its first space, so whitespace
+is refused; a pane's `Log` line is kept, so it is always written, with the
+build's own default for the analysis; a run of the sheet ranges every axis, so
+no range is written. LTspice 26 writes UTF-8 and XVII UTF-16 LE, each without
+a byte order mark and with LF line ends, and each reads the other's; but XVII
+saving over a UTF-8 file appends the old bytes after its own UTF-16 section,
+so the file is written as UTF-16 LE, the one form neither build's save
+damages. A file in two encodings, which that leaves, is refused rather than
+guessed at.
+
+The file is written in the sheet's transaction. Its cross-process lock is
+taken after the sheet's, the fixed order an export takes the sheet's and its
+netlist's in, and it is read under both. The commit stages the sheet, then
+replaces the `.plt` (staged and renamed the same way), then renames the sheet
+last; a sheet rename that fails puts the `.plt`'s old bytes back, so a batch
+that set panes commits both files or neither. A batch of nothing but
+`set_plot_panes` leaves the sheet as it is, file and all, and a `.plt` the
+batch leaves holding what it held is not written. The `.plt` is read only when
+an op sets panes. One that cannot be read or written fails the batch at
+`apply_ops` or `stage_plot_settings`, with nothing written.
+
 **Domain rule: the AUTHOR plane edits schematics and not netlists.** Both
 `.asc` and `.cir` are text files, so the split is not about file format. The
 criterion is where the tool adds something beyond text editing. For schematics
@@ -1570,12 +1609,17 @@ Only deterministic harvested failures block. Suppression is per call, and
 
 Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (warning,
 ngspice: the deck runs and only the top-level `.meas` is skipped, which the run
-relays when it is read), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
-mode), three LTspice refusals recorded on LTspice 26 and XVII, each blocking —
+relays when it is read), `meas-trig-degrees` (blocking, LTspice: a `.meas`
+that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle
+LTspice 26 and XVII read in degrees on their default settings where a B source
+reads radians; `verify_circuit`'s `syntax` check reports the same as
+`meas_trig_degrees`), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
+mode), four LTspice refusals recorded on LTspice 26 and XVII, each blocking —
 `analysis-count-ltspice` (two of `.tran`/`.ac`/`.dc`/`.noise`; `.op` may sit
 beside one), `meas-function-ltspice` (`vdb()`, `phase()` or `group_delay()` in a
-`.meas`) and `lib-section-ltspice` (`.lib file section`, which LTspice reads as
-one file name) — `byte-85-ltspice` (warning, LTspice: a byte 0x85 in an 8-bit
+`.meas`), `meas-name-ltspice` (a `.meas` named `e`, `k`, `pi` or `q`, constants
+of the expression engine) and `lib-section-ltspice` (`.lib file section`, which
+LTspice reads as one file name) — `byte-85-ltspice` (warning, LTspice: a byte 0x85 in an 8-bit
 deck or include with a card after it on the line, which LTspice 24 and later
 read as a line break and XVII does not; silent when the session's LTspice is
 known to be XVII), `node-control-byte-ltspice` (warning, LTspice: a node name
@@ -1716,7 +1760,7 @@ scope.
 
 ### A.2 Recipe
 
-21 discriminant values. Shared fields — `key` (required and unique),
+22 discriminant values. Shared fields — `key` (required and unique),
 `sources?`, `reduce`, `field`, `spec` — are accepted only where the reducer
 category allows: the per-variant accepts-matrix binds to the scalar /
 multi-field / keyed / variable-length categories in `lib/recipes.py`, and
@@ -1748,7 +1792,7 @@ and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included, and the recorded LTspice builds print phase in different conventions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name. A run holding one value per name also carries `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
@@ -1757,6 +1801,7 @@ and reported when the caller names it.
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
+| `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample, resampled by linear interpolation as `thd`'s coherent path is, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
 | `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
@@ -1769,6 +1814,26 @@ and reported when the caller names it.
 | `operating_point` | op | — | `device?` — scoping to one device is the difference between a few hundred bytes and tens of KB on a real opamp |
 | `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
+
+`tone` exists because one frequency's amplitude and phase has correctness
+obligations the server can own once instead of each caller re-deriving them.
+The existing routes reach it only with care. A `.meas INTEG` correlation
+integral puts hand-written trigonometry in the deck; numpy over `RawResult`
+samples weights LTspice's clustered timestep by sample count unless the caller
+interpolates, and has to cut the window to whole periods itself. `.four`, read
+back through `summary`, covers the last periods before the stop time or the
+whole run (LTspice XVII's help; the recordings show only its default of one
+period), never a window the caller places; it is skipped by ngspice in batch mode, and
+it prints phase in a convention that differs between LTspice 26 and XVII
+(`tests/test_recorded_ltspice_results.py`). The
+server-owned burden is therefore time weighting, whole-period alignment and a
+stated phase reference. `thd` already carried the first two, so `tone` reuses
+its trim and resample (`signal_analysis._whole_periods`, `_resample_uniform`)
+rather than a second spectral path. It is a recipe of its own rather than a
+phase column on `thd` because `thd` is a scalar recipe that reduces only
+`thd_pct`, and detects its fundamental when none is given, which a phase
+referred to time zero cannot tolerate: a frequency error df moves it by
+360·df·t_start degrees.
 
 A `signal`, `signals` entry or `expr` names one trace as the raw holds it, or a
 node-pair voltage `V(a,b)`. No simulator writes a pair as a trace, so the one
@@ -1783,10 +1848,10 @@ session serves it and the library otherwise.
 
 ### A.3 Edit ops
 
-Eleven op kinds, discriminated on `op`: `add_component`, `move_component`,
+Twelve op kinds, discriminated on `op`: `add_component`, `move_component`,
 `remove_component`, `set_component_value`, `set_component_attribute`,
 `add_net_label`, `remove_net_label`, `wire_pins`, `remove_wire`,
-`add_directive`, `remove_directive`. The batch commits atomically or not at
+`add_directive`, `remove_directive`, `set_plot_panes`. The batch commits atomically or not at
 all: the first op that fails aborts the transaction and nothing is written.
 
 Carried over from the pre-consolidation op models: exact-segment `remove_wire`,

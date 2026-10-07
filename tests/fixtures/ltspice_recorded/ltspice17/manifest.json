@@ -3407,6 +3407,34 @@
         ".raw"
       ]
     },
+    "log/meas_db": {
+      "behaviour": "log-meas-db",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_db.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_db.cir": "4bd65fb6b94e454bcc2f0a546d98e0b912d981f4e1a0d2a43910b5bd3df7cf4c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_db.log": {
+          "bytes": 516,
+          "sha256": "99686abbf965dc277620297208b17b0c67df7405b928c7f7d6654df569ba041c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/meas_failed": {
       "behaviour": "log-meas-failed",
       "command": [
@@ -3465,6 +3493,210 @@
         ".raw"
       ]
     },
+    "log/meas_name_e": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_e.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_e.cir": "a7af4622273670d818a754be59c45290cfc97a4a8e0dc0de750f3606fd947318"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_e.log": {
+          "bytes": 508,
+          "sha256": "2b0b51cca922e0738153f5b0d7adbc7af8d26ca995408deb5c13707540e525e6"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_k": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_k.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_k.cir": "eb23e8893e0f813902515813b273db56922893fe7618716c0c21446ebc9fbeab"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_k.log": {
+          "bytes": 508,
+          "sha256": "9108c050a94b3ce2cd3b00d8c21d414816793037438325d5186e0a6924d38e6c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_other": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_other.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_other.cir": "4e320c8b2c8a55afaf8f82664b702128669c4aaae4f2553c907f4d05ab9ebe39"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_other.log": {
+          "bytes": 731,
+          "sha256": "26632c16e91f3395233576a813e217c1a319bd666d3e7061c2c70862eafadc67"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_pi": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_pi.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_pi.cir": "e7a65103c34bea1c8fbf518d66a08ddc2e69cae8699823c39c76c97c215d5954"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_pi.log": {
+          "bytes": 511,
+          "sha256": "4ae569b92b526efe4d2b109250db7e79cdd0dfffc32e49dd4580b8d4317cb90d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_q": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_q.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_q.cir": "bdfd22b9ba75029e2f8f6744fe88db219e63102236ccbe3f4d5f11b7d3ef6c72"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_q.log": {
+          "bytes": 508,
+          "sha256": "de342b6d42092ad95626c9f93a8dccfd64a49f2fcada9745ac47615b733a9164"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_phase": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase.log": {
+          "bytes": 302,
+          "sha256": "7418139abb0e0f8d914eaff1af4cb7a052a550fd685b565b7a64024bef16c352"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_phase_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase_radian.log": {
+          "bytes": 302,
+          "sha256": "be5ebec8ac7e0ba0bdea01ef2a2376ffa28defa8ebcabb60d9de0b4510e74238"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/meas_step": {
       "behaviour": "log-meas",
       "command": [
@@ -3491,6 +3723,71 @@
       "written": [
         ".log",
         ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig.log": {
+          "bytes": 1416,
+          "sha256": "4fec55f1624c33ffe68306088f3c5e79d2619d35c6f3b0687664d1d4e5f309c4"
+        },
+        "log/meas_trig.raw": {
+          "bytes": 10818,
+          "sha256": "37d08a372eab5115ef665fb572410651056c005223d8525877c00c5d8842745c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig_radian.log": {
+          "bytes": 1435,
+          "sha256": "b0359bbbf96cb1fbc5ebd121e0715c91d0833ef50af5f96f8b2453a7ad2768b8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
         ".op.raw",
         ".raw"
       ]
@@ -3670,6 +3967,352 @@
       "stopped": false,
       "written": [
         ".log",
+        ".raw"
+      ]
+    },
+    "plot/ac": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/ac.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/ac.plt": {
+          "bytes": 460,
+          "sha256": "e10c992f85b15b95c9eadb8bcc26fa237f5d9f538fff9381f79dcbb58b0ac04e"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/math": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/math.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/math.plt": {
+          "bytes": 618,
+          "sha256": "a4a25b97ff5e1a8235b46db59ddffe994cb09769d8cf586e5bd93d043f70914b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/one_trace": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/one_trace.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/one_trace.plt": {
+          "bytes": 468,
+          "sha256": "7c25f90cddf4b921723f210741fa413645bc7cc1db899b8e2c272369a062a801"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/pane_added": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/pane_added.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/pane_added.plt": {
+          "bytes": 1014,
+          "sha256": "d240590bfde4cd2f0c7b923c4143c30872e69318e18fd11fb9473c92d565a637"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_ac": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_ac.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/ac.plt": "a611b01e577ef40d452b4e91adbaa86b7bcce2a0cec1d12012db4412cd460cc0",
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_ac.plt": {
+          "bytes": 392,
+          "sha256": "56498bcbb493c5a919b43275a0900e4e5c2f81e55002585b63103daad1945ce0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_log_y": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_log_y.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/log_y.plt": "6275d2c72a07f58e3da55f8222be774a4407e246014f163587ad644e55353629",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_log_y.plt": {
+          "bytes": 474,
+          "sha256": "6a19eeddb3fa812923d3b6974ddc7c16d98de8033b80d8f3c76d2fa54824bd87"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_math": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_math.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/math.plt": "fc41be66f8678103b4d58a2ca829c63de2c01574a7acc20a4b87fff68acfaa9e",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_math.plt": {
+          "bytes": 618,
+          "sha256": "a4a25b97ff5e1a8235b46db59ddffe994cb09769d8cf586e5bd93d043f70914b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_spaced": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_spaced.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/spaced.plt": "199d77b25251ceee9722ac02e532ab2af715361d24c4e9fb18ad463e1e315f6c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_spaced.plt": {
+          "bytes": 460,
+          "sha256": "522c77e69baa7a8b9fed160f0c25fc494db91730eedaeb816986f1336f6dd37c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_panes": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_two_panes.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes.plt": "1eedf7eee6766613d99eb2bd9595ff96814cdd2e7da95b0f3ad978b6915586eb"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_panes.plt": {
+          "bytes": 964,
+          "sha256": "8af79fa9d012c4d7f09a1d47b06888f73db848e6fc757b9c67dbe51cfc83e3be"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_sections": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_two_sections.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_sections.plt": "d090016c80a3118099c39024fa25c8a7091dc8acc890a854a153882f879f97a5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_sections.plt": {
+          "bytes": 640,
+          "sha256": "fe16ac161b70d885552efaabaf03482c95a39a1f343e90be3d7e23fb765ce14d"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_utf8": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_utf8.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes_utf8.plt": "12ab44e43c23cb11b3757175f6ce3e48ef6191580c9723e4d745dc9b95b00e6b"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_utf8.plt": {
+          "bytes": 1134,
+          "sha256": "9e8fa4099aeeeb849346c010d4edc96c5d8a8f69796d139ae627e632b917d8e3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
         ".raw"
       ]
     },

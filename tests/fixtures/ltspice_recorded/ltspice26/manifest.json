@@ -3414,6 +3414,36 @@
         ".log"
       ]
     },
+    "log/meas_db": {
+      "behaviour": "log-meas-db",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_db.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_db.cir": "4bd65fb6b94e454bcc2f0a546d98e0b912d981f4e1a0d2a43910b5bd3df7cf4c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_db.log": {
+          "bytes": 653,
+          "sha256": "d563432689b094cf3170684e658d790881224d76c888166bbdac3b146e032eb8"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/meas_failed": {
       "behaviour": "log-meas-failed",
       "command": [
@@ -3474,6 +3504,207 @@
         ".raw"
       ]
     },
+    "log/meas_name_e": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_e.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_name_e.cir": "a7af4622273670d818a754be59c45290cfc97a4a8e0dc0de750f3606fd947318"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_e.log": {
+          "bytes": 127,
+          "sha256": "ca7bcf4e87a7d68a2f9c7bb117d262d5eb428f8f3d9f11d96cbbaf60980a1d21"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_name_k": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_k.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_name_k.cir": "eb23e8893e0f813902515813b273db56922893fe7618716c0c21446ebc9fbeab"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_k.log": {
+          "bytes": 127,
+          "sha256": "2a167c02eff51a37576d544e810e8b3e9bb252ee8b9f296d169d3ab384309cdc"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_name_other": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_other.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_name_other.cir": "4e320c8b2c8a55afaf8f82664b702128669c4aaae4f2553c907f4d05ab9ebe39"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_other.log": {
+          "bytes": 737,
+          "sha256": "43afc240c466a9f37f6399c29a9f089772622bc37e6f5e0e21894fc510394460"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_name_pi": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_pi.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_name_pi.cir": "e7a65103c34bea1c8fbf518d66a08ddc2e69cae8699823c39c76c97c215d5954"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_pi.log": {
+          "bytes": 130,
+          "sha256": "6f6b54a71c2f5bd6b32bdd5ee5b07e93f57872b4dc2554783029fa6a0d5b8eba"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_name_q": {
+      "behaviour": "log-meas-reserved-name",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_name_q.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "log/meas_name_q.cir": "bdfd22b9ba75029e2f8f6744fe88db219e63102236ccbe3f4d5f11b7d3ef6c72"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_name_q.log": {
+          "bytes": 127,
+          "sha256": "89b9e43db4a879f5067db675dd5548b30f9c1ac9e2072e666ecee0699e9bc1ce"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/meas_phase": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase.log": {
+          "bytes": 386,
+          "sha256": "24b46207a068bf4b894ef8471764252c2fc2769cf10247b5535b46d3f28e82ed"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_phase_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_phase_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_phase.cir": "ed2a5d3cc1f986290437aca8d241c3f7067d501ed34bfecfcd1b8c922722a93c"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_phase_radian.log": {
+          "bytes": 401,
+          "sha256": "9ab69f4bf684ca0865620e2b77e27cdd1d587d04e89eaa9366555dccd706a9d7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/meas_step": {
       "behaviour": "log-meas",
       "command": [
@@ -3501,6 +3732,73 @@
         ".db",
         ".log",
         ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig.log": {
+          "bytes": 1076,
+          "sha256": "64c66698dac7873860635feb3b13683baf58c2da30f977b552f1963b89476c93"
+        },
+        "log/meas_trig.raw": {
+          "bytes": 19070,
+          "sha256": "a7e5dcc9b8d065cd2b516d0f7834ba485771c9ea88a5cee2ee9ce2f5f6fb0ec7"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_trig_radian": {
+      "behaviour": "log-meas-angle-unit",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_trig_radian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_trig.cir": "05d26400d8fb5a194c8dff9f7ce8ecc45e8eb4972acbed5c8147853a13a663a6"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_trig_radian.log": {
+          "bytes": 1136,
+          "sha256": "d7dcce282c97f8c7f690ac2b5119f26efe4dd2ab3bbe739c7eb3918cd01a6542"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "RadianMeasure": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
         ".op.raw",
         ".raw"
       ]
@@ -3682,6 +3980,354 @@
       "stopped": false,
       "written": [
         ".log",
+        ".raw"
+      ]
+    },
+    "plot/ac": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/ac.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/ac.plt": {
+          "bytes": 230,
+          "sha256": "df546ff4c9e0bc622d121fbc51657c7d1785166783f1bb52e5feb9a349c0d183"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/math": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/math.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/math.plt": {
+          "bytes": 309,
+          "sha256": "877a773b8f9652c514e0706d3939f36b4134a6c444882a7af4f4e0f890abb992"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/one_trace": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/one_trace.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/one_trace.plt": {
+          "bytes": 234,
+          "sha256": "ea35a11596332a22a00843fb33d4d588c1b65af6ee373aedee4883e9c4467c1c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/pane_below": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/pane_below.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/pane_below.plt": {
+          "bytes": 489,
+          "sha256": "507b496618d388ac59e4f49cc240bebcc2121055f7dd0284929386ee1acf3dd0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_ac": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_ac.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/ac.plt": "a611b01e577ef40d452b4e91adbaa86b7bcce2a0cec1d12012db4412cd460cc0",
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_ac.plt": {
+          "bytes": 196,
+          "sha256": "9d05baba093cc933d2fd63134452880a08a7461aa82c8246c23aa50b46f9ec6a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_log_y": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_log_y.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/log_y.plt": "6275d2c72a07f58e3da55f8222be774a4407e246014f163587ad644e55353629",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_log_y.plt": {
+          "bytes": 235,
+          "sha256": "ba84058d7ae7bcb63aa553472f7d6ee4fdd39e0c35199bb97b4a3b9dcf2a325a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_math": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_math.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/math.plt": "fc41be66f8678103b4d58a2ca829c63de2c01574a7acc20a4b87fff68acfaa9e",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_math.plt": {
+          "bytes": 309,
+          "sha256": "877a773b8f9652c514e0706d3939f36b4134a6c444882a7af4f4e0f890abb992"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_spaced": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_spaced.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/spaced.plt": "199d77b25251ceee9722ac02e532ab2af715361d24c4e9fb18ad463e1e315f6c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_spaced.plt": {
+          "bytes": 230,
+          "sha256": "0d7e03239e09f4fd8f9c3fccc3f43ff03fc92f4e56966e466527a401fda146c2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_panes": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_two_panes.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes.plt": "1eedf7eee6766613d99eb2bd9595ff96814cdd2e7da95b0f3ad978b6915586eb"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_panes.plt": {
+          "bytes": 482,
+          "sha256": "b8ca5950760a1ff4da737da89b091706d830664e03e13507930980bd8b50db5a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_sections": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_two_sections.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_sections.plt": "d090016c80a3118099c39024fa25c8a7091dc8acc890a854a153882f879f97a5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_sections.plt": {
+          "bytes": 320,
+          "sha256": "a135dab31d637299af312eaff8c590c53cad2c13fededcad58e35a1ff81b2a78"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_utf8": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_utf8.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "host": "Wine 11.0",
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes_utf8.plt": "12ab44e43c23cb11b3757175f6ce3e48ef6191580c9723e4d745dc9b95b00e6b"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_utf8.plt": {
+          "bytes": 482,
+          "sha256": "b8ca5950760a1ff4da737da89b091706d830664e03e13507930980bd8b50db5a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
         ".raw"
       ]
     },

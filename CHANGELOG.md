@@ -31,6 +31,35 @@ LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
 recording that showed it.
 
+- The lint and `verify_circuit` passed a `.meas` whose trig LTspice computes
+  in degrees. On the default settings of LTspice 26 and XVII, `sin`, `cos`,
+  `tan`, `asin`, `acos`, `atan` and `atan2` inside a `.meas` take and give
+  degrees where a B source uses radians: `atan2(1,1)` is 45 and `cos(pi)` is
+  0.998497, and `INTEG V(s)*sin(2*pi*1k*time)` over two periods of a 1 kHz
+  sine is -3.5e-5 where 1e-3 was meant. `ph()` in a `.meas` gives degrees as
+  well, and the per-user setting "Use radian measure in waveform expressions"
+  turns both to radians. `run_experiments` now refuses such a `.meas` (lint
+  `meas-trig-degrees`, blocking; `linter_version` 8) and `verify_circuit`'s
+  `syntax` check reports it as `meas_trig_degrees`, both naming the B-source
+  form whose unit does not depend on the setting. The `vdb()`, `phase()` and
+  `group_delay()` refusals also see a call written after an operator
+  (`2*vdb(out)`) or an equals sign (`WHEN time=cos(1)`, `TD={atan(1)}`) now,
+  which they missed.
+- An AC `.meas` whose result is a negative real number came back positive.
+  LTspice prints every AC result as a magnitude and an angle, and a negative
+  `ph()`, `re()` or `im()` as its absolute value at 180°: the phase at the
+  corner of an RC low-pass, -45 degrees, was read as 45. A result printed at
+  0° or 180° is now read as the signed number; any other angle is still read
+  as the magnitude. That also makes `db(mag(V(out)))` read as the gain in dB;
+  `db(V(out))` in an AC `.meas` is LTspice's complex logarithm, read as its
+  magnitude, and the guide now says to write the former.
+- A `.meas` named `e`, `k`, `pi` or `q` was accepted. Those are constants of
+  LTspice's expression engine: LTspice 26 refuses the whole deck and XVII
+  skips the measurement. `run_experiments` now refuses such a deck before it
+  runs (lint `meas-name-ltspice`, blocking; `linter_version` 8), the
+  directive check behind `verify_circuit`'s `syntax` check and
+  `edit_schematic`'s directives refuses it (`meas_reserved_name`), and the
+  fix rides on the error relayed from a run LTspice 26 refused.
 - Results from LTspice 26 could not be read for a deck with two or more
   subcircuit instances. LTspice 24 and later write one `Backannotation:` line
   in the raw header for each instance, and the raw preflight refused a header
@@ -78,6 +107,11 @@ recording that showed it.
   character and is written back as it was read. LTspice reads such a file a
   byte at a time, so the copy is again what the simulator would have been
   given.
+- A `.four` card carrying a harmonic or period count, such as
+  `.four 1k 5 V(in)`, had the count read as a trace it asked for. When the
+  run produced no Fourier table, as on ngspice, an observation reported a
+  trace named "5" as requested and missing. Both builds read the number after
+  the frequency as the harmonic count, and the counts are skipped now.
 - On LTspice XVII no result of a run could be read when the deck's title line
   held one of those bytes. XVII copies the title into its log, and the log was
   refused as undecodable; `.meas` results failed the same way inside the log
@@ -605,6 +639,38 @@ recording that showed it.
 
 ### Added
 
+- `edit_schematic` has a twelfth op, `set_plot_panes`, which writes the
+  waveform panes LTspice opens for a sheet into the `.plt` beside it: the
+  traces of each pane, top to bottom, for the `tran` or `ac` analysis, with
+  optional log or dB scales. It replaces that analysis's panes, keeps the
+  file's other analyses, and reports the panes it replaced so they can be put
+  back. The file is written in the same transaction as the sheet, under a
+  file lock of its own. What LTspice writes and reads was recorded on LTspice
+  26.1.1 and XVII 17.0.37 (new `plot-settings` cases in
+  `tests/fixtures/ltspice_recorded`) and the writer follows it: UTF-16 LE
+  without a byte order mark and LF line ends, the form XVII writes and both
+  builds read. LTspice 26 writes UTF-8, and XVII saving over a UTF-8 file
+  appends the old bytes after its own, so UTF-16 is the form neither build's
+  save damages. Panes are listed bottom first in the file, and a trace is
+  read only up to its first space, so a trace with whitespace is refused.
+  The recorder gained a `plot` case kind that runs a sheet in LTspice's
+  window, builds panes with the window's own menu commands and saves them.
+- An `analyze_results` recipe, `tone`, reads the amplitude and phase of a
+  transient signal at one frequency you give. It cuts the window to the whole
+  periods that fit from its start and weights the samples by time, sharing
+  `thd`'s trim and resample, and returns `amplitude`, `phase_deg`, `dc` and the
+  sine and cosine coefficients, each reducible. The phase is that of
+  `sin(2*pi*f*t)` with `t` the simulation's own time, so it does not move with
+  the window and two signals' phases subtract. A warning names a sampling step
+  too wide for straight lines between samples to follow a sinusoid. The same
+  calculation is `analyze_tone` in the Python API. The guide's `signals`
+  section now names it and LTspice's `.four`, which the `summary` recipe reads;
+  LTspice 26 and XVII print a `.four` phase in different conventions (a
+  `SINE(0 1 1k)` source's fundamental at 90 and 0 degrees), so `.four` is not
+  the place to read phase from.
+- The warning for an ngspice run that skipped `.four` names the `tone` and
+  `thd` recipes, which read harmonics from the raw it still wrote, instead of
+  saying Fourier and THD are unavailable.
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains
   verified completed cases and retries eligible unfinished cases under the
