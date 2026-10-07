@@ -385,6 +385,18 @@ class BridgeSession:
             raise BridgeError(str(reply.get("message") or f"LTspice did not take {path}"))
         return str(reply.get("unchanged")).lower() != "true"
 
+    def show_results(self, path: str) -> None:
+        """Open the results file at ``path`` in the attached window, in front.
+
+        Reading a results file's description is what opens it there: the
+        bridge has no call that only opens one. LTspice loads the plot
+        settings file beside it as it does, and never again while it stays
+        open, so a results file the window already had keeps the traces it
+        was showing; nothing the bridge answers tells the two cases apart.
+        """
+        self.call("get_raw_info", path=path)
+        self.call("bring_to_front", path=path)
+
     def close(self) -> None:
         """End the bridge. It leaves the LTspice window it was attached to running."""
         self._watchdog.cancel()

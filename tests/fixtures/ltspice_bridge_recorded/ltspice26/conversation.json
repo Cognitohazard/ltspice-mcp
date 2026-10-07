@@ -233,6 +233,50 @@
   "error": "document not found"
  },
  {
+  "note": "run the sheet in the window",
+  "call": "start_simulation",
+  "arguments": {
+   "path": "C:\\recording\\older_version.asc"
+  },
+  "reply": {
+   "message": "",
+   "path": "C:\\recording\\older_version.asc",
+   "result": "true"
+  }
+ },
+ {
+  "note": "open a results file",
+  "call": "get_raw_info",
+  "arguments": {
+   "path": "C:\\recording\\older_version.raw"
+  },
+  "reply": {
+   "path": "C:\\recording\\older_version.raw"
+  }
+ },
+ {
+  "note": "put it in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\older_version.raw"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "the results file is then the one LTspice has in front",
+  "observed": true
+ },
+ {
+  "note": "a results file that is not there",
+  "call": "get_raw_info",
+  "arguments": {
+   "path": "C:\\recording\\absent.raw"
+  },
+  "error": "file not found"
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},

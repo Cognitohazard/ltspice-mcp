@@ -39,13 +39,14 @@ import numpy as np
 from pydantic import Field
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
-from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, services
+from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, plot_settings, services
 from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
 from ltspice_mcp.lib.format import si_prefix
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.metrics import (
     guarded_axis,
     parse_time,
@@ -1021,6 +1022,13 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
             "(default [analysis] attach_plot, off)."
         ),
     )
+    in_ltspice: bool = Field(
+        default=False,
+        description=(
+            "Also open the run in the user's open LTspice window (26.1+) with "
+            "these traces drawn; writes a .plt beside the results file."
+        ),
+    )
     annotate: bool = Field(
         default=True,
         description=(
@@ -1058,6 +1066,60 @@ _IMAGE_SCHEMA: dict[str, Any] = {
 }
 
 
+_ALREADY_OPEN_NOTE = (
+    "A results file LTspice already had open keeps the traces it was showing; "
+    "close it there and ask again to change them."
+)
+
+
+def _show_in_ltspice(
+    state: SessionState, results: Path, analysis: str, panes: list[list[str]]
+) -> dict[str, Any]:
+    """Open ``results`` in an LTspice window with ``panes`` drawn. Blocking.
+
+    The traces are written first, as the plot settings file LTspice loads when
+    it opens the results (``lib/plot_settings.py``), so they are there for a
+    person who opens the file by hand when no window could be reached. Nothing
+    here fails the plot: the chart and its numbers are already made, and what
+    happened in LTspice is a fact beside them.
+    """
+    report: dict[str, Any] = {
+        "shown": False,
+        "results": str(results),
+        "plot_settings": None,
+        "panes": panes,
+    }
+    windows = state.open_windows
+    if not windows.available:
+        report["reason"] = f"LTspice windows cannot be reached here: {windows.unavailable}"
+        return report
+    try:
+        left_alone = plot_settings.write_beside(results, analysis, panes)
+    except (plot_settings.PlotSettingsError, OSError) as error:
+        left_alone = f"the plot settings could not be written ({error})"
+    if left_alone is None:
+        report["plot_settings"] = str(plot_settings.settings_path(results))
+    try:
+        report["pid"], report["version"] = windows.show_results(results)
+    except BridgeError as error:
+        report["reason"] = str(error)
+        if left_alone is None:
+            report["note"] = (
+                "Opened by hand in LTspice, the results file shows these traces: the "
+                "plot settings beside it name them."
+            )
+        return report
+    report["shown"] = True
+    report["note"] = _ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}."
+    return report
+
+
+def _ltspice_line(report: Mapping[str, Any]) -> str:
+    if report["shown"]:
+        return f"Opened in LTspice {report['version']} (process {report['pid']}). {report['note']}"
+    return f"Not shown in LTspice: {report['reason']}. " + str(report.get("note", ""))
+
+
 @registry.tool(
     name="plot_waveform",
     title="Plot Waveforms",
@@ -1071,7 +1133,8 @@ _IMAGE_SCHEMA: dict[str, Any] = {
         "supports MCP Apps the chart is also "
         "embedded as an in-chat widget; otherwise it opens in your local "
         "browser. The reply summarizes each trace (min and max and where, first "
-        "and final value, mean on a transient); attach_plot adds a PNG.\n\n"
+        "and final value, mean on a transient); attach_plot adds a PNG; "
+        "in_ltspice also opens the run in the user's LTspice window.\n\n"
         "For more numbers use analyze_results: the waveform recipe returns a "
         "table (or CSV on disk), and signal_stats and the bode_* recipes return "
         "scalars."
@@ -1103,6 +1166,28 @@ _IMAGE_SCHEMA: dict[str, Any] = {
             "delivery": {"type": "string", "enum": ["terminal", "ui"]},
             "opened": {"type": "boolean"},
             "opener": {"type": ["string", "null"]},
+            "ltspice": {
+                "type": "object",
+                "description": "Present with in_ltspice: what happened in the LTspice window.",
+                "properties": {
+                    "shown": {"type": "boolean"},
+                    "pid": {"type": "integer", "description": "The LTspice process."},
+                    "version": {"type": "string"},
+                    "results": {"type": "string", "description": "The file opened."},
+                    "plot_settings": {
+                        "type": ["string", "null"],
+                        "description": "The .plt written beside it; null when none was.",
+                    },
+                    "panes": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "string"}},
+                        "description": "The traces asked for, per pane.",
+                    },
+                    "reason": {"type": "string", "description": "Why it was not shown."},
+                    "note": {"type": "string"},
+                },
+                "required": ["shown", "results", "plot_settings", "panes"],
+            },
             "image": _IMAGE_SCHEMA,
             "image_path": {"type": "string"},
             "observations": OBSERVATIONS_SCHEMA,
@@ -1191,7 +1276,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     step_dicts = [dict(step.parameters) for step in raw.descriptor.steps]
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, PLOT_MAX_POINTS_CEILING)
-    open_locally = state.config.open_plot if args.open is None else args.open
+    # Asked for in LTspice, the chart is not also opened in a browser unless
+    # that was asked for too.
+    open_default = state.config.open_plot and not args.in_ltspice
+    open_locally = open_default if args.open is None else args.open
     attach = state.config.attach_plot if args.attach_plot is None else args.attach_plot
 
     plan = await asyncio.to_thread(
@@ -1258,6 +1346,13 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     opened, opener = False, None
     if widget_spec_json is None and open_locally:
         opened, opener = await asyncio.to_thread(desktop.open_in_desktop, out_path)
+
+    shown_in_ltspice: dict[str, Any] | None = None
+    if args.in_ltspice:
+        panes = [[sig.name for sig in group] for group in plan.groups if group]
+        shown_in_ltspice = await asyncio.to_thread(
+            _show_in_ltspice, state, raw_path, raw.descriptor.original_plot_name, panes
+        )
 
     # The model's own frame: a static PNG of the same panels, on request.
     image: RenderedImage | None = None
@@ -1435,6 +1530,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     if image is not None:
         data["image"] = image.to_dict()
         data["image_path"] = str(png_path)
+    if shown_in_ltspice is not None:
+        data["ltspice"] = shown_in_ltspice
     if widget_spec_json is not None:
         head = (
             f"Rendered an interactive {analysis_type} plot widget in-chat (also wrote {out_path})"
@@ -1444,6 +1541,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         if opened:
             head += f" (opened with {opener})"
     lines = [head]
+    if shown_in_ltspice is not None:
+        lines.append(_ltspice_line(shown_in_ltspice))
     if image is not None:
         lines.append(f"Attached a PNG of the chart ({image.width}x{image.height}, {png_path}).")
     lines.append(f"Traces ({len(traces)} of {traces_total}):")

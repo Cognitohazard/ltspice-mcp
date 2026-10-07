@@ -22,6 +22,7 @@ receipt with `jobs`, and measure a finished job with `analyze_results`.
 | read `.meas` results | recipe `{"metric": "measurements"}` |
 | page RAW plots, trace descriptors, or printed log facts | `inspect(queries=[{"kind": "results", "path": …, "view": …}])` |
 | a scalar, a trace, a chart | recipes `value`, `waveform`, `plot` |
+| show a run in the user's own LTspice, when they ask to see it there | `plot_waveform(job_id=…, signals=[…], in_ltspice=true)` |
 | device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
 | AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
 | transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |

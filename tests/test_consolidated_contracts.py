@@ -757,7 +757,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # by scale), attach_plot, and open, whose default now comes from
     # [analysis] open_plot. Measured 3,695 characters.
     # Explicit plot and dialect selection also contribute to the schema bound.
-    "plot_waveform": 4100,
+    # Raised by about 200 characters for in_ltspice, which opens the run in
+    # the LTspice window the user already has, with the plotted traces drawn:
+    # the argument, and a clause in the description so that a host asked to
+    # "show it in LTspice" finds it. Measured 4,294.
+    "plot_waveform": 4300,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

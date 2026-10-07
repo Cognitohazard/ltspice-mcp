@@ -57,6 +57,8 @@ SERVER_CALLS = {
     "get_active_design_path",
     "get_design_content",
     "set_design_content",
+    "get_raw_info",
+    "bring_to_front",
 }
 
 
@@ -114,6 +116,7 @@ class TestRecording:
             "the window then reads back exactly what it was given": True,
             "the file is as it was": True,
             "after the file is rewritten the window still holds its own copy": True,
+            "the results file is then the one LTspice has in front": True,
             "no LTspice was started in its place": True,
         }
 
@@ -259,7 +262,7 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
     with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
         for step in steps[:first_with_window]:
             replay(session, step)
-    write_world(world, [window])
+    write_world(world, [window], results=[f"{NEUTRAL_DIR}\\older_version.raw"])
     with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
         for step in steps[first_with_window:first_after]:
             replay(session, step)
