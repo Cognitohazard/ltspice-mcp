@@ -19,17 +19,30 @@ def _ids(
     dialect: str | None = None,
     simulator: str = "LTspice",
     suppress=(),
+    codec: str = "cp1252",
+    cp1252_reader: str | None = None,
 ) -> set[str]:
-    path = tmp_path / "deck.cir"
-    # Read as an 8-bit file, the one kind that can hold a byte UTF-8 would not.
+    # Read as an 8-bit file by default, the one kind that can hold a byte
+    # UTF-8 would not.
     findings = lint_deck(
-        text, path, dialect, simulator, suppress=suppress, codecs={path: "cp1252"}
+        text,
+        tmp_path / "deck.cir",
+        dialect,
+        simulator,
+        suppress=suppress,
+        codec=codec,
+        cp1252_reader=cp1252_reader,
     )
     return {finding["rule_id"] for finding in findings}
 
 
 _CLEAN = "V1 in 0 1\nR1 in out 1k\n.model DFAST D(Is=1e-12)\nD1 out 0 DFAST\n.op\n.end\n"
 
+
+# A comment holding byte 0x85, with a card after it on the line.
+_BYTE_85_DECK = "* t\nV1 a 0 1\nR1 a 0 1k\n* 1k to 10k\u2026R2 a 0 1k\n.op\n.end\n"
+# A node named with byte 0x80, a euro sign to cp1252.
+_EURO_NODE_DECK = "* t\nV1 n\u20acf 0 1\nR1 n\u20acf 0 1k\n.op\n.end\n"
 
 # Each seed rule, a deck that trips it, and the dialect and simulator it is
 # live under. The clean-deck test lints in the same context, so a rule that
@@ -71,18 +84,8 @@ _SEED_CASES = [
         None,
         "LTspice",
     ),
-    (
-        "byte-85-ltspice",
-        "* t\nV1 a 0 1\nR1 a 0 1k\n* 1k to 10k\u2026R2 a 0 1k\n.op\n.end\n",
-        None,
-        "LTspice",
-    ),
-    (
-        "node-control-byte-ltspice",
-        "* t\nV1 n\u20acf 0 1\nR1 n\u20acf 0 1k\n.op\n.end\n",
-        None,
-        "LTspice",
-    ),
+    ("byte-85-ltspice", _BYTE_85_DECK, None, "LTspice"),
+    ("node-control-byte-ltspice", _EURO_NODE_DECK, None, "LTspice"),
     (
         "step-ngspice",
         "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
@@ -310,7 +313,7 @@ def test_model_missing_resolves_through_staged_include_snapshots(tmp_path: Path)
         tmp_path / "deck.cir",
         None,
         "LTspice",
-        includes=[(tmp_path / "staged" / "amp.inc", ".subckt AMP a b\nR1 a b 1k\n.ends AMP\n")],
+        includes=[(tmp_path / "staged" / "amp.inc", ".subckt AMP a b\nR1 a b 1k\n.ends AMP\n", "utf-8")],
     )
 
     assert "model-missing" not in {finding["rule_id"] for finding in findings}
@@ -329,7 +332,7 @@ def test_snapshot_serves_models_without_reading_staged_files(tmp_path: Path):
         tmp_path / "staged" / "deck.cir",
         None,
         "LTspice",
-        includes=[(staged_include, ".model DFAST D(Is=1e-12)\n")],
+        includes=[(staged_include, ".model DFAST D(Is=1e-12)\n", "utf-8")],
     )
 
     assert "model-missing" not in {finding["rule_id"] for finding in findings}
@@ -348,7 +351,7 @@ def test_live_reference_nested_in_staged_include_is_still_read(tmp_path: Path):
         tmp_path / "staged" / "deck.cir",
         None,
         "LTspice",
-        includes=[(staged_include, f'.include "{live}"\n')],
+        includes=[(staged_include, f'.include "{live}"\n', "utf-8")],
     )
 
     assert "model-missing" not in {finding["rule_id"] for finding in findings}
@@ -619,7 +622,7 @@ class TestValueSuffixRule:
             f'* t\n.include "{include}"\nX1 in out core\n.op\n.end\n',
             tmp_path,
             "value-suffix-mojibake",
-            includes=[(include, ".subckt core a b\nC1 a b 23Âµ\n.ends core\n")],
+            includes=[(include, ".subckt core a b\nC1 a b 23Âµ\n.ends core\n", "utf-8")],
         )
 
         assert finding["at"] == {"file": str(include), "line": 2}
@@ -710,39 +713,28 @@ def test_linter_version_is_stable_nonempty_string():
     assert linter_version
 
 
-_BYTE_85_DECK = "* t\nV1 a 0 1\nR1 a 0 1k\n* 1k to 10k…R2 a 0 1k\n.op\n.end\n"
-
-
 def test_an_ellipsis_in_a_utf8_deck_is_no_byte_85(tmp_path: Path):
     """UTF-8 spells an ellipsis E2 80 A6; only an 8-bit file holds byte 0x85."""
-    path = tmp_path / "deck.cir"
-    findings = lint_deck(_BYTE_85_DECK, path, None, "LTspice", codecs={path: "utf-8"})
-    assert "byte-85-ltspice" not in {finding["rule_id"] for finding in findings}
+    assert "byte-85-ltspice" not in _ids(_BYTE_85_DECK, tmp_path, codec="utf-8")
 
 
 def test_byte_85_is_one_line_to_a_known_xvii(tmp_path: Path):
-    path = tmp_path / "deck.cir"
-    findings = lint_deck(
-        _BYTE_85_DECK, path, None, "LTspice", codecs={path: "cp1252"}, cp1252_reader="XVIIx64.exe"
-    )
-    assert "byte-85-ltspice" not in {finding["rule_id"] for finding in findings}
+    assert "byte-85-ltspice" not in _ids(_BYTE_85_DECK, tmp_path, cp1252_reader="XVIIx64.exe")
 
 
 def test_byte_85_before_a_comment_or_the_line_end_changes_no_card(tmp_path: Path):
-    deck = "* t\nV1 a 0 1\nR1 a 0 1k ; ten…\n* one…* two\n.op\n.end\n"
+    deck = "* t\nV1 a 0 1\nR1 a 0 1k ; ten\u2026\n* one\u2026* two\n.op\n.end\n"
     assert "byte-85-ltspice" not in _ids(deck, tmp_path)
 
 
 def test_byte_85_in_an_include_is_found_in_the_include(tmp_path: Path):
-    deck = tmp_path / "deck.cir"
     include = tmp_path / "parts.lib"
     findings = lint_deck(
         '* t\n.inc "parts.lib"\nV1 a 0 1\n.op\n.end\n',
-        deck,
+        tmp_path / "deck.cir",
         None,
         "LTspice",
-        includes=[(include, "* parts…R9 a 0 1k\n")],
-        codecs={deck: "utf-8", include: "cp1252"},
+        includes=[(include, "* parts\u2026R9 a 0 1k\n", "cp1252")],
     )
     (finding,) = [f for f in findings if f["rule_id"] == "byte-85-ltspice"]
     assert finding["at"] == {"file": str(include), "line": 1}
@@ -751,7 +743,4 @@ def test_byte_85_in_an_include_is_found_in_the_include(tmp_path: Path):
 
 def test_a_node_name_in_a_utf8_deck_holds_no_control_byte(tmp_path: Path):
     """In UTF-8 a euro sign is three bytes LTspice reads as one character."""
-    path = tmp_path / "deck.cir"
-    deck = "* t\nV1 n\u20acf 0 1\nR1 n\u20acf 0 1k\n.op\n.end\n"
-    findings = lint_deck(deck, path, None, "LTspice", codecs={path: "utf-8"})
-    assert "node-control-byte-ltspice" not in {finding["rule_id"] for finding in findings}
+    assert "node-control-byte-ltspice" not in _ids(_EURO_NODE_DECK, tmp_path, codec="utf-8")
