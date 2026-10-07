@@ -70,6 +70,10 @@ _CREATE_NO_WINDOW = 0x08000000
 # of these may reach it from this process's environment.
 _BRIDGE_VARIABLES = frozenset({"LTSPICE_MCP_PID", "LTSPICE_MCP_PORT", "LTSPICE_INSTALL_DIR"})
 _ATTACHED_TO_A_WINDOW = "gui-attached"
+# Handed a document with this character in it, LTspice 26.1.1 never answers
+# again: seen by pushing a UTF-16 sheet read as an 8-bit one. In a window that
+# is every open document a person has, so such text is never sent.
+_NEVER_ANSWERED = chr(0)
 
 
 class BridgeError(RuntimeError):
@@ -378,8 +382,15 @@ class BridgeSession:
         """Replace the open document at ``path``; False when it already read so.
 
         The window changes and the file does not. LTspice records the change
-        as one step of that document's undo history.
+        as one step of that document's undo history. Text holding a NUL
+        character is refused here and not sent: LTspice stops answering for
+        good when it is given one.
         """
+        if _NEVER_ANSWERED in text:
+            raise BridgeError(
+                "the sheet holds a NUL character, and LTspice stops answering when it "
+                "is handed text with one"
+            )
         reply = self.call("set_design_content", path=path, text=text)
         if reply.get("status") != "ok":
             raise BridgeError(str(reply.get("message") or f"LTspice did not take {path}"))

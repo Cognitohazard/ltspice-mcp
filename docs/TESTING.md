@@ -578,6 +578,12 @@ that the call the server uses opens a results file and leaves it in front. If
 that needs checking again, capture the window; `PrintWindow` works on a window
 of another desktop when the capturing process is started on that desktop.
 
+A second observation is behind a refusal. Handed a document with a NUL
+character in it, LTspice 26.1.1 stops answering for good, which in a window is
+every document a person has open; it was seen by pushing a UTF-16 sheet read as
+an 8-bit one. The client refuses to send such text (`replace_design_text`), so
+there is nothing to record: the test is that it is never sent.
+
 The bridge can start an LTspice of its own, and one thing about that is not
 in the recording because the recording is made with the launch disabled. The
 opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to
