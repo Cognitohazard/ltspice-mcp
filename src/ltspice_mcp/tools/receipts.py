@@ -388,7 +388,6 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
 
 ReceiptBuilt = tuple[dict[str, Any], str]
 ReceiptBuild = Callable[[int, response_budget.Rung | None], ReceiptBuilt]
-_ReceiptRows = Callable[[dict[str, Any]], list[Any]]
 
 # Rung 0's allowlist, shared by run_experiments and jobs status/wait because
 # both render the same receipt envelope. The attached analysis is that tool's
@@ -430,8 +429,6 @@ def _receipt_row_pages(data: dict[str, Any]) -> list[dict[str, Any]]:
     return pages
 
 
-
-
 def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
     """The attached analysis's rendered result, when the receipt carries one."""
     analysis_block = data.get("analysis")
@@ -439,15 +436,15 @@ def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-def receipt_rows(data: dict[str, Any]) -> list[Any]:
-    """Every row a receipt-shaped response shows: its run pages, and the
-    attached analysis's rows when it carries one. The one measure every
-    receipt is shrunk against, whichever tool returns it."""
-    rows = [row for page in _receipt_row_pages(data) for row in page["items"]]
+def _receipt_surfaces(data: dict[str, Any]) -> list[list[Any]]:
+    """Every row surface a receipt-shaped response shows, one list apiece: its
+    run pages, and the attached analysis's surfaces when it carries one. The
+    one measure every receipt is shrunk against, whichever tool returns it."""
+    surfaces = [page["items"] for page in _receipt_row_pages(data)]
     result = _attached_result(data)
     if result is not None:
-        rows.extend(analyze.analysis_rows(result))
-    return rows
+        surfaces.extend(analyze.analysis_surfaces(result))
+    return surfaces
 
 
 def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[str]:
@@ -477,51 +474,42 @@ async def negotiate_receipt(
     build: ReceiptBuild,
     page_limit: int,
     *,
-    rows: _ReceiptRows,
     notes: response_budget.Notes,
 ) -> ReceiptBuilt:
     """Render a receipt at the mildest shared budget rung that fits.
 
-    The shrink rung measures rather than trusting the shared estimate, which
-    counts every surface's rows but becomes one limit on each — the run page and
-    every attached recipe's rows — so it can price a page that cut nothing as
-    fitting. Its search goes down to a limit of zero: a receipt's rows preview
-    surfaces other calls page (``jobs(runs)``, ``analyze_results``), so at the
-    floor ``completeness``, ``runs.total`` and the cursor stand in for them and
-    the floor is the same size however many cases the job ran. A page whose
-    cursor continues itself floors its own limit at one row.
+    The shrink rung measures the page its estimate priced and searches below it
+    when that page is still over. The search goes down to a limit of zero: a
+    receipt's rows preview surfaces other calls page (``jobs(runs)``,
+    ``analyze_results``), so at the floor ``completeness``, ``runs.total`` and
+    the cursor stand in for them and the floor is the same size however many
+    cases the job ran. A page whose cursor continues itself floors its own
+    limit at one row.
     """
     text = ""
     rendered: dict[str, Any] = {}
 
-    def candidate(limit: int, rung: response_budget.Rung) -> tuple[dict[str, Any], str, list[str]]:
+    def candidate(
+        limit: int, rung: response_budget.Rung
+    ) -> tuple[dict[str, Any], tuple[str, list[str]]]:
         data, line = build(limit, rung)
-        return data, line, _degrade_receipt(data, rung)
-
-    def at_shrink(rung: response_budget.Rung) -> tuple[dict[str, Any], str, list[str]]:
-        @functools.cache
-        def probe(limit: int) -> tuple[tuple[dict[str, Any], str, list[str]], int]:
-            built = candidate(limit, rung)
-            return built, response_budget.estimate_tokens(built[0])
-
-        measure = response_budget.RowMeasure.of(rows(rendered))
-        limit = measure.fit_limit(page_limit, rung)
-        # With no rows shown, every limit renders the same page.
-        if measure.shown > 0:
-            limit = response_budget.largest_fitting(
-                limit, lambda cap: probe(cap)[1] <= rung.body_budget
-            )
-        return probe(limit)[0]
+        return data, (line, _degrade_receipt(data, rung))
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
         nonlocal text, rendered
         if rung.shrink:
-            rendered, text, cut = at_shrink(rung)
+            measure = response_budget.RowMeasure.of_surfaces(_receipt_surfaces(rendered))
+            rendered, (text, cut) = response_budget.render_to_fit(
+                min(page_limit, measure.affordable(rung)),
+                lambda limit: candidate(limit, rung),
+                rung,
+                floor=0,
+            )
         elif rung.level == response_budget.RUNG_TRIM:
             # The undegraded rung built this same page; degrade it in place.
             cut = _degrade_receipt(rendered, rung)
         else:
-            rendered, text, cut = candidate(page_limit, rung)
+            rendered, (text, cut) = candidate(page_limit, rung)
         rung.cut.extend(cut)
         return rendered
 
@@ -544,7 +532,6 @@ async def render_run_receipt(
             budget,
             build,
             _RUN_PAGE_LIMIT,
-            rows=receipt_rows,
             notes=_RUN_BUDGET_NOTES,
         )
     result = format_response(text, data)
