@@ -648,21 +648,14 @@ async def _negotiate_jobs(
     budget: ResponseBudget,
     build: _JobsBuild,
     page_limit: int,
-    *,
-    min_rows: int = 1,
 ) -> _JobsBuilt:
-    """Render this jobs response at the mildest ladder rung that fits ``budget``.
-
-    ``min_rows`` is 0 only for a receipt, whose run page previews jobs(runs);
-    the runs and list pages continue themselves, so they keep at least a row.
-    """
+    """Render this jobs response at the mildest ladder rung that fits ``budget``."""
     return await negotiate_receipt(
         budget,
         build,
         page_limit,
         rows=jobs_rows,
         notes=_BUDGET_NOTES,
-        min_rows=min_rows,
     )
 
 
@@ -1447,7 +1440,6 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                     budget,
                     lambda limit, rung: render_jobs_data(evaluation, limit=limit, rung=rung),
                     page_limit,
-                    min_rows=1 if isinstance(args, JobsListInput | JobsRunsInput) else 0,
                 )
         except Exception as exc:
             # Presentation failed over an action that already happened — a

@@ -889,7 +889,8 @@ in the result set, so a continuation replays them.
   run of a sweep — a signal no run carries — is one row, not a row per run, so
   the failures channel no rung trims stays bounded in the run count. The page
   then caps rows at 100 with a `failures_truncated` observation. The Python
-  API's complete result lists every record, one per place.
+  API's complete `analyze_results` result lists every record, one per place;
+  an analysis attached to an experiment is stored as the page renders it.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
   assignments}`.
