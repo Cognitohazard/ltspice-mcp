@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics
 from ltspice_mcp.lib.raw_parser import (
     extract_operating_point,
@@ -80,6 +80,34 @@ class TestParseSpiceMicroSign:
     )
     def test_micro_sign_is_the_u_suffix(self, text: str, expected: float):
         assert parse_spice_value(text) == pytest.approx(expected)
+
+
+class TestAValueOrAName:
+    """LTspice reads digits after a suffix as a fraction, so to it ``1N4148``
+    is a number. A caller telling a value from a name must not read it so:
+    diode and transistor names are written exactly that way."""
+
+    @pytest.mark.parametrize("name", ["1N4148", "2N2222", "2N3904A", "1k5", "4R7", "2Hz"])
+    def test_a_name_or_an_ltspice_only_spelling_is_not_a_plain_value(self, name: str):
+        with pytest.raises(ValueError, match="Cannot read"):
+            parse_plain_value(name)
+        parse_spice_value(name)  # LTspice reads each one as a number
+
+    @pytest.mark.parametrize(
+        ("text", "expected"), [("1k", 1e3), ("4.7uF", 4.7e-6), ("10MegHz", 1e7), ("2.5", 2.5)]
+    )
+    def test_a_plain_value_reads_as_every_spice_reads_it(self, text: str, expected: float):
+        assert parse_plain_value(text) == pytest.approx(expected)
+        assert parse_spice_value(text) == pytest.approx(expected)
+
+    def test_two_model_names_are_compared_as_names(self):
+        from ltspice_mcp.lib.montecarlo import parse_value
+        from ltspice_mcp.lib.netlist_graph import values_equal
+
+        assert not values_equal("2N3904", "2N3904A", 1e-6)
+        assert values_equal("1k", "1000", 1e-6)
+        assert parse_value("2N2222") is None
+        assert parse_value("4.7u") == pytest.approx(4.7e-6)
 
 
 class TestParseSpiceCaseSensitivity:
