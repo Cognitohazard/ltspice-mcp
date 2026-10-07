@@ -21,9 +21,9 @@ from pydantic import TypeAdapter, ValidationError
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
+from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.schematic_ops import (
     OP_RESULT_FACTS,
-    build_on_wire_predicate,
     collect_component_geometry,
     get_asc_editor,
     post_op_warnings,

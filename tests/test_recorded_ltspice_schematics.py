@@ -17,6 +17,12 @@ import pytest
 from spicelib.editor.asc_editor import AscEditor
 
 from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib.asc_document import parse_asc
+from ltspice_mcp.lib.connectivity import (
+    label_folded_nets,
+    same_instance_dropped_segments,
+    signature,
+)
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
@@ -25,17 +31,18 @@ from ltspice_mcp.lib.netlist_graph import canon_ref, compare_graphs, parse_netli
 from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     element_class,
-    label_folded_nets,
     make_editor,
     net_partition,
-    same_instance_dropped_segments,
+    post_op_warnings,
     wire_segments_of,
 )
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene
+from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, sheet_view
+from ltspice_mcp.lib.sheet_findings import checker_findings
 from ltspice_mcp.lib.simulator import _in_generation
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
+from ltspice_mcp.lib.symbol_library import find_symbol
 from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR
 from tests.ltspice_recorder import INPUTS
@@ -43,6 +50,7 @@ from tests.ltspice_recorder import INPUTS
 ORIENTATION = rec.cases_of("symbol-orientation") + rec.cases_of("stock-symbol-orientation")
 CONNECTIVITY = rec.cases_of("wire-connectivity") + rec.cases_of("net-naming")
 SAME_INSTANCE = rec.cases_of("same-instance-wire")
+SHARED_POINT = rec.cases_of("pins-of-one-part-on-one-point")
 PLACEMENTS = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
 
 
@@ -250,6 +258,189 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
     assert bool(dropped) == (first != second)
     if dropped:
         assert [(d["ref"], set(d["pins"])) for d in dropped] == [("R1", {"1", "2"})]
+
+
+def netlisted_groups(sheet: Path) -> set[frozenset[str]]:
+    """The pins on each net of the sheet's signature, as ``REF.order`` sets."""
+    editor = make_editor(sheet)
+    assert isinstance(editor, AscEditor)
+    pins = [
+        ((pin["x"], pin["y"]), (canon_ref(row["ref"]), str(pin["order"])))
+        for row in collect_component_geometry(editor)
+        for pin in row["pins"]
+    ]
+    labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
+    wires = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wire_segments_of(editor)]
+    return {
+        frozenset(f"{ref}.{order}" for ref, order in on_net)
+        for on_net, _names in signature(pins, labels, wires)
+    }
+
+
+@pytest.mark.parametrize(
+    ("build", "case_id"), list(rec.per_build(CONNECTIVITY + SAME_INSTANCE + SHARED_POINT))
+)
+def test_the_signature_is_the_circuit_ltspice_netlists(build: str, case_id: str, tmp_path: Path):
+    """Every joining rule at once, with the two a partition cannot hold: the
+    wire between two pins of one part that the export drops, and the pins of
+    one part that share a point."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    assert netlisted_groups(sheet) == exported_groups(build, case_id)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_parts_pins_on_one_point_are_joined_only_by_what_else_is_there(build: str):
+    """What the recording says, read off the export itself."""
+    nodes = {
+        name: card.nodes
+        for name, card in rec.export_instances(
+            build, "connectivity/pins_of_one_part_on_one_point"
+        ).items()
+    }
+    # Alone: each pin on a node of its own.
+    assert nodes["r1"][0] != nodes["r1"][1]
+    # A wire ending there, or a label there: both pins on it.
+    assert nodes["r4"] == ["w", "w"]
+    assert nodes["r5"] == ["f", "f"]
+    # Another part's pin there joins the pin highest in SpiceOrder, whichever
+    # order the symbol lists its pins in, and leaves the other alone.
+    for stacked, other in (("r2", "r3"), ("r6", "r7")):
+        assert nodes[stacked][1] == nodes[other][0]
+        assert nodes[stacked][0] not in (nodes[stacked][1], *nodes[other])
+    # So do two other parts' pins.
+    assert nodes["r8"][1] == nodes["r9"][0] == nodes["r10"][1]
+    assert nodes["r8"][0] != nodes["r8"][1]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_both_tools_call_floating_the_pins_ltspice_left_on_nothing(build: str, tmp_path: Path):
+    """On the sheet of parts with two pins on one point: a pin is floating
+    exactly when the export gives it a node no other pin is on."""
+    case_id = "connectivity/pins_of_one_part_on_one_point"
+    cards = rec.export_instances(build, case_id)
+    on_node: dict[str, list[str]] = {}
+    for name, card in cards.items():
+        for order, node in enumerate(card.nodes, start=1):
+            on_node.setdefault(node, []).append(f"{name}.{order}")
+    alone = sorted(pins[0] for node, pins in on_node.items() if len(pins) == 1 and node != "0")
+    assert alone == ["r1.1", "r1.2", "r2.1", "r6.1", "r8.1"]
+
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    editor = make_editor(sheet)
+    assert isinstance(editor, AscEditor)
+    # The stacked symbols name each pin by its SpiceOrder.
+    from_the_editor = sorted(
+        f"{row['ref']}.{row['pin']}".lower()
+        for row in post_op_warnings(editor)
+        if row["kind"] == "floating_pin"
+    )
+    assert from_the_editor == alone
+
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    from_the_checker = sorted(
+        found.refs[0].lower()
+        for found in checker_findings(sheet_view(scene))
+        if found.rule == "floating_pin"
+    )
+    assert from_the_checker == sorted(pin.split(".")[0] for pin in alone)
+
+
+# --------------------------------------------------------------------------
+# Where a symbol is found
+# --------------------------------------------------------------------------
+
+#: Each recorded search, and whether LTspice 26 and LTspice XVII found the
+#: symbol. Beside the sheet the two differ, in opposite ways.
+BESIDE_THE_SHEET = {
+    # the sheet says ``part``; the symbol is in ``lib`` beside the sheet
+    "search/in_subfolder": {"current": False, "xvii": False},
+    # the sheet says ``lib\\part``; the symbol is in ``lib`` beside the sheet
+    "search/named_subfolder": {"current": True, "xvii": False},
+    # the sheet says ``lib\\part``; the symbol is right beside the sheet
+    "search_flat/named_folder_absent": {"current": False, "xvii": True},
+}
+#: The stock ``battery``, which both builds keep in ``Misc``.
+IN_THE_LIBRARY = {
+    "search/library_folder_bare": {"current": True, "xvii": True},  # ``battery``
+    "search/library_folder_named": {"current": True, "xvii": True},  # ``Misc\\battery``
+    "search/library_folder_wrong": {"current": True, "xvii": True},  # ``Wrong\\battery``
+}
+SEARCHES = BESIDE_THE_SHEET | IN_THE_LIBRARY
+
+
+def _found_by(build: str, case_id: str) -> bool:
+    """Whether the build exported the sheet, which it does only with every symbol found."""
+    return bool(rec.entry(build, case_id)["outputs"])
+
+
+def _staged_search(case_id: str, directory: Path) -> tuple[Path, str, list[Path]]:
+    """The case's sheet with its symbol where the recording had it; the name the
+    sheet uses; and, for a library case, a library that keeps ``battery`` in
+    ``Misc`` as both builds' do."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], case_id, directory / "sheet")
+    name = parse_asc(sheet.read_bytes()).symbols[0].symbol
+    libraries: list[Path] = []
+    if case_id in IN_THE_LIBRARY:
+        library = directory / "library"
+        (library / "Misc").mkdir(parents=True)
+        (library / "Misc" / "battery.asy").write_text(
+            "Version 4\nSYMATTR Prefix V\nPIN 0 16 NONE 0\nPINATTR PinName +\n"
+            "PINATTR SpiceOrder 1\nPIN 0 96 NONE 0\nPINATTR PinName -\nPINATTR SpiceOrder 2\n",
+            encoding="utf-8",
+        )
+        libraries.append(library)
+    return sheet, name, libraries
+
+
+def test_every_recorded_search_is_listed():
+    recorded = {
+        case_id
+        for behaviour in (
+            "symbol-beside-sheet",
+            "symbol-named-with-a-folder-it-is-not-in",
+            "symbol-in-library-folder",
+        )
+        for case_id in rec.cases_of(behaviour)
+    }
+    assert recorded == set(SEARCHES)
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(list(SEARCHES))))
+def test_each_build_finds_a_symbol_where_the_table_says(build: str, case_id: str):
+    assert _found_by(build, case_id) == SEARCHES[case_id][rec.generation(build)]
+    if not _found_by(build, case_id) and rec.generation(build) == "xvii":
+        # XVII says which; LTspice 26 only ends with an error.
+        assert "Couldn't find symbol(s)" in rec.entry(build, case_id)["dialog"]
+
+
+@pytest.mark.parametrize("case_id", list(SEARCHES))
+class TestTheServerFindsASymbolWhereEitherBuildDoes:
+    """A part whose symbol is not found has no pins, so a connection to it goes
+    unseen. The search therefore finds what either build would, and nothing
+    that neither would."""
+
+    def test_the_rule(self, case_id: str, tmp_path: Path):
+        sheet, name, libraries = _staged_search(case_id, tmp_path)
+        either = any(_found_by(build, case_id) for build in rec.BUILDS)
+        assert (find_symbol(name, sheet.parent, libraries) is not None) == either
+
+    def test_the_editors_pin_geometry(
+        self, case_id: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        sheet, name, libraries = _staged_search(case_id, tmp_path)
+        monkeypatch.setattr(AscEditor, "custom_lib_paths", [str(root) for root in libraries])
+        either = any(_found_by(build, case_id) for build in rec.BUILDS)
+        info = symbol_geometry.get_symbol_info(name, sheet)
+        assert (info is not None) == either
+        if info is not None:
+            assert len(info.pins) == 2
+
+    def test_the_renderer(self, case_id: str, tmp_path: Path):
+        sheet, name, libraries = _staged_search(case_id, tmp_path)
+        resolver = SymbolResolver(local_dir=sheet.parent, stock_paths=libraries)
+        either = any(_found_by(build, case_id) for build in rec.BUILDS)
+        assert (resolver.resolve(name) is not None) == either
+        assert resolver.resolve(name) == find_symbol(name, sheet.parent, libraries)
 
 
 # --------------------------------------------------------------------------

@@ -45,6 +45,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, replace_file
+from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -74,7 +75,6 @@ from ltspice_mcp.lib.schematic_ops import (
     OpWirePins,
     SheetPlotSettings,
     blank_sheet,
-    build_on_wire_predicate,
     collapse_result_warnings,
     collect_component_geometry,
     edit_guard,

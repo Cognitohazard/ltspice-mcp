@@ -13,13 +13,9 @@ import pytest
 from mcp.types import TextContent
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.connectivity import build_on_wire_predicate, point_on_segment
 from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
-from ltspice_mcp.lib.schematic_ops import (
-    OpWirePins,
-    blank_sheet,
-    build_on_wire_predicate,
-    point_on_segment,
-)
+from ltspice_mcp.lib.schematic_ops import OpWirePins, blank_sheet
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import TraceNetInput, handle_trace_net
 from tests._asc_ops import (

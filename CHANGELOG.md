@@ -31,6 +31,36 @@ LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
 recording that showed it.
 
+- `edit_schematic` and `verify_circuit` each had a reading of their own of
+  a floating pin. Both now follow what LTspice was recorded doing. A pin on
+  the interior of a diagonal wire is connected: `edit_schematic` reported it
+  floating and left it out of `wiring.pins_wired`. Two pins of one part on
+  one point do not connect each other, which `edit_schematic` took for a
+  connection. And where another part's pin is on that point too, only the
+  first part's highest pin in SpiceOrder is connected to it; the other is
+  on a node of its own, and neither tool reported it. A wire of no length
+  connects nothing.
+- `edit_schematic` left a part whose symbol is not found out of every
+  geometry pass without saying so: its pins were missing from the
+  floating-pin check and from the pin counts. It now reports the part
+  (`unresolved_symbol`, a new kind among its findings), as `verify_circuit`
+  does.
+- `verify_circuit` judged two parts to overlap by what each draws, and
+  `edit_schematic` by the box it reports, which includes the pins. Both now
+  use the box with pins. The two are the same box for nearly every symbol;
+  they differ for one with a pin drawn apart from its body.
+- Where a symbol is looked for was two rules, one for `edit_schematic`'s pin
+  geometry and one for `verify_circuit`'s drawing and symbol check, and
+  neither was LTspice's. It is now one, recorded from both builds.
+  `verify_circuit` no longer finds a symbol kept in a folder beside the
+  sheet under its bare name, which neither build does; such a symbol is
+  drawn as the placeholder and reported as not found. `edit_schematic` now
+  finds a symbol whose name says a folder when the file is right beside the
+  sheet, as XVII does, and one whose name says a library folder the library
+  keeps it out of, as both builds do. On Linux and macOS it also finds a
+  symbol named with a library folder at all: the backslashes in the name
+  were taken for part of a file name there, and the part was left with no
+  pins.
 - The lint and `verify_circuit` passed a `.meas` whose trig LTspice computes
   in degrees. On the default settings of LTspice 26 and XVII, `sin`, `cos`,
   `tan`, `asin`, `acos`, `atan` and `atan2` inside a `.meas` take and give

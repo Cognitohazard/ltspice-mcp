@@ -35,7 +35,8 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
-from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
+from ltspice_mcp.lib.schematic_scene import Scene
+from ltspice_mcp.lib.sheet_findings import Finding, SheetView
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
 from ltspice_mcp.tools._base import CompareSpec, RenderPolicy
@@ -602,19 +603,19 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     monkeypatch,
 ):
     asc = _write(work_dir, "crowded.asc", "Version 4.1\nSHEET 1 880 680\n")
-    issues = [
-        LayoutIssue(
-            kind="floating_pin",
-            refs=(f"R{index}.1",),
-            coords=((index * 16, 0),),
+    found = [
+        Finding(
+            rule="floating_pin",
             detail=f"floating pin {index}",
+            refs=(f"R{index}.1",),
+            points=((index * 16, 0),),
         )
         for index in range(vc.FINDING_RULE_CAP + 7)
     ]
 
     def crowded_scene(path, _state, *, compute_issues):
         assert compute_issues is True
-        return Scene(source=path), issues
+        return Scene(source=path), SheetView(), found
 
     monkeypatch.setattr(vc, "_analyze_scene", crowded_scene)
     args = VerifyCircuitInput(path=str(asc), checks=["layout"])
@@ -1323,15 +1324,15 @@ async def test_quality_fires_on_text_overlap(state_no_sim, work_dir, asc_symbols
 
 async def test_render_svg(state_no_sim, work_dir, asc_symbols, monkeypatch):
     asc = _write(work_dir, "r.asc", _RES_ASC)
-    # render.mode="only" skips every check, so the O(n²) layout scan must not run.
+    # render.mode="only" skips every check, so the layout checks must not run.
     calls = {"n": 0}
-    real_layout_issues = vc.layout_issues
+    real_checker_findings = vc.checker_findings
 
-    def _counting(scene):
+    def _counting(view):
         calls["n"] += 1
-        return real_layout_issues(scene)
+        return real_checker_findings(view)
 
-    monkeypatch.setattr(vc, "layout_issues", _counting)
+    monkeypatch.setattr(vc, "checker_findings", _counting)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
     render = data["render"]
     assert render["image_format"] == "svg"
@@ -1341,7 +1342,7 @@ async def test_render_svg(state_no_sim, work_dir, asc_symbols, monkeypatch):
     assert render["downscaled"] is False
     # mode="only" skips every check.
     assert data["checks_run"] == []
-    assert calls["n"] == 0, "render.mode='only' must not run the layout_issues scan"
+    assert calls["n"] == 0, "render.mode='only' must not run the layout checks"
 
 
 async def test_render_reports_the_digest_of_the_sheet_it_drew(state_no_sim, work_dir, asc_symbols):
@@ -1378,7 +1379,7 @@ async def test_the_digest_names_the_bytes_that_were_drawn(state_no_sim, work_dir
     """
     asc = _write(work_dir, "drawn.asc", _RES_ASC)
     drawn = hashlib.sha256(asc.read_bytes()).hexdigest()
-    scene, _ = vc._analyze_scene(asc, state_no_sim, compute_issues=False)
+    scene, _, _ = vc._analyze_scene(asc, state_no_sim, compute_issues=False)
 
     asc.write_text(_RES_ASC.replace("1k", "2k"), encoding="utf-8")
     assert hashlib.sha256(asc.read_bytes()).hexdigest() != drawn
