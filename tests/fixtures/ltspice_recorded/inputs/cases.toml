@@ -361,6 +361,11 @@ summary = "What ltspice-mcp-bridge.exe answers to each call the server makes, th
 model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json, which test_ltspice_bridge.py also replays against the stand-in bridge the suite uses"
 
+[behaviour.reference-documents]
+summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."
+model = ["lib/simulator_docs.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/manifest.json: reference, the file names and front matter keys of the install (the documents are the vendor's and are not recorded); LTspice XVII installs none"
+
 # ---------------------------------------------------------------- cases an input path cannot describe
 
 [[case]]

@@ -560,6 +560,12 @@ way LTspice rewrites a sheet on opening it goes in as an input here, not as a
 rule worked out by hand; the text-grid rule was first written from one example
 and was wrong for a negative coordinate.
 
+The manifest also notes the reference documents the install holds, by file
+name and front matter key, which is what `lib/simulator_docs.py` reads; the
+documents themselves are the vendor's and are not recorded. The opt-in tier
+checks that the documents read from the install are the ones LTspice's own
+server lists.
+
 The bridge can start an LTspice of its own, and one thing about that is not
 in the recording because the recording is made with the launch disabled. The
 opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to

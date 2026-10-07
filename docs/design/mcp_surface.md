@@ -1394,6 +1394,16 @@ Python API), which are never capped. The gate stays a whole-file answer.
     session reads first, ending in an index of the topic sections and task
     playbooks; a `section` from that index returns that part. An unknown name
     fails the item as `unknown_section`, listing the names that exist
+{kind: "simulator_docs", name?, cursor?}
+    the reference documents the simulator's vendor installs with it; for
+    LTspice 26.1 and later, about fifteen Markdown files on the program itself
+    (keyboard shortcuts, menus, the schematic file format, .MEAS, the waveform
+    viewer, troubleshooting). No `name` lists them as {name, title,
+    description} with the `source` directory; a `name` from that list returns
+    the document as `sections`, each {heading, text}, cut at its second-level
+    headings and paged there. An unknown name fails as `unknown_document`,
+    listing the names; an install with none fails as
+    `simulator_docs_unavailable`
 {kind: "open_in_ltspice"}
     the documents open in the LTspice windows on this machine: `windows`
     (how many are running), `total`, and `designs`, each {path, kind:
@@ -1407,8 +1417,24 @@ Python API), which are never capped. The gate stays a whole-file answer.
 ```
 
 `path` is required except on `capabilities`, `symbols`, `symbol`,
-`reference`, `guide` and `open_in_ltspice`; `results` accepts either `path` or
-`job_id`.
+`reference`, `guide`, `simulator_docs` and `open_in_ltspice`; `results`
+accepts either `path` or `job_id`.
+
+**Why the vendor's documents are a query, and not part of the guide.** The
+guide is this server's: how to use these tools, and what goes wrong in a deck.
+What the keyboard shortcut is, where a menu item lives, how the waveform viewer
+adds a trace, are questions about the program, and from 26.1 LTspice installs
+its own answers as files written for an assistant, which its own MCP server
+serves. A client with file access could read them where they lie, but the
+clients this surface is first for have none, which is the reason the guide has
+a query kind too. They are read from the install when asked (`lib/simulator_docs.py`)
+and never packaged: they are the vendor's, and the installed copy is the one
+that describes the installed build. They stay out of the guide because the
+guide is one text behind three doors, the same on every machine, and these are
+on some machines and not others. A document comes back in sections so that the
+longest (about sixty thousand characters) pages where a reader would stop, by
+the same cursor and the same response budget as every other listing. A name is
+looked up only among the files the directory lists.
 
 **Why what is open is a query.** A person working in LTspice says "this
 circuit", and until now the surface could only be handed a path. LTspice knows

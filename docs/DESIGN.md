@@ -99,7 +99,9 @@ help advises keeping a model away from drawing.
 
 Most of that this server already does on files, with more behind it: typed and
 validated ops in place of whole-sheet text, experiments in place of one run,
-recipes in place of raw samples. None of it is routed through the bridge.
+recipes in place of raw samples. None of it is routed through the bridge. Its
+reference documents are files in the install, and `inspect(kind="simulator_docs")`
+reads them from there.
 
 The one thing only LTspice can reach is the window, and that is what the bridge
 is used for. LTspice reads a sheet once: a sheet edited on disk while it is

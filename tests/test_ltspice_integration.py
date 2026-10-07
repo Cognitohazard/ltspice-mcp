@@ -804,6 +804,57 @@ class TestSheetOpenInAWindow:
         assert "SYMBOL res" in design["difference"]
         assert design["sha256"] == hashlib.sha256(on_disk).hexdigest()
 
+    async def test_the_reference_documents_are_the_ones_ltspice_itself_lists(
+        self, ltspice_state: SessionState, open_sheet
+    ):
+        """LTspice's own server lists its reference documents. Read from the
+        install, they are the same documents. The summaries differ: LTspice
+        takes its one from the index page's table, and each document's own
+        front matter, which is what is read here, says more."""
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession, bridge_command
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+        _sheet, pid = open_sheet
+        exe = executable_path(ltspice_state.default_simulator)
+        assert exe is not None
+        command = bridge_command(exe)
+        assert command is not None
+
+        def as_ltspice_lists_them() -> dict[str, str]:
+            with BridgeSession(command) as session:
+                session.attach(pid)
+                listed = session.call("list_ltspice_reference_docs")["docs"]
+            return {doc["docname"]: doc["summary"] for doc in listed}
+
+        theirs = await asyncio.to_thread(as_ltspice_lists_them)
+        result = await handle_inspect(
+            InspectInput.model_validate({"queries": [{"kind": "simulator_docs"}]}), ltspice_state
+        )
+        assert result.structured_content is not None
+        (item,) = result.structured_content["results"]
+        assert item["ok"] is True, item
+        ours = {doc["name"]: doc["description"] for doc in item["data"]["docs"]}
+
+        assert theirs, "LTspice listed no reference documents"
+        assert set(theirs) <= set(ours)
+        # What the install holds and LTspice does not list is its index page.
+        assert set(ours) - set(theirs) <= {"README.md"}
+        assert all(ours[name] for name in theirs), "a listed document has no description"
+
+        (document,) = [
+            (
+                await handle_inspect(
+                    InspectInput.model_validate(
+                        {"queries": [{"kind": "simulator_docs", "name": "MEAS-REFERENCE.md"}]}
+                    ),
+                    ltspice_state,
+                )
+            ).structured_content["results"][0]
+        ]
+        assert document["ok"] is True, document
+        assert document["data"]["sections"], "the document came back with no sections"
+
     def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
         self, ltspice_state: SessionState
     ):
