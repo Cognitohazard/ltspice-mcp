@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import shutil
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
@@ -27,7 +28,16 @@ from ltspice_mcp.lib.parser_worker import parse_request
 from ltspice_mcp.lib.raw_header import RawLimits
 from ltspice_mcp.lib.spice_lex import SpiceCard, cards_from_path
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, read_instance
-from tests.ltspice_recorder import FIXTURES, INPUTS, load_cases, load_manifest, recorded_builds
+from tests.ltspice_recorder import (
+    FIXTURES,
+    INPUTS,
+    Build,
+    discover_builds,
+    load_cases,
+    load_manifest,
+    recorded_builds,
+    unavailable_reason,
+)
 
 BUILDS = recorded_builds()
 CASES = load_cases()
@@ -59,6 +69,31 @@ def has(build: str, name: str) -> bool:
 
 def entry(build: str, case_id: str) -> dict[str, Any]:
     return manifest(build)["cases"][case_id]
+
+
+def installed_counterpart(label: str) -> Build | str:
+    """The installed build to hold against the recording ``label``, or why there is none.
+
+    The same major version when it is installed. Otherwise a newer build of
+    the same generation stands in for the newest recording of that generation,
+    which is how a new release gets compared with the last one recorded.
+    """
+    if os.environ.get("LTSPICE_MCP_RUN_LTSPICE_INTEGRATION") != "1":
+        return "LTspice integration tests are opt-in; set LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1"
+    installed = discover_builds()
+    for build in installed:
+        if build.label == label:
+            return unavailable_reason(build) or build
+    newest = max(
+        (other for other in BUILDS if generation(other) == generation(label)),
+        key=lambda other: int(other.removeprefix("ltspice")),
+    )
+    if label == newest:
+        for build in installed:
+            newer = int(build.label.removeprefix("ltspice")) > int(label.removeprefix("ltspice"))
+            if build.generation == generation(label) and newer:
+                return unavailable_reason(build) or build
+    return f"no LTspice build to compare with the {label} recording is installed here"
 
 
 def cases_of(behaviour: str, *, kind: str | None = None) -> list[str]:

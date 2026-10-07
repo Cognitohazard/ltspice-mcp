@@ -9,15 +9,21 @@ import asyncio
 import math
 import os
 import shutil
+import sys
+import threading
 from pathlib import Path
 
+import psutil
 import pytest
 from mcp.types import TextContent, TextResourceContents
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib.hidden_desktop import DialogError
+from ltspice_mcp.lib.simulator import SIMULATORS, bind_named_executable, detect_simulators
 from ltspice_mcp.state import SessionState
 from tests.conftest import terminal_experiment
+from tests.test_hidden_desktop import windows_only
 
 # Path to the test fixture .asc schematic
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -500,3 +506,155 @@ class TestMonteCarloIntegration:
         for item in reduced.values():
             assert 950.0 <= item["assignments"]["random:component:R1"] <= 1050.0
             assert 1516 <= item["value"] <= 1676  # 1/(2*pi*R*100n) over that band
+
+
+# --------------------------------------------------------------------------
+# LTspice's window stays off the desktop someone is working at
+# --------------------------------------------------------------------------
+
+
+class _WindowWatch:
+    """Where the windows of this test's LTspice are, sampled while it runs.
+
+    LTspice is told apart from any other on the machine by ``marker``, a
+    directory only this test's command lines name. ``here`` is set when one of
+    its windows was on the desktop the test runs on, ``foreground`` when it was
+    the foreground window there, and ``hidden`` when one was on the server's
+    own desktop: the last shows the watch saw the windows at all.
+    """
+
+    def __init__(self, marker: Path) -> None:
+        self._marker = marker.as_posix().casefold()
+        self._known: dict[int, bool] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._watch, name="window-watch")
+        self.here = self.foreground = self.hidden = False
+
+    def __enter__(self) -> "_WindowWatch":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        self._thread.join()
+
+    def _ours(self, pid: int) -> bool:
+        if pid not in self._known:
+            try:
+                command = " ".join(psutil.Process(pid).cmdline())
+            except psutil.Error:
+                return False  # gone, or not ours to read: ask again next time
+            self._known[pid] = self._marker in command.replace("\\", "/").casefold()
+        return self._known[pid]
+
+    def _watch(self) -> None:
+        if sys.platform != "win32":
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        user = ctypes.WinDLL("user32")
+        listed = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user.EnumWindows.argtypes = [listed, wintypes.LPARAM]
+        user.GetForegroundWindow.restype = wintypes.HWND
+        user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+
+        def owner(window: int | None) -> int:
+            pid = wintypes.DWORD(0)
+            if window:
+                user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+            return int(pid.value)
+
+        while True:
+            on_this_desktop: set[int] = set()
+
+            def note(window: int, _unused: int, found: set[int] = on_this_desktop) -> bool:
+                found.add(owner(window))
+                return True
+
+            user.EnumWindows(listed(note), 0)
+            ours_here = {pid for pid in on_this_desktop if self._ours(pid)}
+            desktop = hidden_desktop.shared()
+            ours_hidden = {
+                pid for pid in (desktop.window_owners() if desktop else ()) if self._ours(pid)
+            }
+            self.here = self.here or bool(ours_here)
+            self.hidden = self.hidden or bool(ours_hidden)
+            front = owner(user.GetForegroundWindow())
+            self.foreground = self.foreground or (front != 0 and self._ours(front))
+            # timing: a sampler; nothing signals that a window opened or closed
+            if self._stop.wait(0.002):
+                return
+
+
+@windows_only
+@pytest.mark.asyncio
+class TestWindowStaysOffTheDesktop:
+    """LTspice opens a window for every run and export and takes the keyboard
+    focus for as long as it lasts. Started on the server's own desktop it has
+    no window where the person is, so it cannot."""
+
+    def _assert_kept_away(self, watch: _WindowWatch) -> None:
+        assert watch.here or watch.hidden, "the watch saw no LTspice window: it proves nothing"
+        assert watch.hidden, "LTspice had no window on the server's desktop"
+        assert not watch.here, "LTspice had a window on the desktop the test runs on"
+        assert not watch.foreground, "LTspice was the foreground window"
+
+    async def test_a_run_has_no_window_here(self, ltspice_state: SessionState, work_dir: Path):
+        deck = work_dir / "long_tran.cir"
+        deck.write_text(
+            "* long enough to be seen\n"
+            "R1 in out 1k\n"
+            "C1 out 0 100n\n"
+            "V1 in 0 PULSE(0 1 0 1n 1n 0.5m 1m)\n"
+            ".tran 0 300m 0 1u\n"
+            ".END\n"
+        )
+        with _WindowWatch(work_dir) as watch:
+            await _run_deck(ltspice_state, "off-desktop-run", deck.name)
+        self._assert_kept_away(watch)
+
+    async def test_an_export_has_no_window_here(self, ltspice_state: SessionState, work_dir: Path):
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+        sheet = work_dir / "Draft1.asc"
+        shutil.copy2(_FIXTURE_DIR / "Draft1.asc", sheet)
+        with _WindowWatch(work_dir) as watch:
+            result = await handle_verify_circuit(
+                VerifyCircuitInput.model_validate(
+                    {"path": sheet.name, "checks": ["export"], "export_to": "sidecar"}
+                ),
+                ltspice_state,
+            )
+        data = result.structured_content
+        assert data is not None
+        assert data["export"]["ok"] is True, data["export"]
+        self._assert_kept_away(watch)
+
+
+@windows_only
+@pytest.mark.asyncio
+class TestMessageBoxWhereNobodyCanAnswer:
+    """On a desktop nobody sees, a message box would hold LTspice until the
+    timeout and say nothing. The launch ends it and reports the box."""
+
+    async def test_xvii_refusing_a_sheet_ends_the_export_with_what_it_said(self, work_dir: Path):
+        """LTspice XVII answers a sheet that starts with a byte order mark with
+        a box and waits for OK, which is recorded as ``export/micro_utf8_bom``.
+        The export raises what that box said, as it was recorded."""
+        from tests import _ltspice_recorded as recorded
+
+        case_id = "export/micro_utf8_bom"
+        xvii = recorded.installed_counterpart("ltspice17")
+        if isinstance(xvii, str):
+            pytest.skip(xvii)
+        source = recorded.CASES.case(case_id).source
+        sheet = work_dir / Path(source).name
+        shutil.copy2(recorded.INPUTS / source, sheet)
+        simulator = bind_named_executable(SIMULATORS["ltspice"], "ltspice:xvii", xvii.exe)
+
+        with pytest.raises(DialogError) as stopped:
+            await asyncio.to_thread(simulator.create_netlist, sheet, timeout=120)
+
+        assert stopped.value.text == recorded.entry("ltspice17", case_id)["dialog"]
+        assert not sheet.with_suffix(".net").exists()

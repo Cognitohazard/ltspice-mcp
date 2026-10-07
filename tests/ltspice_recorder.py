@@ -35,7 +35,7 @@ against a committed one; the opt-in LTspice tier calls it, so a release that
 changes behaviour fails there by name.
 
 The recorder drives LTspice natively and is Windows-only. It starts each run
-on a desktop of its own (``HiddenDesktop``), because LTspice otherwise takes
+on a desktop of its own (``recording_desktop``), because LTspice otherwise takes
 the keyboard focus for as long as a run lasts. Everything that reads a
 recording (``load_manifest``, ``recorded``, ``compare``) works anywhere.
 """
@@ -45,7 +45,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import ctypes
-import ctypes.wintypes as wintypes
 import fnmatch
 import hashlib
 import json
@@ -62,6 +61,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ltspice_mcp.lib.hidden_desktop import BoxWatch, HiddenDesktop, StartedProcess
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_recorded"
 INPUTS = FIXTURES / "inputs"
@@ -684,235 +685,24 @@ def assert_private(
 # --------------------------------------------------------------------------
 
 
-class _StartupInfo(ctypes.Structure):
-    _fields_ = [
-        ("cb", wintypes.DWORD),
-        ("lpReserved", wintypes.LPWSTR),
-        ("lpDesktop", wintypes.LPWSTR),
-        ("lpTitle", wintypes.LPWSTR),
-        ("dwX", wintypes.DWORD),
-        ("dwY", wintypes.DWORD),
-        ("dwXSize", wintypes.DWORD),
-        ("dwYSize", wintypes.DWORD),
-        ("dwXCountChars", wintypes.DWORD),
-        ("dwYCountChars", wintypes.DWORD),
-        ("dwFillAttribute", wintypes.DWORD),
-        ("dwFlags", wintypes.DWORD),
-        ("wShowWindow", wintypes.WORD),
-        ("cbReserved2", wintypes.WORD),
-        ("lpReserved2", ctypes.c_void_p),
-        ("hStdInput", wintypes.HANDLE),
-        ("hStdOutput", wintypes.HANDLE),
-        ("hStdError", wintypes.HANDLE),
-    ]
-
-
-class _ProcessInformation(ctypes.Structure):
-    _fields_ = [
-        ("hProcess", wintypes.HANDLE),
-        ("hThread", wintypes.HANDLE),
-        ("dwProcessId", wintypes.DWORD),
-        ("dwThreadId", wintypes.DWORD),
-    ]
-
-
-_GENERIC_ALL = 0x10000000
-_WAIT_OBJECT_0 = 0
-_INFINITE = 0xFFFFFFFF
-
-
-class _Started:
-    """A process started on a named desktop: the part of ``Popen`` a case uses.
-
-    It is held in a job that ends with this object, so an LTspice no one can
-    see cannot outlive a recorder that was itself stopped.
-    """
-
-    def __init__(self, handle: int, pid: int, command: Sequence[str]) -> None:
-        from ltspice_mcp.lib.windows_job import WindowsJob
-
-        self._handle: int | None = handle
-        self.pid = pid
-        self.args = list(command)
-        self.returncode: int | None = None
-        self._job: WindowsJob | None = None
-        # A process that has already exited cannot join a job, and needs none.
-        with contextlib.suppress(OSError):
-            self._job = WindowsJob(pid, allow_breakaway=False)
-
-    def _settle(self, milliseconds: int) -> int | None:
-        if self.returncode is not None or self._handle is None:
-            return self.returncode
-        if sys.platform != "win32":
-            return None
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        if kernel.WaitForSingleObject(self._handle, milliseconds) != _WAIT_OBJECT_0:
-            return None
-        code = wintypes.DWORD(0)
-        kernel.GetExitCodeProcess(self._handle, ctypes.byref(code))
-        self.returncode = code.value
-        return self.returncode
-
-    def poll(self) -> int | None:
-        return self._settle(0)
-
-    def wait(self, timeout: float | None = None) -> int:
-        code = self._settle(_INFINITE if timeout is None else max(0, int(timeout * 1000)))
-        if code is None:
-            raise subprocess.TimeoutExpired(self.args, timeout or 0.0)
-        return code
-
-    def kill(self) -> None:
-        if sys.platform != "win32" or self._handle is None:
-            return
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        kernel.TerminateProcess(self._handle, 1)
-
-    def close(self) -> None:
-        if self._job is not None:
-            self._job.close()
-            self._job = None
-        if sys.platform == "win32" and self._handle is not None:
-            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-            kernel.CloseHandle(self._handle)
-        self._handle = None
-
-
-class HiddenDesktop:
+def recording_desktop() -> HiddenDesktop:
     """A desktop of its own for LTspice to open its window on.
 
-    LTspice opens a window even for a batch run and holds the keyboard focus
-    until the run ends, whatever show state it is started with: started
-    minimised or hidden it was still the foreground window for most of a run.
-    A process started on another desktop has its windows there and nowhere
-    else, so recording a few hundred cases does not interrupt whoever is at
-    the machine.
+    The launch is the server's (``lib/hidden_desktop.py``, which has the
+    measurements): a process started on another desktop has its windows there
+    and nowhere else, so recording a few hundred cases does not interrupt
+    whoever is at the machine.
 
     It also keeps a person out of the recording. LTspice answers some inputs
     with a message box and waits for OK; on the desktop someone is working at,
     a stray key press answers it, and the run then looks as if it had ended by
-    itself. Here nobody can, so ``dialog`` reads what the box says and the case
-    records that the build stopped to ask.
+    itself. Here nobody can, so the box is read and the case records that the
+    build stopped to ask.
 
-    Where a desktop cannot be made, ``start`` launches the ordinary way and
-    ``dialog`` sees nothing.
+    Where a desktop cannot be made, a case is launched the ordinary way and
+    no box is seen.
     """
-
-    def __init__(self) -> None:
-        self.name: str | None = None
-        self._handle: int | None = None
-        if sys.platform != "win32":
-            return
-        user = ctypes.WinDLL("user32", use_last_error=True)
-        user.CreateDesktopW.restype = wintypes.HANDLE
-        user.CreateDesktopW.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.LPCWSTR,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.c_void_p,
-        ]
-        name = f"ltspice-recorder-{os.getpid()}"
-        handle = user.CreateDesktopW(name, None, None, 0, _GENERIC_ALL, None)
-        if handle:
-            self.name, self._handle = name, handle
-
-    def __enter__(self) -> HiddenDesktop:
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        self.close()
-
-    def close(self) -> None:
-        if sys.platform == "win32" and self._handle is not None:
-            user = ctypes.WinDLL("user32", use_last_error=True)
-            user.CloseDesktop.argtypes = [wintypes.HANDLE]
-            user.CloseDesktop(self._handle)
-        self.name = self._handle = None
-
-    def dialog(self, pid: int) -> str | None:
-        """What a message box ``pid`` has open here says, or None when it has none.
-
-        The box's title, then each line of text in it. Its buttons are left
-        out: what the build asked is the recording, not how it could be
-        answered.
-        """
-        if sys.platform != "win32" or self._handle is None:
-            return None
-        user = ctypes.WinDLL("user32", use_last_error=True)
-        callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        user.EnumDesktopWindows.argtypes = [wintypes.HANDLE, callback, wintypes.LPARAM]
-        user.EnumChildWindows.argtypes = [wintypes.HWND, callback, wintypes.LPARAM]
-
-        def text_of(window: int) -> str:
-            buffer = ctypes.create_unicode_buffer(2048)
-            user.GetWindowTextW(window, buffer, len(buffer))
-            return buffer.value
-
-        def class_of(window: int) -> str:
-            buffer = ctypes.create_unicode_buffer(128)
-            user.GetClassNameW(window, buffer, len(buffer))
-            return buffer.value
-
-        found: list[str] = []
-
-        def child(window: int, _unused: int) -> bool:
-            if class_of(window) == "Static" and text_of(window).strip():
-                found.append(text_of(window))
-            return True
-
-        def top(window: int, _unused: int) -> bool:
-            owner = wintypes.DWORD(0)
-            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-            # "#32770" is the window class of a dialog box.
-            if (
-                owner.value == pid
-                and class_of(window) == "#32770"
-                and user.IsWindowVisible(window)
-            ):
-                found.append(text_of(window))
-                user.EnumChildWindows(window, callback(child), 0)
-            return True
-
-        user.EnumDesktopWindows(self._handle, callback(top), 0)
-        return "\n".join(found) if found else None
-
-    def start(self, command: Sequence[str], cwd: Path) -> _Started | subprocess.Popen[bytes]:
-        """Start ``command`` in ``cwd`` with its windows on this desktop."""
-        if sys.platform != "win32" or self.name is None:
-            return subprocess.Popen(
-                list(command), cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.CreateProcessW.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.LPWSTR,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            wintypes.BOOL,
-            wintypes.DWORD,
-            ctypes.c_void_p,
-            wintypes.LPCWSTR,
-            ctypes.POINTER(_StartupInfo),
-            ctypes.POINTER(_ProcessInformation),
-        ]
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        startup = _StartupInfo()
-        startup.cb = ctypes.sizeof(startup)
-        startup.lpDesktop = self.name
-        created = _ProcessInformation()
-        line = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(command)))
-        if not kernel.CreateProcessW(
-            None, line, None, None, False, 0, None, str(cwd), ctypes.byref(startup), created
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-        kernel.CloseHandle(created.hThread)
-        return _Started(created.hProcess, created.dwProcessId, command)
+    return HiddenDesktop(f"ltspice-recorder-{os.getpid()}")
 
 
 # --------------------------------------------------------------------------
@@ -966,7 +756,7 @@ class _Ended:
 
 
 def _wait(
-    process: _Started | subprocess.Popen[bytes],
+    process: StartedProcess | subprocess.Popen[bytes],
     case: Case,
     raw: Path,
     timeout: float,
@@ -982,7 +772,7 @@ def _wait(
     stopped at ``timeout``.
     """
     started = time.monotonic()
-    asked: str | None = None
+    boxes = BoxWatch(desktop, process.pid)
     while True:
         try:
             # timing: looks between waits at a file LTspice is writing and at the
@@ -1003,9 +793,8 @@ def _wait(
             waited = case.kill_after_s is not None and elapsed >= case.kill_after_s
             stop = grown or waited
         else:
-            dialog = desktop.dialog(process.pid)
-            stop = dialog is not None and dialog == asked
-            asked = dialog
+            dialog = boxes.look()
+            stop = dialog is not None
         if stop or elapsed >= timeout:
             process.kill()
             process.wait()
@@ -1022,12 +811,15 @@ def _launch(
     timeout: float,
 ) -> _Ended:
     """Run ``command`` to its end or to the point the recorder stops it."""
-    process = desktop.start(command, work)
-    try:
+    started = (
+        desktop.start(command, cwd=work)
+        if desktop.available
+        else subprocess.Popen(
+            list(command), cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    )
+    with started as process:
         return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
-    finally:
-        if isinstance(process, _Started):
-            process.close()
 
 
 def run_case(
@@ -1041,7 +833,7 @@ def run_case(
 ) -> CaseResult:
     """Run ``case`` on ``build`` in a fresh directory and return what it wrote."""
     if desktop is None:
-        with HiddenDesktop() as own:
+        with recording_desktop() as own:
             return run_case(build, case, inputs, work_root, timeout=timeout, desktop=own)
     settings = build.settings_file
     if settings is None:
@@ -1269,7 +1061,7 @@ def record_build(
     defaults: dict[str, str] = {}
     if only and (directory / MANIFEST).is_file():
         defaults = dict(load_manifest(directory).get("settings", {}).get("defaults", {}))
-    desktop = HiddenDesktop()
+    desktop = recording_desktop()
     try:
         forbidden = private_strings([str(root)])
         for case in selected:

@@ -25,6 +25,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "simulator_exe",
         "simulator_executables",
         "ltspice_ini",
+        "hidden_desktop",
         "ngbehavior",
         "allowed_paths",
         "max_parallel_sims",
