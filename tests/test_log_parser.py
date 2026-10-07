@@ -18,6 +18,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_temperatures,
     read_log_text,
 )
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
 
 
 class TestMissingRefsFromText:
@@ -252,8 +253,11 @@ class TestExtractLogDiagnostics:
         result = extract_log_diagnostics(log)
         (warning,) = [w for w in result["warnings"] if "fourier" in w.lower()]
         # The raw is still written, and the recipes that read a harmonic's
-        # amplitude and phase from it are named as the way on.
-        assert "'tone'" in warning and "'thd'" in warning
+        # amplitude and phase from it are named as the way on, checked against
+        # the live union so a rename cannot leave the warning stale.
+        for recipe in ("tone", "thd"):
+            assert recipe in DISCRIMINANTS
+            assert f"'{recipe}'" in warning
         assert "unavailable" not in warning
 
     def test_bare_singular_matrix(self, tmp_path: Path):

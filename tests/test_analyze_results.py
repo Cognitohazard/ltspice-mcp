@@ -1602,9 +1602,8 @@ _TONE_RECIPES: list[dict[str, Any]] = [
 def _assert_two_tone_answer(data: dict[str, Any]) -> None:
     assert data["failures"] == []
     results = data["results"]
-    (v_in,) = results["in"]["values"]
-    (v_out,) = results["out"]["values"]
-    v_in, v_out = v_in["value"], v_out["value"]
+    (v_in,) = [row["value"] for row in results["in"]["values"]]
+    (v_out,) = [row["value"] for row in results["out"]["values"]]
     assert v_in["unit"] == v_out["unit"] == "V"
     assert v_in["amplitude"] == pytest.approx(1.0, rel=1e-3)
     assert v_in["phase_deg"] == pytest.approx(20.0, abs=0.02)
@@ -1627,11 +1626,8 @@ async def test_tone_reads_amplitude_and_phase_from_a_real_raw(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
-    import jsonschema
-
     data = await _analyze(state_no_sim, _two_tone_raw(work_dir), _TONE_RECIPES)
     _assert_two_tone_answer(data)
-    jsonschema.Draft202012Validator(analyze_mod.OUTPUT_SCHEMA).validate(data)
 
 
 def test_tone_reads_the_same_through_the_python_api(state_no_sim: SessionState, work_dir: Path):

@@ -1640,7 +1640,7 @@ class TestAnalyzeTone:
         # of the amplitude, the loss the warning states.
         t = np.linspace(0.0, 10e-3, 101)
         r = analyze_tone(t, np.sin(2 * np.pi * self.F * t), self.F)
-        expected = (math.sin(math.pi * 0.1) / (math.pi * 0.1)) ** 2
+        expected = float(np.sinc(0.1)) ** 2
         assert r["amplitude"] == pytest.approx(expected, rel=1e-4)
         (warning,) = r["warnings"]
         assert "0.1 of a period" in warning
