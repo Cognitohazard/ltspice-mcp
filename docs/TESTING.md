@@ -463,7 +463,7 @@ These run everywhere, with no LTspice:
 |-|-|
 |`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, and how an export is spelled and encoded|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
-|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
 |`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
 
@@ -476,8 +476,8 @@ A difference between the server and a recording is a finding. Fix the server
 if the fix is small, with the recording as the regression test, which must
 fail before the fix. Otherwise pin what LTspice does and what the server does
 side by side in the test, under a name that says so
-(`READ_BY_LTSPICE_ONLY`, `NOT_REFUSED_YET`), so the gap is written down where
-the next person will find it.
+(`READ_AS_CP1252_BY_THE_SERVER_ONLY` in `test_recorded_ltspice_decks.py`), so
+the gap is written down where the next person will find it.
 
 ### Recording again
 

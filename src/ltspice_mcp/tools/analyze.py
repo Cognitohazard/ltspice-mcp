@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import functools
 import math
 import os
+import re
 import statistics
 import time
 from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
@@ -256,6 +258,12 @@ class Failure:
     message: str
     python_route: bool = False
 
+    @functools.cached_property
+    def reason(self) -> tuple[str, str, str]:
+        """What a collapsed failure row groups this one under, read once: a
+        budget assembles the same failures once per rung it tries."""
+        return (self.code, self.stage, diagnostic_collapse_key(self.message))
+
     def wire(self, served: Collection[str] | None = None) -> dict[str, Any]:
         message = self.message
         if self.python_route and served is not None:
@@ -266,6 +274,54 @@ class Failure:
             "where": self.where,
             "message": message,
         }
+
+
+_FAILURE_WHERE_CAP = 10
+"""How many places a collapsed failure row names before deferring to ``count``."""
+
+_DIGIT_RUN = re.compile(r"(\d+)")
+
+
+def _place_order(where: str) -> tuple[Any, ...]:
+    """``where`` in reading order: ``recipes[2]`` before ``recipes[10]``."""
+    return tuple(
+        int(part) if index % 2 else part for index, part in enumerate(_DIGIT_RUN.split(where))
+    )
+
+
+def _collapse_failures(
+    failures: Sequence[Failure], served: Collection[str] | None = None
+) -> list[dict[str, Any]]:
+    """Failure rows in wire shape, one per reason rather than one per place.
+
+    A recipe that fails one way fails that way on every run — a signal no run
+    carries is one message per run, identical but for ``where`` — so a wide
+    sweep returned a row per run in a channel the budget ladder may never trim.
+    Rows sharing ``(code, stage, message)`` therefore become one row naming its
+    places, the way the experiment receipt already collapses case failures.
+
+    The message keys through :func:`diagnostic_collapse_key`, which folds
+    numbers: a message carrying the run's own numeric state differs in every
+    case of a Monte Carlo, and a verbatim key would group none of them. The row
+    is one member verbatim, the first by ``where`` so that two identical calls
+    pick the same one. ``count`` is the true number of failure records and
+    ``wheres`` the distinct places, capped, so a capped list reports its own
+    shortfall rather than rounding it away. The Python API's complete result
+    keeps every record, uncollapsed.
+    """
+    grouped: dict[tuple[str, str, str], list[Failure]] = {}
+    for failure in failures:
+        grouped.setdefault(failure.reason, []).append(failure)
+    rows: list[dict[str, Any]] = []
+    for members in grouped.values():
+        ordered = sorted(members, key=lambda failure: _place_order(failure.where))
+        row = ordered[0].wire(served)
+        if len(ordered) > 1:
+            places = list(dict.fromkeys(failure.where for failure in ordered))
+            row["wheres"] = places[:_FAILURE_WHERE_CAP]
+            row["count"] = len(ordered)
+        rows.append(row)
+    return rows
 
 
 @dataclass(frozen=True)
@@ -710,17 +766,12 @@ def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
 _LEAN_KEPT_BLOCKS: frozenset[str] = frozenset({"artifact"})
 
 
-def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[str, Any]:
-    """Default row rendering — the answer channel.
+def _scalar_leaves(value: dict[str, Any]) -> dict[str, Any]:
+    """``value`` flattened to its scalar leaves, the default lean value.
 
-    Drops attribution keys that carry nothing (null step_index, empty
-    step_values — the row schema declares no required keys, so absent and
-    empty mean the same thing), drops the per-row deck digest (provenance,
-    reachable via include.fields), and flattens ``value`` to its scalar
-    leaves — the promoted headlines and the simple facts. The nested
-    curve/list detail stays reachable by name: include.fields=["value"]
-    returns the full block. If flattening would empty the value (an
-    all-nested metric such as measurements), the full dict stays — lean
+    The promoted headlines and the simple facts stay; the nested curve/list
+    detail is reachable by name, since include.fields=["value"] returns the
+    full block. If flattening would empty the value, the full dict stays: lean
     never trades data for absence.
 
     An ``artifact`` handle survives the flattening. It is a dict, so the
@@ -728,6 +779,25 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
     recompute from the response, because it names a file this call has already
     written. A plot recipe rendered that way came back as a series count and
     nothing else, which is not a lean answer to "plot this", it is no answer.
+    """
+    flat = {
+        key: item
+        for key, item in value.items()
+        if key in _LEAN_KEPT_BLOCKS or not isinstance(item, (dict, list))
+    }
+    return flat if flat else value
+
+
+def _lean_row(
+    row: dict[str, Any], lean_value: Callable[[dict[str, Any]], dict[str, Any]]
+) -> dict[str, Any]:
+    """Default row rendering — the answer channel.
+
+    Drops attribution keys that carry nothing (null step_index, empty
+    step_values — the row schema declares no required keys, so absent and
+    empty mean the same thing), drops the per-row deck digest (provenance,
+    reachable via include.fields), and renders ``value`` by the metric's own
+    ``lean_value`` (see _LEAN_VALUES).
     """
     out: dict[str, Any] = {}
     for key, item in row.items():
@@ -737,30 +807,27 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
             continue
         out[key] = item
     value = row.get("value")
-    if isinstance(value, dict) and not keep_value_whole:
-        flat = {
-            key: item
-            for key, item in value.items()
-            if key in _LEAN_KEPT_BLOCKS or not isinstance(item, (dict, list))
-        }
-        out["value"] = flat if flat else value
-    else:
-        out["value"] = value
+    out["value"] = lean_value(value) if isinstance(value, dict) else value
     return out
 
 
 def _row_renderer(
     fields: list[str] | None,
     *,
-    whole: bool,
+    metric: str,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Build one reusable renderer for every row on a result surface."""
+    """Build one reusable renderer for every row of ``metric`` on a result surface.
+
+    One plan serves both row surfaces, so projection never depends on an
+    unrelated pagination choice.
+    """
     plan = keep_plan(fields) if fields else None
+    lean_value = _LEAN_VALUES.get(metric, _scalar_leaves)
 
     def render(row: dict[str, Any]) -> dict[str, Any]:
         if plan is not None:
             return project_row(row, plan)
-        return _lean_row(row, keep_value_whole=whole)
+        return _lean_row(row, lean_value)
 
     return render
 
@@ -1809,6 +1876,47 @@ _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
 }
 
 
+def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: entry.get("mean")
+        for name, entry in value.get("stats", {}).items()
+        if isinstance(entry, dict)
+    }
+
+
+def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
+    """A run's ``.meas`` numbers by name, when the run reported one of each.
+
+    One case of a sweep with no ``.step`` holds a single sample per name, so its
+    stats block restates that sample as min, max, mean, median, p10 and p90
+    beside a zero spread and an empty histogram: about fifteen fields to carry
+    one number. Here the number is keyed by name under ``measured``, read by the
+    reducer's own extractor so a row and a reduction over it cannot disagree;
+    the point a crossing or ``AT`` reported with it goes under ``at``. A name
+    the log holds no number for (FAIL'ed, or a value the log decoder nulled as
+    not finite) keeps its key with null and is listed in
+    ``failed_measurements``, so a failure reads as a failure rather than as a
+    missing name. A stepped run's per-name spread is its answer, so it gets
+    none of this, and neither does an empty selection.
+    """
+    stats = value.get("stats")
+    if not isinstance(stats, dict) or not stats:
+        return {}
+    if not all(
+        isinstance(entry, dict) and entry.get("total_count") == 1 for entry in stats.values()
+    ):
+        return {}
+    measured = _measurements_flat(value)
+    compact: dict[str, Any] = {"measured": measured}
+    at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
+    if at:
+        compact["at"] = at
+    failed = [name for name, number in measured.items() if number is None]
+    if failed:
+        compact["failed_measurements"] = failed
+    return compact
+
+
 # Metrics whose headline number lives only inside a list (points[]/crossings[])
 # where dotted ``include.fields`` projection cannot reach — 13-22x the size of
 # the equivalent shell output for a 12-case sweep table, because the caller
@@ -1818,7 +1926,8 @@ _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
 # bode_crossing is a variable-length recipe whose category rejects ``reduce``
 # at validation, so its rule lives only here. stability shipped its worst-case
 # margins flat but left the crossover frequency in a list; this is that rule
-# applied uniformly.
+# applied uniformly. measurements is the keyed form of it: a run holding one
+# sample per .meas gets those samples by name (_measurements_compact).
 _HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "bode_point": lambda value: dict([_bode_point_sample(value)]),
     # No crossing COUNT here: the adapter caps its list (max_results, default
@@ -1827,6 +1936,7 @@ _HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     # crossed"; ambiguity is visible in the list itself.
     "bode_crossing": lambda value: dict([_crossing_sample(value)]),
     "stability": lambda value: dict([_unity_gain_sample(value)]),
+    "measurements": _measurements_compact,
 }
 
 
@@ -1840,12 +1950,13 @@ def _promote_headlines(metric: str, value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        name: entry.get("mean")
-        for name, entry in value.get("stats", {}).items()
-        if isinstance(entry, dict)
-    }
+def _measurements_lean(value: dict[str, Any]) -> dict[str, Any]:
+    """The answer channel's measurements value: without its stats block when
+    ``measured`` carries every number in it. ``include.fields=["value"]``
+    returns the block."""
+    if "measured" not in value:
+        return value
+    return {key: item for key, item in value.items() if key != "stats"}
 
 
 # How each keyed metric flattens its value dict into a {name: number} map.
@@ -1855,52 +1966,102 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
-# Metrics whose row value IS its nested structure, so the answer channel must
-# keep it whole. A waveform's value is the curve the caller asked for. A keyed
-# metric's value is a map addressed by name — and operating_point's only FLAT
-# leaves are ``step``/``step_count``/``device``, so leaning it returns the row's
+def _whole(value: dict[str, Any]) -> dict[str, Any]:
+    return value
+
+
+# How the answer channel renders a metric's value; a metric not listed keeps
+# its scalar leaves (_scalar_leaves). Applied to the lean row only, never to a
+# projected one. A metric whose row value IS its nested structure keeps it
+# whole. A waveform's value is the curve the caller asked for. A keyed metric's
+# value is a map addressed by name — and operating_point's only FLAT leaves are
+# ``step``/``step_count``/``device``, so leaning it returns the row's
 # bookkeeping and drops every number: a bias-point read that answers "complete"
 # and carries nothing. Derived from _KEYED_EXTRACTORS rather than listed, so a
-# new keyed metric cannot be added without this rule following it.
-_WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
+# new keyed metric cannot be added without this rule following it. A
+# measurements value sheds the stats block its 'measured' map restates.
+_LEAN_VALUES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "waveform": _whole,
+    **dict.fromkeys(_KEYED_EXTRACTORS, _whole),
+    "measurements": _measurements_lean,
+}
 
 
-def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Record, float]]]:
+@dataclass
+class _FieldTally:
+    """One reducible number across a recipe's rows: the rows that carried it,
+    and how many rows carried none."""
+
+    samples: list[tuple[Record, float]] = field(default_factory=list)
+    no_value: int = 0
+
+
+def _tallies(recipe: Recipe, records: list[Record]) -> dict[str, _FieldTally]:
+    """Each number a reduction or a spec over ``recipe`` reads, tallied over
+    every row of it.
+
+    A row with no number for a field (a null, a missing key, a value that is
+    not finite) is counted rather than skipped. Leaving it out made a
+    measurement that failed in one run of three a statistic over two with
+    nothing saying so, a spec pass over the two it could judge, and one that
+    failed in every run a name absent from the result.
+    """
+    if not (getattr(recipe, "reduce", None) or getattr(recipe, "spec", None)):
+        return {}
     # The reducer category is the base the recipe inherits (exactly one); a
-    # variable-length recipe matches none and yields no samples.
-    out: dict[str, list[tuple[Record, float]]] = {}
-    pairs = recipe.reduction_fields() if isinstance(recipe, MultiRecipe) else []
-    for record in records:
-        value = record.value
-        if isinstance(recipe, ScalarRecipe):
-            nested = _SCALAR_NESTED.get(recipe.metric)
+    # variable-length recipe matches none and yields no tallies.
+    out: dict[str, _FieldTally] = {}
+
+    def tally(name: str, candidate: Any, record: Record) -> None:
+        entry = out.get(name)
+        if entry is None:
+            entry = out[name] = _FieldTally()
+        number = _number(candidate)
+        if number is None:
+            entry.no_value += 1
+        else:
+            entry.samples.append((record, number))
+
+    if isinstance(recipe, ScalarRecipe):
+        nested = _SCALAR_NESTED.get(recipe.metric)
+        names = _SCALAR_FIELDS.get(recipe.metric, ())
+        for record in records:
+            value = record.value
             if nested is not None:
-                field, candidate = nested(value)
+                name, candidate = nested(value)
             else:
-                names = _SCALAR_FIELDS.get(recipe.metric, ())
-                field = next(
-                    (name for name in names if name in value), names[0] if names else "value"
-                )
-                candidate = value.get(field)
-            number = _number(candidate)
-            if number is not None:
-                out.setdefault(field, []).append((record, number))
-        elif isinstance(recipe, MultiRecipe):
-            for field, actual in pairs:
-                number = _number(value.get(actual))
-                if number is not None:
-                    out.setdefault(recipe.field_for_row(field, value), []).append((record, number))
-        elif isinstance(recipe, KeyedRecipe):
-            # 'field' means one thing on every category: the single number both
-            # a reduction and a spec read. Absent, a keyed recipe covers every
-            # key.
-            wanted = recipe.field
-            for name, candidate in _KEYED_EXTRACTORS[recipe.metric](value).items():
-                if wanted is not None and name != wanted:
-                    continue
-                number = _number(candidate)
-                if number is not None:
-                    out.setdefault(name, []).append((record, number))
+                name = next((key for key in names if key in value), names[0] if names else "value")
+                candidate = value.get(name)
+            tally(name, candidate, record)
+    elif isinstance(recipe, MultiRecipe):
+        pairs = recipe.reduction_fields()
+        for record in records:
+            for name, actual in pairs:
+                tally(recipe.field_for_row(name, record.value), record.value.get(actual), record)
+        if recipe.field is None:
+            # A bare reduction covers the recipe's whole fixed table, which
+            # holds fields a given circuit has none of: a lowpass's low cutoff,
+            # a step response's disturbance figures. A field no row has a
+            # number for is that, not a measurement that failed, so only a
+            # field the caller named is reported with no samples.
+            out = {name: entry for name, entry in out.items() if entry.samples}
+    elif isinstance(recipe, KeyedRecipe):
+        # 'field' means one thing on every category: the single number both a
+        # reduction and a spec read. Absent, a keyed recipe covers every key
+        # any row carries; a key is a name the run itself asked for (a .meas,
+        # a bias-point quantity), so a row without a number for it is counted.
+        extract = _KEYED_EXTRACTORS[recipe.metric]
+        for record in records:
+            flat = extract(record.value)
+            if recipe.field is None:
+                for name, candidate in flat.items():
+                    tally(name, candidate, record)
+            else:
+                tally(recipe.field, flat.get(recipe.field), record)
+        # A key appears at most once in a row, so the rows with no number for
+        # it, null or absent, are every row its samples do not account for.
+        for entry in out.values():
+            entry.no_value = len(records) - len(entry.samples)
     return out
 
 
@@ -1935,18 +2096,22 @@ def _attribution(stat: str, samples: list[tuple[Record, float]]) -> dict[str, An
     return chosen.attribution()
 
 
-def _reduce(recipe: Recipe, records: list[Record]) -> list[dict[str, Any]]:
+def _reduce(recipe: Recipe, tallies: dict[str, _FieldTally]) -> list[dict[str, Any]]:
     stats = list(getattr(recipe, "reduce", []))
     reduced: list[dict[str, Any]] = []
-    for field_name, field_samples in _samples(recipe, records).items():
-        values = [value for _, value in field_samples]
+    for field_name, tally in tallies.items():
+        values = [value for _, value in tally.samples]
+        # Present only when some row had no number, as failed_measurements is:
+        # absent, every row the reduction covers carried one.
+        no_value = {"no_value_count": tally.no_value} if tally.no_value else {}
         for stat in stats:
             reduced.append(
                 {
                     "field": field_name,
                     "stat": stat,
                     "value": _stat(stat, values),
-                    **_attribution(stat, field_samples),
+                    **_attribution(stat, tally.samples),
+                    **no_value,
                 }
             )
     return reduced
@@ -1954,7 +2119,8 @@ def _reduce(recipe: Recipe, records: list[Record]) -> list[dict[str, Any]]:
 
 def _spec(
     recipe: Recipe,
-    records: list[Record],
+    tallies: dict[str, _FieldTally],
+    rows: int,
     *,
     incomplete: bool,
     include_outliers: bool,
@@ -1963,14 +2129,17 @@ def _spec(
     limits = getattr(recipe, "spec", None)
     if limits is None:
         return None
-    samples_by_field = _samples(recipe, records)
     # One spelling: the recipe's own 'field' names the number both a reduction
     # and a spec read. A scalar recipe declares none because it produces one
     # number, so its spec falls through to that single field.
     field = getattr(recipe, "field", None)
-    if field is None and len(samples_by_field) == 1:
-        field = next(iter(samples_by_field))
-    samples = samples_by_field.get(field or "", [])
+    if field is None and len(tallies) == 1:
+        field = next(iter(tallies))
+    # A row with no number for the field is a run the spec did not judge, so
+    # it stands beside the passes and fails rather than outside them; with no
+    # field to read, no row was judged.
+    tally = tallies.get(field, _FieldTally()) if field is not None else _FieldTally(no_value=rows)
+    samples, no_value = tally.samples, tally.no_value
     failed: list[dict[str, Any]] = []
     pass_count = 0
     for record, value in samples:
@@ -1981,7 +2150,7 @@ def _spec(
             pass_count += 1
         else:
             failed.append({"value": value, **record.attribution()})
-    if not samples or (incomplete and not limits.allow_incomplete):
+    if not samples or ((incomplete or no_value) and not limits.allow_incomplete):
         verdict = "indeterminate"
     else:
         verdict = "fail" if failed else "pass"
@@ -1991,6 +2160,7 @@ def _spec(
         "max": limits.max,
         "pass_count": pass_count,
         "fail_count": len(failed),
+        "no_value_count": no_value,
         # fail_cases is not resumable, so its next offset has no consumer.
         "fail_cases": _page(failed, limit=fail_case_limit)[0],
         "verdict": verdict,
@@ -2020,7 +2190,7 @@ def _group_values(
     return [
         {
             "by": dict(group),
-            "reduced": _reduce(recipe, group_records),
+            "reduced": _reduce(recipe, _tallies(recipe, group_records)),
             "count": len(group_records),
         }
         for group, group_records in grouped.items()
@@ -2294,9 +2464,11 @@ def _result_entry(
     """The one result entry for ``recipe``, plus the offset its ``per_run``
     page ends at — the caller turns that into the resume cursor."""
     incomplete = bool(failures or missing)
+    # One tally serves the reduction and the spec.
+    tallies = _tallies(recipe, records)
     entry: dict[str, Any] = {
         "metric": recipe.metric,
-        "reduced": _reduce(recipe, records),
+        "reduced": _reduce(recipe, tallies),
         "warnings": _record_warnings(records),
     }
     groups = _group_values(recipe, records, group_by)
@@ -2316,7 +2488,8 @@ def _result_entry(
         entry["groups"] = groups
     spec = _spec(
         recipe,
-        records,
+        tallies,
+        len(records),
         incomplete=incomplete,
         include_outliers=include_outliers,
         fail_case_limit=fail_case_limit,
@@ -2333,10 +2506,7 @@ def _result_entry(
                     omitted=spec["fail_count"] - spec["fail_cases"]["returned"]
                 )
             )
-    # Everything outside _WHOLE_VALUE_METRICS defaults to the scalar leaves.
-    # One plan serves both row surfaces, so projection never depends on an
-    # unrelated pagination choice.
-    render = _row_renderer(fields, whole=recipe.metric in _WHOLE_VALUE_METRICS)
+    render = _row_renderer(fields, metric=recipe.metric)
 
     per_run_next = per_run_offset
     if per_run_limit is not None:
@@ -2429,7 +2599,28 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
         "assignments": {"type": "object"},
         "circuit": {"type": ["string", "null"]},
         "deck_sha256": {"type": ["string", "null"]},
-        "value": {"type": "object"},
+        "value": {
+            "type": "object",
+            "description": (
+                "The recipe's value. A measurements row whose run holds one value "
+                "per .meas carries 'measured' {name: value}, 'at' {name: reported "
+                "crossing/AT point} and 'failed_measurements', the names whose "
+                "'measured' is null because the log holds no number for them; its "
+                "'stats' block is left off the default row and returned by "
+                "include.fields=['value']. A stepped run's row is 'stats' alone."
+            ),
+            "properties": {
+                "measured": {
+                    "type": "object",
+                    "additionalProperties": {"type": ["number", "null"]},
+                },
+                "at": {
+                    "type": "object",
+                    "additionalProperties": {"type": ["number", "null"]},
+                },
+                "failed_measurements": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     },
     "additionalProperties": False,
 }
@@ -2448,6 +2639,15 @@ _REDUCED_SCHEMA: dict[str, Any] = {
         "step_index": {"type": ["integer", "null"]},
         "step_values": {"type": "object"},
         "assignments": {"type": "object"},
+        "no_value_count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": (
+                "Rows of this recipe with no number for this field (a failed "
+                ".meas, a null, a missing key), left out of the statistic. "
+                "Absent when every row had one."
+            ),
+        },
     },
     "required": [
         "field",
@@ -2470,6 +2670,16 @@ _SPEC_SCHEMA: dict[str, Any] = {
         "max": {"type": ["number", "null"]},
         "pass_count": {"type": "integer"},
         "fail_count": {"type": "integer"},
+        "no_value_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "Rows with no number for the field, so neither passed nor failed; "
+                "pass + fail + no_value is every row. Any makes the verdict "
+                "indeterminate unless allow_incomplete. Absent only on a verdict "
+                "an earlier build stored with a job."
+            ),
+        },
         "fail_cases": _PAGE_SCHEMA,
         "verdict": {
             "type": "string",
@@ -2548,6 +2758,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "stage": {"type": "string"},
                     "where": {"type": "string"},
                     "message": {"type": "string"},
+                    # Present on a row that stands for several failures with one
+                    # cause: the distinct places, capped, and the true count.
+                    "wheres": {"type": "array", "items": {"type": "string"}},
+                    "count": {"type": "integer", "minimum": 2},
                 },
                 "required": ["code", "stage", "where", "message"],
                 "additionalProperties": False,
@@ -2845,19 +3059,25 @@ def _assemble(
                 view_fields=a.include.fields,
             ),
         }
-    failure_total = len(failures)
-    if failure_total > _FAILURE_CAP:
-        failures = failures[:_FAILURE_CAP]
+    failure_rows = _collapse_failures(failures, a.served)
+    if len(failure_rows) > _FAILURE_CAP:
+        standing_for = (
+            f", which stand for {len(failures)} failures"
+            if len(failures) != len(failure_rows)
+            else ""
+        )
         observations.append(
             Observation(
                 code="failures_truncated",
                 kind="coverage",
                 detail=(
-                    f"Returned {_FAILURE_CAP} of {failure_total} failure records; "
-                    "coverage and recipe result presence still reflect the full call."
+                    f"Returned {_FAILURE_CAP} of {len(failure_rows)} failure records"
+                    f"{standing_for}; coverage and recipe result presence still "
+                    "reflect the full call."
                 ),
             )
         )
+        failure_rows = failure_rows[:_FAILURE_CAP]
     runs_requested = len(a.runs) + len(a.missing)
     # A continuation handle is both a delivery (there is more to fetch, so the
     # call did not come back empty-handed) and a shortfall (this page is not
@@ -2888,7 +3108,7 @@ def _assemble(
         "coverage": coverage,
         "results": results,
         "observations": [observation.wire() for observation in observations],
-        "failures": [failure.wire(a.served) for failure in failures],
+        "failures": failure_rows,
         "source_hashes": _source_hashes(item, provenance=provenance),
         "result_set_id": item.result_set_id,
         "cursor": next_value["cursor"] if next_value is not None else None,
@@ -2919,7 +3139,7 @@ def _assemble(
         data["hint"] = " ".join(hints)
     text = (
         f"analyze_results: {outcome}; {len(results)} recipe result(s), "
-        f"{failure_total} failure(s), "
+        f"{len(failures)} failure(s), "
         f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
     )
     return data, text
@@ -3099,7 +3319,7 @@ def render_attached_analysis(
     for key, block in stored["results"].items():
         entry = copy.deepcopy(block["facts"])
         metric = entry.get("metric")
-        render_row = _row_renderer(fields, whole=metric in _WHOLE_VALUE_METRICS)
+        render_row = _row_renderer(fields, metric=metric)
         rows_emitted = False
         value_rows: list[dict[str, Any]] | None = None
         if (answer_channel and block["answer_rows"]) or (
@@ -3283,6 +3503,24 @@ _TRIM_REMOVE_ENVELOPE: tuple[str, ...] = ("signals_available",)
 _TRIM_EMPTY_ENVELOPE: tuple[str, ...] = ("source_hashes",)
 
 
+def trim_analysis(data: dict[str, Any], *, keep_provenance: bool = False) -> list[str]:
+    """Rung 0 over one analysis envelope; returns the keys it emptied of content.
+
+    Public because an analysis attached to an experiment is this envelope too,
+    and the receipt carrying it trims it by this tool's own allowlists rather
+    than a copy of them. ``keep_provenance`` leaves the identity echo standing.
+    Nothing below touches failures, observations, warnings, completeness or
+    spec verdicts.
+
+    Idempotent, so the ladder may re-apply it to an envelope it already
+    degraded on the way down.
+    """
+    for entry in data["results"].values():
+        response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
+    empty = () if keep_provenance else _TRIM_EMPTY_ENVELOPE
+    return response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+
+
 def _degrade_analysis(
     data: dict[str, Any],
     rung: response_budget.Rung,
@@ -3293,25 +3531,16 @@ def _degrade_analysis(
 
     The answer rung and the shrink rung are not here: revoking an opt-in changes
     what gets computed, and shrinking a page has to happen before its cursor is
-    minted, so both are inputs to :func:`_assemble` instead. Nothing below
-    touches failures, observations, warnings, completeness or spec verdicts.
-
-    Idempotent, so the ladder may re-apply it to an envelope it already degraded
-    on the way down.
+    minted, so both are inputs to :func:`_assemble` instead.
     """
     if rung.trim:
-        for entry in data["results"].values():
-            response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
         # An explicit include.provenance is a caller opt-in, and the trim rung's
         # charter is to revoke none — so below the answer rung (the rung whose
         # documented job IS revoking opt-ins) an enriched identity echo
         # survives. Once the answer rung has revoked the opt-in, emptying the
         # echo is the ladder working as specified, not a second revocation.
         keep = preserve_provenance and not rung.answer_channel
-        empty = () if keep else _TRIM_EMPTY_ENVELOPE
-        rung.cut.extend(
-            response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
-        )
+        rung.cut.extend(trim_analysis(data, keep_provenance=keep))
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3952,6 +4181,8 @@ def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str,
         groups=None,
     )
     data, _text = _assemble(combined, None, limits)
+    # Every record, one per place: the page's collapse and cap are how a wire
+    # response stays bounded, and a complete result has no bound to keep.
     data["failures"] = [failure.wire() for failure in combined.failure_inventory]
     data["observations"] = [
         observation

@@ -678,11 +678,29 @@ Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
 Under a `budget`, receipts keep the common envelope and negotiate the shared
-trim -> answer -> shrink ladder. The runs page and attached-analysis row pages
-may be shrunk to fewer rows; fact channels, completeness, progress, verdicts,
-coverage and recovery handles are protected. If the irreducible floor exceeds
-the budget, the floor is returned with `budget_not_met` rather than facts being
-dropped.
+trim -> answer -> shrink ladder. The trim rung empties the attached analysis's
+`source_hashes`, one identity row per run, by `analyze_results`' own rung-0
+allowlist; `source` stays, because it carries staging disclosures. The runs
+page and attached-analysis row surfaces may be shrunk to fewer rows; fact
+channels, completeness, progress, verdicts, coverage and recovery handles are
+protected. If the irreducible floor exceeds the budget, the floor is returned
+with `budget_not_met` rather than facts being dropped.
+
+One page limit caps every row surface of a receipt — the run page and each
+attached recipe's values, groups, failing cases and missing cases — so the
+shared estimate, which counts the rows all surfaces show, can price a page as
+fitting that cut nothing. The receipt's shrink rung therefore measures: when
+the estimated page is still over, it bisects below it for the largest limit
+that fits. The search may reach zero. A receipt's rows are previews of
+surfaces other calls page (`jobs(runs)`, `analyze_results` over the `job_id`),
+so the floor carries no per-case row: `completeness` and `runs.total` count the
+runs, `runs.next_cursor` starts `jobs(runs)` at the first, each recipe's
+warning counts its omitted rows, and reductions and spec verdicts stay. That
+keeps the floor the same size however many cases the job ran — a floor that
+carried a row per case grew with exactly the number that made a caller set a
+budget. `jobs(runs)` and `jobs(list)` keep at least one row at their floor,
+since their cursor continues the same page and an empty one would hand back
+the cursor it was given.
 
 An `artifact` handle survives the lean row. The lean row flattens `value` to
 its scalar leaves, and a handle is a dict; dropped with them, the `plot` recipe
@@ -824,6 +842,25 @@ the selected descriptor's dialect; log hints alone do not prove a producer.
 whole-log rows report only the recorded producer, which may be null.
 Companion edits and absent-to-present changes invalidate stored continuations.
 
+A `measurements` row whose run holds one value per `.meas`, as each case of a
+sweep with no `.step` does, carries that value by name: `measured: {name:
+value}`, the number a reduction or a spec reads for that name; `at: {name:
+point}` where the log printed a crossing or `AT` point with it; and
+`failed_measurements: [name]` for each name the run's log holds no number for
+(LTspice printed it FAIL'ed, or printed a value that is not finite), whose
+`measured` entry is null rather than absent: a null there is always a listed
+failure. The default row leaves off the per-name `stats` block beside them,
+which restated the one value as min, max, mean, median, p10 and p90 next to its
+counts, a zero spread, step indices and an empty histogram: 856 characters a
+row for two measurements, where the row is now 291. `include.fields=["value"]`
+still returns the block, and reductions and specs read it as before. A stepped
+run's row is `stats` alone, since its spread across steps is the answer. No
+argument was added for this: the default row is the answer channel, and a run
+with one number per name should answer in one number per name. A flag would
+have left the default as it was, and a projection wildcard
+(`value.stats.*.mean`) would have reached only the mean, four levels down, for
+a caller who already knew to ask.
+
 `step`/`all_steps` are call-level, not per-recipe. A RAW run's step axis belongs to
 the run, so the choice is made once and every recipe in the call reads it; the
 per-recipe spelling asked twenty-one branches to restate one fact and let two
@@ -864,13 +901,37 @@ in the result set, so a continuation replays them.
   share one; a label the caller writes must still be unique.
 - Validation, results and errors are per recipe: one bad recipe fails that item
   only.
+- A failure row is one reason, not one place. Rows sharing `code`, `stage` and
+  `message` (numbers folded, as a repeated log diagnostic is) become one: the
+  first by `where`, verbatim, plus `wheres` (the distinct places, at most 10)
+  and `count` (the failure records it stands for). A recipe that fails on every
+  run of a sweep — a signal no run carries — is one row, not a row per run, so
+  the failures channel no rung trims stays bounded in the run count. The page
+  then caps rows at 100 with a `failures_truncated` observation. The Python
+  API's complete `analyze_results` result lists every record, one per place;
+  an analysis attached to an experiment is stored as the page renders it.
 - Reductions are attributed:
   `reduced[] = {stat, value, case_id, run_index, step_index?, step_values?,
-  assignments}`.
+  assignments, no_value_count?}`. `no_value_count` is the number of the
+  recipe's rows with no number for that field (a failed `.meas`, a null, a
+  missing key), which the statistic leaves out; it is absent when every row
+  had one.
 - Spec verdicts:
-  `{field, min?, max?, pass_count, fail_count, fail_cases: Page,
-  verdict: "pass"|"fail"|"indeterminate", allow_incomplete?}` — indeterminate on
-  incomplete coverage unless the caller opts out.
+  `{field, min?, max?, pass_count, fail_count, no_value_count, fail_cases: Page,
+  verdict: "pass"|"fail"|"indeterminate", allow_incomplete?}`. `pass_count +
+  fail_count + no_value_count` is every row of the recipe. The verdict is
+  indeterminate on incomplete coverage, or while any row has no number for the
+  field, unless the caller opts out with `allow_incomplete`, which judges the
+  rows that have one and keeps the count. A verdict an earlier build stored
+  with a job has no `no_value_count`: it was reached by the old rule, which
+  skipped rows with no number.
+- A row with no number for a field used to be skipped. A `.meas` that failed in
+  one run of three then reduced over two with nothing saying so, a spec passed
+  on the two it could judge with `outcome: "complete"`, and a `.meas` that
+  failed in every run was missing from `reduced`. The count now stands beside
+  the statistic, which says how many runs it covers without the caller
+  reconciling `count` against `coverage`, and an unjudged run keeps a spec from
+  reading as a pass.
 - A whole-call compute budget sits atop the per-parse deadlines. Exceeding it
   returns partial results plus a `result_set_id`, persisted in the working-dir
   store and expiring with jobs; an expired one has to be re-requested. Ask for
@@ -918,7 +979,8 @@ in the result set, so a continuation replays them.
 
 Output: `outcome, coverage {runs_requested, runs_analyzed, missing_cases: Page},
 results {key -> {metric, units, reduced[], groups?, steps?, spec?,
-per_run?: Page, warnings}}, observations[], failures[], signals_available?,
+per_run?: Page, warnings}}, observations[],
+failures[] {code, stage, where, message, wheres?, count?}, signals_available?,
 source_hashes, result_set_id?, hint`.
 
 The name `analyze_results` is broader than the naming rule prefers. It was kept
@@ -1538,8 +1600,22 @@ Only deterministic harvested failures block. Suppression is per call, and
 
 Seed rules: `save-meas-coverage` (blocking), `meas-ngspice-batch` (warning,
 ngspice: the deck runs and only the top-level `.meas` is skipped, which the run
-relays when it is read), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
-mode), `model-missing` (blocking at staging; the model is read past a
+relays when it is read), `meas-trig-degrees` (blocking, LTspice: a `.meas`
+that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle
+LTspice 26 and XVII read in degrees on their default settings where a B source
+reads radians; `verify_circuit`'s `syntax` check reports the same as
+`meas_trig_degrees`), `lib-section-ngspice` (blocking, ngspice in `kiltpsa`
+mode), three LTspice refusals recorded on LTspice 26 and XVII, each blocking —
+`analysis-count-ltspice` (two of `.tran`/`.ac`/`.dc`/`.noise`; `.op` may sit
+beside one), `meas-function-ltspice` (`vdb()`, `phase()` or `group_delay()` in a
+`.meas`) and `lib-section-ltspice` (`.lib file section`, which LTspice reads as
+one file name) — `byte-85-ltspice` (warning, LTspice: a byte 0x85 in an 8-bit
+deck or include with a card after it on the line, which LTspice 24 and later
+read as a line break and XVII does not; silent when the session's LTspice is
+known to be XVII), `node-control-byte-ltspice` (warning, LTspice: a node name
+in an 8-bit file holding a byte from 0x80 to 0x9F, a control character to
+LTspice, which LTspice 26 refuses and XVII saves under a name the server spells
+otherwise), `model-missing` (blocking at staging; the model is read past a
 BJT/JFET/MOSFET area factor or `off` and before a subckt call's `params:`), the
 four checks of
 the netlist arity validator, each its own rule so suppressing one never
@@ -1694,10 +1770,20 @@ reduced every key; the two categories now agree. Two names for one number
 `undershoot`) reduce once: an edge under the direction its row measured, the
 others under the first name. A scalar recipe takes none, having one number.
 
+Which fields a `reduce` without `field` covers differs by category, because
+the two kinds of name mean different things. A keyed recipe's keys are what the
+run asked for, each `.meas` the deck holds or each quantity its bias point
+reports, so every key any row carries is reduced: a `.meas` that failed in every
+run reduces to null over all of them, with its `no_value_count` (§3.3). A
+multi-field recipe's fields are its fixed table, and a circuit can have none of
+some of them, as a lowpass has no low cutoff and a step response no
+disturbance figures. Such a field is left out when no row has a number for it,
+and reported when the caller names it.
+
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); returns the `.meas` table plus `failed_measurements` |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name. A run holding one value per name also carries `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |

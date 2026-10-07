@@ -71,7 +71,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.plot_settings import (
@@ -287,11 +287,12 @@ _OFF_CLASSES = frozenset("QJDM")
 
 
 def _is_spice_number(text: str) -> bool:
-    """Whether ``text`` is one finite SPICE number (``2``, ``0.5``, ``10u``)."""
-    try:
-        return math.isfinite(parse_spice_value(text))
-    except ValueError:
-        return False
+    """Whether ``text`` is one finite SPICE number (``2``, ``0.5``, ``10u``).
+
+    Strict: a model name such as ``2N2222`` is a value to LTspice, but here it
+    is the name it looks like.
+    """
+    return is_scaled_number(text) and math.isfinite(parse_spice_value(text))
 
 
 def _device_tail_ok(element: str, tokens: list) -> bool:

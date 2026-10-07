@@ -76,6 +76,7 @@ from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
     JOBS_PAGE_LIMIT,
     OBSERVATION_SCHEMA,
+    RECEIPT_DEFAULT_ROUTE,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
     RUNS_PAGE_SCHEMA,
@@ -639,6 +640,7 @@ _BUDGET_NOTES = response_budget.Notes(
     route=(
         "Ask again with a larger 'budget' for the full presentation, or page on with next_cursor."
     ),
+    default_route=RECEIPT_DEFAULT_ROUTE,
 )
 
 

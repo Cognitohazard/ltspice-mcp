@@ -137,7 +137,7 @@ async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
     data = response.structured_content
     assert data is not None and data["failures"] == []
     row = data["results"]["meas"]["per_run"]["items"][0]
-    assert row["value"]["stats"]["vfinal"]["mean"] == LTSPICE_TRAN_RC_VFINAL
+    assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
 
 
 @pytest.mark.asyncio
