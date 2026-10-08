@@ -4014,6 +4014,39 @@
         ".raw"
       ]
     },
+    "plot/ac_grid": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/ac_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/ac_grid.plt": {
+          "bytes": 248,
+          "sha256": "b3a6444d86de53c0e6754a33e42e90e2664a3578bdf291f54e7d377ee6fc647b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "grid": "on"
+      },
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/math": {
       "behaviour": "plot-settings",
       "command": [
@@ -4160,6 +4193,37 @@
         "plot/read_ac.plt": {
           "bytes": 196,
           "sha256": "9d05baba093cc933d2fd63134452880a08a7461aa82c8246c23aa50b46f9ec6a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_ac_grid": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_ac_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/ac_grid.plt": "9d3d52b31afa9f9ef95336e32c99f4bf513b689bd566ac5ed8c17f888486b171",
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_ac_grid.plt": {
+          "bytes": 215,
+          "sha256": "b8ad0a0eb725c001ca400e9bea93fa9b53b4c17f9b6ff6697d9b5696e6ddde3a"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
