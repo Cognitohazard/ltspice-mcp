@@ -451,6 +451,11 @@ summary = "That a run made in a window simulates the window's copy of the sheet 
 model = ["assets/guide/schematics.md"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the three facts noted after 'run the sheet in the window', made with the window holding one resistor value and the file another"
 
+[behaviour.reader-agreement]
+summary = "That the server reads a results file to the samples LTspice's own reader gives for it, whichever build wrote the file: every sample to its last bit, a stepped run divided at the same points with the same parameter values. And where the two present a file differently: a time point XVII stored with its sign set, a transient saved from a later start, a file of one point, a stepped operating point, a run stopped part way."
+model = ["lib/raw_parser.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/raw_header.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/reader/: what the reader of LTspice 26.1.1 said of each results file in the raw group of both main recordings, each read whole with its log beside it. Asked of a stepped file with no log beside it, the reader divided the run the same and gave no parameter values; that was looked at and is not in the recording."
+
 [behaviour.started-with-no-document]
 summary = "That an LTspice started with no document is offered to the bridge as a window, with no document open and none in front."
 model = ["lib/ltspice_window.py"]
