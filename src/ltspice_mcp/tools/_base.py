@@ -316,6 +316,15 @@ def window_difference(on_disk: bytes, window_text: str) -> dict[str, Any]:
 # out of step.
 VALIDATION_WARNING_KINDS: tuple[str, ...] = tuple(SHEET_RULES)
 
+RULES_RUN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "The sheet rules that ran, each with how many findings it had, zero "
+        "included: a rule that found nothing is told from one that did not run."
+    ),
+    "additionalProperties": {"type": "integer"},
+}
+
 VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
     "type": "array",
     "items": {

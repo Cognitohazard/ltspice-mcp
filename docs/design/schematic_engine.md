@@ -442,7 +442,9 @@ what must hold before the next one starts.
      them, and `tests/test_route_planner_record.py` holds it to that.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
-     the published size of both tools raised on purpose.
+     the published size of both tools raised on purpose. *The list is done:*
+     `rules_run` in both replies names each sheet rule that ran with its
+     count, zero included. Limits and waivers are not built.
 5. **Readers on the sheet.** `inspect`'s net and component queries and the
    schematic resource stop using the cached editor; a cache of sheets keyed
    by the file's stamp takes its place.

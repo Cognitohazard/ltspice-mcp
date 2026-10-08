@@ -694,6 +694,13 @@ recording that showed it.
 
 ### Added
 
+- `edit_schematic` and `verify_circuit` say which sheet rules ran. `rules_run`
+  in each reply names every rule that ran with how many findings it had, zero
+  included, so that no findings of a kind is told from that kind not having
+  been looked for. In an edit's reply the counts are of the sheet as it now
+  is, so a rule whose findings all predate the batch still shows; in a
+  check's they are for the rules of the checks that ran, counted before the
+  cap on how many of one rule a reply lists.
 - `edit_schematic` has a twelfth op, `set_plot_panes`, which writes the
   waveform panes LTspice opens for a sheet into the `.plt` beside it: the
   traces of each pane, top to bottom, for the `tran` or `ac` analysis, with

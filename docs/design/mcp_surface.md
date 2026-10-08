@@ -1099,6 +1099,13 @@ block:
 preexisting {count, findings, label_only_pins, cursor}
 ```
 
+`rules_run` names every sheet rule that ran with how many findings it had on
+the sheet as it now is, zero included, so a rule that found nothing is told
+from one that did not run, and a rule with findings only among the
+`preexisting` ones is still seen. Its counts sum to the sheet findings in
+`warnings` plus `preexisting.findings`. `verify_circuit` carries the same
+field for the sheet rules of the checks it ran, counted before any cap.
+
 Nothing is dropped — a finding the caller did not cause is still a fact about
 the sheet, so it is counted, and the counts reconcile: `wiring.pins_total`,
 `pins_wired` and `pins_label_only` stay whole-sheet, and
@@ -1321,7 +1328,7 @@ Output: `outcome, target, sha256, build_id, stages[] (the stages that did not
 complete; empty on success), netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
-preexisting {count, findings, label_only_pins, cursor},
+rules_run {rule: count}, preexisting {count, findings, label_only_pins, cursor},
 views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
 open_in_ltspice? (one entry per LTspice window that had the sheet open),
 warnings, failures, observations, hint`.

@@ -631,6 +631,21 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
     )
     assert by_rule["label_over_component"]["subject"] == "R1"
     assert by_rule["label_over_component"]["at"]["x"] == 100
+    # Each reply lists the rules its check ran and no others, zero included.
+    assert layout["rules_run"] == {
+        "floating_pin": 2,
+        "dangling_wire_end": 0,
+        "dangling_label": 2,
+        "duplicate_wire": 1,
+        "symbol_overlap": 0,
+        "wire_through_symbol": 0,
+    }
+    assert quality["rules_run"] == {
+        "label_over_component": 1,
+        "text_in_symbol_body": 0,
+        "stacked_directive": 1,
+        "label_island": 0,
+    }
 
 
 async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
@@ -659,12 +674,15 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     full = [f for f in neutral.data["findings"] if f["rule_id"] == "floating_pin"]
     assert len(full) == vc.FINDING_RULE_CAP + 7
     assert not any("showing" in note for note in neutral.data["observations"])
+    assert neutral.data["rules_run"]["floating_pin"] == vc.FINDING_RULE_CAP + 7
 
     mcp = await handle_verify_circuit(args, state_no_sim)
     data = _assert_schema(mcp)
     shown = [finding for finding in data["findings"] if finding["rule_id"] == "floating_pin"]
     assert shown == full[: vc.FINDING_RULE_CAP]
     assert len(full) - len(shown) == 7
+    # The count of a rule is of what it found, not of what the reply shows.
+    assert data["rules_run"]["floating_pin"] == len(full)
     assert any(
         note == (f"floating_pin: showing {vc.FINDING_RULE_CAP} of {len(full)} findings")
         for note in data["observations"]

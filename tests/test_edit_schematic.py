@@ -999,6 +999,43 @@ async def test_an_edit_says_of_a_sheet_what_a_check_of_it_says(asc_state):
     assert by_kind == Counter(finding["rule_id"] for finding in checked["findings"])
 
 
+async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
+    """A rule that found nothing is listed with zero, so it is told from one
+    that did not run; the counts are of the sheet as it now is, what the batch
+    is told of and what is counted as there before alike."""
+    sheet = await _crowded_sheet(asc_state, "crowded-rules")
+
+    data = await apply_ops(
+        asc_state, sheet, [{"op": "set_component_value", "reference": "R3", "value": "2k"}]
+    )
+    checked = await run_verify_circuit(
+        asc_state, path=str(sheet), checks=["symbols", "layout", "quality"]
+    )
+
+    assert data["rules_run"] == {
+        "unresolved_symbol": 0,
+        "dropped_wire": 0,
+        "floating_pin": 6,
+        "dangling_wire_end": 2,
+        "dangling_label": 0,
+        "duplicate_wire": 0,
+        "symbol_overlap": 1,
+        "wire_through_symbol": 2,
+        "label_over_component": 0,
+        "text_in_symbol_body": 2,
+        "stacked_directive": 0,
+        "label_island": 0,
+    }
+    assert list(data["rules_run"]) == list(se.RULES)
+    assert sum(data["rules_run"].values()) == (
+        len(_sheet_findings(data)) + data["preexisting"]["findings"]
+    )
+    # A check of the same sheet ran all of them but the one its export check holds.
+    assert checked["rules_run"] == {
+        rule: count for rule, count in data["rules_run"].items() if rule != "dropped_wire"
+    }
+
+
 async def test_an_edit_reports_what_it_drew_badly(asc_state):
     """A part placed over another, and a wire left hanging by moving the part
     it ran to, are the batch's own."""
