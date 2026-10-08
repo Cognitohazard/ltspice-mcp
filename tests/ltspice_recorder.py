@@ -56,7 +56,6 @@ import locale
 import os
 import re
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
@@ -67,6 +66,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib import pe_menu
 from ltspice_mcp.lib.hidden_desktop import (
     BoxWatch,
     HiddenDesktop,
@@ -75,6 +75,7 @@ from ltspice_mcp.lib.hidden_desktop import (
     window_class,
     window_text,
 )
+from ltspice_mcp.lib.ltspice_frame import is_frame
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_recorded"
 INPUTS = FIXTURES / "inputs"
@@ -90,10 +91,10 @@ NEUTRAL_HOME = "C:\\Users\\user"
 #: day, so the builds' different padding of a one-digit day does not arise.
 NEUTRAL_DATE = "Thu Jan 15 00:00:00 2026"
 
-#: Settings that change what a run, an export or a saved plot settings file
-#: holds. They are removed from the copy of the settings file a case runs
-#: against, so the build falls back to its own default for each; a case sets
-#: one back with ``ini = {...}``.
+#: Settings that change what a run, an export or the waveform window produces.
+#: They are removed from the copy of the settings file a case runs against, so
+#: the build falls back to its own default for each; a case sets one back with
+#: ``ini = {...}``.
 BEHAVIOUR_KEYS = frozenset(
     key.casefold()
     for key in (
@@ -135,6 +136,10 @@ BEHAVIOUR_KEYS = frozenset(
         "WarnOnNoIndRser",
         "AutoDeleteRawFiles",
         "FastAccessRAM",
+        # The waveform window's grid, which a key press turns on and the build
+        # then remembers. With it on, the plot settings a build saves gain a
+        # GridStyle line in every pane, and the phase axis of an AC pane
+        # another last number (plot/ac_grid_on). Both builds default it to off.
         "grid",
     )
 )
@@ -765,7 +770,6 @@ def recording_desktop() -> HiddenDesktop:
 # Driving the waveform window (plot cases)
 # --------------------------------------------------------------------------
 
-_RT_MENU = 4
 _WM_SETTEXT = 0x000C
 _WM_COMMAND = 0x0111
 _WM_MDIACTIVATE = 0x0222
@@ -775,105 +779,6 @@ _ADD_TRACES = "Add Traces to Plot"
 #: The menu labels a plot case uses besides its own steps.
 _ADD_TRACE = "Add trace"
 _SAVE_PLOT = "Save Plot Settings"
-
-
-def _pe_resources(image: bytes, kind: int) -> list[bytes]:
-    """The data of every resource of type ``kind`` in a PE image, in directory order."""
-
-    def u16(at: int) -> int:
-        return struct.unpack_from("<H", image, at)[0]
-
-    def u32(at: int) -> int:
-        return struct.unpack_from("<I", image, at)[0]
-
-    header = u32(0x3C)
-    if image[header : header + 4] != b"PE\0\0":
-        raise RecorderError("not a Windows executable")
-    sections, optional_size = u16(header + 6), u16(header + 20)
-    optional = header + 24
-    directories = optional + (112 if u16(optional) == 0x20B else 96)
-    resource_rva = u32(directories + 2 * 8)
-    table = optional + optional_size
-    spans = [
-        (
-            u32(table + 40 * i + 12),
-            max(u32(table + 40 * i + 8), u32(table + 40 * i + 16)),
-            u32(table + 40 * i + 20),
-        )
-        for i in range(sections)
-    ]
-
-    def offset(rva: int) -> int:
-        for start, size, raw in spans:
-            if start <= rva < start + size:
-                return rva - start + raw
-        raise RecorderError("a resource lies outside every section of the executable")
-
-    root = offset(resource_rva)
-
-    def entries(directory: int) -> list[tuple[int, int]]:
-        count = u16(directory + 12) + u16(directory + 14)
-        return [(u32(directory + 16 + 8 * i), u32(directory + 20 + 8 * i)) for i in range(count)]
-
-    found: list[bytes] = []
-    for type_id, type_target in entries(root):
-        if type_id != kind or not type_target & 0x80000000:
-            continue
-        for _name, name_target in entries(root + (type_target & 0x7FFFFFFF)):
-            for _language, data in entries(root + (name_target & 0x7FFFFFFF)):
-                entry = root + data
-                start = offset(u32(entry))
-                found.append(image[start : start + u32(entry + 4)])
-    return found
-
-
-def _menu_items(template: bytes) -> list[tuple[int | None, str]]:
-    """The (command id, text) of every item of a menu template; a submenu's id is None."""
-    version, header = struct.unpack_from("<HH", template, 0)
-    items: list[tuple[int | None, str]] = []
-
-    def text_at(at: int) -> tuple[str, int]:
-        end = at
-        while template[end : end + 2] != b"\0\0":
-            end += 2
-        return template[at:end].decode("utf-16-le"), end + 2
-
-    def extended(at: int) -> int:
-        while True:
-            at = (at + 3) & ~3
-            _type, _state, command, flags = struct.unpack_from("<IIIH", template, at)
-            text, at = text_at(at + 14)
-            items.append((None if flags & 0x01 else command, text))
-            if flags & 0x01:
-                at = extended(((at + 3) & ~3) + 4)
-            if flags & 0x80:
-                return at
-
-    def classic(at: int) -> int:
-        while True:
-            (flags,) = struct.unpack_from("<H", template, at)
-            at += 2
-            command = None
-            if not flags & 0x10:
-                (command,) = struct.unpack_from("<H", template, at)
-                at += 2
-            text, at = text_at(at)
-            items.append((command, text))
-            if flags & 0x10:
-                at = classic(at)
-            if flags & 0x80:
-                return at
-
-    if version == 1:
-        extended(4 + header)
-    else:
-        classic(4)
-    return items
-
-
-def menu_label(text: str) -> str:
-    """A menu item's text as a case names it: no accelerator, no ``&``, no trailing dots."""
-    return text.split("\t", 1)[0].replace("&", "").rstrip(".").strip()
 
 
 @functools.cache
@@ -886,16 +791,10 @@ def waveform_commands(exe: Path) -> dict[str, int]:
     first id: the File menu's Save Plot Settings, which writes the default
     file without asking where.
     """
-    for template in _pe_resources(exe.read_bytes(), _RT_MENU):
-        items = _menu_items(template)
-        if not any(menu_label(text) == _ADD_TRACE for _command, text in items):
-            continue
-        commands: dict[str, int] = {}
-        for command, text in items:
-            if command is not None:
-                commands.setdefault(menu_label(text), command)
-        return commands
-    raise RecorderError(f"{exe.name} has no waveform-window menu with an {_ADD_TRACE} item")
+    commands = pe_menu.commands(exe, _ADD_TRACE)
+    if not commands:
+        raise RecorderError(f"{exe.name} has no waveform-window menu with an {_ADD_TRACE} item")
+    return commands
 
 
 @functools.cache
@@ -973,14 +872,7 @@ class _WaveformWindow:
         return [window for window in self.desktop.windows(self.pid) if visible(window)]
 
     def frame(self) -> int | None:
-        return next(
-            (
-                w
-                for w in self.top_level()
-                if window_class(w).startswith("Afx:") and window_text(w).startswith("LTspice")
-            ),
-            None,
-        )
+        return next((w for w in self.top_level() if is_frame(w)), None)
 
     def waveform(self, frame: int) -> tuple[int, int] | None:
         """The waveform window of the case's raw file, and the MDI client it is in."""
@@ -1162,7 +1054,9 @@ class CaseResult:
     """What one case produced: its manifest entry and its scrubbed files.
 
     ``defaults`` is what the build wrote back into the settings copy for the
-    keys the recorder had removed: its own default for each.
+    keys the recorder had removed: its own default for each one it wrote.
+    LTspice XVII writes back the ones it knows when a batch run ends; LTspice
+    26 writes none.
     """
 
     entry: dict[str, Any]
@@ -1507,10 +1401,14 @@ def record_build(
     """Record every applicable case on ``build`` into ``out / build.label``.
 
     With ``only`` (glob patterns over case ids) the named cases are re-recorded
-    and the rest of an existing recording is kept, with the settings defaults
-    and the library facts it was made with; ``progress`` is told when this
-    machine's library differs from those. Without ``only`` the directory is
-    rebuilt, so a case removed from the list leaves no file behind.
+    and the rest of an existing recording is kept, with the library facts it
+    was made with; ``progress`` is told when this machine's library differs
+    from those. Without ``only`` the directory is rebuilt, so a case removed
+    from the list leaves no file behind.
+
+    The settings defaults of a recording are every default its cases' runs
+    wrote back, the first value for a key standing (``merged_defaults``), on
+    top of the ones an existing recording holds.
     """
     reason = unavailable_reason(build)
     if reason is not None:
@@ -1551,8 +1449,8 @@ def record_build(
                 progress(f"{build.label}: {case.case_id}")
             result = run_case(build, case, inputs, root, timeout=timeout, desktop=desktop)
             assert_private(result.files, forbidden)
-            if case.settings and not case.ini and not defaults:
-                defaults = _portable_defaults(result.defaults)
+            if case.settings and not case.ini:
+                defaults = merged_defaults(defaults, result.defaults)
             for stale in cases.get(case.case_id, {}).get("outputs", {}):
                 (directory / stale).unlink(missing_ok=True)
             for name, data in result.files.items():
@@ -1601,6 +1499,18 @@ def _portable_defaults(defaults: Mapping[str, str]) -> dict[str, str]:
     """The build's defaults without the ones that are local directories."""
     local = {"symbolsearchpath", "librarysearchpath", "rawtempdir"}
     return {key: value for key, value in defaults.items() if key.casefold() not in local}
+
+
+def merged_defaults(
+    on_record: Mapping[str, str], written_back: Mapping[str, str]
+) -> dict[str, str]:
+    """``on_record`` with each default in ``written_back`` that it has none for.
+
+    ``written_back`` is what a build wrote into its settings copy for the keys
+    the recorder had removed, less the ones that are local directories. The
+    value on record for a key stands.
+    """
+    return {**_portable_defaults(written_back), **on_record}
 
 
 def _build_banner(cases: Mapping[str, Any]) -> str | None:

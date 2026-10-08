@@ -6,7 +6,9 @@ a base:"blank" build reaching the same sheet as the same ops applied to an
 existing one, each op's own facts under ``results``, the wiring metric and the
 paginated touched / pin_legend / label_only_pins views, the refusal of every spelling of a render this tool no
 longer has, the post-commit compare stage (success / mismatch / export
-failure), and an archetype-scale blank build.
+failure), an archetype-scale blank build, the sheet records the schematic
+editor does not model (data labels written back, an unreadable line refused
+by file and line), and the routes that leave a sheet's bytes as they were.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
-from tests._asc_ops import apply_ops
+from tests._asc_ops import apply_ops, file_at
 from tests.test_api_reference import _op_kinds
 
 # Validates a raw op dict into the tool's own op union, so the control path
@@ -1905,3 +1907,248 @@ class TestHierarchicalPortPreservation:
             await handle_edit_schematic(request, asc_state)
         assert {p: p.read_bytes() for p in (parent, outer, child)} == before
         assert changed.updated
+
+
+# ---------------------------------------------------------------------------
+# Records the schematic editor does not model
+# ---------------------------------------------------------------------------
+#
+# Both LTspice builds are recorded reading a sheet that holds each of these
+# lines: a data label (export/data_flags), a bus tap (export/bus_tap) and an
+# empty line (export/blank_line), where neither exports a sheet holding a
+# keyword it does not know (export/unknown_record). TestSheetRecords in
+# tests/test_recorded_ltspice_schematics.py holds the editor to those sheets;
+# the ones below hold the same lines in smaller sheets of their own.
+#
+# DATAFLAG <x> <y> "<expression>" is the form in the example sheets both
+# builds install, which have an empty expression. BUSTAP <x1> <y1> <x2> <y2>
+# is the layout KiCad's LTspice importer reads; no recording confirms it,
+# because an export does not check a tap's fields (docs/spicelib_bugs.md,
+# Bug 26).
+
+# An edit that touches none of the records under test.
+_MID_LABEL = {"op": "add_net_label", "net": "MID", "x": 40, "y": 0}
+
+
+async def _commit(state: SessionState, path: Path, op: dict = _MID_LABEL, **kw) -> dict:
+    """Commit ``op`` to the sheet at ``path``, quoting its current digest."""
+    request = _edit_input(target=str(path), expected_sha256=_sha(path), ops=[op], **kw)
+    return _assert_schema(await handle_edit_schematic(request, state))
+
+
+class TestDataFlagPreservation:
+    """A data label (DATAFLAG) survives an edit, though spicelib's reader skips
+    it and its writer never writes one (docs/spicelib_bugs.md)."""
+
+    @staticmethod
+    def _sheet(work_dir: Path) -> Path:
+        path = work_dir / "flags.asc"
+        path.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 0 0 160 0\n"
+            "FLAG 0 0 IN\nIOPIN 0 0 In\n"
+            'DATAFLAG 80 0 ""\n'
+            "FLAG 160 0 OUT\n"
+            'DATAFLAG 160 0 "$*2"\n'
+            "TEXT 0 64 Left 2 !.op\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return path
+
+    async def test_an_edit_keeps_the_data_flags_on_disk(self, state_no_sim, work_dir):
+        path = self._sheet(work_dir)
+        data = await _commit(state_no_sim, path)
+        assert data["commit_state"] == "committed"
+        assert data["sha256"] == _sha(path)
+        # Both data labels, in their order, after the labels and their ports:
+        # never between a FLAG and its IOPIN, never inside a symbol's block.
+        assert path.read_text(encoding="utf-8").splitlines() == [
+            "Version 4",
+            "SHEET 1 880 680",
+            "WIRE 0 0 160 0",
+            "FLAG 0 0 IN",
+            "IOPIN 0 0 In",
+            "FLAG 160 0 OUT",
+            "FLAG 40 0 MID",
+            'DATAFLAG 80 0 ""',
+            'DATAFLAG 160 0 "$*2"',
+            "TEXT 0 64 Left 2 !.op",
+        ]
+        assert [(p.text.text, p.direction) for p in AscEditor(path).ports] == [("IN", "In")]
+
+    async def test_a_data_flag_is_written_back_in_the_sheets_codec(self, asc_state, work_dir):
+        """A cp1252 sheet stays cp1252, whatever the platform's own codec is."""
+        path = work_dir / "flags_cp1252.asc"
+        path.write_bytes(
+            b"Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\n"
+            b'DATAFLAG 160 0 "$*1\xb5"\nSYMBOL res 0 0 R0\nSYMATTR InstName R1\n'
+            b"SYMATTR Value 1\xb5\n"
+        )
+        data = await _commit(asc_state, path, {**_MID_LABEL, "net": "OUT", "x": 160})
+        assert data["commit_state"] == "committed"
+        written = path.read_bytes()
+        assert b'\nDATAFLAG 160 0 "$*1\xb5"\nSYMBOL res 0 0 R0\n' in written
+        assert data["sha256"] == _sha(path)
+
+    async def test_a_blank_base_starts_without_the_targets_data_flags(
+        self, state_no_sim, work_dir
+    ):
+        path = self._sheet(work_dir)
+        await _commit(state_no_sim, path, base="blank")
+        assert b"DATAFLAG" not in path.read_bytes()
+
+
+@pytest.mark.usefixtures("isolated_spicelib_symbol_cache")
+class TestRecordTheEditorCannotRead:
+    """A sheet holding a record spicelib's reader has no branch for is refused
+    with the record and its line named, not reported as an internal error."""
+
+    @staticmethod
+    def _sheet(work_dir: Path, record: str) -> Path:
+        path = work_dir / "bus.asc"
+        path.write_text(
+            "Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 D[0:3]\n"
+            f"{record}\nFLAG 160 0 OUT\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return path
+
+    @staticmethod
+    def _parent_loading(work_dir: Path) -> Path:
+        """``top.asc``, whose one block instance loads the ``bus.asc`` beside it."""
+        (work_dir / "bus.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -32 -32 32 32\n"
+            "PIN -32 0 LEFT 8\nPINATTR PinName IN\nPINATTR SpiceOrder 1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        parent = work_dir / "top.asc"
+        parent.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL bus 0 0 R0\nSYMATTR InstName X1\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return parent
+
+    @pytest.mark.parametrize(
+        ("record", "named"),
+        [("BUSTAP 80 0 80 16", "BUSTAP 80 0 80 16"), ("", "empty")],
+    )
+    async def test_an_edit_names_the_record_and_its_line(
+        self, state_no_sim, work_dir, record, named
+    ):
+        path = self._sheet(work_dir, record)
+        original = path.read_bytes()
+        with pytest.raises(NetlistError) as caught:
+            await _commit(state_no_sim, path)
+        message = str(caught.value)
+        assert "bus.asc" in message
+        assert "line 5" in message
+        assert named in message
+        assert path.read_bytes() == original
+
+    async def test_inspect_reports_a_refusal_not_an_internal_error(self, state_no_sim, work_dir):
+        path = self._sheet(work_dir, "BUSTAP 80 0 80 16")
+        results = (
+            await handle_inspect(
+                InspectInput.model_validate(
+                    {
+                        "queries": [
+                            {"kind": "components", "path": str(path)},
+                            {"kind": "net", "path": str(path), "at": [0, 0]},
+                        ]
+                    }
+                ),
+                state_no_sim,
+            )
+        ).structured_content["results"]
+        assert [item["ok"] for item in results] == [False, False]
+        for item in results:
+            assert item["error"]["code"] != "internal_error"
+            assert "line 5" in item["error"]["message"]
+            assert "BUSTAP" in item["error"]["message"]
+
+    async def test_a_record_in_a_sheet_the_target_loads_names_that_sheet(
+        self, asc_state, work_dir
+    ):
+        child = self._sheet(work_dir, "BUSTAP 80 0 80 16")
+        parent = self._parent_loading(work_dir)
+        before = (parent.read_bytes(), child.read_bytes())
+        with pytest.raises(NetlistError) as caught:
+            await _commit(asc_state, parent)
+        message = str(caught.value)
+        assert "top.asc" in message
+        assert "bus.asc, a sheet it loads: line 5" in message
+        assert "BUSTAP 80 0 80 16" in message
+        assert (parent.read_bytes(), child.read_bytes()) == before
+
+    async def test_a_byte_order_mark_on_a_sheet_the_target_loads_names_that_sheet(
+        self, asc_state, work_dir
+    ):
+        """Neither LTspice build reads a sheet behind a UTF-8 byte order mark
+        (recorded as export/micro_utf8_bom); the refusal names the sheet that
+        has one, not the parent being opened."""
+        (work_dir / "bus.asc").write_bytes(
+            b"\xef\xbb\xbfVersion 4\nSHEET 1 880 680\nWIRE 0 0 160 0\n"
+        )
+        parent = self._parent_loading(work_dir)
+        with pytest.raises(NetlistError) as caught:
+            await _commit(asc_state, parent)
+        message = str(caught.value)
+        assert "top.asc" in message
+        assert "bus.asc, a sheet it loads, starts with a UTF-8 byte order mark" in message
+
+
+class TestPathsThatLeaveTheSheetAsItIs:
+    """A read, a dry run and a batch of plot panes alone never rewrite the
+    sheet, so they keep bytes the editor would not write back.
+
+    The sheet's line ends, its comment ahead of the wires and its data label
+    are each something a render through the editor changes; the test checks
+    that first, so a rewrite on any of these paths would show."""
+
+    SHEET = (
+        b"Version 4\r\nSHEET 1 880 680\r\n"
+        b"TEXT 0 64 Left 2 ;drawn by hand\r\n"
+        b"WIRE 0 0 160 0\r\n"
+        b"FLAG 0 0 IN\r\n"
+        b'DATAFLAG 80 0 ""\r\n'
+    )
+
+    @pytest.mark.parametrize(
+        ("request_fields", "commit_state"),
+        [
+            ({"ops": [], "return_views": ["pin_legend"]}, "not_committed"),
+            ({"dry_run": True, "ops": [_MID_LABEL]}, "not_committed"),
+            (
+                {
+                    "expected_sha256": hashlib.sha256(SHEET).hexdigest(),
+                    "ops": [
+                        {
+                            "op": "set_plot_panes",
+                            "analysis": "tran",
+                            "panes": [{"traces": ["V(in)"]}],
+                        }
+                    ],
+                },
+                "committed",
+            ),
+        ],
+        ids=["read", "dry_run", "plot_panes_only"],
+    )
+    async def test_the_sheet_keeps_its_bytes(
+        self, asc_state, work_dir, request_fields, commit_state
+    ):
+        path = work_dir / "kept.asc"
+        path.write_bytes(self.SHEET)
+        assert se._render_editor_text(AscEditor(path)).encode("utf-8") != self.SHEET
+        before = file_at(path)
+        data = _assert_schema(
+            await handle_edit_schematic(_edit_input(target=str(path), **request_fields), asc_state)
+        )
+        assert data["outcome"] == "complete"
+        assert data["commit_state"] == commit_state
+        assert file_at(path) == before
+        assert data["sha256"] == _sha(path)

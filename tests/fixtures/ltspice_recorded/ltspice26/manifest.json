@@ -1,6 +1,33 @@
 {
   "build": "ltspice26",
   "cases": {
+    "connectivity/bus_label": {
+      "behaviour": "bus-labels",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/bus_label.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/bus_label.asc": "98df098ccae55170654f2de9db81435c7784403bef46b5f5f5ff51a59bfd8919",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/bus_label.net": {
+          "bytes": 126,
+          "sha256": "bfeebeb9fbba5d9d0ddea10bf19230cec3367cf0bba4cfc2cdf83808342bec68"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/collinear_overlap": {
       "behaviour": "wire-connectivity",
       "command": [
@@ -2364,6 +2391,33 @@
         ".net"
       ]
     },
+    "export/blank_line": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/blank_line.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/blank_line.asc": "5e92393c561d1ad1b67bde252f6510e05c0a65a7bfc72efb191be696d230e5cb",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/blank_line.net": {
+          "bytes": 98,
+          "sha256": "de6e69f93cdb74699677eab2a3bfac178b7237ba84a3a774e8368b619355f133"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/block_symbol": {
       "behaviour": "export-instance-names",
       "command": [
@@ -2411,6 +2465,60 @@
         "export/boilerplate.net": {
           "bytes": 712,
           "sha256": "ad260f438d0680b3357e6c0ef7b085b442b6e64ed07170ed8627b2ff4b050dcc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/bus_tap": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/bus_tap.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/bus_tap.asc": "ed53a2933a60d5de8f02acfa7962f056b0535a5993f63ad712fe6f644a5f2e8d",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/bus_tap.net": {
+          "bytes": 122,
+          "sha256": "d3a98e76c3d2b7a064d178103114f8527e205df212f762c17c1efae6ba546ecc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/data_flags": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/data_flags.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/data_flags.asc": "4033863e5ca5968a27cfa2dd11b4ad0b964f55f6b2ef0713cc434106f509e00d",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/data_flags.net": {
+          "bytes": 100,
+          "sha256": "3632b86042e35f9490d3b7955f45ab5ab6afe24efcef92061bfde042c692547a"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -2811,6 +2919,26 @@
       "written": [
         ".net"
       ]
+    },
+    "export/unknown_record": {
+      "behaviour": "sheet-records",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/unknown_record.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "export/unknown_record.asc": "33e658355d85c639a4980af5d21542bdf2d30b619cec3801cdd8085dba07663e"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": false,
+      "written": []
     },
     "log/device_op": {
       "behaviour": "log-device-op",
@@ -3993,7 +4121,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
       },
@@ -4014,12 +4141,12 @@
         ".raw"
       ]
     },
-    "plot/ac_grid": {
+    "plot/ac_grid_on": {
       "behaviour": "plot-settings",
       "command": [
         "LTspice.exe",
         "-Run",
-        "<dir>/ac_grid.asc",
+        "<dir>/ac_grid_on.asc",
         "-ini",
         "<settings>"
       ],
@@ -4029,7 +4156,7 @@
       },
       "kind": "plot",
       "outputs": {
-        "plot/ac_grid.plt": {
+        "plot/ac_grid_on.plt": {
           "bytes": 248,
           "sha256": "b3a6444d86de53c0e6754a33e42e90e2664a3578bdf291f54e7d377ee6fc647b"
         }
@@ -4057,7 +4184,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
       },
@@ -4121,7 +4247,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
       },
@@ -4152,7 +4277,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
       },
@@ -4183,7 +4307,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/ac.plt": "a611b01e577ef40d452b4e91adbaa86b7bcce2a0cec1d12012db4412cd460cc0",
         "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
@@ -4277,7 +4400,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/log_y.plt": "6275d2c72a07f58e3da55f8222be774a4407e246014f163587ad644e55353629",
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
@@ -4309,7 +4431,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/math.plt": "fc41be66f8678103b4d58a2ca829c63de2c01574a7acc20a4b87fff68acfaa9e",
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
@@ -4341,7 +4462,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/spaced.plt": "199d77b25251ceee9722ac02e532ab2af715361d24c4e9fb18ad463e1e315f6c"
@@ -4373,7 +4493,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/two_panes.plt": "1eedf7eee6766613d99eb2bd9595ff96814cdd2e7da95b0f3ad978b6915586eb"
@@ -4439,7 +4558,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/two_sections.plt": "d090016c80a3118099c39024fa25c8a7091dc8acc890a854a153882f879f97a5"
@@ -4471,7 +4589,6 @@
         "<settings>"
       ],
       "exit_code": null,
-      "host": "Wine 11.0",
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
         "plot/two_panes_utf8.plt": "12ab44e43c23cb11b3757175f6ce3e48ef6191580c9723e4d745dc9b95b00e6b"

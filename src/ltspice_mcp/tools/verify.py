@@ -13,7 +13,8 @@ Checks by file kind:
   paths), ``export`` (the authoritative LTspice netlist export, plus the wires
   LTspice silently drops and the value suffixes the exported netlist spells
   outside ASCII), ``layout`` (geometric placement facts), ``quality``
-  (label-island and text-in-body hygiene), and ``compare``.
+  (label-island and text-in-body hygiene, and a leading byte order mark
+  LTspice does not read), and ``compare``.
 * netlist — ``syntax`` (directive + element arity, and a non-ASCII character
   where a value's scale suffix goes), ``quality`` (nodes wired to
   a single terminal, directives naming something no element declares, nets with
@@ -78,7 +79,7 @@ from pydantic import BeforeValidator, Field
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
-from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
+from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
@@ -131,7 +132,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FINDING_SCHEMA,
     HINT_SCHEMA,
-    LTSPICE_WINDOW_PROPERTIES,
+    LTSPICE_SHOWN_PROPERTIES,
     REPEATABLE_CHANGE_ANNOTATIONS,
     WARNINGS_SCHEMA,
     CompareSpec,
@@ -150,6 +151,7 @@ from ltspice_mcp.tools._base import (
     render_scene_artifact,
     resolve_reference,
     safe_path,
+    shown_in_window,
     symbol_resolver_for,
     window_difference,
 )
@@ -681,9 +683,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": "Present with in_ltspice: what happened in the LTspice window.",
             "properties": {
-                "shown": {"type": "boolean"},
+                **LTSPICE_SHOWN_PROPERTIES,
                 "path": {"type": "string", "description": "The file opened."},
-                **LTSPICE_WINDOW_PROPERTIES,
                 "already_open": {
                     "type": "boolean",
                     "description": (
@@ -850,7 +851,10 @@ class VerifyCircuitInput(ToolInput):
 
     in_ltspice: bool = Field(
         default=False,
-        description=("Also open the file in the user's open LTspice window (26.1+), in front."),
+        description=(
+            "Also open the file in the user's LTspice window (26.1+), in front; "
+            "LTspice is started if none is open."
+        ),
     )
 
     export_to: Literal["sidecar", "managed"] = Field(
@@ -875,7 +879,8 @@ VERIFY_DESCRIPTION = (
     "drops wires the file appears to contain), geometric layout facts (overlapping "
     "bodies, wires through a body, floating pins, dangling wire ends), and quality "
     "facts (net connected only by label stubs with no drawn wire; text anchored "
-    "inside a symbol). Supply 'compare' to graph-compare against a known-good "
+    "inside a symbol; a byte order mark LTspice rejects). Supply 'compare' to "
+    "graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
     "Every fixable finding carries its location and subject. in_ltspice also "
     "opens the file in the user's LTspice window."
@@ -1414,6 +1419,25 @@ def _label_island_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
             )
         )
     return findings
+
+
+def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
+    """A byte order mark at the start of the sheet, which LTspice does not read past.
+
+    The drawing decodes past it, so every other check passes such a sheet.
+    """
+    mark = scene.byte_order_mark
+    if mark is None:
+        return []
+    return [
+        _finding(
+            rule_id="byte_order_mark",
+            severity="error",
+            at={"file": str(path), "line": 1},
+            subject=path.name,
+            evidence={"mark": mark, "detail": f"the sheet {refused_sheet_mark_note(mark)}"},
+        )
+    ]
 
 
 def _dropped_wire_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
@@ -2126,15 +2150,13 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     """
     report: dict[str, Any] = {"shown": False, "path": str(path)}
     try:
-        window, held = state.open_windows.open_sheet(path)
+        shown = state.open_windows.open_sheet(path)
     except BridgeError as error:
         report["reason"] = str(error)
         return report
-    report.update(
-        shown=True, pid=window.pid, version=window.version, already_open=held is not None
-    )
-    if held is not None and path.suffix.lower() == ".asc":
-        report.update(window_difference(path.read_bytes(), held))
+    report.update(shown_in_window(shown), already_open=shown.held is not None)
+    if shown.held is not None and path.suffix.lower() == ".asc":
+        report.update(window_difference(path.read_bytes(), shown.held))
     return report
 
 
@@ -2150,6 +2172,8 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
             f"that was checked ({shown['difference']}); to see the file's, close it there "
             "without saving and ask again."
         )
+    if shown.get("started"):
+        return "LTspice was started, with it in front."
     return "In front in LTspice."
 
 
@@ -2440,6 +2464,7 @@ async def evaluate_verify_circuit(
                 scene_issues, path, _QUALITY_ISSUE_KINDS, "observation"
             )
             quality_findings.extend(_label_island_findings(scene, path))
+            quality_findings.extend(_byte_order_mark_findings(scene, path))
             findings.extend(quality_findings)
             capped_rules.update(totals)
             observation_events.append(_FindingCapSummary(totals))
