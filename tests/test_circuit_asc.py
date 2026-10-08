@@ -221,10 +221,7 @@ class TestEditDirectiveCommentKind:
     async def test_stacked_directives_detected(self, asc_state: SessionState, work_dir: Path):
         # A hand-authored .asc with two directives at the same anchor (bypasses
         # the auto-shift) must surface a stacked_directive advisory.
-        from ltspice_mcp.lib.schematic_ops import (
-            get_asc_editor,
-            post_op_warnings,
-        )
+        from ltspice_mcp.lib.schematic_ops import get_asc_editor
 
         stacked = work_dir / "stacked.asc"
         stacked.write_text(
@@ -232,7 +229,7 @@ class TestEditDirectiveCommentKind:
             "TEXT 16 16 Left 2 !.tran 5m\n"
             "TEXT 16 16 Left 2 !.ac dec 100 1 1meg\n"
         )
-        warns = post_op_warnings(get_asc_editor(stacked, asc_state))
+        warns = structured_warnings(get_asc_editor(stacked, asc_state))
         stacked_w = [w for w in warns if w["kind"] == "stacked_directive"]
         assert len(stacked_w) == 1
         assert stacked_w[0]["count"] == 2

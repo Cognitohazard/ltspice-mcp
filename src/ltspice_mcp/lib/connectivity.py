@@ -70,8 +70,8 @@ def build_on_wire_predicate(
     ``point_on_segment`` but O(1)-amortised per query.
 
     The naive ``any(point_on_segment(coord, *seg) for seg in segments)``
-    scan is O(segments) per coord; calling it once per pin makes
-    ``post_op_warnings`` O(pins × segments), which becomes the dominant
+    scan is O(segments) per coord; calling it once per pin makes a pass
+    over a sheet's pins O(pins × segments), which becomes the dominant
     cost during a long ``add_component`` build. Bucketing
     horizontal segments by row and vertical by column collapses each query
     to the handful of segments sharing that row/column.

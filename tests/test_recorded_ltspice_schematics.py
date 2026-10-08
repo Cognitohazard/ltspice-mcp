@@ -34,18 +34,17 @@ from ltspice_mcp.lib.schematic_ops import (
     element_class,
     make_editor,
     net_partition,
-    post_op_warnings,
     wire_segments_of,
 )
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, sheet_view
-from ltspice_mcp.lib.sheet_findings import checker_findings
+from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.simulator import _in_generation
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from ltspice_mcp.lib.symbol_library import find_symbol
 from tests import _ltspice_recorded as rec
-from tests._asc_ops import apply_ops
+from tests._asc_ops import apply_ops, sheet_findings
 from tests.conftest import FIXTURES_DIR
 from tests.ltspice_recorder import INPUTS
 
@@ -332,19 +331,18 @@ def test_both_tools_call_floating_the_pins_ltspice_left_on_nothing(build: str, t
     assert isinstance(editor, AscEditor)
     # The stacked symbols name each pin by its SpiceOrder.
     from_the_editor = sorted(
-        f"{row['ref']}.{row['pin']}".lower()
-        for row in post_op_warnings(editor)
-        if row["kind"] == "floating_pin"
+        f"{found.refs[0]}.{found.facts['pin']}".lower()
+        for found in sheet_findings(editor)
+        if found.rule == "floating_pin"
     )
     assert from_the_editor == alone
 
     scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
     from_the_checker = sorted(
-        found.refs[0].lower()
-        for found in checker_findings(sheet_view(scene))
-        if found.rule == "floating_pin"
+        f"{found.refs[0]}.{found.facts['pin']}".lower()
+        for found in findings(sheet_view(scene), ["floating_pin"])
     )
-    assert from_the_checker == sorted(pin.split(".")[0] for pin in alone)
+    assert from_the_checker == alone
 
 
 # --------------------------------------------------------------------------

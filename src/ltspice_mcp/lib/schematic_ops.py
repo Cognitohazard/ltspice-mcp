@@ -18,7 +18,8 @@ What lives here:
 - the placement, routing and net-partition geometry (``placed_geometry``,
   ``resolve_pin``, ``plan_connect_route``, ``net_partition``, ``trace_nets``),
   which reads each symbol once per request through ``symbol_info_for``;
-- the post-op validation pass (``post_op_warnings``) and the wiring profile.
+- the wiring profile. What is said of a whole sheet after an edit is
+  ``lib/sheet_findings.py``, read by ``tools/schematic_edit.py``.
 
 Names imported by another module are public.
 
@@ -96,13 +97,6 @@ from ltspice_mcp.lib.plot_settings import (
     scales_of,
     with_panes,
     write_plot_settings,
-)
-from ltspice_mcp.lib.sheet_findings import (
-    RULES,
-    Finding,
-    Part,
-    SheetView,
-    editor_findings,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
@@ -761,68 +755,6 @@ def _append_wire_segments(
         present.add(key)
         editor.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
     return already
-
-
-def sheet_view(editor: AscEditor) -> SheetView:
-    """The sheet ``editor`` holds, as the checks in ``lib/sheet_findings.py`` read it.
-
-    Every part is in it. One whose symbol resolves has the box that includes
-    its pins, which is the box ``add_component`` and ``inspect`` report. One
-    whose symbol does not is there as ``missing``, with no box and no pins.
-    """
-    parts: list[Part] = []
-    for ref in editor.get_components():
-        position, _rotation = editor.get_component_position(ref)
-        at = (int(position.X), int(position.Y))
-        geometry = placed_geometry(editor, ref)
-        if geometry is None:
-            symbol = str(editor.components[ref].symbol or "")
-            parts.append(Part(ref=ref, symbol=symbol, at=at, missing=True))
-            continue
-        box = geometry["bounding_box"]
-        parts.append(
-            Part(
-                ref=ref,
-                at=at,
-                box=BBox.from_origin_size(box["x"], box["y"], box["width"], box["height"]),
-                pins=tuple((pin["name"], pin["x"], pin["y"]) for pin in geometry["pins"]),
-            )
-        )
-    return SheetView(
-        parts=tuple(parts),
-        wires=tuple(wire_segments_of(editor)),
-        labels=tuple((int(lbl.coord.X), int(lbl.coord.Y), lbl.text) for lbl in editor.labels),
-        texts=tuple((int(d.coord.X), int(d.coord.Y), d.text) for d in editor.directives),
-    )
-
-
-def _warning_row(finding: Finding) -> dict:
-    """A finding as ``edit_schematic`` has always carried it: a kind, a place, a message."""
-    row: dict = {"kind": finding.rule}
-    if RULES[finding.rule].scope == "wire":
-        (ax, ay), (bx, by) = finding.points
-        row["from"] = {"x": ax, "y": ay}
-        row["to"] = {"x": bx, "y": by}
-    else:
-        if finding.refs:
-            row["ref"] = finding.refs[0]
-        if finding.points:
-            row["x"], row["y"] = finding.points[0]
-    row.update(finding.facts)
-    row["message"] = finding.detail
-    return row
-
-
-def post_op_warnings(editor: AscEditor) -> list[dict]:
-    """Schematic-state advisories surfaced after a mutating op succeeds.
-
-    The findings of ``sheet_findings.editor_findings`` for the sheet ``editor``
-    holds (floating pins, duplicate wires, dangling labels, labels inside a
-    part's box, stacked directives, parts whose symbol was not found), each as
-    a row a caller can act on without a follow-up read. Read-only on the
-    editor, and cheap during an edit.
-    """
-    return [_warning_row(finding) for finding in editor_findings(sheet_view(editor))]
 
 
 def wiring_profile(editor: AscEditor) -> dict[str, int]:

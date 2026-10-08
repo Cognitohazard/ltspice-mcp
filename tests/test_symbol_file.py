@@ -11,8 +11,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.geometry import BBox
-from ltspice_mcp.lib.schematic_ops import make_editor
-from ltspice_mcp.lib.schematic_ops import sheet_view as editor_view
+from ltspice_mcp.lib.schematic_ops import collect_component_geometry, make_editor
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, parse_symbol
 from ltspice_mcp.lib.schematic_scene import sheet_view as scene_view
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolArc, read_symbol
@@ -268,11 +267,15 @@ class TestBothReadersUseIt:
         )
         editor = make_editor(sheet)
         assert isinstance(editor, AscEditor)
-        (for_the_editor,) = editor_view(editor).parts
+        (reported,) = collect_component_geometry(editor)
         scene = build_scene(sheet, SymbolResolver(local_dir=tmp_path))
         (for_the_checker,) = scene_view(scene).parts
-        assert for_the_editor.box == for_the_checker.box
-        assert for_the_editor.pins == for_the_checker.pins
+        assert for_the_checker.box == BBox.from_origin_size(
+            reported["x"], reported["y"], reported["width"], reported["height"]
+        )
+        assert for_the_checker.pins == tuple(
+            (pin["name"], pin["x"], pin["y"]) for pin in reported["pins"]
+        )
         assert [name for name, _x, _y in for_the_checker.pins] == ["A", "B"]
         assert for_the_checker.box is not None and for_the_checker.body is not None
         # The shallow arc is a sliver of its circle's box, which is 96 units

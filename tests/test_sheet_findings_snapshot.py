@@ -29,16 +29,19 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.lib import symbol_geometry
-from ltspice_mcp.lib.schematic_ops import make_editor, post_op_warnings, wiring_profile
+from ltspice_mcp.lib.schematic_ops import make_editor, wiring_profile
 from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
+from ltspice_mcp.lib.sheet_findings import Finding, findings
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import _base as tools_base
 from ltspice_mcp.tools._base import symbol_resolver_for
+from ltspice_mcp.tools.schematic_edit import finding_row
 from ltspice_mcp.tools.verify import (
     VerifyCircuitInput,
-    _dropped_wire_findings,  # pyright: ignore[reportPrivateUsage]  # reported only beside an export
+    _check_findings,  # pyright: ignore[reportPrivateUsage]  # a dropped wire is reported only beside an export
     evaluate_verify_circuit,
 )
+from tests._asc_ops import sheet_findings
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS
 from tests._schematic_fixtures import suite_name as _name
 
@@ -65,18 +68,28 @@ def _without_folder(finding: dict[str, Any]) -> dict[str, Any]:
     return {**finding, "at": at}
 
 
-async def findings_of(sheet: Path, state: SessionState) -> dict[str, Any]:
-    """Everything both tools say of ``sheet``, in the order they say it."""
+def _staged_afresh(sheet: Path, state: SessionState) -> Path:
+    """``sheet`` copied into the sandbox, with nothing remembered of the sheet before it."""
     # Both symbol caches are keyed by name for the whole process, spicelib's
     # by file name alone: without this a sheet is read with whatever symbol
     # of that name the sheet before it left behind.
     AscEditor.symbol_cache = {}
     symbol_geometry._symbol_cache.clear()  # pyright: ignore[reportPrivateUsage]
-    staged = _stage(sheet, Path(state.working_dir))
+    return _stage(sheet, Path(state.working_dir))
+
+
+def _from_the_file(staged: Path, state: SessionState) -> list[Finding]:
+    """What the sheet rules find of the file, read as ``verify_circuit`` reads it."""
+    return findings(sheet_view(build_scene(staged, resolver=symbol_resolver_for(staged, state))))
+
+
+async def findings_of(sheet: Path, state: SessionState) -> dict[str, Any]:
+    """Everything both tools say of ``sheet``, in the order they say it."""
+    staged = _staged_afresh(sheet, state)
     try:
         editor = make_editor(staged)
         edit: dict[str, Any] = {
-            "warnings": post_op_warnings(editor),  # type: ignore[arg-type]
+            "warnings": [finding_row(found) for found in sheet_findings(editor)],
             "wiring": wiring_profile(editor),  # type: ignore[arg-type]
         }
     except Exception:
@@ -86,11 +99,11 @@ async def findings_of(sheet: Path, state: SessionState) -> dict[str, Any]:
     evaluation = await evaluate_verify_circuit(
         VerifyCircuitInput(path=str(staged), checks=["symbols", "layout", "quality"]), state
     )
-    view = sheet_view(build_scene(staged, resolver=symbol_resolver_for(staged, state)))
+    dropped, _counts = _check_findings(_from_the_file(staged, state), staged, "export")
     return {
         "edit": edit,
         "verify": [_without_folder(finding) for finding in evaluation.data["findings"]],
-        "dropped_wire": [_without_folder(f) for f in _dropped_wire_findings(view, staged)],
+        "dropped_wire": [_without_folder(finding) for finding in dropped],
     }
 
 
@@ -157,3 +170,20 @@ async def test_both_tools_say_of_a_sheet_what_the_record_says(
     said = await findings_of(sheet, asc_state)
     # Through JSON, as the record went: a tuple there is a list here.
     assert json.loads(json.dumps(said)) == _recorded()[_name(sheet)]
+
+
+@pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=_name)
+def test_an_edit_and_a_check_find_the_same_of_a_sheet(sheet: Path, asc_state: SessionState):
+    """What an edit reports of a sheet is what the checker finds of its file.
+
+    The edit's side is read off the editor's own rendering of the sheet, which
+    is the text an edit writes; the checker's off the file as it is.
+    """
+    staged = _staged_afresh(sheet, asc_state)
+    try:
+        editor = make_editor(staged)
+    except Exception:
+        pytest.skip("the editor cannot open this sheet")
+    from_the_edit = sorted(found.identity for found in sheet_findings(editor))
+    from_the_file = sorted(found.identity for found in _from_the_file(staged, asc_state))
+    assert from_the_edit == from_the_file

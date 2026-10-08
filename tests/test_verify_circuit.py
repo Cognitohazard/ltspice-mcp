@@ -36,7 +36,7 @@ from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
 from ltspice_mcp.lib.schematic_scene import Scene
-from ltspice_mcp.lib.sheet_findings import Finding, SheetView
+from ltspice_mcp.lib.sheet_findings import Finding
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
 from ltspice_mcp.tools._base import CompareSpec, RenderPolicy
@@ -597,6 +597,42 @@ async def test_lexer_warnings_reach_the_observations(state_no_sim, work_dir):
     assert any("unclosed .SUBCKT" in note for note in data["observations"]), data["observations"]
 
 
+async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
+    state_no_sim, work_dir, asc_symbols
+):
+    """A wire drawn twice and a label on nothing are layout facts; a label
+    inside a part and directives stacked on one anchor are quality facts."""
+    asc = _write(
+        work_dir,
+        "untidy.asc",
+        "Version 4\nSHEET 1 880 680\n"
+        "WIRE 400 0 464 0\nWIRE 464 0 400 0\n"
+        "FLAG 700 700 loose\nFLAG 100 300 inside\n"
+        "SYMBOL res 100 300 R0\nSYMATTR InstName R1\n"
+        "TEXT 16 16 Left 2 !.op\nTEXT 16 16 Left 2 ;again\n",
+    )
+
+    layout = await _run(state_no_sim, path=str(asc), checks=["layout"])
+    quality = await _run(state_no_sim, path=str(asc), checks=["quality"])
+
+    assert {f["rule_id"] for f in layout["findings"]} == {
+        "floating_pin",
+        "dangling_label",
+        "duplicate_wire",
+    }
+    assert {f["rule_id"] for f in quality["findings"]} == {
+        "label_over_component",
+        "stacked_directive",
+    }
+    assert {f["severity"] for f in layout["findings"] + quality["findings"]} == {"observation"}
+    by_rule = {f["rule_id"]: f for f in layout["findings"] + quality["findings"]}
+    assert (
+        by_rule["duplicate_wire"]["evidence"]["detail"] == "Duplicate wire (2×): (400,0)->(464,0)"
+    )
+    assert by_rule["label_over_component"]["subject"] == "R1"
+    assert by_rule["label_over_component"]["at"]["x"] == 100
+
+
 async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     state_no_sim,
     work_dir,
@@ -613,9 +649,9 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
         for index in range(vc.FINDING_RULE_CAP + 7)
     ]
 
-    def crowded_scene(path, _state, *, compute_issues):
-        assert compute_issues is True
-        return Scene(source=path), SheetView(), found
+    def crowded_scene(path, _state, *, checks):
+        assert list(checks) == ["layout"]
+        return Scene(source=path), found
 
     monkeypatch.setattr(vc, "_analyze_scene", crowded_scene)
     args = VerifyCircuitInput(path=str(asc), checks=["layout"])
@@ -1326,13 +1362,13 @@ async def test_render_svg(state_no_sim, work_dir, asc_symbols, monkeypatch):
     asc = _write(work_dir, "r.asc", _RES_ASC)
     # render.mode="only" skips every check, so the layout checks must not run.
     calls = {"n": 0}
-    real_checker_findings = vc.checker_findings
+    real_sheet_findings = vc.sheet_findings
 
-    def _counting(view):
+    def _counting(view, rules=None):
         calls["n"] += 1
-        return real_checker_findings(view)
+        return real_sheet_findings(view, rules)
 
-    monkeypatch.setattr(vc, "checker_findings", _counting)
+    monkeypatch.setattr(vc, "sheet_findings", _counting)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
     render = data["render"]
     assert render["image_format"] == "svg"
@@ -1379,7 +1415,7 @@ async def test_the_digest_names_the_bytes_that_were_drawn(state_no_sim, work_dir
     """
     asc = _write(work_dir, "drawn.asc", _RES_ASC)
     drawn = hashlib.sha256(asc.read_bytes()).hexdigest()
-    scene, _, _ = vc._analyze_scene(asc, state_no_sim, compute_issues=False)
+    scene, _ = vc._analyze_scene(asc, state_no_sim, checks=())
 
     asc.write_text(_RES_ASC.replace("1k", "2k"), encoding="utf-8")
     assert hashlib.sha256(asc.read_bytes()).hexdigest() != drawn
