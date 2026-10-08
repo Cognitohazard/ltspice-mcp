@@ -4222,6 +4222,19 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 3,
+    "pins_total": 6,
+    "pins_wired": 3,
+    "wire_segments": 3
+   }
+  },
+  "verify": []
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc": {
   "dropped_wire": [],
   "edit": {
@@ -6311,6 +6324,13 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/blank_line.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": []
+ },
  "fixtures/ltspice_recorded/inputs/export/block_symbol.asc": {
   "dropped_wire": [],
   "edit": {
@@ -7184,6 +7204,69 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/bus_tap.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "bus_tap.asc",
+     "x": 256,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       112
+      ]
+     ],
+     "detail": "Wire end at (256,112) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(256,112)"
+   },
+   {
+    "at": {
+     "file": "bus_tap.asc",
+     "x": 400,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       112
+      ]
+     ],
+     "detail": "Wire end at (400,112) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(400,112)"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/data_flags.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 2,
+    "pins_wired": 1,
+    "wire_segments": 1
+   }
+  },
+  "verify": []
+ },
  "fixtures/ltspice_recorded/inputs/export/directives.asc": {
   "dropped_wire": [],
   "edit": {
@@ -7833,7 +7916,22 @@
     "wire_segments": 0
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "micro_utf16le_bom.asc",
+     "line": 1
+    },
+    "evidence": {
+     "detail": "the sheet starts with a UTF-16 LE byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+     "mark": "UTF-16 LE"
+    },
+    "ok": false,
+    "rule_id": "byte_order_mark",
+    "severity": "error",
+    "subject": "micro_utf16le_bom.asc"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/export/micro_utf8.asc": {
   "dropped_wire": [],
@@ -7853,7 +7951,22 @@
   "edit": {
    "unopenable": true
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "micro_utf8_bom.asc",
+     "line": 1
+    },
+    "evidence": {
+     "detail": "the sheet starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+     "mark": "UTF-8"
+    },
+    "ok": false,
+    "rule_id": "byte_order_mark",
+    "severity": "error",
+    "subject": "micro_utf8_bom.asc"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/export/micro_utf8_v41.asc": {
   "dropped_wire": [],
@@ -28839,6 +28952,13 @@
     "subject": "(1616,736)"
    }
   ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/unknown_record.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": []
  },
  "fixtures/ltspice_recorded/inputs/plot/rc_ac.asc": {
   "dropped_wire": [],

@@ -34,12 +34,16 @@ def only(view: SheetView, rule: str) -> list[Finding]:
 
 class TestTheRegistry:
     def test_every_rule_either_tool_reports_is_in_it(self) -> None:
+        """But for the byte order mark ``verify_circuit`` reports: that is read
+        off the file's bytes, which a view of what is drawn does not hold."""
         record = json.loads(_RECORD.read_text(encoding="utf-8"))
-        reported: set[str] = set()
+        from_an_edit: set[str] = set()
+        from_a_check: set[str] = set()
         for entry in record.values():
-            reported |= {warning["kind"] for warning in entry["edit"].get("warnings", [])}
-            reported |= {f["rule_id"] for f in entry["verify"] + entry["dropped_wire"]}
-        assert reported <= set(RULES)
+            from_an_edit |= {warning["kind"] for warning in entry["edit"].get("warnings", [])}
+            from_a_check |= {f["rule_id"] for f in entry["verify"] + entry["dropped_wire"]}
+        assert from_an_edit <= set(RULES)
+        assert from_a_check - set(RULES) == {"byte_order_mark"}
 
     def test_an_edit_publishes_every_rule_in_the_order_they_are_listed(self) -> None:
         """What changes the circuit or leaves it undone comes first, how the

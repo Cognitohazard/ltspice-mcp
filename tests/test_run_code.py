@@ -25,7 +25,14 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
 from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
-from tests.conftest import LIVENESS_S, await_until, process_running, wait_until, written
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    process_running,
+    start_when,
+    wait_until,
+    written,
+)
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -263,12 +270,28 @@ class TestLifetime:
         assert not process_running(before)
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
-    async def test_timeout_interrupts_and_keeps_the_worker(self, state: SessionState):
+    async def test_timeout_interrupts_and_keeps_the_worker(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
         before = (await run(state, "1"))["worker_pid"]
+        started = state.working_dir / "timeout-started"
+        snippet_started = written(started, str.strip)
+        # The snippet's timeout counts from once it is running, so the interrupt
+        # lands inside it however late the worker starts it.
+        start_when(
+            monkeypatch,
+            CodeWorker,
+            "_await_reply",
+            lambda *_: snippet_started(),
+            what="the snippet to start",
+        )
+        snippet = (
+            "import pathlib, time\nprint('started')\n"
+            f"pathlib.Path({str(started)!r}).write_text('1')\ntime.sleep({2 * LIVENESS_S})"
+        )
         # timing: the snippet timeout under test
-        reply = await run(state, "import time\nprint('started')\ntime.sleep(30)", timeout_s=1)
+        reply = await run(state, snippet, timeout_s=1)
         assert reply["status"] == "timeout"
-        assert reply["elapsed_s"] < 5
         assert reply["stdout"] == "started\n"
         assert "timeout_s" in reply["hint"]
         after = await run(state, "1")
@@ -280,18 +303,22 @@ class TestLifetime:
     async def test_a_snippet_that_swallows_the_interrupt_is_killed(
         self, state: SessionState, monkeypatch: pytest.MonkeyPatch
     ):
-        # The grace is read at call time; a short one keeps the test quick.
+        # timing: the grace under test, read at call time; the worker never answers the interrupt
         monkeypatch.setattr(run_code_module, "INTERRUPT_GRACE_S", 0.5)
-        before = (await run(state, "1"))["worker_pid"]
-        code = (
-            "import time\n"
-            "try:\n    time.sleep(30)\n"
-            "except KeyboardInterrupt:\n    time.sleep(30)\n"
+        # A call that has already returned makes the worker ignore the
+        # interrupt, so it is ignored wherever it lands: before the timed
+        # snippet starts or inside it.
+        ignore = "import signal\nsignal.signal(signal.SIGINT, lambda *_: None)\n"
+        ignoring = await run(state, ignore)
+        assert ignoring["status"] == "ok", ignoring
+        before = ignoring["worker_pid"]
+        # The snippet sleeps past LIVENESS_S, so a call that waited it out fails here.
+        reply = await asyncio.wait_for(
+            # timing: the snippet timeout under test
+            run(state, f"import time\ntime.sleep({2 * LIVENESS_S})", timeout_s=1),
+            LIVENESS_S,
         )
-        # timing: the snippet timeout under test
-        reply = await run(state, code, timeout_s=1)
         assert reply["status"] == "timeout"
-        assert reply["elapsed_s"] < 3
         after = await run(state, "'fresh'")
         assert after["status"] == "ok"
         assert after["worker_pid"] != before

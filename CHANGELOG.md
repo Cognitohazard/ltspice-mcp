@@ -25,6 +25,21 @@ tool-surface changes.
   LTspice launch a recoverable experiment resumes with, which keeps its
   command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
+- An `edit_schematic` commit removed every data label (`DATAFLAG` record) from
+  the sheet it edited and reported a complete edit: the schematic editor
+  underneath skips them when it reads a sheet and never writes them. They are
+  now written back, in their order, after the sheet's labels and ports.
+- A sheet holding a line the schematic editor does not read, such as a bus tap
+  (`BUSTAP`) or an empty line, failed `edit_schematic` as an internal error and
+  `inspect`'s schematic queries as `internal_error`, naming neither the file
+  nor the line. Both now refuse it with the file, the line number and the
+  line, also when the line is in a sheet the target loads as a block. Such a
+  sheet still cannot be opened for editing, though LTspice 26 and LTspice XVII
+  both read one (`export/bus_tap`, `export/blank_line`), and a bus tap
+  connects nothing in the netlist they export. `verify_circuit`, which draws the
+  sheet with its own parser, used to leave such a record out of the drawing
+  and of every check built on it without saying so; it now reports each
+  keyword it did not read, how many lines hold it and the first.
 - `wire_pins` drew a wire that shorted two named nets in two cases it
   now refuses, as it always refused the plain one. With an end given as
   `net:NAME`, the check for two differently named nets was skipped
@@ -59,6 +74,15 @@ LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
 recording that showed it.
 
+- Neither LTspice 26 nor LTspice XVII reads a sheet that starts with a byte
+  order mark (`export/micro_utf8_bom`, `export/micro_utf16le_bom`). With a
+  UTF-8 mark, `edit_schematic` and `inspect` failed as an internal error
+  saying the sheet had no `Version` line; they now refuse it as starting with
+  the mark. With a UTF-16 mark the sheet opened and an edit wrote the mark
+  back, so the edited sheet still could not be exported; an edit now writes
+  it as UTF-16 LE without the mark, which both builds read. `verify_circuit`
+  passed either sheet, because its drawing reads past the mark; its `quality`
+  check now reports the mark as an error (`byte_order_mark`).
 - `edit_schematic` and `verify_circuit` each had a reading of their own of
   a floating pin. Both now follow what LTspice was recorded doing. A pin on
   the interior of a diagonal wire is connected: `edit_schematic` reported it
@@ -708,6 +732,14 @@ recording that showed it.
   once, as `jobs(action="wait")` already did. A job's record no longer carries
   anything to wait on: what a wait waits on belongs to the job this process
   runs, so a copy read from disk cannot be waited on by mistake.
+- On Windows, a result read that was stopped (it timed out, was cancelled or
+  failed) was reported as fully ended while processes its decoder had started
+  were still exiting. Windows counts a job's processes as gone the moment it
+  is asked to terminate them, and that count was the confirmation; measured,
+  every process of a terminated job was still running when it read zero, for
+  2 to 50 ms depending on the memory they held. The read's scratch directory
+  was removed next, which a process still exiting can hold open. A tree is
+  now confirmed gone only once each of its processes has exited.
 
 ### Added
 
@@ -781,13 +813,25 @@ recording that showed it.
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says
   when that is not the file that was checked.
-- The guide says what to do when a person wants to plot nets by clicking the
-  sheet in LTspice. LTspice offers that only after a run made in its own
-  window, and a job's results opened there are drawn but not tied to the
-  sheet. So that one run is started through LTspice's own MCP server where it
-  is connected, or by the person, and measured by path with
-  `analyze_results(raw_path)`. Such a run simulates the window's copy of the
-  sheet, not the file.
+- `in_ltspice` on `verify_circuit` and `plot_waveform` starts LTspice when no
+  LTspice window is open, where it used to say that none was. It opens in
+  view and takes the keyboard focus, which is what a request to be shown
+  something there asks for; the reply's `ltspice` block says `started: true`.
+  `[schematic] start_ltspice = false` (`LTSPICE_MCP_START_LTSPICE`) keeps the
+  old behaviour. Nothing else starts LTspice in view: an edit to an open sheet
+  and `inspect(kind="open_in_ltspice")` still start nothing.
+  `inspect(kind="capabilities")` reports the setting under
+  `open_window_sync.starts_ltspice`.
+- `plot_waveform(in_ltspice=true)` opens a run of a sheet from the sheet, so
+  that LTspice ties the plot to it and a click on a net plots it, as after a
+  run made in LTspice. The run's results and log are put beside the sheet
+  under its name, replacing the ones there, and the sheet's own Visible Traces
+  command opens them: no second simulation. The reply's `ltspice` block names
+  the `sheet`. Nothing is written when no window is open, when the sheet is
+  outside the sandbox, or when LTspice already has that plot open (it would go
+  on showing what it read); a sheet LTspice had open before it had any
+  results has to be closed there once, and the reply says so. A run of a
+  netlist opens on its own, as before.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 
@@ -1077,7 +1121,7 @@ recording that showed it.
   after a failed, cancelled or timed-out read or a process it did not start;
   a tree whose exit cannot be confirmed still closes parser admission. Waits
   on a parser process are woken by the operating system (a pidfd and
-  `SIGCHLD` on Linux, the Job Object's completion port on Windows) rather than
+  `SIGCHLD` on Linux, a handle to each process on Windows) rather than
   by polling every 5 or 10 ms. On Linux each read of new results took about
   400 ms; a session's first read still does, and the reads after it take
   about 15 ms.

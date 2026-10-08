@@ -27,6 +27,17 @@
   "error": "Could not start or attach an LTspice instance. Open an LTspice window, or use start_headless/attach."
  },
  {
+  "note": "an LTspice started with no document is offered to the bridge as a window",
+  "observed": true
+ },
+ {
+  "note": "it has no document open and none in front",
+  "observed": [
+   [],
+   null
+  ]
+ },
+ {
   "note": "one window is open",
   "call": "status",
   "arguments": {},
@@ -333,6 +344,72 @@
    "path": "C:\\recording\\absent.raw"
   },
   "error": "file not found"
+ },
+ {
+  "note": "the frame has a pane titled for an open sheet, and none for results it has not opened",
+  "observed": [
+   true,
+   false
+  ]
+ },
+ {
+  "note": "put the open sheet in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\micro_sign.asc"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "results put beside a sheet that was already open are not opened by its command",
+  "observed": true
+ },
+ {
+  "note": "open a sheet that has results beside it",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\placed.asc"
+  },
+  "reply": {
+   "already_open": "false",
+   "path": "C:\\recording\\placed.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "put it in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\placed.asc"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "results beside a sheet when it is opened are opened by its command",
+  "observed": true
+ },
+ {
+  "note": "it asks nothing on the way",
+  "observed": true
+ },
+ {
+  "note": "put the sheet in front again",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\placed.asc"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "with those results open the same command asks which traces to show",
+  "observed": "Select Visible Waveforms"
  },
  {
   "note": "the window has closed",

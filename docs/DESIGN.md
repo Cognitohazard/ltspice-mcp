@@ -121,6 +121,17 @@ and not a tool of its own: there are two such actions, each has an object the
 surface already names, and a tool for the window alone would be the remote
 control LTspice's own server is.
 
+For those two, and for nothing else, LTspice is started when no window is
+open (by the `OpenWindows` method that shows it; `[schematic] start_ltspice`). It is the one
+start of LTspice that is meant to be seen: a person asked to be shown
+something in a program that is not running. It is started with no document
+and no settings file, as from the Start menu, and outside the server's own
+job where Windows allows, so that the window is the person's and does not end
+with a session; the bridge finds it as a window within a second or two
+(recorded), and the call goes on as if it had been open. Keeping an open
+sheet in step with an edit, and saying what is open, start nothing. Nor does
+the bridge: letting it start one is what the hidden desktop below is against.
+
 The file stays the record, and the window is a view of it. LTspice's server
 takes the other side: the window is the document and saving is the user's. Had
 this server followed, every tool that reads a file (a run, an export, a
@@ -146,17 +157,35 @@ sheet, which differs from the file in ways that change nothing, so the
 comparison reads content and not text. Only the bridge's stdio interface is
 used; the loopback protocol behind it is not documented and is left alone.
 
-One thing stays with LTspice's server: a run made in the window. It is the
-only run whose waveform pane LTspice ties to the sheet, so that clicking a net
-plots it. A job's results opened in the window are drawn and not tied, and
-putting them beside the sheet under its name changes nothing (26.1.1, looked
-at in all four combinations of where the results came from and how the panes
-were laid out). Such a run is also of the window's copy and not of the file,
-and leaves no record: the opposite of a job on each count the job system
-exists for. So this server does not start one. The guide tells a session to
-use LTspice's `start_simulation` for it when that server is connected, or to
-ask the person to run the sheet, and then to measure the results it leaves
-beside the sheet by path, which is what `analyze_results(raw_path)` is for.
+One thing the bridge cannot be asked for is a plot tied to its sheet, so that
+clicking a net plots it. Results it opens stand alone, wherever the file is.
+LTspice ties a plot to a sheet when the results are opened from the sheet: by
+a run made there, or by the sheet's own Visible Traces command, which reads
+`<sheet>.raw` beside the sheet whichever run wrote it. So for a run of a
+sheet the server does what a person would: it puts the run's results beside
+the sheet under its name and sends the window's frame that command
+(`lib/ltspice_frame.py`, `OpenWindows.results_from_sheet`). The command is
+found by its label in the menus of the executable the window runs, because
+its number is the build's own. Three things LTspice does decide the order of
+the steps, each recorded from a window:
+
+- It looks for a sheet's results as it opens the sheet, and afterwards knows
+  of none but those of a run made there. So a sheet no window has open is
+  opened only after the results are in place, and one that was already open
+  with none is reported as such, for the person to close.
+- It reads the file when the command is given, so results replaced since it
+  last looked are the ones shown, and no earlier run's are passed off as the
+  job's.
+- With those results already open, the same command asks which traces to
+  show, and the file is not read again. So the frame is asked first whether
+  that pane is open, and then nothing is replaced and nothing sent.
+
+This is the one place the server reaches a window other than through the
+bridge. It sends one command, to a sheet it has just put in front, and reads
+the titles of the frame's panes. It does not start a run in the window to get
+a tied plot: such a run is of the window's copy and not of the file, and
+leaves no record, the opposite of a job on each count the job system exists
+for.
 
 Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,
@@ -470,16 +499,24 @@ so zoom / pan / hover does nothing for it.
   two analyses whose section is recorded, a transient and an AC run; any
   other run opens with an empty plot and the reply says why. A settings file
   a person saved from LTspice is left alone: writing its panes back never
-  gives its bytes, which is how it is told from one written here. LTspice is
-  not started for
-  this; with no window open the settings are still written, so the file opens
-  with its traces when the person opens it by hand. It is the one place the
-  server opens anything in a window, and it does so only when asked, which is
-  why it is an argument and not a setting. The chart and the trace summaries
+  gives its bytes, which is how it is told from one written here. With no
+  window open LTspice is started for this, unless `[schematic] start_ltspice`
+  is off; the settings are written first either way, so the file opens with
+  its traces when the person opens it by hand. It opens something in a
+  window, and can bring LTspice to the front, only when asked, which is why
+  it is an argument and not a setting. The chart and the trace summaries
   are made all the same, and the browser is not opened as well. What LTspice
   loads when it opens a results file it does not load again while the file
   stays open, and nothing the bridge answers says whether it was open, so the
-  reply says that a file already open keeps the traces it had.
+  reply says that a file already open keeps the traces it had. A run of a
+  sheet is opened from the sheet instead, so that the plot is tied to it
+  (*LTspice's own MCP server*, above): its results and log are copied beside
+  the sheet under its name, which replaces the ones a run in LTspice left
+  there, and its plot settings are the sheet's own, the file `set_plot_panes`
+  writes. These are LTspice's own companions of a sheet, written because the
+  caller asked for the run to be shown there; nothing is written beside a
+  sheet until a window is found that can show it, or beside a sheet outside
+  the sandbox.
 - **Static PNG (the vision tier) — opt-in, on `plot_waveform`.** A config
   default `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
   parameter that overrides it: an operator can attach a plot to every

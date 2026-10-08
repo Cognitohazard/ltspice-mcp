@@ -18,12 +18,12 @@ from pydantic import Field, PrivateAttr
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
-from ltspice_mcp.errors import PathSecurityError, SimulationError
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
-from ltspice_mcp.lib.ltspice_window import file_difference
+from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
@@ -298,6 +298,30 @@ LTSPICE_WINDOW_PROPERTIES: dict[str, Any] = {
     "pid": {"type": "integer", "description": "The LTspice process."},
     "version": {"type": "string"},
 }
+
+
+#: What a reply says of something a caller asked to be shown in LTspice.
+LTSPICE_SHOWN_PROPERTIES: dict[str, Any] = {
+    "shown": {"type": "boolean"},
+    **LTSPICE_WINDOW_PROPERTIES,
+    "started": {
+        "type": "boolean",
+        "description": "LTspice was not running and was started for this.",
+    },
+}
+
+
+def shown_in_window(shown: Shown) -> dict[str, Any]:
+    """The window something was shown in, as a reply says it: ``shown``, the
+    window, and ``started`` when LTspice was started for it."""
+    report: dict[str, Any] = {
+        "shown": True,
+        "pid": shown.window.pid,
+        "version": shown.window.version,
+    }
+    if shown.started:
+        report["started"] = True
+    return report
 
 
 def window_difference(on_disk: bytes, window_text: str) -> dict[str, Any]:
@@ -1239,6 +1263,14 @@ def safe_path(user_path: str, state: SessionState) -> Path:
         PathSecurityError: If path violates security constraints
     """
     return resolve_safe_path(user_path, state.allowed_paths())
+
+
+def sandboxed(user_path: str, state: SessionState) -> Path | None:
+    """``user_path`` as a path this server may read and write, or None when it may not."""
+    try:
+        return safe_path(user_path, state)
+    except (LTSpiceMCPError, OSError, ValueError):
+        return None
 
 
 def path_denied_text(exc: PathSecurityError, state: SessionState) -> str:

@@ -43,6 +43,31 @@ _BOM_ENCODINGS: tuple[tuple[bytes, str], ...] = (
 )
 
 
+def leading_byte_order_mark(data: bytes) -> str | None:
+    """The codec named by the byte order mark ``data`` starts with, or None."""
+    return next((encoding for bom, encoding in _BOM_ENCODINGS if data.startswith(bom)), None)
+
+
+#: The byte order marks neither LTspice 26 nor LTspice XVII reads a sheet
+#: behind, by the codec each names, with the name a message gives it
+#: (``export/micro_utf8_bom`` and ``export/micro_utf16le_bom`` in the recordings).
+_MARKS_LTSPICE_REFUSES = {"utf-8-sig": "UTF-8", "utf-16-le": "UTF-16 LE"}
+
+
+def refused_sheet_mark(data: bytes) -> str | None:
+    """The name of the mark ``data`` starts with, if LTspice refuses a sheet behind it."""
+    return _MARKS_LTSPICE_REFUSES.get(leading_byte_order_mark(data) or "")
+
+
+def refused_sheet_mark_note(name: str) -> str:
+    """What a refusal or a finding says of a sheet that starts with the mark ``name``."""
+    return (
+        f"starts with a {name} byte order mark; neither LTspice 26 nor LTspice XVII reads "
+        'a sheet that does (26 exports nothing from it, XVII stops on "Unknown schematic '
+        'syntax"). Save it without the mark.'
+    )
+
+
 def detect_utf16_endianness(probe: bytes) -> str | None:
     """Return ``"utf-16-le"`` / ``"utf-16-be"`` if every other byte is null.
 

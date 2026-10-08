@@ -176,7 +176,7 @@ async def _submit_seeded(state, request_id, seed, *, variations=None):
                 "recoverable": True,
                 "simulator_seed": seed,
                 "wait_s": LIVENESS_S,
-                "run_timeout_s": 10,
+                "run_timeout_s": LIVENESS_S,
                 "max_parallel": 1,
             },
             "variations": variations or [],
@@ -220,7 +220,7 @@ def test_python_api_preserves_seed_execution_field(work_dir):
         simulator="ngspice",
         simulator_exe=shutil.which("ngspice"),
         ngbehavior="hsa",
-        run_timeout=10,
+        run_timeout=LIVENESS_S,
     ) as api:
         result = api.run_experiments(
             request_id="api-seeded",

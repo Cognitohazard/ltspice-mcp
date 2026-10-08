@@ -34,7 +34,7 @@ from pathlib import Path
 from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import point_on_segment
-from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
+from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text, refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.symbol_file import (
@@ -509,6 +509,10 @@ class Scene:
     directives: list[Directive] = field(default_factory=list)
     sheet_graphics: list[Graphic] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
+    #: The byte order mark the file starts with, when it is one neither LTspice
+    #: build reads a sheet behind (``encoding.refused_sheet_mark``). The drawing
+    #: decodes past it, so the scene keeps it here.
+    byte_order_mark: str | None = None
 
     def content_bbox(self) -> BBox | None:
         """Smallest box enclosing everything drawn, including text and glyphs.
@@ -726,13 +730,24 @@ class _AscDoc:
     sheet_rects: list[DrawRect] = field(default_factory=list)
     sheet_circles: list[DrawEllipse] = field(default_factory=list)
     sheet_arcs: list[SymbolArc] = field(default_factory=list)
+    #: Each keyword the parse does not read, with the lines it is on.
+    unread: dict[str, list[int]] = field(default_factory=dict)
+
+
+# The records an LTspice sheet holds that the drawing has nothing to take from:
+# the header, a port's direction (its label is the FLAG before it) and a data
+# label's expression (recorded as export/data_flags: the export is the circuit
+# without them). Any other keyword it does not read is reported, a bus tap
+# among them: LTspice draws one and this drawing does not, though it connects
+# nothing in the netlist (export/bus_tap).
+_UNDRAWN_KEYWORDS = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
 
 
 def _parse_asc(text: str) -> _AscDoc:
     doc = _AscDoc()
     current: _RawSymbol | None = None
 
-    for raw in text.splitlines():
+    for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line:
             continue
@@ -763,12 +778,13 @@ def _parse_asc(text: str) -> _AscDoc:
                 doc.symbols.append(current)
             else:
                 current = None
-        elif kw == "WINDOW" and current is not None:
-            window = read_window(parts)
-            if window is not None:
-                current.windows.append(window)
-        elif kw == "SYMATTR" and current is not None:
-            if len(parts) >= 2:
+        elif kw == "WINDOW":
+            if current is not None:
+                window = read_window(parts)
+                if window is not None:
+                    current.windows.append(window)
+        elif kw == "SYMATTR":
+            if current is not None and len(parts) >= 2:
                 current.attrs[parts[1]] = value_of(line)
         elif kw == "WIRE":
             if len(parts) >= 5:
@@ -805,7 +821,8 @@ def _parse_asc(text: str) -> _AscDoc:
             c = leading_ints(parts[2:], 8)
             if c is not None:
                 doc.sheet_arcs.append(SymbolArc(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
-        # IOPIN / DATAFLAG / SHEET / Version: no geometry we render in V1.
+        elif kw not in _UNDRAWN_KEYWORDS:
+            doc.unread.setdefault(kw, []).append(number)
 
     return doc
 
@@ -1058,6 +1075,19 @@ def _svg_anchor(align: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _unread_note(keyword: str, lines: list[int]) -> str:
+    """What the drawing, and every check read from it, leaves out of a sheet."""
+    if len(lines) == 1:
+        return (
+            f"line {lines[0]}: a {keyword} record, which the drawing does not read; it is "
+            "not drawn and no check built on the drawing includes it"
+        )
+    return (
+        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which the drawing "
+        "does not read; they are not drawn and no check built on the drawing includes them"
+    )
+
+
 def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene:
     """Parse ``asc_path`` and build a fully-placed :class:`Scene`.
 
@@ -1073,21 +1103,32 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
     # something that was never drawn.
     data = asc_path.read_bytes()
     return scene_of_text(
-        decode_spice_bytes(data), asc_path, resolver, hashlib.sha256(data).hexdigest()
+        decode_spice_bytes(data),
+        asc_path,
+        resolver,
+        hashlib.sha256(data).hexdigest(),
+        refused_sheet_mark(data),
     )
 
 
 def scene_of_text(
-    text: str, source: Path, resolver: SymbolResolver, source_sha256: str | None = None
+    text: str,
+    source: Path,
+    resolver: SymbolResolver,
+    source_sha256: str | None = None,
+    byte_order_mark: str | None = None,
 ) -> Scene:
     """The fully-placed :class:`Scene` of a sheet given as text.
 
     ``source`` is the path the sheet has or will have; nothing is read from
     it. This is how a sheet that is not on disk yet is drawn and checked: the
-    text an edit is about to write.
+    text an edit is about to write. ``byte_order_mark`` is the mark the sheet's
+    bytes began with, for a sheet read from a file.
     """
     doc = _parse_asc(text)
-    scene = Scene(source=source, source_sha256=source_sha256)
+    scene = Scene(source=source, source_sha256=source_sha256, byte_order_mark=byte_order_mark)
+    for keyword, lines in doc.unread.items():
+        scene.diagnostics.append(_unread_note(keyword, lines))
 
     for raw in doc.symbols:
         proto = resolver.load(raw.symbol)

@@ -1182,8 +1182,8 @@ external write like any other (LTspice rewrites the sheet its own way, so the
 digest changes and the next edit must read it again). The alternative, editing
 the window's copy and leaving the save to the user as LTspice's own MCP server
 does, would make every other tool on the surface read a file that is behind
-what the user sees. LTspice is not started for this, and a sheet is never
-opened in a window that did not have it. The bridge would start an LTspice of
+what the user sees. LTspice is not started for an edit, and an edit never
+opens a sheet in a window that did not have it. The bridge would start an LTspice of
 its own if the window closed under it, so it runs on the server's hidden
 desktop in a job that ends with the call, where one it started could not be
 seen or left behind, and it is told where LTspice is not, so that the launch
@@ -1371,8 +1371,10 @@ already_open, differs_from_file?, difference?, reason?}`. A sheet the window
 already had open is put in front as the window holds it, because LTspice does
 not read a file again, so its copy is compared with the file and
 `differs_from_file` says when the person is looking at something else than was
-checked. LTspice is not started for this: with no window open the block says so
-and the checks stand. It never fails the call. Like `plot_waveform`'s argument
+checked. With no window open LTspice is started for this (`started: true`),
+in view, since the caller was asked to show the file there; with
+`[schematic] start_ltspice` off the block says that no window is open, and the
+checks stand. It never fails the call. Like `plot_waveform`'s argument
 of the same name, it opens something in a window and so is an argument a caller
 passes when asked, never a default.
 
@@ -1473,9 +1475,10 @@ Python API), which are never capped. The gate stays a whole-file answer.
     one the `remediation` that would turn it on; named_executables: the same
     facts and the family for each [simulator.executables] entry bound at
     startup, keyed by the selector execution.simulator takes ("ltspice:xvii");
-    exporter presence, `open_window_sync: {available, reason}` (whether
-    edit_schematic can keep a sheet open in an LTspice window in step with
-    its file), dialects, persistence,
+    exporter presence, `open_window_sync: {available, reason,
+    starts_ltspice}` (whether edit_schematic can keep a sheet open in an
+    LTspice window in step with its file, and whether in_ltspice starts
+    LTspice when no window is open), dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,

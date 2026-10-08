@@ -213,7 +213,7 @@ class TestAPinNameWithASpace:
 
     def test_the_editor_cannot_open_a_sheet_that_places_it(self, tmp_path: Path) -> None:
         """spicelib's symbol reader unpacks the line into three words
-        (``docs/spicelib_bugs.md``, Bug 25), and it reads every symbol a sheet
+        (``docs/spicelib_bugs.md``, Bug 28), and it reads every symbol a sheet
         places while it loads the sheet."""
         (tmp_path / "dual.asy").write_text(self.SYMBOL, encoding="utf-8")
         sheet = tmp_path / "with_dual.asc"

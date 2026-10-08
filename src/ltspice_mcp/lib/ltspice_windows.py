@@ -12,18 +12,25 @@ method is spicelib's own.
 
 The class keeps the name ``LTspice``: a job records its simulator by class
 name, and the raw dialect and the linter key on it.
+
+One start here is the other way about: ``start_in_view`` starts LTspice where
+a person can see it, for a caller who was asked to show them something in it
+when none is running (``OpenWindows``). It is here so that every start of
+LTspice on Windows is in one module.
 """
 
 from __future__ import annotations
 
 import contextlib
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 from spicelib.simulators.ltspice_simulator import LTspice as _SpicelibLTspice
 
 from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib.windows_job import detached_creation_flags
 
 _SEE_THE_BOX = (
     "To see LTspice's window and answer the box yourself, set [simulator] "
@@ -55,6 +62,39 @@ def run_on_desktop(
         stderr=stderr,
         remedy=_SEE_THE_BOX,
     )
+
+
+def start_in_view(executable: Path, *, spawn: Any = subprocess.Popen) -> None:
+    """Start LTspice where the person can see it.
+
+    The one start of LTspice that is meant to be seen: every other is kept
+    off the person's desktop. It is for a caller who was asked to show
+    something in LTspice when no window is open, and it takes the keyboard
+    focus, as starting any program does. No document and no settings file are
+    named, so it opens as it does from the Start menu. The process is the
+    person's from then on: nothing here waits for it or ends it, and it is
+    started outside the server's own job where that job lets a process leave,
+    so that it does not end with a session. Raises ``OSError`` when it cannot
+    be started.
+
+    ``spawn`` is ``subprocess.Popen``, there to be replaced by a test: no test
+    starts LTspice where it can be seen.
+    """
+    if sys.platform != "win32":
+        raise OSError("an LTspice window is started through Windows")
+    process = spawn(
+        [str(executable)],
+        # Apart from the server's own console and process group.
+        creationflags=subprocess.DETACHED_PROCESS
+        | subprocess.CREATE_NEW_PROCESS_GROUP
+        | detached_creation_flags(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Not this process's to wait for: without this, dropping the handle of a
+    # program still running is reported as a leak.
+    process.returncode = 0
 
 
 def _switches(cmd_line_switches: list | str | None) -> list:
