@@ -88,9 +88,15 @@ def _hold_lock_then_write(
     return t
 
 
-def _hold_lock_until_released(target: Path) -> tuple[threading.Thread, threading.Event]:
+def _hold_lock_until_released(
+    target: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[threading.Thread, threading.Event]:
     """Peer session stand-in: hold the file's cross-process lock until the
-    returned event is set. Returns (thread, release_event) once held."""
+    returned event is set, with a wait for a lock cut short so the edit it
+    refuses does not sit out the default. Returns (thread, release_event)
+    once held."""
+    # timing: the bound under test; the peer holds the lock until released
+    monkeypatch.setattr(filelock_module, "DEFAULT_TIMEOUT", 0.2)
     held = threading.Event()
     release = threading.Event()
 
@@ -157,13 +163,7 @@ class TestCircuitFileLock:
     async def test_contended_lock_times_out_with_clear_error(
         self, asc_state: SessionState, asc_file: Path, monkeypatch
     ):
-        import ltspice_mcp.lib.filelock as lock_mod
-
-        # Shrink the acquisition window so the test doesn't sit out the
-        # full default timeout.
-        # timing: the bound under test; the peer holds the lock until released
-        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
-        t, release = _hold_lock_until_released(asc_file)
+        t, release = _hold_lock_until_released(asc_file, monkeypatch)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 await apply_ops(
@@ -206,12 +206,9 @@ class TestCircuitFileLock:
         # LTspice's export overwrites the sibling .net; a peer session editing
         # that .net holds ITS file lock, so the export guard must contend on
         # the .net lock too — not just the .asc.
-        import ltspice_mcp.lib.filelock as lock_mod
         from ltspice_mcp.lib.deck_prep import asc_export_lock
 
-        # timing: the bound under test; the peer holds the lock until released
-        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
-        t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
+        t, release = _hold_lock_until_released(asc_file.with_suffix(".net"), monkeypatch)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 async with asc_export_lock(asc_file):
@@ -226,11 +223,7 @@ class TestCircuitFileLock:
         # set_plot_panes rewrites the .plt beside the sheet, so a peer session
         # writing the same .plt holds a lock this edit must contend on; an edit
         # that leaves the .plt alone does not wait for it.
-        import ltspice_mcp.lib.filelock as lock_mod
-
-        # timing: the bound under test; the peer holds the lock until released
-        monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
-        t, release = _hold_lock_until_released(asc_file.with_suffix(".plt"))
+        t, release = _hold_lock_until_released(asc_file.with_suffix(".plt"), monkeypatch)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 await apply_ops(
@@ -304,8 +297,6 @@ class TestCircuitLockLocation:
         different current directory and working directory, and names the sheet
         by a relative path from there. Our edit must see that lock as held.
         """
-        import ltspice_mcp.lib.filelock as lock_mod
-
         sheet = _project_sheet(work_dir, project_dir)
         elsewhere = tmp_path_factory.mktemp("other-session")
         holder = await asyncio.create_subprocess_exec(
@@ -330,7 +321,7 @@ class TestCircuitLockLocation:
             held = await asyncio.wait_for(holder.stdout.readline(), timeout=60)
             assert held.strip() == b"held"
             # timing: the bound under test; the other session holds the lock until its input ends
-            monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
+            monkeypatch.setattr(filelock_module, "DEFAULT_TIMEOUT", 0.2)
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 await apply_ops(asc_state, sheet, _SET_R1)
         finally:

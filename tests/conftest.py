@@ -1120,6 +1120,34 @@ def settled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(parser_service, "_now_ns", lambda: time.time_ns() + 3600 * 10**9)
 
 
+def start_when(
+    monkeypatch: pytest.MonkeyPatch,
+    owner: object,
+    name: str,
+    ready: Callable[..., object],
+    *,
+    what: str,
+) -> None:
+    """Hold each call of the coroutine method ``owner.name`` until ``ready``
+    holds, then run it unchanged.
+
+    For a bound that starts its clock when that method is called (a run
+    timeout, a job deadline's watch, a snippet's timeout): the clock then
+    starts once the state the test reads exists, however long the work before
+    it took, and everything the bound does once it runs out is the real code.
+    ``ready`` gets the call's arguments and may be a coroutine function; every
+    later call waits on it too, so it should stay true once it holds.
+    """
+    original = getattr(owner, name)
+
+    @functools.wraps(original)
+    async def once_ready(*args: object, **kwargs: object) -> object:
+        await await_until(lambda: ready(*args, **kwargs), what=what)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, once_ready)
+
+
 @pytest.fixture
 def parser_deadline_passed(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
     """Set it, and the supervisor finds the deadline of the parser call it is

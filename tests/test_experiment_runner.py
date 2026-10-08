@@ -28,7 +28,14 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import OwnerLiveness
 from ltspice_mcp.state import SessionState
-from tests.conftest import LIVENESS_S, await_until, job_done, ngspice_binary_raw, staged_decks
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    job_done,
+    ngspice_binary_raw,
+    staged_decks,
+    start_when,
+)
 from tests.test_completion_logs import captured_completion_facts
 
 
@@ -205,10 +212,10 @@ async def _cancel_during_launch(
         killed.append(token)
 
     monkeypatch.setattr(runner, "_kill_case", record_kill)
-    # timing: shorter than the rescan interval, so the case gets exactly one kill;
-    # whether its exit lands inside the grace is not what these tests read
+    # One kill attempt; the kill grace then waits for the exit the test delivers after it.
+    monkeypatch.setattr("ltspice_mcp.lib.experiment_runner.KILL_MAX_PASSES", 1)
     receipt = await asyncio.shield(
-        runner.submit(_request(state, work_dir, request_id="cancel-mid-launch", kill_grace_s=0.2))
+        runner.submit(_request(state, work_dir, request_id="cancel-mid-launch"))
     )
     await await_until(launching.is_set)
     cancel_task = asyncio.create_task(
@@ -981,13 +988,13 @@ class TestCaseConcurrencyAndTimeouts:
         monkeypatch.setattr(runner, "_kill_case", no_kill)
         # The deadline counts from once the first case is running, so it finds
         # one case active and one queued however long the launch took.
-        watch = runner._deadline_watch
-
-        async def once_launched(execution: Any, deadline_s: float) -> None:
-            await await_until(lambda: len(submissions) == 1, what="the first case to launch")
-            await watch(execution, deadline_s)
-
-        monkeypatch.setattr(runner, "_deadline_watch", once_launched)
+        start_when(
+            monkeypatch,
+            runner,
+            "_deadline_watch",
+            lambda *_: len(submissions) == 1,
+            what="the first case to launch",
+        )
         receipt = await asyncio.shield(
             runner.submit(
                 _request(

@@ -29,7 +29,7 @@ from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import await_until, terminal_experiment
+from tests.conftest import await_until, start_when, terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -689,26 +689,27 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
 ):
     """A real ngspice run stopped at its run timeout says what it left behind.
 
-    The deck asks for 10^8 steps, so it is still solving when the two-second
-    run timeout kills it. The killed process leaves a raw whose ``No. Points``
-    is still 0 and a log with no progress in it, so the only record of how
-    far it got is the raw's own length, read before cleanup deletes it.
+    The deck asks for 10^8 steps, so it is still solving when the run timeout
+    kills it. The killed process leaves a raw whose ``No. Points`` is still 0
+    and a log with no progress in it, so the only record of how far it got is
+    the raw's own length, read before cleanup deletes it.
 
     The timeout counts from once ngspice has written points, read the way a
     status call reads a running case, so there is progress to report however
     slowly ngspice started.
     """
-    await_case = ExperimentRunner._await_case
 
-    async def once_progressing(runner: ExperimentRunner, execution: Any, future: Any) -> Any:
-        async def progressing() -> bool:
-            live = await live_run_progress(execution.job)
-            return any((item["evidence"]["points"] or 0) > 0 for item in live.values())
+    async def progressing(_runner: ExperimentRunner, execution: Any, _future: Any) -> bool:
+        live = await live_run_progress(execution.job)
+        return any((item["evidence"]["points"] or 0) > 0 for item in live.values())
 
-        await await_until(progressing, what="ngspice to write its first points")
-        return await await_case(runner, execution, future)
-
-    monkeypatch.setattr(ExperimentRunner, "_await_case", once_progressing)
+    start_when(
+        monkeypatch,
+        ExperimentRunner,
+        "_await_case",
+        progressing,
+        what="ngspice to write its first points",
+    )
     net = _write(
         work_dir,
         "slow.cir",
@@ -721,7 +722,7 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
             "circuits": [{"path": net, "id": "dut"}],
             # timing: the run timeout under test; it starts once there are points, and
             # the deck solves far past it
-            "execution": {"wait_s": 90, "simulator": "ngspice", "run_timeout_s": 2},
+            "execution": {"wait_s": 90, "simulator": "ngspice", "run_timeout_s": 0.2},
         },
     )
 
@@ -730,7 +731,7 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     assert failure["code"] == "run_timeout"
     assert failure["hint"]
     evidence = failure["evidence"]
-    assert evidence["run_timeout_s"] == 2
+    assert evidence["run_timeout_s"] == 0.2
     assert evidence["run_timeout_source"] == "request"
     assert evidence["exit_code"] != 0
     assert "Circuit" in evidence["log_excerpt"]

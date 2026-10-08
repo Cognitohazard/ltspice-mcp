@@ -14,7 +14,6 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import replace
 from pathlib import Path
 from typing import IO
@@ -383,15 +382,17 @@ def _pipe_full(stream: IO[bytes] | None) -> bool:
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux guardian startup backpressure seam")
-def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limits, monkeypatch):
+async def test_startup_stall_with_full_request_pipe_has_finite_cleanup(
+    call_dir, limits, monkeypatch
+):
     """A guardian stalled before reading its request, with the request filling
     its input pipe, is killed once the cleanup grace runs out.
 
-    The cancel waits until the guardian is in its stall and the pipe is full,
-    so the cleanup always starts from that state however slowly the
-    interpreter starts. The stall outlasts the test's cap, so a cleanup that
-    waited for the guardian is caught by the cap and not let off by the stall
-    ending.
+    The call is cancelled once the guardian is in its stall and the pipe is
+    full, so the cleanup always starts from that state however slowly the
+    interpreter starts. The stall lasts longer than the test's time limit
+    (``LIVENESS_S``), so a cleanup that waited for the guardian fails the test
+    instead of finishing when the stall ends.
     """
     directory = call_dir()
     parser_file_in(directory, "sitecustomize.py").write_text(
@@ -418,56 +419,41 @@ def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limit
         return process
 
     monkeypatch.setattr(parser_process.subprocess, "Popen", record)
-    cancel = threading.Event()
-    reached: list[str] = []
-
-    def request_cancel():
-        try:
-            wait_until(
-                written(parser_file_in(directory, "stalled.txt"), str),
-                what="the guardian to stall at startup",
-            )
-            reached.append("stalled")
-            wait_until(
-                lambda: bool(spawned) and _pipe_full(spawned[0].stdin),
-                what="the request to fill the guardian's input pipe",
-            )
-            reached.append("pipe full")
-        finally:
-            cancel.set()
-
-    canceller = threading.Thread(target=request_cancel)
-    canceller.start()
-    caller = ThreadPoolExecutor(max_workers=1)
-    try:
-        call = caller.submit(
-            run_parser_sync,
+    call = asyncio.create_task(
+        run_parser(
             {"padding": "x" * 1000000},
             work_dir=directory,
             deadline=time.monotonic() + LIVENESS_S,
             # timing: the grace runs out; a guardian in its stall never closes its output
             limits=replace(limits, request_bytes=2000000, cleanup_grace_s=0.5),
-            cancel=cancel,
             _worker_module="parser_fixture",
         )
-        finished, _ = wait([call], timeout=LIVENESS_S)
+    )
+    try:
+        await await_until(
+            written(parser_file_in(directory, "stalled.txt"), str),
+            what="the guardian to stall at startup",
+        )
+        await await_until(
+            lambda: bool(spawned) and _pipe_full(spawned[0].stdin),
+            what="the request to fill the guardian's input pipe",
+        )
+        call.cancel()
+        finished, _ = await asyncio.wait({call}, timeout=LIVENESS_S)
         assert finished, "the cleanup waited on the stalled guardian"
         with pytest.raises(ParserProcessError) as caught:
             call.result()
-        assert reached == ["stalled", "pipe full"]
         assert caught.value.code == "cleanup_failed" and not caught.value.reaped
         assert len(spawned) == 1
         # Ended by a signal, the cleanup's kill, and not by its stall running out.
-        assert spawned[0].wait(timeout=LIVENESS_S) < 0
+        assert await asyncio.to_thread(spawned[0].wait, timeout=LIVENESS_S) < 0
         assert not parser_file_in(directory, "imported.txt").exists()
     finally:
-        cancel.set()
-        canceller.join(timeout=LIVENESS_S)
         for process in spawned:
             if process.poll() is None:
                 process.kill()
-            process.wait(timeout=LIVENESS_S)
-        caller.shutdown()
+            await asyncio.to_thread(process.wait, timeout=LIVENESS_S)
+        await asyncio.wait({call}, timeout=LIVENESS_S)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Requires native Windows Job enforcement")
