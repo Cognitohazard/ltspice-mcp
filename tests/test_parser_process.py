@@ -141,6 +141,7 @@ async def _started(directory: Path) -> list[psutil.Process | None]:
 
 def _assert_gone(processes):
     for process in processes:
+        assert process is not None, "a process never identified cannot be shown gone"
         assert not process_running(process), f"Owned process {process} was not reaped"
 
 
@@ -160,24 +161,27 @@ async def _success(directory, limits):
     _assert_gone([reply.worker_pid])
 
 
-async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(call_dir, limits):
+async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(
+    call_dir, limits, parser_deadline_passed
+):
     directory = call_dir()
     task = asyncio.create_task(
         run_parser(
             {"mode": "runaway"},
             work_dir=directory,
-            # timing: the deadline under test; the decoder reaches its runaway
-            # seam well inside it, and the test lasts as long as it does
-            deadline=time.monotonic() + 5,
+            deadline=time.monotonic() + LIVENESS_S,
             limits=limits,
             _worker_module="parser_fixture",
         )
     )
     started = await _started(directory)
+    # The deadline passes now that there is a decoder and a descendant to reap.
+    parser_deadline_passed.set()
     with pytest.raises(ParserProcessError) as caught:
         await task
     assert caught.value.code == "deadline" and caught.value.reaped
     _assert_gone(started)
+    parser_deadline_passed.clear()
     await _success(call_dir("fresh"), limits)
 
 
@@ -820,6 +824,98 @@ def test_windows_job_default_and_parser_limits(monkeypatch):
     strict = windows_job.WindowsJob(1, allow_breakaway=False, memory_limit_bytes=134217728)
     strict.close()
     assert captured == [(0x2000 | 0x0800, 0, 0), (0x2000 | 0x0100 | 0x0200, 134217728, 134217728)]
+
+
+# A process that waits to be put in a job, then starts a descendant holding
+# enough memory for its exit to take a moment, and says who they are. Each
+# further line it is sent asks it to start one more process.
+_JOB_ROOT = """
+import json, os, subprocess, sys
+from pathlib import Path
+
+sys.stdin.readline()
+child = subprocess.Popen(
+    [sys.executable, "-c", (
+        "import os\\n"
+        "ballast = bytearray(64 * 1024 * 1024)\\n"
+        "for at in range(0, len(ballast), 4096): ballast[at] = 1\\n"
+        "print(os.getpid(), flush=True)\\n"
+        "while True: pass"
+    )],
+    stdout=subprocess.PIPE,
+)
+pids = [os.getpid(), child.pid, int(child.stdout.readline())]
+Path("ready.json").write_text(json.dumps(pids), encoding="utf-8")
+for _ in sys.stdin:
+    try:
+        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    except OSError:
+        Path("answer.txt").write_text("refused", encoding="utf-8")
+    else:
+        Path("answer.txt").write_text("started", encoding="utf-8")
+"""
+
+
+@contextlib.contextmanager
+def _job_with_descendants(directory: Path):
+    """A job holding a process and its descendants: (job, root, the processes).
+
+    The processes are identified while they run. On a virtual environment the
+    descendant is two: the environment's launcher and the interpreter it starts.
+    """
+    executable, env = python_launch()
+    root = subprocess.Popen(
+        [executable, "-c", _JOB_ROOT], stdin=subprocess.PIPE, cwd=directory, env=env, text=True
+    )
+    try:
+        with contextlib.closing(
+            windows_job.WindowsJob(root.pid, allow_breakaway=False, cleanup_timeout_s=LIVENESS_S)
+        ) as job:
+            assert root.stdin is not None
+            root.stdin.write("the job holds you\n")
+            root.stdin.flush()
+            pids = wait_until(
+                written(directory / "ready.json", json.loads), what="the job's processes to start"
+            )
+            yield job, root, [identify(pid) for pid in set(pids)]
+    finally:
+        if root.poll() is None:
+            root.kill()
+        root.wait(timeout=LIVENESS_S)
+
+
+_NEEDS_WINDOWS = pytest.mark.skipif(
+    sys.platform != "win32", reason="a Windows Job Object needs Windows"
+)
+
+
+@_NEEDS_WINDOWS
+def test_a_closed_windows_job_has_no_process_still_exiting(tmp_path):
+    """A close with a cleanup bound returns once the job's processes have
+    exited. A parser tree's first process is also waited for by the supervisor;
+    what a decoder starts is confirmed by the job alone."""
+    with _job_with_descendants(tmp_path) as (job, _root, owned):
+        assert len(owned) >= 2 and all(process_running(process) for process in owned)
+        job.close()
+        _assert_gone(owned)
+
+
+@_NEEDS_WINDOWS
+def test_a_sealed_windows_job_admits_no_further_process(tmp_path):
+    """A close takes a handle to each process before it ends them, so one
+    started after the handles were taken would be ended with the rest and
+    waited for by nothing. The job is sealed first, which refuses the start."""
+    with _job_with_descendants(tmp_path) as (job, root, owned):
+        job.seal()
+        assert root.stdin is not None
+        root.stdin.write("start another\n")
+        root.stdin.flush()
+        answer = wait_until(
+            written(tmp_path / "answer.txt", str.strip), what="the process to try a start"
+        )
+        assert answer == "refused"
+        assert job.active_processes() == len(owned)
+        assert all(process_running(process) for process in owned)
 
 
 # ---------------------------------------------------------------------------
