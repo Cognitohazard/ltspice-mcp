@@ -468,7 +468,8 @@ what must hold before the next one starts.
        run over 400 units goes, a length the server picked being no ground
        for advice, and the guide names what is usual instead; and placing or
        moving a part is checked for the one way it can join two named nets,
-       a pin landing where two wires cross.
+       a pin landing where two wires cross. *The last is done*
+       (`schematic_ops._pins_on_crossings`); the other two are not.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
@@ -517,8 +518,13 @@ Taken:
   Today it leaves the part out of every geometry pass without a word, so
   its pins are missing from the floating-pin check and from the pin counts.
 - A move is checked for joining two named nets, as drawing a wire and
-  placing a label are. Today a part can be moved onto another net's wiring
-  and nothing says so.
+  placing a label are, and so is a placement. Worked out from the joining
+  rules, there is one way either can: a pin landing on a point where two
+  wires cross, which joins them. On a wire's interior or end, a label or
+  another part's pin, a pin lands on one net. Between two named nets that
+  is refused; with an unnamed side the part is placed and the join said,
+  a pin put on a crossing being taken as meant where a route's waypoint is
+  not.
 - A wire is through a part, and a text inside one, by what the part draws
   without its pins. The box with pins is for two parts overlapping. With a
   pin drawn apart from the body, the box reaches out to it over the whole

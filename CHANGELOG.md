@@ -35,6 +35,13 @@ tool-surface changes.
   took on that net and its name. Such a crossing is now a contact like any
   other, refused onto another net and reported as a junction on the route's
   own.
+- `add_component` and `move_component` could short two named nets and say
+  nothing. A pin on the point where two wires cross joins them (the
+  `pin_at_crossing` recording), and a part placed or moved so that a pin
+  landed on such a point, between wires of two differently named nets, was
+  written. It is now refused, with the pin, the point and the names, and the
+  part stays where it was. Where one of the two wires has no name the part
+  is placed and the join is said in the op's warnings.
 - The bounding box `inspect` and `edit_schematic` report for a part took
   each `ARC` of its symbol as the whole ellipse the arc is cut from, so a part
   drawn with arcs was reported larger than it is: a polarized capacitor 64 by

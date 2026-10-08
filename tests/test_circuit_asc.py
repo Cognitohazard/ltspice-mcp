@@ -329,6 +329,80 @@ class TestARouteThatJoinsNamedNets:
 
 
 @pytest.mark.asyncio
+class TestAPinPlacedOnACrossing:
+    """A pin on a point where two wires cross joins them, as a label there does
+    (the ``pin_at_crossing`` recording). It is the one way placing or moving a
+    part makes one net of two."""
+
+    def _crossing(self, state: SessionState, name: str, *labels: str) -> Path:
+        """A wire across and a wire down that cross at (200,100) and are not
+        joined, each carrying the label given for it, if any."""
+        sheet = blank_sheet_file(state, name)
+        across, down = (*labels, "", "")[:2]
+        text = "WIRE 0 100 400 100\nWIRE 200 0 200 200\n"
+        text += f"FLAG 0 100 {across}\n" if across else ""
+        text += f"FLAG 200 0 {down}\n" if down else ""
+        sheet.write_bytes(sheet.read_bytes() + text.encode("ascii"))
+        return sheet
+
+    async def test_placing_one_there_between_two_named_nets_is_refused(
+        self, asc_state: SessionState
+    ):
+        sheet = self._crossing(asc_state, "cross-place", "VDD", "VSS")
+        before = sheet.read_bytes()
+        with pytest.raises(NetlistError, match="Refused to place R1") as refusal:
+            add_component(asc_state, sheet, "R1", "res", 200, 148)
+        said = str(refusal.value)
+        assert "R1.1 would land at (200,100)" in said
+        assert "['VDD']" in said and "['VSS']" in said
+        assert sheet.read_bytes() == before
+        assert "R1" not in load_editor(asc_state, sheet).components
+
+    async def test_moving_one_there_is_refused_and_the_part_stays_where_it_was(
+        self, asc_state: SessionState
+    ):
+        sheet = self._crossing(asc_state, "cross-move", "VDD", "VSS")
+        add_component(asc_state, sheet, "R1", "res", 600, 300)
+        with pytest.raises(NetlistError, match="Refused to move R1"):
+            apply_one(
+                asc_state, sheet, {"op": "move_component", "reference": "R1", "x": 200, "y": 148}
+            )
+        position, _rotation = load_editor(asc_state, sheet).get_component_position("R1")
+        assert (int(position.X), int(position.Y)) == (600, 300)
+
+    async def test_where_one_of_the_two_has_no_name_it_is_placed_and_said(
+        self, asc_state: SessionState
+    ):
+        sheet = self._crossing(asc_state, "cross-plain", "VDD")
+        placed = add_component(asc_state, sheet, "R1", "res", 200, 148)
+        (said,) = [w for w in placed["warnings"] if "cross" in w]
+        assert said.startswith("R1.1 at (200,100) is on a point where 2 wires cross")
+        # And it is so: the two wires are one net now.
+        nets = load_editor(asc_state, sheet)
+        from ltspice_mcp.lib.schematic_ops import trace_nets
+
+        assert trace_nets(nets)[(200, 0)] == trace_nets(nets)[(400, 100)] == frozenset({"VDD"})
+
+    async def test_a_pin_on_one_wire_is_an_ordinary_connection(self, asc_state: SessionState):
+        sheet = self._crossing(asc_state, "cross-none", "VDD", "VSS")
+        placed = add_component(asc_state, sheet, "R1", "res", 100, 148)
+        assert not [w for w in placed.get("warnings", []) if "cross" in w]
+
+    async def test_a_part_already_on_a_crossing_may_be_moved_in_place(
+        self, asc_state: SessionState
+    ):
+        """What its pin joined before the move is not the move's doing."""
+        sheet = self._crossing(asc_state, "cross-stay")
+        add_component(asc_state, sheet, "R1", "res", 200, 148)
+        moved = apply_one(
+            asc_state,
+            sheet,
+            {"op": "move_component", "reference": "R1", "x": 200, "y": 148, "rotation": "R0"},
+        )
+        assert not [w for w in moved.get("warnings", []) if "cross" in w]
+
+
+@pytest.mark.asyncio
 class TestWirePins:
     async def test_diagonal_rejected(self, asc_state: SessionState, asc_file: Path):
         # First add a unique net label, then try a diagonal route to it from a
