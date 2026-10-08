@@ -26,6 +26,7 @@ from ltspice_mcp.lib.plot_settings import (
     YScale,
     check_trace,
     decode_plot_settings,
+    inherit_grid,
     parse_plot_settings,
     read_plot_settings,
     render_plot_settings,
@@ -42,8 +43,9 @@ def pane(
     analysis: PlotAnalysis = "tran",
     x: XScale | None = None,
     y: YScale | None = None,
+    grid: int | None = None,
 ) -> PlotPane:
-    return PlotPane(traces=traces, scales=scales_of(analysis, x, y))
+    return PlotPane(traces=traces, scales=scales_of(analysis, x, y), grid=grid)
 
 
 def section_of(settings: PlotSettings, name: str) -> PlotSection:
@@ -72,6 +74,8 @@ SERVER_WRITTEN: dict[str, list[tuple[PlotAnalysis, list[PlotPane]]]] = {
         ("tran", [pane("V(out)")]),
         ("ac", [pane("V(out)", analysis="ac")]),
     ],
+    "plot/grid.plt": [("tran", [pane("V(out)", grid=1), pane("V(in)", "I(R1)", grid=1)])],
+    "plot/ac_grid.plt": [("ac", [pane("V(out)", analysis="ac", grid=1)])],
 }
 
 
@@ -174,6 +178,26 @@ class TestReplacingASection:
     def test_a_pane_without_a_trace_is_refused(self):
         with pytest.raises(NetlistError, match="at least one trace"):
             with_panes(PlotSettings(), "tran", [PlotPane(traces=())])
+
+
+@pytest.mark.parametrize(
+    ("replaced", "kept"),
+    [
+        pytest.param([1, 1], 1, id="every-pane-had-it"),
+        pytest.param([1, None], None, id="only-some-had-it"),
+        pytest.param([1, 2], None, id="the-lines-differ"),
+        pytest.param(None, None, id="no-section"),
+    ],
+)
+def test_new_panes_keep_the_grid_every_replaced_pane_had(
+    replaced: list[int | None] | None, kept: int | None
+):
+    section = None
+    if replaced is not None:
+        old = tuple(pane(f"V(n{i})", grid=grid) for i, grid in enumerate(replaced))
+        section = PlotSection(name=SECTION_NAMES["tran"], panes=old, body="")
+    new = [pane("V(a)"), pane("V(b)")]
+    assert inherit_grid(section, new) == [pane("V(a)", grid=kept), pane("V(b)", grid=kept)]
 
 
 class TestTraces:

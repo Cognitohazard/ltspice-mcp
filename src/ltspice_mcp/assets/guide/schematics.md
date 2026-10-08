@@ -190,8 +190,10 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   instead of drawing wires. Such a sheet connects only through its label names,
   which the profile does not check. Draw wires with the `wire_pins` op for
   local nets; reserve net-labels for ground, power rails, and distant nets.
-  Also heed the `label_over_component` validation warning (a net-label whose
-  anchor fell inside a symbol's bounding box).
+  Also heed the sheet findings in `warnings`: they are what `verify_circuit`
+  reports of the same sheet (a floating pin, a loose wire end, parts that
+  overlap, a wire through a part, a label or text inside one, a wire LTspice
+  leaves out of the netlist), said as soon as the edit that caused them.
 - **On an existing sheet, the reported findings are the edit's.** `warnings`
   and `wiring.label_only_pins` list only what your ops introduced or named;
   older ones are counted in `preexisting`, not listed. Before calling a sheet
@@ -241,6 +243,8 @@ reads a trace in the file only up to its first space, so the op refuses one.
 The run ranges every axis to its data; `x_scale` and `y_scale` set a pane's log
 or dB scales and default to LTspice's own (linear for `tran`, log frequency and
 dB magnitude for `ac`). The op replaces that analysis's panes, leaves the
-file's other analyses alone and does not change the sheet. Its `results` entry
+file's other analyses alone and does not change the sheet. New panes keep the
+waveform grid the replaced ones all had; a pane in a new file has none, even
+for a person whose LTspice draws one on panes it makes. Its `results` entry
 names the file and the `replaced_panes`, which passed back as `panes` restore
 them; `panes: []` removes them.

@@ -467,10 +467,10 @@ Everything is under `tests/fixtures/ltspice_recorded/`.
   `[behaviour.<key>]` table names a behaviour, the code that models it, and
   the inputs that record it. A sheet is exported with `-netlist`; anything
   else is run with `-Run -b`. A `plot` case runs a sheet in LTspice's window
-  instead, the way the person it is handed to does (*Plot settings* below). A
-  behaviour with no input says why:
-  `evidence` when the manifest records it some other way, `unrecordable` when
-  nothing can (LTspice saves a sheet only from its window, for one).
+  instead, the way the person it is handed to does (*Plot settings* below),
+  and a `save` case opens a sheet there and saves it (*Saved sheets* below).
+  A behaviour with no input says why: `evidence` when the manifest records
+  it some other way, `unrecordable` when nothing can.
 - `ltspice26/` and `ltspice17/` hold what each build wrote, one file per
   output, and a `manifest.json`: the executable's digest, size and version,
   the build as its own output names it, the build's defaults for the settings
@@ -487,9 +487,10 @@ These run everywhere, with no LTspice:
 
 |test module|holds the server to|
 |-|-|
-|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, how an export is spelled and encoded, and what a data label, a bus tap, a bus label, an empty line and an unknown keyword do to one|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, how an export is spelled and encoded, and what a data label, a bus tap, a bus label, an empty line and an unknown keyword do to one|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_sheet_save.py`|the sheet each build writes when it saves one: its line endings, encoding and record order, and that the lossless document reads it, writes it back byte for byte, and spells a record as the build does|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
 |`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
 
@@ -593,8 +594,12 @@ writes back that it has none for.
 One setting of the person at the window reaches a plot settings file: the
 waveform window's grid, the `grid` key of the settings file, which a key
 press turns on and the build then remembers. With it on, each build writes a
-`GridStyle` line in every pane and another last number on the phase axis of
-an AC pane (`plot/ac_grid_on`). Four of XVII's plot files came out that way
+`GridStyle` line in every pane it makes, and ranges whichever Y axis has fewer
+divisions out to as many as the other has: the phase axis of an AC pane
+(`plot/ac_grid_on`), the left axis of a transient pane with a trace on each
+side (`plot/math_grid`). A pane read from a file keeps the line the file had
+and takes none from the setting (`plot/read_grid`, `plot/read_two_panes_grid`).
+Four of XVII's plot files came out that way
 on a machine where XVII's grid had been left on, which looked like a
 difference between Wine and Windows and was not one. The recorder now removes
 the key, so each build is on its default, which is off; XVII writes that
@@ -613,6 +618,27 @@ windows on it cannot be listed, so the recorder launches on Wine's display
 instead and looks for a box, or the waveform window, among the windows of the
 process it started there. That is how the box XVII stops on for the two
 sheets with a byte order mark is recorded under Wine as it is on Windows.
+
+### Saved sheets
+
+A build writes a sheet only from its window, so a `save` case drives it
+(`ltspice_recorder.drive_save`). The build is started on the sheet alone,
+the schematic window's own Save is sent to it by the id the build's menu
+gives it, and the case ends when the file has been written and holds still.
+Nothing on the sheet is changed first: the point is the bytes a build writes
+for a sheet it read. A sheet the build stops on a box for is recorded as
+that box, with no sheet kept.
+
+These are the only sheets in the suite that LTspice wrote, and both builds
+agree on all of it but the first line. The line endings are LF, whatever the
+sheet had. The text is 8-bit: a UTF-16 sheet is saved as 8-bit text, and
+bytes that are UTF-8 are kept as the bytes they are, never read as UTF-8.
+The kinds come in one order (wires, flags each with its port line, symbols,
+text, drawn lines, the other shapes); wires are put in an order of the
+build's own, and everything else keeps the order it had. LTspice 26 writes
+`Version 4.1` over a sheet that said 4. Neither build opens a sheet that
+starts with a byte order mark. They were recorded on Windows, so their
+manifest entries have no `host`.
 
 ### An open window and the bridge
 
@@ -718,6 +744,34 @@ finds it as a window with nothing open and nothing in front; `FakeStart`, the
 start the handler tests use, is held to that. No test starts LTspice where it
 can be seen: the opt-in tier's start is on a desktop of its own, and the start
 in view is tested for the command line and flags it asks Windows for.
+
+The same recording holds what LTspice's own reader says of a results file.
+The bridge can be asked to read one, which is LTspice reading its own format,
+and the server's reader is one this project keeps up itself. So the recorder
+hands LTspice's reader every results file in the main recordings' `raw` group,
+those XVII wrote as well as LTspice 26's own, and keeps each reply under
+`reader/`. `tests/test_ltspice_reader_agreement.py` holds the server's decoder
+to them on any machine: every sample to its last bit, a stepped run divided at
+the same points, the same parameter values a step. It needs no LTspice to
+run. It does need the bridge recorder run again, on Windows with LTspice 26.1
+or later, whenever a results file in the main recordings is added or recorded
+again; until then one test fails and names the script.
+
+The two readers agree on what every file holds. They present five kinds of
+file differently, and the tests pin what LTspice's says of each:
+
+- XVII stores some time points of a compressed transient with the sign set.
+  LTspice 26's reader returns them negative; the server returns plain time.
+- A transient saved from a later start (`.tran 0 2m 1m`) comes back from
+  LTspice's reader starting at zero; the server adds the header's `Offset`.
+- LTspice's reader refuses a file of one point (an operating point, a
+  transfer function); the server reads it.
+- A stepped operating point is one sweep to LTspice's reader, with the
+  stepped parameter for its axis; the server keeps a point a step.
+- A run stopped part way is read by LTspice's reader as far as its header's
+  point count, which can lag the samples; the server's decoder refuses a file
+  whose header and samples disagree, and reports how far the run got
+  another way.
 
 Other bridges may be running on the machine, each with a hidden LTspice of
 its own that comes and goes as windows open and close: an assistant session

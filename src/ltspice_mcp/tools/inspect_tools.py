@@ -129,7 +129,13 @@ from ltspice_mcp.lib import (
     services,
     simulator_docs,
 )
+from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
+from ltspice_mcp.lib.connectivity import (
+    label_folded_nets,
+    net_members,
+    same_instance_dropped_segments,
+)
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
@@ -148,19 +154,15 @@ from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
+from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
-    label_folded_nets,
     named_labels,
-    net_members,
     net_partition,
     netlist_card_value,
     placed_geometry,
     require_asc,
     resolve_pin,
-    same_instance_dropped_segments,
-    segment_json,
-    segment_text,
     wire_segments_of,
     wires_of_one_net,
 )
@@ -433,7 +435,6 @@ class _View:
 
 
 # Every rotation LTspice can place a symbol at, in a stable reported order.
-ROTATIONS: tuple[str, ...] = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
 
 # Dwell caps mirrored for capabilities disclosure. Source of truth: the field
 # constraints on experiments.ExecutionInput.wait_s (run_experiments) and

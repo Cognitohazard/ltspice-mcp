@@ -14,6 +14,8 @@ by file and line), and the routes that leave a sheet's bytes as they were.
 from __future__ import annotations
 
 import hashlib
+import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +25,11 @@ from pydantic import TypeAdapter, ValidationError
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
+from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.schematic_ops import (
     OP_RESULT_FACTS,
-    build_on_wire_predicate,
     collect_component_geometry,
     get_asc_editor,
-    post_op_warnings,
     run_op_batch,
 )
 from ltspice_mcp.state import SessionState
@@ -41,8 +42,9 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
-from tests._asc_ops import apply_ops, file_at
+from tests._asc_ops import apply_ops, file_at, sheet_findings
 from tests.test_api_reference import _op_kinds
+from tests.test_verify_circuit import _run as run_verify_circuit
 
 # Validates a raw op dict into the tool's own op union, so the control path
 # below builds exactly the op objects the tool would have built.
@@ -837,7 +839,7 @@ def _whole_sheet(state: SessionState, path: Path) -> tuple[list[str], list[str]]
         for pin in comp["pins"]
         if not wired((pin["x"], pin["y"])) and (pin["x"], pin["y"]) in labels
     ]
-    return [w["message"] for w in post_op_warnings(editor)], label_only
+    return [found.detail for found in sheet_findings(editor)], label_only
 
 
 async def _untidy_sheet(state: SessionState, name: str) -> Path:
@@ -947,6 +949,224 @@ async def test_a_finding_at_a_routes_coordinate_endpoint_is_reported(asc_state, 
 
     assert data["commit_state"] == "committed"
     assert any(w.startswith("Duplicate wire (2×)") for w in _sheet_findings(data))
+
+
+# Two resistors drawn over one another, a comment inside them, and (written
+# raw below) a wire straight through both with nothing on either end.
+_CROWDED_OPS: list[dict] = [
+    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 300},
+    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 108, "y": 316},
+    {"op": "add_component", "reference": "R3", "symbol": "res", "x": 500, "y": 300},
+]
+_OVERLAP = "R1 and R2: bounding boxes share a 24x80 region at (92,268)"
+
+
+async def _crowded_sheet(state: SessionState, name: str) -> Path:
+    built = await _build_blank(state, name, _CROWDED_OPS)
+    assert built["commit_state"] == "committed"
+    sheet = Path(state.working_dir) / f"{name}.asc"
+    sheet.write_bytes(sheet.read_bytes() + b"WIRE 60 300 140 300\nTEXT 100 300 Left 2 ;a note\n")
+    return sheet
+
+
+async def _every_row(state: SessionState, sheet: Path) -> list[dict]:
+    """Every finding of the sheet as an op-less read lists it: nothing is new to
+    a read, so the preexisting view is the whole sheet."""
+    data = await apply_ops(state, sheet, [], return_views=["preexisting"], view_limit=200)
+    page = data["views"]["preexisting"]
+    assert page["total"] == page["returned"]
+    return [row for row in page["items"] if row["kind"] != "label_only_pin"]
+
+
+async def test_an_edit_says_of_a_sheet_what_a_check_of_it_says(asc_state):
+    """Sentence for sentence: the two tools read one list of findings."""
+    sheet = await _crowded_sheet(asc_state, "crowded-both")
+
+    rows = await _every_row(asc_state, sheet)
+    checked = await run_verify_circuit(
+        asc_state, path=str(sheet), checks=["symbols", "layout", "quality"]
+    )
+
+    assert sorted(row["message"] for row in rows) == sorted(
+        finding["evidence"]["detail"] for finding in checked["findings"]
+    )
+    by_kind = Counter(row["kind"] for row in rows)
+    assert by_kind == {
+        "floating_pin": 6,
+        "dangling_wire_end": 2,
+        "symbol_overlap": 1,
+        "wire_through_symbol": 2,
+        "text_in_symbol_body": 2,
+    }
+    assert by_kind == Counter(finding["rule_id"] for finding in checked["findings"])
+
+
+async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
+    """A rule that found nothing is listed with zero, so it is told from one
+    that did not run; the counts are of the sheet as it now is, what the batch
+    is told of and what is counted as there before alike."""
+    sheet = await _crowded_sheet(asc_state, "crowded-rules")
+
+    data = await apply_ops(
+        asc_state, sheet, [{"op": "set_component_value", "reference": "R3", "value": "2k"}]
+    )
+    checked = await run_verify_circuit(
+        asc_state, path=str(sheet), checks=["symbols", "layout", "quality"]
+    )
+
+    assert data["rules_run"] == {
+        "unresolved_symbol": 0,
+        "dropped_wire": 0,
+        "floating_pin": 6,
+        "dangling_wire_end": 2,
+        "dangling_label": 0,
+        "duplicate_wire": 0,
+        "symbol_overlap": 1,
+        "wire_through_symbol": 2,
+        "label_over_component": 0,
+        "text_in_symbol_body": 2,
+        "stacked_directive": 0,
+        "label_island": 0,
+    }
+    assert list(data["rules_run"]) == list(se.RULES)
+    assert sum(data["rules_run"].values()) == (
+        len(_sheet_findings(data)) + data["preexisting"]["findings"]
+    )
+    # A check of the same sheet ran all of them but the one its export check holds.
+    assert checked["rules_run"] == {
+        rule: count for rule, count in data["rules_run"].items() if rule != "dropped_wire"
+    }
+
+
+async def test_an_edit_reports_what_it_drew_badly(asc_state):
+    """A part placed over another, and a wire left hanging by moving the part
+    it ran to, are the batch's own."""
+    await _build_blank(
+        asc_state,
+        "drawn-badly",
+        [
+            _CROWDED_OPS[0],
+            _CROWDED_OPS[2],
+            {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R3.1"},
+        ],
+    )
+    data = await apply_ops(
+        asc_state,
+        "drawn-badly.asc",
+        [_CROWDED_OPS[1], {"op": "move_component", "reference": "R3", "x": 700, "y": 300}],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    said = _sheet_findings(data)
+    assert _OVERLAP in said
+    assert "Wire end at (500,252) meets no pin, net label, or other wire" in said
+    # R1's free pin was there before, and the batch did not name R1.
+    assert "Floating pin: R1.2 at (100,348)" not in said
+    assert data["preexisting"]["findings"] == 1
+
+
+async def test_a_finding_is_the_batchs_by_any_part_it_names(asc_state):
+    """The overlap of R1 and R2 predates the edit and names R2 second."""
+    sheet = await _crowded_sheet(asc_state, "crowded-named")
+
+    about_r2 = await apply_ops(
+        asc_state, sheet, [{"op": "set_component_value", "reference": "R2", "value": "2k"}]
+    )
+    about_r3 = await apply_ops(
+        asc_state, sheet, [{"op": "set_component_value", "reference": "R3", "value": "2k"}]
+    )
+
+    assert _OVERLAP in _sheet_findings(about_r2)
+    assert _OVERLAP not in _sheet_findings(about_r3)
+    assert _sheet_findings(about_r3) == [
+        "Floating pin: R3.1 at (500,252)",
+        "Floating pin: R3.2 at (500,348)",
+    ]
+
+
+async def test_a_row_carries_every_part_and_point_of_its_finding(asc_state):
+    sheet = await _crowded_sheet(asc_state, "crowded-rows")
+
+    rows = {row["message"]: row for row in await _every_row(asc_state, sheet)}
+
+    assert rows[_OVERLAP] == {
+        "kind": "symbol_overlap",
+        "ref": "R1",
+        "refs": ["R1", "R2"],
+        "x": 92,
+        "y": 268,
+        "points": [{"x": 92, "y": 268}, {"x": 116, "y": 348}],
+        "message": _OVERLAP,
+    }
+    assert rows["Wire (60,300)->(140,300) passes through R2's body"] == {
+        "kind": "wire_through_symbol",
+        "ref": "R2",
+        "x": 60,
+        "y": 300,
+        "points": [{"x": 60, "y": 300}, {"x": 140, "y": 300}],
+        "message": "Wire (60,300)->(140,300) passes through R2's body",
+    }
+    assert rows["Text 'a note' at (100,300) is anchored inside R1's body"]["text"] == "a note"
+    assert rows["Floating pin: R3.1 at (500,252)"] == {
+        "kind": "floating_pin",
+        "ref": "R3",
+        "x": 500,
+        "y": 252,
+        "pin": "1",
+        "message": "Floating pin: R3.1 at (500,252)",
+    }
+
+
+async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_state, work_dir):
+    """spicelib reads a text line only with its ``!`` or ``;`` and writes back
+    what it read, so a sheet with one that has neither is one line shorter once
+    edited. The sheet before the batch is read the same way, or the two stacked
+    directives left would be reported as something the batch did."""
+    sheet = work_dir / "three-texts.asc"
+    sheet.write_text(
+        "Version 4\nSHEET 1 880 680\n"
+        "TEXT 16 16 Left 2 !.op\n"
+        "TEXT 16 16 Left 2 ;a comment\n"
+        "TEXT 16 16 Left 2 no marker\n",
+        encoding="utf-8",
+    )
+    of_the_file = await run_verify_circuit(asc_state, path=str(sheet), checks=["quality"])
+    assert [f["evidence"]["detail"] for f in of_the_file["findings"]] == [
+        "3 directives/comments share anchor (16,16) — they render on top of each other"
+    ]
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "add_component", "reference": "R9", "symbol": "res", "x": 500, "y": 300}],
+    )
+
+    assert data["commit_state"] == "committed"
+    assert _sheet_findings(data) == [
+        "Floating pin: R9.1 at (500,252)",
+        "Floating pin: R9.2 at (500,348)",
+    ]
+    assert data["preexisting"]["findings"] == 1
+    stacked = [
+        row for row in await _every_row(asc_state, sheet) if row["kind"] == "stacked_directive"
+    ]
+    assert [row["count"] for row in stacked] == [2]
+
+
+async def test_the_sheets_findings_are_read_off_the_event_loop(asc_state, monkeypatch):
+    """Two scenes are built for an edit, each reading symbol files."""
+    read_on: list[bool] = []
+    real = se._findings_before_and_after
+
+    def watched(before, after, target):
+        read_on.append(threading.current_thread() is threading.main_thread())
+        return real(before, after, target)
+
+    monkeypatch.setattr(se, "_findings_before_and_after", watched)
+    data = await _build_blank(asc_state, "off-loop", _CROWDED_OPS)
+
+    assert data["commit_state"] == "committed"
+    assert read_on == [False]
 
 
 async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):
