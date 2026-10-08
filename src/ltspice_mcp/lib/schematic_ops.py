@@ -1530,49 +1530,46 @@ def _plan_connect_route(
 
     # Net-label conflict — checked first because it's a "wrong intent"
     # error: rejecting it gives the user a clearer signal than a route
-    # geometry complaint. Skip when either side uses ``net:`` form (those
-    # are already named explicitly). A coordinate endpoint on a wire's interior
-    # reads the labels of that wire's net. Two-phase check:
+    # geometry complaint. An end given as ``net:NAME`` is on the net of that
+    # label and is checked like a pin: naming the net one end is on does not
+    # make joining it to another named net any less a short. A coordinate
+    # endpoint on a wire's interior reads the labels of that wire's net.
+    # Two-phase check:
     #   1) BEFORE state — endpoints resolve to two different already-named
     #      nets (the standard short).
     #   2) AFTER state — proposed route drags a mid-segment label into
     #      the union, merging an additional named net.
-    if not any(isinstance(ep, str) and ep.startswith("net:") for ep in (from_pin, to_pin)):
-        nets_before = labels_per_coord(part_before)
-        from_labels_before = named_labels(_net_label_at(nets_before, from_anchor))
-        to_labels_before = named_labels(_net_label_at(nets_before, to_anchor))
-        if (
-            from_labels_before
-            and to_labels_before
-            and from_labels_before.isdisjoint(to_labels_before)
-        ):
+    nets_before = labels_per_coord(part_before)
+    from_labels_before = named_labels(_net_label_at(nets_before, from_anchor))
+    to_labels_before = named_labels(_net_label_at(nets_before, to_anchor))
+    if from_labels_before and to_labels_before and from_labels_before.isdisjoint(to_labels_before):
+        raise NetlistError(
+            f"Refused to connect {from_name} to {to_name}: "
+            f"Net-label conflict — {from_name} is on net "
+            f"{sorted(from_labels_before)} and {to_name} is on net "
+            f"{sorted(to_labels_before)}. Connecting them would short "
+            f"the two named nets. To join them on purpose, give both the "
+            f"same name: remove one side's labels with remove_net_label "
+            f"and label it with the other's name; no wire is needed."
+        )
+    nets_after = trace_nets(editor, extra_segments=segments)
+    from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))
+    to_labels_after = named_labels(_net_label_at(nets_after, (x2, y2)))
+    unioned = from_labels_after | to_labels_after
+    if len(unioned) >= 2:
+        # Some labels seen post-route weren't there pre-route on
+        # either endpoint — that's the mid-segment case.
+        unioned_before = from_labels_before | to_labels_before
+        new_labels = unioned - unioned_before
+        if new_labels:
             raise NetlistError(
                 f"Refused to connect {from_name} to {to_name}: "
-                f"Net-label conflict — {from_name} is on net "
-                f"{sorted(from_labels_before)} and {to_name} is on net "
-                f"{sorted(to_labels_before)}. Connecting them would short "
-                f"the two named nets. To join them on purpose, give both the "
-                f"same name: remove one side's labels with remove_net_label "
-                f"and label it with the other's name; no wire is needed."
+                f"Net-label conflict — the proposed route would "
+                f"merge named nets {sorted(unioned)} (a label on a "
+                f"mid-segment of the wire path adds "
+                f"{sorted(new_labels)} to the merged net). Reroute "
+                "to avoid the labelled wire."
             )
-        nets_after = trace_nets(editor, extra_segments=segments)
-        from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))
-        to_labels_after = named_labels(_net_label_at(nets_after, (x2, y2)))
-        unioned = from_labels_after | to_labels_after
-        if len(unioned) >= 2:
-            # Some labels seen post-route weren't there pre-route on
-            # either endpoint — that's the mid-segment case.
-            unioned_before = from_labels_before | to_labels_before
-            new_labels = unioned - unioned_before
-            if new_labels:
-                raise NetlistError(
-                    f"Refused to connect {from_name} to {to_name}: "
-                    f"Net-label conflict — the proposed route would "
-                    f"merge named nets {sorted(unioned)} (a label on a "
-                    f"mid-segment of the wire path adds "
-                    f"{sorted(new_labels)} to the merged net). Reroute "
-                    "to avoid the labelled wire."
-                )
 
     # Same-instance self-loop — refused first because, like the net-label
     # conflict above, it's a "wrong intent" error: a wire tying two pins of one
@@ -1644,7 +1641,9 @@ def _plan_connect_route(
     # Wire-junction check: forbid overlaps with existing wires unless the
     # existing wire already terminates at one of our endpoints (intended
     # T-junction). A plain crossing, where neither wire ends, is only
-    # reported: LTspice leaves it unjoined.
+    # reported: LTspice leaves it unjoined. One with a label on the point is
+    # not plain, since a label there joins both wires (the label_at_crossing
+    # recording), and is left to the contact check below.
     flagged: set[int] = set()
     for sx1, sy1, sx2, sy2 in segments:
         for ext_index, (ex1, ey1, ex2, ey2) in enumerate(existing_wires):
@@ -1683,6 +1682,7 @@ def _plan_connect_route(
                     new_min < cross_y < new_max
                     and ext_min < cross_x < ext_max
                     and (cross_x, cross_y) not in endpoints
+                    and (cross_x, cross_y) not in part_before.label_texts
                 ):
                     warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
             elif sy1 == sy2 and ex1 == ex2:
@@ -1693,6 +1693,7 @@ def _plan_connect_route(
                     ext_min < cross_y < ext_max
                     and new_min < cross_x < new_max
                     and (cross_x, cross_y) not in endpoints
+                    and (cross_x, cross_y) not in part_before.label_texts
                 ):
                     warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
 
@@ -1722,7 +1723,7 @@ def _plan_connect_route(
 
     # Contact check. LTspice joins a wire wherever another wire's end, a pin or
     # a label touches it (see connectivity.partition), so a waypoint on existing wiring,
-    # or a route passing through an existing wire's end or a lone label, joins
+    # or a route passing through an existing wire's end or a label, joins
     # the route there as an endpoint would. Onto a net the route already joins
     # that is a redundant junction, reported; onto any other net it would merge
     # a net nobody named, so it is refused, pointing at the coordinate endpoint
@@ -1750,7 +1751,14 @@ def _plan_connect_route(
     for coord in sorted(part_before.label_texts):
         if coord in endpoints or coord in pin_coords or not wires_through(coord, segments):
             continue
-        if not wires_through(coord, existing_wires):
+        # A label joins whatever passes through its point, on a wire or off
+        # one. On a wire the overlap check already refused it is not said twice.
+        under = [
+            index
+            for index, wire in enumerate(existing_wires)
+            if point_on_segment(coord, wire[:2], wire[2:])
+        ]
+        if not under or any(index not in flagged for index in under):
             contacts.setdefault((coord, net_of(coord)), ("label", None))
 
     def _describe_net(net: tuple[int, int]) -> str:

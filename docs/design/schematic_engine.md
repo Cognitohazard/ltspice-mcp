@@ -439,7 +439,35 @@ what must hold before the next one starts.
      to some 8,500 proposals on the 79 sheets of the suite the editor opens
      (pin to pin straight and by each corner, pin to the middle of each wire,
      a detour level with each part), every refusal and advisory it has among
-     them, and `tests/test_route_planner_record.py` holds it to that.
+     them, and `tests/test_route_planner_record.py` holds it to that. The
+     plan's review found two routes the planner drew that join named nets, an
+     end given by net name and a crossing at a labelled point; both are
+     refused now and the record asks for routes by net name too, 11,000
+     proposals in all. How the rest is to be done, as the review left it:
+     - The checks become functions of plain data in `routing.py`, reading
+       the view and the partition the sheet rules read, filled from the
+       editor by an adapter that step 6 discards. No answer changes: the
+       record is the gate.
+     - They are not all separate. The overlap check, the check of a leg
+       along the wire it ends on and the contact check hand a set of wires
+       already refused from one to the next, and stay one stage. The pin
+       check's notion of a pin on the route's net (a wire runs straight from
+       it to an end) is narrower than the net lookup the contact check uses,
+       and both are kept as they are.
+     - The checks raised alone before any other (both ends on one point, no
+       length, the two named-net checks, a wire LTspice drops) and the
+       resolving of an end are checks of what was asked, and stay in the
+       planner with the wording of a refusal.
+     - Route rules have a registry of their own. In the sheet rules' registry
+       they would be listed as run by every edit, published among the kinds
+       of a sheet finding, and expected to have a whole-sheet finder.
+     - Then, each on purpose and with the record changing: a part's box
+       crossed by a route is judged as `wire_through_symbol` is, by what the
+       part draws and for the route's own end parts too; the advisory for a
+       run over 400 units goes, a length the server picked being no ground
+       for advice, and the guide names what is usual instead; and placing or
+       moving a part is checked for the one way it can join two named nets,
+       a pin landing where two wires cross.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*

@@ -25,6 +25,16 @@ tool-surface changes.
   LTspice launch a recoverable experiment resumes with, which keeps its
   command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
+- `wire_pins` drew a wire that shorted two named nets in two cases it
+  now refuses, as it always refused the plain one. With an end given as
+  `net:NAME`, the check for two differently named nets was skipped
+  altogether, so `net:VDD` to a pin on `VSS` was drawn without a word. And a
+  route that crossed a wire at the very point a label sits on was reported as
+  a plain crossing that LTspice leaves unjoined, where LTspice joins two
+  wires that cross at a label (the `label_at_crossing` recording): the route
+  took on that net and its name. Such a crossing is now a contact like any
+  other, refused onto another net and reported as a junction on the route's
+  own.
 - The bounding box `inspect` and `edit_schematic` report for a part took
   each `ARC` of its symbol as the whole ellipse the arc is cut from, so a part
   drawn with arcs was reported larger than it is: a polarized capacitor 64 by
