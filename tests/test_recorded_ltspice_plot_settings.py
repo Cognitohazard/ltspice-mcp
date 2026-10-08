@@ -13,6 +13,7 @@ panes, so every check of it fails rather than skips.
 from __future__ import annotations
 
 import codecs
+from dataclasses import replace
 
 import pytest
 
@@ -22,6 +23,7 @@ from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
     PlotPane,
     check_trace,
+    decode_plot_settings,
     encode_plot_settings,
     read_plot_settings,
 )
@@ -103,14 +105,58 @@ class TestWhatABuildWritesForPanesItMade:
         assert panes(saved(build, "plot/math_grid"), TRAN) == (
             PlotPane(("V(in)-V(out)", "V(out)*I(R1)"), scales=DEFAULT_SCALES["tran"], grid=1),
         )
-        assert panes(saved(build, "plot/ac_grid"), AC) == (
-            PlotPane(("V(out)",), scales=DEFAULT_SCALES["ac"], grid=1),
-        )
 
     def test_a_micro_sign_in_a_unit_is_in_the_builds_own_encoding(self, build: str):
         data = saved(build, "plot/math")
         micro = "µ".encode("utf-16-le" if rec.generation(build) == "xvii" else "utf-8")
         assert micro in data
+
+
+#: The AC case recorded with the waveform window's grid on. The recorder removes
+#: that setting from every case that does not set it (``grid`` in its
+#: ``BEHAVIOUR_KEYS``).
+GRID_ON = "plot/ac_grid_on"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_grid_left_on_adds_a_line_and_changes_nothing_else_the_server_reads(build: str):
+    """With the grid on, each build writes a ``GridStyle`` line in the pane and
+    another last number on the phase axis, and nothing else differs from
+    ``plot/ac``. The traces and scales read are the same, and the grid."""
+    assert rec.entry(build, GRID_ON)["settings"] == {"grid": "on"}
+    assert "settings" not in rec.entry(build, "plot/ac")
+    plain, gridded = saved(build, "plot/ac"), saved(build, GRID_ON)
+    off, on = (decode_plot_settings(data).splitlines() for data in (plain, gridded))
+    assert [line.strip() for line in on if line not in off] == [
+        "Y[1]: (' ',0,-90,9,9)",
+        "GridStyle: 1",
+    ]
+    assert [line.strip() for line in off if line not in on] == ["Y[1]: (' ',0,-90,9,-0)"]
+    assert panes(gridded, AC) == tuple(replace(pane, grid=1) for pane in panes(plain, AC))
+
+
+def has_grid_line(data: bytes) -> bool:
+    # XVII's read_utf8 is its own UTF-16 followed by the UTF-8 it was handed.
+    return b"GridStyle" in data or "GridStyle".encode("utf-16-le") in data
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(WRITTEN + READ)))
+def test_a_recording_holds_a_grid_line_only_where_its_case_turned_the_grid_on_or_read_one(
+    build: str, case_id: str
+):
+    """Every other case runs with the key removed, so on the build's own
+    default, which is off. A pane a build reads keeps the line the file it was
+    handed had, and takes none from the setting (``plot/read_two_panes_grid``)."""
+    held = has_grid_line(saved(build, case_id))
+    if case_id in READ:
+        assert held == has_grid_line(handed(case_id))
+    else:
+        assert held == (rec.entry(build, case_id).get("settings") == {"grid": "on"})
+
+
+def test_ltspice_xvii_has_the_grid_off_by_default():
+    """XVII wrote that default back for the removed key."""
+    assert rec.manifest(XVII)["settings"]["defaults"]["grid"] == "off"
 
 
 def test_the_pane_ltspice_26_adds_below_is_listed_first():

@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib import pe_menu
 from tests import ltspice_recorder as recorder
 from tests._ltspice_recorded import installed_counterpart
 from tests.ltspice_recorder import (
@@ -226,8 +227,8 @@ class TestPrivacyGuard:
 class TestSettingsCopy:
     """The copy of a build's settings file a case runs against."""
 
-    # grid under [Options] is the waveform grid, which changes a saved plot
-    # settings file; Grid under [Colors] is a colour and stays.
+    # grid in [Options] is the waveform window's grid, which changes what a
+    # build saves; Grid in [Colors] is a colour.
     ANSI = (
         b"[Options]\r\nLastRunVersion=26.1.1\r\nDefaultTrtol=2\r\nNoGreekMus=true\r\n"
         b"grid=on\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
@@ -239,6 +240,16 @@ class TestSettingsCopy:
         assert copy == (
             b"[Options]\r\nLastRunVersion=26.1.1\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
         )
+
+    def test_a_default_on_record_stands_and_one_it_lacks_is_added(self):
+        on_record = {"Solver": "0", "RadianMeasure": "false"}
+        written_back = {"Solver": "1", "grid": "off", "RawTempDir": "C:\\Users\\dev\\raw"}
+        assert recorder.merged_defaults(on_record, written_back) == {
+            "Solver": "0",
+            "RadianMeasure": "false",
+            "grid": "off",
+        }
+        assert recorder.merged_defaults({}, written_back) == {"Solver": "1", "grid": "off"}
 
     def test_the_copy_is_never_empty_of_what_marks_a_used_install(self):
         # A build that starts on an empty settings file runs its first-launch
@@ -321,6 +332,15 @@ class TestCommittedRecordings:
         assert executable["name"].lower().endswith(".exe")
         assert build == f"ltspice{executable['file_version'].split('.')[0]}"
         assert manifest["reported_build"]
+
+    def test_every_default_on_record_is_for_a_key_the_recorder_removes(self, build: str):
+        """The defaults are what a build wrote back for the keys removed from
+        its settings copy. LTspice XVII writes back the ones it knows; LTspice
+        26 writes none, so what it does on a default is in its recorded files."""
+        manifest = load_manifest(FIXTURES / build)
+        defaults = manifest["settings"]["defaults"]
+        assert {key.casefold() for key in defaults} <= BEHAVIOUR_KEYS
+        assert bool(defaults) == (manifest["generation"] == "xvii")
 
     def test_every_applicable_case_is_recorded_and_no_other(self, build: str):
         manifest = load_manifest(FIXTURES / build)
@@ -427,9 +447,12 @@ GROUPS = sorted({case.case_id.split("/", 1)[0] for case in CASES.cases})
 def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tmp_path: Path):
     """Record the group again on the installed build and compare.
 
-    A difference is a change in what LTspice does: look at it, fix the model
-    if the server depended on the old behaviour, then record again with
-    ``scripts/record_ltspice_fixtures.py``.
+    A difference is a change in what LTspice does, or something of the
+    machine or person recording that the recorder let through. Look at it
+    first. For the one, fix the model if the server depended on the old
+    behaviour, then record again with ``scripts/record_ltspice_fixtures.py``.
+    For the other, teach the recorder: the scrubber for a path, date or
+    duration, ``BEHAVIOUR_KEYS`` for a setting.
     """
     build = installed_counterpart(label)
     if isinstance(build, str):
@@ -505,9 +528,9 @@ class TestPlotCases:
             load_cases(inputs)
 
     def test_a_menu_label_is_the_text_a_case_names(self):
-        assert recorder.menu_label("&Save Plot Settings\tCtrl+S") == "Save Plot Settings"
-        assert recorder.menu_label("Save Plot Settings &As...") == "Save Plot Settings As"
-        assert recorder.menu_label("Add &Plot Pane Below Active Pane") == (
+        assert pe_menu.menu_label("&Save Plot Settings\tCtrl+S") == "Save Plot Settings"
+        assert pe_menu.menu_label("Save Plot Settings &As...") == "Save Plot Settings As"
+        assert pe_menu.menu_label("Add &Plot Pane Below Active Pane") == (
             "Add Plot Pane Below Active Pane"
         )
 
@@ -528,7 +551,7 @@ class TestPlotCases:
             + item(0, "Add trace\tCtrl+A", 32855)
             + item(0x80, "Save Plot Settings As...", 32914)
         )
-        assert recorder._menu_items(template) == [
+        assert pe_menu.menu_items(template) == [
             (None, "&File"),
             (57603, "&Save Plot Settings\tCtrl+S"),
             (None, "&Plot Settings"),

@@ -32,7 +32,7 @@ are named below):
   ranges every axis to its data (``plot/read_two_panes``).
 - A pane a build makes while its waveform grid setting (``grid`` in either
   build's settings file) is on has a ``GridStyle: 1`` line after its ``Log``
-  line (``plot/math_grid``, ``plot/ac_grid``); on the default it has none
+  line (``plot/math_grid``, ``plot/ac_grid_on``); on the default it has none
   (``plot/one_trace``). Both builds keep the line they read
   (``plot/read_grid``, ``plot/read_ac_grid``), and a pane read without one
   has no grid whatever the setting (``plot/read_two_panes_grid``). So new

@@ -7,7 +7,6 @@ LTspice wrote, used as the file already beside a sheet, are the recorded ones.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,7 @@ from ltspice_mcp.lib.plot_settings import read_plot_settings
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
-from tests._asc_ops import apply_ops, build_sheet, sha_of
+from tests._asc_ops import apply_ops, build_sheet, file_at, sha_of
 from tests._ltspice_recorded import recorded
 
 _TWO_PANES = [{"traces": ["V(out)"]}, {"traces": ["V(in)", "I(R1)"]}]
@@ -24,12 +23,6 @@ _TWO_PANES = [{"traces": ["V(out)"]}, {"traces": ["V(in)", "I(R1)"]}]
 
 def _panes(analysis: str, panes: list[dict]) -> dict:
     return {"op": "set_plot_panes", "analysis": analysis, "panes": panes}
-
-
-def _file_at(path: Path) -> tuple[bytes, int, int]:
-    """The file at ``path``, bytes and identity: a rewrite renames a new one into place."""
-    st = os.stat(path)
-    return path.read_bytes(), st.st_ino, st.st_mtime_ns
 
 
 def _refuse(*_args: object) -> None:
@@ -65,21 +58,21 @@ async def test_the_panes_are_written_beside_the_sheet_bottom_first(asc_state, sh
 
 
 async def test_a_batch_of_plot_panes_alone_leaves_the_sheet_as_it_is(asc_state, sheet: Path):
-    before = _file_at(sheet)
+    before = file_at(sheet)
     data = await apply_ops(asc_state, "rc.asc", [_panes("tran", _TWO_PANES)])
     assert data["outcome"] == "complete"
     assert sheet.with_suffix(".plt").is_file()
-    assert _file_at(sheet) == before
+    assert file_at(sheet) == before
     assert data["sha256"] == sha_of(sheet)
 
 
 async def test_panes_the_file_already_holds_are_not_written_again(asc_state, sheet: Path):
     plot = sheet.with_suffix(".plt")
     await apply_ops(asc_state, "rc.asc", [_panes("tran", _TWO_PANES)])
-    before = _file_at(plot)
+    before = file_at(plot)
     data = await apply_ops(asc_state, "rc.asc", [_panes("tran", _TWO_PANES)])
     assert data["outcome"] == "complete"
-    assert _file_at(plot) == before
+    assert file_at(plot) == before
 
 
 async def test_an_ac_pane_gets_ltspices_own_scales_unless_it_names_them(asc_state, sheet: Path):
