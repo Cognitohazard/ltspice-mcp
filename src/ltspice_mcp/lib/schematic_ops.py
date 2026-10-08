@@ -32,11 +32,13 @@ import importlib
 import itertools
 import math
 import re
+import traceback
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import CodeType
 from typing import Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
@@ -51,6 +53,7 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
+from spicelib.utils.detect_encoding import EncodingDetectError
 from spicelib.utils.file_search import search_file_in_containers
 
 # The concrete class to instantiate for a from-scratch .asc component.
@@ -71,6 +74,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
+from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
@@ -1126,6 +1130,91 @@ class GridPoint(StrictModel):
 # ---------------------------------------------------------------------------
 
 
+def _refusing_read(exc: BaseException, code: CodeType) -> dict[str, Any]:
+    """The locals of the innermost ``code`` frame ``exc`` passed through, or none.
+
+    A block symbol's sheet is read while its parent loads, so the sheet
+    spicelib refused may not be the one being opened, and its errors do not
+    say which it was. The innermost frame of the method that raised does: its
+    ``self`` is the editor reading that sheet.
+    """
+    names: dict[str, Any] = {}
+    for frame, _ in traceback.walk_tb(exc.__traceback__):
+        if frame.f_code is code and isinstance(frame.f_locals.get("self"), AscEditor):
+            names = dict(frame.f_locals)
+    return names
+
+
+def _unreadable_record(path: Path, exc: NotImplementedError) -> NetlistError:
+    """The refusal for a sheet holding a line spicelib's reader has no branch for.
+
+    spicelib raises ``NotImplementedError`` naming the line but neither its
+    file nor its number (docs/spicelib_bugs.md, Bug 26). The read that refused
+    names the sheet and its codec, and its ``line`` the record.
+
+    Both LTspice builds read a sheet holding a bus tap or an empty line
+    (recorded as ``export/bus_tap`` and ``export/blank_line``), so this refuses
+    sheets that LTspice opens.
+    """
+    names = _refusing_read(exc, AscEditor.reset_netlist.__code__)
+    record = names.get("line")
+    if not isinstance(record, str):
+        return NetlistError(
+            f"Cannot open {path}: the schematic editor cannot read it: {exc}", show_hint=False
+        )
+    sheet, encoding = Path(names["self"].asc_file_path), names["self"].encoding
+    number = None
+    try:
+        with open(sheet, encoding=encoding) as text:
+            # The reader stops at the first line it cannot read, so the first
+            # line equal to the record is that line.
+            number = next((n for n, line in enumerate(text, 1) if line == record), None)
+    except (OSError, UnicodeError, LookupError):
+        pass
+    shown = record.removesuffix("\n")
+    if not shown.strip():
+        what = "is empty"
+    elif shown[0].isspace():
+        what = f"starts with whitespace ({shown!r})"
+    else:
+        what = f"is a {shown.split()[0]} record ({shown!r})"
+    where = f"line {number}" if number is not None else "a line"
+    if sheet != path:
+        where = f"{sheet}, a sheet it loads: {where}"
+    return NetlistError(
+        f"Cannot open {path}: {where} {what}, which the schematic editor does not "
+        "read, so the sheet cannot be opened for reading or editing here.",
+        show_hint=False,
+    )
+
+
+def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
+    """The refusal for a sheet spicelib finds no codec for.
+
+    spicelib looks for the ``Version`` line in each codec it tries, and none of
+    them reads past a UTF-8 byte order mark, so such a sheet is refused as if
+    it had no ``Version`` line (docs/spicelib_bugs.md, Bug 27). Both LTspice
+    builds refuse it too, recorded as ``export/micro_utf8_bom``.
+    """
+    names = _refusing_read(exc, AscEditor.__init__.__code__)
+    sheet = Path(names["self"].asc_file_path) if names else path
+    try:
+        with open(sheet, "rb") as stream:
+            mark = refused_sheet_mark(stream.read(4))
+    except OSError:
+        mark = None
+    where = "it" if sheet == path else f"{sheet}, a sheet it loads,"
+    if mark is not None:
+        return NetlistError(
+            f"Cannot open {path}: {where} {refused_sheet_mark_note(mark)}", show_hint=False
+        )
+    return NetlistError(
+        f"Cannot open {path}: {where} does not start with a Version line in any "
+        "encoding the schematic editor reads.",
+        show_hint=False,
+    )
+
+
 class _AscEditor(AscEditor):
     """spicelib's editor, opening a sheet whose block symbol has no sheet.
 
@@ -1168,12 +1257,20 @@ class _AscEditor(AscEditor):
 def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
-    Raises NetlistError if file not found or .asy symbol files are missing.
+    Raises NetlistError if the file is not found, has no Version line the
+    schematic editor can find, or holds a line it cannot read, and
+    SymbolResolutionError if a file the schematic refers to (a symbol, a
+    sub-sheet) is missing.
     """
     try:
-        if path.suffix.lower() == ".asc":
+        if path.suffix.lower() != ".asc":
+            return SpiceEditor(str(path))
+        try:
             return _AscEditor(str(path))
-        return SpiceEditor(str(path))
+        except NotImplementedError as e:
+            raise _unreadable_record(path, e) from e
+        except EncodingDetectError as e:
+            raise _unrecognised_sheet(path, e) from e
     except FileNotFoundError as e:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e

@@ -767,7 +767,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 30 characters: in_ltspice now says that LTspice is
     # started if none is open. A caller should know before it asks that the
     # argument can bring a program to the front. Measured 5,068.
-    "verify_circuit": 5070,
+    # Raised by 40 characters for the byte order mark the quality check
+    # reports, named in the description beside the other things that check
+    # looks at, for the reason above. Measured 5,103 with both.
+    "verify_circuit": 5110,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

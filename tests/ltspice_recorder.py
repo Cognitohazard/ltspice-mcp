@@ -91,9 +91,10 @@ NEUTRAL_HOME = "C:\\Users\\user"
 #: day, so the builds' different padding of a one-digit day does not arise.
 NEUTRAL_DATE = "Thu Jan 15 00:00:00 2026"
 
-#: Settings that change what a run or an export produces. They are removed from
-#: the copy of the settings file a case runs against, so the build falls back
-#: to its own default for each; a case sets one back with ``ini = {...}``.
+#: Settings that change what a run, an export or the waveform window produces.
+#: They are removed from the copy of the settings file a case runs against, so
+#: the build falls back to its own default for each; a case sets one back with
+#: ``ini = {...}``.
 BEHAVIOUR_KEYS = frozenset(
     key.casefold()
     for key in (
@@ -135,6 +136,11 @@ BEHAVIOUR_KEYS = frozenset(
         "WarnOnNoIndRser",
         "AutoDeleteRawFiles",
         "FastAccessRAM",
+        # The waveform window's grid, which a key press turns on and the build
+        # then remembers. With it on, the plot settings a build saves gain a
+        # GridStyle line in every pane, and the phase axis of an AC pane
+        # another last number (plot/ac_grid_on). Both builds default it to off.
+        "grid",
     )
 )
 
@@ -1048,7 +1054,9 @@ class CaseResult:
     """What one case produced: its manifest entry and its scrubbed files.
 
     ``defaults`` is what the build wrote back into the settings copy for the
-    keys the recorder had removed: its own default for each.
+    keys the recorder had removed: its own default for each one it wrote.
+    LTspice XVII writes back the ones it knows when a batch run ends; LTspice
+    26 writes none.
     """
 
     entry: dict[str, Any]
@@ -1393,10 +1401,14 @@ def record_build(
     """Record every applicable case on ``build`` into ``out / build.label``.
 
     With ``only`` (glob patterns over case ids) the named cases are re-recorded
-    and the rest of an existing recording is kept, with the settings defaults
-    and the library facts it was made with; ``progress`` is told when this
-    machine's library differs from those. Without ``only`` the directory is
-    rebuilt, so a case removed from the list leaves no file behind.
+    and the rest of an existing recording is kept, with the library facts it
+    was made with; ``progress`` is told when this machine's library differs
+    from those. Without ``only`` the directory is rebuilt, so a case removed
+    from the list leaves no file behind.
+
+    The settings defaults of a recording are every default its cases' runs
+    wrote back, the first value for a key standing (``merged_defaults``), on
+    top of the ones an existing recording holds.
     """
     reason = unavailable_reason(build)
     if reason is not None:
@@ -1437,8 +1449,8 @@ def record_build(
                 progress(f"{build.label}: {case.case_id}")
             result = run_case(build, case, inputs, root, timeout=timeout, desktop=desktop)
             assert_private(result.files, forbidden)
-            if case.settings and not case.ini and not defaults:
-                defaults = _portable_defaults(result.defaults)
+            if case.settings and not case.ini:
+                defaults = merged_defaults(defaults, result.defaults)
             for stale in cases.get(case.case_id, {}).get("outputs", {}):
                 (directory / stale).unlink(missing_ok=True)
             for name, data in result.files.items():
@@ -1487,6 +1499,18 @@ def _portable_defaults(defaults: Mapping[str, str]) -> dict[str, str]:
     """The build's defaults without the ones that are local directories."""
     local = {"symbolsearchpath", "librarysearchpath", "rawtempdir"}
     return {key: value for key, value in defaults.items() if key.casefold() not in local}
+
+
+def merged_defaults(
+    on_record: Mapping[str, str], written_back: Mapping[str, str]
+) -> dict[str, str]:
+    """``on_record`` with each default in ``written_back`` that it has none for.
+
+    ``written_back`` is what a build wrote into its settings copy for the keys
+    the recorder had removed, less the ones that are local directories. The
+    value on record for a key stands.
+    """
+    return {**_portable_defaults(written_back), **on_record}
 
 
 def _build_banner(cases: Mapping[str, Any]) -> str | None:

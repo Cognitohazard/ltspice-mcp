@@ -160,7 +160,7 @@ does not fix the race. A load test can reveal additional failures, but it is
 not a substitute for a deterministic regression of a known interleaving.
 
 That rule was written down and then broken, and each break lost only on the
-Windows runner, one per run. Three mechanisms now carry it:
+Windows runner, one per run. These now carry it:
 
 - **Work the server starts has an owner that can say when it is done.**
   `BackgroundTasks` (`lib/background.py`) holds every task the server starts
@@ -183,6 +183,15 @@ Windows runner, one per run. Three mechanisms now carry it:
   first (a source loaded beforehand under `settled_stamps`, say), because
   the half of such a test that has to fit inside the budget is the half that
   fails on a slow runner.
+- **A deadline under test passes when the test says so.** Where what has to
+  fit inside the budget cannot be made instant (a process that must start and
+  start another before there is a tree to reap), the call is given
+  `LIVENESS_S`, the test waits for that state by its own handshake, and then
+  moves the clock the deadline is read against past it
+  (`parser_deadline_passed`, `tests/conftest.py`). A one-second parse deadline
+  that a decoder had to start inside lost on the Windows runner exactly this
+  way: the call ended before the decoder had written its marker, and the test
+  found no process to check.
 - **Races lose on Linux first.** `--jitter-seed=N` (`tests/schedule_jitter.py`)
   delays thread-to-loop hand-offs and process starts and fires timers up to
   15.6 ms early, as Windows does, with delays drawn from the seed and the
@@ -217,9 +226,12 @@ above assumes them:
     (`lib/wsl.py`), simulator detection at bootstrap, desktop browser launch
     (`lib/desktop.py`), and the optional cairosvg raster backend — so one
     machine can exercise every platform branch.
-  - **Timeouts, lowered.** Parse deadlines and the shutdown cancel timeout are
-    dropped to fractions of a second, so a bound can be shown to fire inside
-    the suite instead of only being asserted about.
+  - **Timeouts and clocks.** The shutdown cancel timeout and bounds like it
+    are dropped to fractions of a second, so a bound can be shown to fire
+    inside the suite instead of only being asserted about. Two clocks are
+    moved in place of a bound: the one a source's stat stamp settles against
+    (`parser_service._now_ns`) and the one the parser's supervisor reads a
+    call's deadline against (`parser_process._deadline_clock`).
 
   What is *not* substituted: handlers, the response path, the SPICE lexer and
   validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the
@@ -461,7 +473,7 @@ These run everywhere, with no LTspice:
 
 |test module|holds the server to|
 |-|-|
-|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, and how an export is spelled and encoded|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, how an export is spelled and encoded, and what a data label, a bus tap, a bus label, an empty line and an unknown keyword do to one|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, and what a deck means where simulators differ|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
@@ -476,8 +488,11 @@ A difference between the server and a recording is a finding. Fix the server
 if the fix is small, with the recording as the regression test, which must
 fail before the fix. Otherwise pin what LTspice does and what the server does
 side by side in the test, under a name that says so
-(`READ_AS_CP1252_BY_THE_SERVER_ONLY` in `test_recorded_ltspice_decks.py`), so
-the gap is written down where the next person will find it.
+(`READ_AS_CP1252_BY_THE_SERVER_ONLY` in `test_recorded_ltspice_decks.py`;
+`EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR` and
+`JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY` in
+`test_recorded_ltspice_schematics.py`), so the gap is written down where the
+next person will find it.
 
 ### Recording again
 
@@ -500,8 +515,9 @@ What makes that true, and what a recording must never carry:
 - **No settings of the person recording.** Each case runs against a copy of
   the build's settings file with the keys that change a result removed, so
   the build is on its own defaults; a case sets one back when it is the
-  point (`ini = { NoGreekMus = "true" }`). The build must have been started
-  once, so that it has a settings file to copy.
+  point (`ini = { NoGreekMus = "true" }`). The keys are `BEHAVIOUR_KEYS` in
+  `tests/ltspice_recorder.py`. The build must have been started once, so
+  that it has a settings file to copy.
 - **No path, name, date or duration.** The run directory, the home directory,
   dates, elapsed times and the thread count are rewritten to fixed values, in
   the file's own encoding, a raw's samples untouched. The recorder then
@@ -547,25 +563,42 @@ and its Save saves the sheet. A dialog the case did not open is a box the
 build stopped on and is recorded as one, with no `.plt` kept. A window that
 does none of this in the timeout fails the recording.
 
-The committed plot cases were recorded under Wine 11, on the same executables
-as the rest of the recording (the digests match the manifest's), and each
-entry says so in `host`. A recording made on Windows has no `host`, so
-recording them again there with
-`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`
-replaces them. A partial recording like that keeps the library facts the rest
-of the recording was made with, and says so when the machine's own differ: a
-Wine prefix has the library the installer unpacked, not the one the committed
-manifest describes. Every other committed case was recorded again under Wine
-(`--check`) to see what the host changes. On LTspice 26 every file came out
-as committed but those of the two cases that run on the recording user's own
-settings, which differ by design. On XVII each log ended without the blank
-line that follows the matrix compiler report. Neither touches a plot case,
-whose recording is the build's own serialisation of the file. Under Wine a
-desktop of the recorder's own is made but the windows on it cannot be listed,
-so the recorder launches on Wine's display instead and looks for a box, or the
-waveform window, among the windows of the process it started there. That is
-how the box XVII stops on for the two sheets with a byte order mark is
-recorded under Wine as it is on Windows.
+The plot cases were first recorded under Wine 11, on the same executables as
+the rest of the recording (the digests match the manifest's), and then again
+on Windows with
+`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`.
+Every file came out on Windows byte for byte as it had under Wine, on both
+builds; the committed entries are the ones from Windows. An entry recorded
+under Wine says so in `host`, and one recorded on Windows has no `host`. A
+partial recording like that keeps the library facts the rest of the recording
+was made with, and says so when the machine's own differ: a Wine prefix has
+the library the installer unpacked, not the one the committed manifest
+describes. It keeps the settings defaults on record too, and adds any a run
+writes back that it has none for.
+
+One setting of the person at the window reaches a plot settings file: the
+waveform window's grid, the `grid` key of the settings file, which a key
+press turns on and the build then remembers. With it on, each build writes a
+`GridStyle` line in every pane and another last number on the phase axis of
+an AC pane (`plot/ac_grid_on`). Four of XVII's plot files came out that way
+on a machine where XVII's grid had been left on, which looked like a
+difference between Wine and Windows and was not one. The recorder now removes
+the key, so each build is on its default, which is off; XVII writes that
+default back, and the manifest holds it.
+
+Every other committed case was recorded again under Wine (`--check`) to see
+what the host changes. On LTspice 26 every file came out as committed but
+those of the two cases that run on the recording user's own settings, which
+differ by design. On XVII each log ended without the blank line that follows
+the matrix compiler report. Two of XVII's logs, `log/meas_trig` and
+`log/meas_trig_radian`, had been committed in that form, recorded before an
+entry named its host; they are now as Windows writes them, with the line.
+Neither touches a plot case, whose recording is the build's own serialisation
+of the file. Under Wine a desktop of the recorder's own is made but the
+windows on it cannot be listed, so the recorder launches on Wine's display
+instead and looks for a box, or the waveform window, among the windows of the
+process it started there. That is how the box XVII stops on for the two
+sheets with a byte order mark is recorded under Wine as it is on Windows.
 
 ### An open window and the bridge
 
@@ -699,7 +732,10 @@ header.
 
 When it fails, look at the difference before recording over it: either
 LTspice changed, in which case the model may need to follow, or the recorder
-missed something that varies, in which case it belongs in the scrubber.
+missed something that varies. A path, a date or a duration belongs in the
+scrubber. A file that comes out differently for another person on the same
+build is a setting of theirs, and its key belongs in `BEHAVIOUR_KEYS` (the
+waveform grid was one, *Plot settings* above).
 
 ## Conventions
 

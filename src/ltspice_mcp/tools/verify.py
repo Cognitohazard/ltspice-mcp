@@ -13,7 +13,8 @@ Checks by file kind:
   paths), ``export`` (the authoritative LTspice netlist export, plus the wires
   LTspice silently drops and the value suffixes the exported netlist spells
   outside ASCII), ``layout`` (geometric placement facts), ``quality``
-  (label-island and text-in-body hygiene), and ``compare``.
+  (label-island and text-in-body hygiene, and a leading byte order mark
+  LTspice does not read), and ``compare``.
 * netlist — ``syntax`` (directive + element arity, and a non-ASCII character
   where a value's scale suffix goes), ``quality`` (nodes wired to
   a single terminal, directives naming something no element declares, nets with
@@ -78,7 +79,7 @@ from pydantic import BeforeValidator, Field
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_prep import asc_export_lock
-from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
+from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
@@ -878,7 +879,8 @@ VERIFY_DESCRIPTION = (
     "drops wires the file appears to contain), geometric layout facts (overlapping "
     "bodies, wires through a body, floating pins, dangling wire ends), and quality "
     "facts (net connected only by label stubs with no drawn wire; text anchored "
-    "inside a symbol). Supply 'compare' to graph-compare against a known-good "
+    "inside a symbol; a byte order mark LTspice rejects). Supply 'compare' to "
+    "graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
     "Every fixable finding carries its location and subject. in_ltspice also "
     "opens the file in the user's LTspice window."
@@ -1417,6 +1419,25 @@ def _label_island_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
             )
         )
     return findings
+
+
+def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
+    """A byte order mark at the start of the sheet, which LTspice does not read past.
+
+    The drawing decodes past it, so every other check passes such a sheet.
+    """
+    mark = scene.byte_order_mark
+    if mark is None:
+        return []
+    return [
+        _finding(
+            rule_id="byte_order_mark",
+            severity="error",
+            at={"file": str(path), "line": 1},
+            subject=path.name,
+            evidence={"mark": mark, "detail": f"the sheet {refused_sheet_mark_note(mark)}"},
+        )
+    ]
 
 
 def _dropped_wire_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
@@ -2443,6 +2464,7 @@ async def evaluate_verify_circuit(
                 scene_issues, path, _QUALITY_ISSUE_KINDS, "observation"
             )
             quality_findings.extend(_label_island_findings(scene, path))
+            quality_findings.extend(_byte_order_mark_findings(scene, path))
             findings.extend(quality_findings)
             capped_rules.update(totals)
             observation_events.append(_FindingCapSummary(totals))
