@@ -13,6 +13,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib.sheet_findings import Finding
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 
@@ -124,11 +125,25 @@ def run_ops(
     return entries, abort, editor
 
 
-def structured_warnings(editor: Any, **kw: Any) -> list[dict[str, Any]]:
-    """The post-op validation pass's structured findings for ``editor``."""
-    from ltspice_mcp.lib.schematic_ops import post_op_warnings
+def sheet_findings(editor: Any) -> list[Finding]:
+    """What ``edit_schematic`` finds of the sheet ``editor`` holds.
 
-    return post_op_warnings(editor, **kw)
+    Read as the tool reads them: off the scene of the editor's own rendering,
+    with symbols found where the editor's pin geometry finds them.
+    """
+    from ltspice_mcp.tools.schematic_edit import (
+        _render_editor_text,  # pyright: ignore[reportPrivateUsage]
+        sheet_findings_of,
+    )
+
+    return sheet_findings_of(_render_editor_text(editor), Path(editor.asc_file_path))
+
+
+def structured_warnings(editor: Any) -> list[dict[str, Any]]:
+    """Those findings as the rows the ``preexisting`` view lists."""
+    from ltspice_mcp.tools.schematic_edit import finding_row
+
+    return [finding_row(found) for found in sheet_findings(editor)]
 
 
 def batch_view(

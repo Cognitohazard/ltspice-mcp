@@ -994,6 +994,32 @@ recording that showed it.
 
 ### Changed
 
+- `edit_schematic` and `verify_circuit` now report one list of sheet findings.
+  Each told a caller things the other did not: an edit never said that a part
+  it placed overlapped another's box as a finding of the sheet, that a wire ran
+  through a part, that a wire end was left on nothing, that text sat inside a
+  part, that a net was joined only by labels, or that LTspice would leave a
+  wire out of the netlist; a check never said that a wire was drawn twice, a
+  label was on nothing or inside a part, or directives were stacked. Each now
+  says all of it, in the same sentences, and an edit says of a sheet what a
+  check of the written file says. For `verify_circuit` the four it gained are
+  observations, a wire drawn twice and a dangling label under `layout`, a
+  label inside a part and stacked directives under `quality`; a finding's
+  `evidence.detail` is now a sentence that names its parts and its place, and
+  findings come in one order, what changes the circuit or leaves it undone
+  before how the sheet reads. For `edit_schematic` the `preexisting` view's
+  rows gain the six kinds, and a row carries every part (`refs`) and point
+  (`points`) its finding names.
+- An edit's findings are scoped by every part and point a finding names. A
+  finding of two parts used to be the batch's only when the batch named the
+  first.
+- Neither tool says anything of the extent of a part whose symbol is not
+  found. `verify_circuit` used to report overlaps with, and wires through, the
+  placeholder box such a part is drawn as, which is not the part's.
+- A wire between a pin of one part and a pin of another that carries the same
+  reference, or none, is no longer reported as a wire LTspice leaves out: the
+  rule is about two pins of one part.
+
 - The server's name in a client is `spice`, where the README and the Claude
   Code plugin used `ltspice`. LTspice 26.1 ships an MCP server of its own and
   registers it as `ltspice`, so the two would have shared a name. **For plugin

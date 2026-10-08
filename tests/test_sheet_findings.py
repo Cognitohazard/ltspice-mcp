@@ -1,8 +1,8 @@
-"""The registry of sheet rules, and the checks on views made for the purpose.
+"""The registry of sheet rules, and each rule on views made for the purpose.
 
 What both tools say of real sheets is held to a record in
 ``test_sheet_findings_snapshot.py``. This holds the registry to what the tools
-publish, and each rule to what it means, whichever tool asks.
+publish, and each rule to what it means.
 """
 
 from __future__ import annotations
@@ -10,18 +10,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
     Finding,
     Part,
     SheetView,
-    checker_findings,
-    dropped_wires,
-    editor_findings,
+    findings,
     floating_pins,
-    label_islands,
-    unresolved_symbols,
 )
 from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
 from ltspice_mcp.tools.verify import CHECK_ORDER
@@ -30,8 +28,8 @@ from tests import _ltspice_recorded as rec
 _RECORD = Path(__file__).parent / "fixtures" / "sheet_findings.json"
 
 
-def kinds(findings: list[Finding]) -> list[str]:
-    return [finding.rule for finding in findings]
+def only(view: SheetView, rule: str) -> list[Finding]:
+    return findings(view, [rule])
 
 
 class TestTheRegistry:
@@ -43,34 +41,55 @@ class TestTheRegistry:
             reported |= {f["rule_id"] for f in entry["verify"] + entry["dropped_wire"]}
         assert reported <= set(RULES)
 
-    def test_the_editors_rules_are_the_kinds_its_reply_publishes_in_that_order(self) -> None:
-        assert VALIDATION_WARNING_KINDS == (
-            "floating_pin",
-            "duplicate_wire",
-            "dangling_label",
-            "label_over_component",
-            "stacked_directive",
-            "unresolved_symbol",
-        )
+    def test_an_edit_publishes_every_rule_in_the_order_they_are_listed(self) -> None:
+        """What changes the circuit or leaves it undone comes first, how the
+        sheet reads after."""
         assert (
-            tuple(rule.rule_id for rule in RULES.values() if rule.editor)
-            == VALIDATION_WARNING_KINDS
+            VALIDATION_WARNING_KINDS
+            == tuple(RULES)
+            == (
+                "unresolved_symbol",
+                "dropped_wire",
+                "floating_pin",
+                "dangling_wire_end",
+                "dangling_label",
+                "duplicate_wire",
+                "symbol_overlap",
+                "wire_through_symbol",
+                "label_over_component",
+                "text_in_symbol_body",
+                "stacked_directive",
+                "label_island",
+            )
+        )
+        families = [rule.family for rule in RULES.values()]
+        assert families.index("drawing") > max(
+            position for position, family in enumerate(families) if family != "drawing"
         )
 
-    def test_a_rule_is_reported_by_a_check_the_checker_has(self) -> None:
-        checks = {rule.check for rule in RULES.values() if rule.check is not None}
-        assert checks <= set(CHECK_ORDER)
-        assert {rule.rule_id for rule in RULES.values() if rule.check == "layout"} == {
-            "floating_pin",
-            "symbol_overlap",
-            "wire_through_symbol",
-            "dangling_wire_end",
+    def test_every_rule_is_reported_by_a_check_the_checker_has(self) -> None:
+        by_check: dict[str, set[str]] = {}
+        for rule in RULES.values():
+            by_check.setdefault(rule.check, set()).add(rule.rule_id)
+        assert set(by_check) <= set(CHECK_ORDER)
+        assert by_check == {
+            "symbols": {"unresolved_symbol"},
+            "export": {"dropped_wire"},
+            "layout": {
+                "floating_pin",
+                "dangling_wire_end",
+                "dangling_label",
+                "duplicate_wire",
+                "symbol_overlap",
+                "wire_through_symbol",
+            },
+            "quality": {
+                "label_over_component",
+                "text_in_symbol_body",
+                "stacked_directive",
+                "label_island",
+            },
         }
-
-    def test_every_rule_is_reported_by_one_tool_at_least(self) -> None:
-        assert [
-            rule.rule_id for rule in RULES.values() if not rule.editor and not rule.check
-        ] == []
 
     def test_a_finding_on_a_whole_sheet_is_called_what_it_always_was(self) -> None:
         called = {rule.rule_id: rule.severity for rule in RULES.values()}
@@ -90,14 +109,74 @@ class TestTheRegistry:
         for rule in RULES.values():
             assert rule.summary.endswith(".") and len(rule.summary) > 20, rule.rule_id
 
+    def test_findings_come_grouped_by_rule_in_that_order(self) -> None:
+        view = SheetView(
+            parts=(
+                Part("R1", box=BBox(0, 0, 32, 96), pins=(("A", 16, 0),)),
+                Part("U1", symbol="opamp", at=(200, 0), missing=True),
+            ),
+            wires=((300, 0, 364, 0),),
+            labels=((16, 48, "inside"),),
+            texts=((400, 0, ".op"), (400, 0, ".tran 1")),
+        )
+        order = list(RULES)
+        found = [one.rule for one in findings(view)]
+        assert found == sorted(found, key=order.index)
+        assert set(found) == {
+            "unresolved_symbol",
+            "floating_pin",
+            "dangling_wire_end",
+            "dangling_label",
+            "label_over_component",
+            "stacked_directive",
+        }
+
+    def test_only_the_rules_asked_for_are_run(self) -> None:
+        view = SheetView(parts=(Part("R1", pins=(("A", 0, 0),)),), wires=((64, 0, 128, 0),))
+        assert {one.rule for one in findings(view)} == {"floating_pin", "dangling_wire_end"}
+        assert {one.rule for one in findings(view, ["floating_pin"])} == {"floating_pin"}
+        assert findings(view, []) == []
+
+
+class TestAFinding:
+    def test_its_sentence_stands_alone_and_says_no_more_than_the_rest_of_it(self) -> None:
+        """An edit's reply shows the sentence and nothing else, and two findings
+        are the same finding when their rule, parts, points and facts are."""
+        view = SheetView(
+            parts=(
+                Part("R1", box=BBox(0, 0, 32, 96), pins=(("A", 16, 0),), texts=((16, 200, "R1"),)),
+                Part("R2", box=BBox(16, 48, 48, 144), texts=((8, 8, "1k"),)),
+            ),
+            wires=((-16, 16, 64, 16), (400, 0, 464, 0), (464, 0, 400, 0)),
+            labels=((500, 500, "loose"), (600, 0, "vdd"), (700, 0, "vdd")),
+            texts=((300, 300, ".op"), (300, 300, ".tran 1")),
+        )
+        found = findings(view)
+        assert len({one.rule for one in found}) >= 8
+        for one in found:
+            for ref in one.refs:
+                assert ref in one.detail, one
+            for fact in one.facts.values():
+                assert str(fact) in one.detail, one
+            x, y = one.points[0]
+            assert f"({x},{y})" in one.detail or one.rule == "label_island", one
+        assert len({one.identity for one in found}) == len(found)
+
+    def test_a_different_fact_is_a_different_finding(self) -> None:
+        one = Finding("floating_pin", "s", refs=("R1",), points=((0, 0),), facts={"pin": "A"})
+        other = Finding("floating_pin", "s", refs=("R1",), points=((0, 0),), facts={"pin": "B"})
+        again = Finding("floating_pin", "t", refs=("R1",), points=((0, 0),), facts={"pin": "A"})
+        assert one.identity != other.identity
+        assert one.identity == again.identity
+
 
 def stacked(ref: str, x: int, y: int) -> Part:
     """A part with both of its pins on one point."""
     return Part(ref, pins=(("1", x, y), ("2", x, y)))
 
 
-class TestAFloatingPinIsOneRule:
-    """What LTspice was recorded doing, the same whichever tool asks."""
+class TestAFloatingPin:
+    """What LTspice was recorded doing."""
 
     def floating(self, view: SheetView) -> list[str]:
         return [f"{part.ref}.{name}" for part, (name, _x, _y) in floating_pins(view)]
@@ -137,114 +216,115 @@ class TestAFloatingPinIsOneRule:
         labelled = SheetView(parts=(stacked("R1", 0, 0),), labels=((0, 0, "f"),))
         assert self.floating(wired) == [] and self.floating(labelled) == []
 
-    def test_both_tools_report_the_same_pins(self) -> None:
-        view = SheetView(
-            parts=(
-                Part("R1", box=BBox(0, 0, 0, 0), pins=(("1", 0, 0), ("2", 0, 0))),
-                Part("R2", box=BBox(0, 0, 0, 0), pins=(("1", 0, 0),)),
-                Part("R3", box=BBox(96, 0, 96, 0), pins=(("1", 96, 0),)),
+    def test_the_finding_names_the_part_the_pin_and_the_place(self) -> None:
+        view = SheetView(parts=(Part("R1", pins=(("A", 16, 0), ("", 16, 96))),))
+        assert only(view, "floating_pin") == [
+            Finding(
+                "floating_pin",
+                "Floating pin: R1.A at (16,0)",
+                refs=("R1",),
+                points=((16, 0),),
+                facts={"pin": "A"},
             ),
-        )
-        from_the_editor = [f.points for f in editor_findings(view) if f.rule == "floating_pin"]
-        from_the_checker = [f.points for f in checker_findings(view) if f.rule == "floating_pin"]
-        assert from_the_editor == from_the_checker == [((0, 0),), ((96, 0),)]
-
-
-class TestAPartsBox:
-    def test_two_parts_overlap_by_their_boxes_with_pins(self) -> None:
-        # R1 draws 32 wide and has a pin 32 further out; R2 sits in that reach.
-        r1 = Part("R1", box=BBox(0, 0, 64, 96), body=BBox(0, 0, 32, 96))
-        r2 = Part("R2", box=BBox(40, 0, 56, 96), body=BBox(40, 0, 56, 96))
-        (found,) = checker_findings(SheetView(parts=(r1, r2)))
-        assert (found.rule, found.refs) == ("symbol_overlap", ("R1", "R2"))
-
-    def test_a_wire_is_through_a_part_by_what_the_part_draws(self) -> None:
-        # The same part; a wire through the reach between its body and its far
-        # pin crosses nothing drawn.
-        r1 = Part("R1", box=BBox(0, 0, 64, 96), body=BBox(0, 0, 32, 96))
-        view = SheetView(
-            parts=(r1,),
-            wires=((48, -16, 48, 112), (16, -16, 16, 112)),
-            labels=((48, -16, "a"), (48, 112, "b"), (16, -16, "c"), (16, 112, "d")),
-        )
-        (found,) = checker_findings(view)
-        assert (found.rule, found.points) == ("wire_through_symbol", ((16, -16), (16, 112)))
-
-    def test_a_view_that_knows_no_body_uses_the_box(self) -> None:
-        assert Part("R1", box=BBox(0, 0, 64, 96)).drawn == BBox(0, 0, 64, 96)
+            Finding(
+                "floating_pin",
+                "Floating pin: R1 at (16,96)",
+                refs=("R1",),
+                points=((16, 96),),
+                facts={"pin": ""},
+            ),
+        ]
 
 
 def part(ref: str, box: tuple[int, int, int, int], *pins: tuple[str, int, int]) -> Part:
     return Part(ref, box=BBox(*box), pins=pins)
 
 
-class TestTheEditorsReading:
-    def test_a_pin_on_nothing(self) -> None:
-        view = SheetView(parts=(part("R1", (0, 0, 32, 96), ("A", 16, 0), ("B", 16, 96)),))
-        found = editor_findings(view)
-        assert kinds(found) == ["floating_pin", "floating_pin"]
-        assert found[0] == Finding(
-            "floating_pin",
-            "Floating pin: R1.A at (16,0)",
-            refs=("R1",),
-            points=((16, 0),),
-            facts={"pin": "A"},
+class TestWhatIsLeftUndone:
+    def test_a_wire_end_on_nothing_is_one_place_however_many_end_there(self) -> None:
+        view = SheetView(wires=((0, 0, 64, 0), (64, 0, 64, 64)), labels=((0, 0, "a"),))
+        (found,) = only(view, "dangling_wire_end")
+        assert (found.points, found.detail) == (
+            ((64, 64),),
+            "Wire end at (64,64) meets no pin, net label, or other wire",
         )
 
-    def test_a_pin_on_a_wires_interior_or_under_a_label_is_not_floating(self) -> None:
-        view = SheetView(
-            parts=(part("R1", (0, 0, 32, 96), ("A", 16, 0), ("B", 16, 96)),),
-            wires=((0, 0, 64, 0),),
-            labels=((16, 96, "0"),),
-        )
-        assert editor_findings(view) == []
-
-    def test_a_wire_drawn_twice_in_either_direction(self) -> None:
-        view = SheetView(wires=((0, 0, 64, 0), (64, 0, 0, 0), (0, 16, 0, 16)))
-        (found,) = editor_findings(view)
-        assert (found.rule, found.points, found.facts) == (
-            "duplicate_wire",
-            ((0, 0), (64, 0)),
-            {"count": 2},
-        )
-
-    def test_a_label_on_nothing_and_a_label_inside_a_box(self) -> None:
+    def test_a_label_on_nothing(self) -> None:
         view = SheetView(
             parts=(part("R1", (0, 0, 32, 96), ("A", 16, 0)),),
             wires=((16, 0, 16, -32),),
-            labels=((200, 200, "loose"), (16, 48, "inside"), (16, 0, "on_the_pin")),
+            labels=((200, 200, "loose"), (16, -16, "on_the_wire"), (16, 0, "on_the_pin")),
         )
-        found = editor_findings(view)
-        assert [(f.rule, f.facts["label"]) for f in found] == [
-            ("dangling_label", "loose"),
-            ("dangling_label", "inside"),
-            ("label_over_component", "inside"),
-        ]
+        (found,) = only(view, "dangling_label")
+        assert (found.points, found.facts) == (((200, 200),), {"label": "loose"})
 
-    def test_text_at_one_anchor(self) -> None:
-        view = SheetView(texts=((16, 16, ".op"), (16, 16, ".tran 1"), (16, 32, "a note")))
-        (found,) = editor_findings(view)
-        assert (found.rule, found.points, found.facts) == (
-            "stacked_directive",
-            ((16, 16),),
-            {"count": 2},
-        )
+    def test_a_wire_drawn_twice_in_either_direction(self) -> None:
+        view = SheetView(wires=((0, 0, 64, 0), (64, 0, 0, 0), (0, 16, 0, 16)))
+        (found,) = only(view, "duplicate_wire")
+        assert (found.points, found.facts) == (((0, 0), (64, 0)), {"count": 2})
 
     def test_a_part_whose_symbol_was_not_found(self) -> None:
         view = SheetView(parts=(Part("U1", symbol="opamp", at=(96, 64), missing=True),))
-        assert editor_findings(view) == [
+        assert findings(view) == [
             Finding(
                 "unresolved_symbol",
-                "Symbol 'opamp' of U1 was not found: the part has no pins here, so "
-                "nothing at them is checked",
+                "Symbol 'opamp' of U1 was not found: the part has no pins and no "
+                "extent here, so nothing about them is checked",
                 refs=("U1",),
                 points=((96, 64),),
                 facts={"symbol": "opamp"},
             )
         ]
 
+    def test_nothing_is_said_of_the_extent_of_a_part_that_was_not_found(self) -> None:
+        """It is drawn as a placeholder, and a placeholder's box is not the part's."""
+        placeholder = BBox(0, 0, 64, 48)
+        lost = Part(
+            "U1", symbol="opamp", at=(0, 0), box=placeholder, body=placeholder, missing=True
+        )
+        view = SheetView(
+            parts=(lost, part("R1", (16, 16, 48, 112))),
+            wires=((-16, 24, 80, 24),),
+            labels=((8, 8, "inside"), (-16, 24, "a"), (80, 24, "b")),
+            texts=((32, 40, ".op"),),
+        )
+        found = findings(view)
+        assert [one.refs for one in found if "U1" in one.refs] == [("U1",)]
+        assert {one.rule for one in found} == {
+            "unresolved_symbol",
+            "dangling_label",
+            "wire_through_symbol",
+            "text_in_symbol_body",
+        }
+        assert {one.refs for one in found if one.rule != "unresolved_symbol"} <= {(), ("R1",)}
 
-class TestTheCheckersReading:
+
+class TestWhatLtspiceLeavesOut:
+    def test_a_wire_straight_between_two_pins_of_one_part(self) -> None:
+        view = SheetView(
+            parts=(Part("R1", pins=(("A", 0, 0), ("B", 0, 96))),), wires=((0, 0, 0, 96),)
+        )
+        (found,) = only(view, "dropped_wire")
+        assert (found.refs, found.points, found.detail) == (
+            ("R1",),
+            ((0, 0), (0, 96)),
+            "Wire (0,0)->(0,96) joins two pins of the same instance R1 and is not exported",
+        )
+
+    @pytest.mark.parametrize("reference", ["", "R1"])
+    def test_two_parts_of_one_reference_are_still_two_parts(self, reference: str) -> None:
+        """A wire between a pin of each is a connection, whatever they are called."""
+        view = SheetView(
+            parts=(
+                Part(reference, symbol="res", pins=(("A", 0, 0),)),
+                Part(reference, symbol="res", pins=(("A", 0, 96),)),
+            ),
+            wires=((0, 0, 0, 96),),
+        )
+        assert only(view, "dropped_wire") == []
+
+
+class TestHowTheSheetReads:
     def test_boxes_that_share_an_area_and_boxes_that_only_touch(self) -> None:
         view = SheetView(
             parts=(
@@ -253,53 +333,70 @@ class TestTheCheckersReading:
                 part("R3", (32, 0, 64, 48)),
             )
         )
-        (found,) = checker_findings(view)
-        assert (found.rule, found.refs, found.points) == (
-            "symbol_overlap",
+        (found,) = only(view, "symbol_overlap")
+        assert (found.refs, found.points, found.detail) == (
             ("R1", "R2"),
             ((16, 48), (32, 96)),
+            "R1 and R2: bounding boxes share a 16x48 region at (16,48)",
         )
+
+    def test_two_parts_overlap_by_their_boxes_with_pins(self) -> None:
+        # R1 draws 32 wide and has a pin 32 further out; R2 sits in that reach.
+        r1 = Part("R1", box=BBox(0, 0, 64, 96), body=BBox(0, 0, 32, 96))
+        r2 = Part("R2", box=BBox(40, 0, 56, 96), body=BBox(40, 0, 56, 96))
+        (found,) = only(SheetView(parts=(r1, r2)), "symbol_overlap")
+        assert found.refs == ("R1", "R2")
 
     def test_a_wire_through_a_box_and_one_along_its_edge(self) -> None:
         view = SheetView(
             parts=(part("R1", (0, 0, 32, 96)),),
             wires=((-16, 48, 48, 48), (0, 0, 0, 96)),
-            labels=((-16, 48, "a"), (48, 48, "b"), (0, 0, "c"), (0, 96, "d")),
         )
-        (found,) = checker_findings(view)
-        assert (found.rule, found.refs, found.points) == (
-            "wire_through_symbol",
+        (found,) = only(view, "wire_through_symbol")
+        assert (found.refs, found.points, found.detail) == (
             ("R1",),
             ((-16, 48), (48, 48)),
+            "Wire (-16,48)->(48,48) passes through R1's body",
         )
 
-    def test_a_wire_end_on_nothing_is_one_place_however_many_end_there(self) -> None:
-        view = SheetView(wires=((0, 0, 64, 0), (64, 0, 64, 64)), labels=((0, 0, "a"),))
-        (found,) = checker_findings(view)
-        assert (found.rule, found.points) == ("dangling_wire_end", ((64, 64),))
+    def test_a_wire_is_through_a_part_by_what_the_part_draws(self) -> None:
+        # A wire through the reach between a part's body and its far pin
+        # crosses nothing drawn.
+        r1 = Part("R1", box=BBox(0, 0, 64, 96), body=BBox(0, 0, 32, 96))
+        view = SheetView(parts=(r1,), wires=((48, -16, 48, 112), (16, -16, 16, 112)))
+        (found,) = only(view, "wire_through_symbol")
+        assert found.points == ((16, -16), (16, 112))
+
+    def test_a_view_that_knows_no_body_uses_the_box(self) -> None:
+        assert Part("R1", box=BBox(0, 0, 64, 96)).drawn == BBox(0, 0, 64, 96)
+
+    def test_a_label_inside_a_box_and_on_no_pin(self) -> None:
+        view = SheetView(
+            parts=(part("R1", (0, 0, 32, 96), ("A", 16, 0)),),
+            labels=((16, 48, "inside"), (16, 0, "on_the_pin"), (200, 200, "elsewhere")),
+        )
+        (found,) = only(view, "label_over_component")
+        assert (found.refs, found.points, found.facts) == (
+            ("R1",),
+            ((16, 48),),
+            {"label": "inside"},
+        )
 
     def test_text_inside_another_parts_box_but_not_its_own(self) -> None:
         own = Part("R1", box=BBox(0, 0, 32, 96), texts=((16, 16, "R1"),))
         other = Part("R2", box=BBox(100, 0, 132, 96), texts=((16, 48, "1k"),))
         view = SheetView(parts=(own, other), texts=((110, 48, ".op"),))
-        found = checker_findings(view)
-        assert [(f.rule, f.refs, f.detail) for f in found] == [
-            ("text_in_symbol_body", ("R1",), "text '1k' is anchored inside the symbol's body box"),
-            (
-                "text_in_symbol_body",
-                ("R2",),
-                "text '.op' is anchored inside the symbol's body box",
-            ),
+        found = only(view, "text_in_symbol_body")
+        assert [(one.refs, one.facts, one.detail) for one in found] == [
+            (("R1",), {"text": "1k"}, "Text '1k' at (16,48) is anchored inside R1's body"),
+            (("R2",), {"text": ".op"}, "Text '.op' at (110,48) is anchored inside R2's body"),
         ]
 
-    def test_a_part_is_called_by_its_reference_else_by_its_symbol(self) -> None:
-        nameless = Part("", symbol="res", box=BBox(0, 0, 32, 96))
-        view = SheetView(parts=(nameless, Part("", box=BBox(16, 16, 48, 48))))
-        (found,) = checker_findings(view)
-        assert found.refs == ("res", "<unnamed>")
+    def test_text_at_one_anchor(self) -> None:
+        view = SheetView(texts=((16, 16, ".op"), (16, 16, ".tran 1"), (16, 32, "a note")))
+        (found,) = only(view, "stacked_directive")
+        assert (found.points, found.facts) == (((16, 16),), {"count": 2})
 
-
-class TestTheCheckersOtherFindings:
     def test_a_net_joined_by_labels_alone(self) -> None:
         view = SheetView(
             wires=((0, 0, 64, 0),),
@@ -313,35 +410,11 @@ class TestTheCheckersOtherFindings:
                 (500, 0, "alone"),
             ),
         )
-        (found,) = label_islands(view)
-        assert (found.rule, found.points, found.facts) == (
-            "label_island",
-            ((200, 0), (200, 96)),
-            {"net": "vdd"},
-        )
+        (found,) = only(view, "label_island")
+        assert (found.points, found.facts) == (((200, 0), (200, 96)), {"net": "vdd"})
 
-    def test_a_wire_straight_between_two_pins_of_one_part(self) -> None:
-        view = SheetView(
-            parts=(Part("R1", pins=(("", 0, 0), ("", 0, 96))),), wires=((0, 0, 0, 96),)
-        )
-        (found,) = dropped_wires(view)
-        assert (found.rule, found.refs, found.points) == (
-            "dropped_wire",
-            ("R1",),
-            ((0, 0), (0, 96)),
-        )
-
-    def test_a_symbol_that_was_not_found_names_every_part_that_uses_it(self) -> None:
-        view = SheetView(
-            parts=(
-                Part("U2", symbol="opamp", missing=True),
-                Part("R1", symbol="res"),
-                Part("U1", symbol="opamp", missing=True),
-            )
-        )
-        (found,) = unresolved_symbols(view)
-        assert (found.rule, found.refs, found.facts) == (
-            "unresolved_symbol",
-            ("U2", "U1"),
-            {"symbol": "opamp"},
-        )
+    def test_a_part_is_called_by_its_reference_else_by_its_symbol(self) -> None:
+        nameless = Part("", symbol="res", box=BBox(0, 0, 32, 96))
+        view = SheetView(parts=(nameless, Part("", box=BBox(16, 16, 48, 48))))
+        (found,) = only(view, "symbol_overlap")
+        assert found.refs == ("res", "<unnamed>")

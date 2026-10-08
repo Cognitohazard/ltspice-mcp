@@ -2,9 +2,11 @@
 
 A check on a sheet is a rule. ``RULES`` is the registry: for each rule its id,
 what kind of thing it says, what it is about, where the claim comes from, what
-a finding of it is called on a whole sheet, and which tool reports it. A check
-returns :class:`Finding` values, whichever tool asked, and the tool turns them
-into the rows its own reply has always carried.
+a finding of it is called on a whole sheet, and which of ``verify_circuit``'s
+checks reports it. ``findings`` runs them and returns :class:`Finding` values,
+the same ones whichever tool asked: ``edit_schematic`` reads them off the sheet
+it is about to write and ``verify_circuit`` off the file it was given, and each
+words them into the rows its own reply carries.
 
 The rules are in three families, kept apart because they are different kinds
 of statement:
@@ -17,21 +19,21 @@ of statement:
 
 None of them is a verdict on the sheet. A finding says what is there and where.
 
-The checks read a :class:`SheetView`, a plain picture of a sheet that the
-schematic editor builds from the sheet it holds and the checker from the file
-it read. A rule means one thing whichever tool asks: a floating pin is
-:func:`floating_pins` for both, and a part's box is the box with its pins for
-both. What still differs is which rules each tool reports and how each words
-a finding, which is why there are two lists: ``editor_findings`` and
-``checker_findings``. ``docs/design/schematic_engine.md`` (sections 7 and 8)
-says where that goes next.
+A finding's sentence stands alone, because an edit's reply shows the sentence
+and nothing else; and everything the sentence says is also in the finding's
+parts, points and facts, so those three with the rule are what makes two
+findings the same finding (:attr:`Finding.identity`).
+
+The checks read a :class:`SheetView`, a plain picture of a sheet. A part whose
+symbol was not found is in it, and is reported as that; nothing is said about
+its pins or its extent, which are not known.
 
 Nothing here reads a file or a symbol, and nothing depends on the event loop.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -45,6 +47,7 @@ from ltspice_mcp.lib.geometry import BBox
 Point = tuple[int, int]
 Family = Literal["electrical", "structural", "drawing"]
 Scope = Literal["point", "wire", "part", "net", "sheet"]
+Check = Literal["symbols", "layout", "quality", "export"]
 
 
 @dataclass(frozen=True)
@@ -54,28 +57,56 @@ class Rule:
     ``provenance`` is the recorded behaviour an electrical rule rests on (a key
     of the recording inventory), or ``"definition"`` for a rule that says what
     is drawn and claims nothing about LTspice. ``severity`` is what a finding
-    of the rule is called on a whole sheet. ``editor`` says the schematic
-    editor's reply lists the rule, and ``check`` names the ``verify_circuit``
-    check that reports it, if one does.
+    of the rule is called on a whole sheet, and ``check`` the ``verify_circuit``
+    check that reports it. ``edit_schematic`` reports every rule.
     """
 
     rule_id: str
     family: Family
     scope: Scope
     summary: str
+    check: Check
     provenance: str = "definition"
     severity: Literal["observation", "warning", "error"] = "observation"
-    editor: bool = False
-    check: Literal["symbols", "layout", "quality", "export"] | None = None
 
 
 _RULES = (
+    Rule(
+        "unresolved_symbol",
+        "structural",
+        "part",
+        "A part whose symbol is not found, so that it has no pins.",
+        check="symbols",
+        severity="error",
+    ),
+    Rule(
+        "dropped_wire",
+        "electrical",
+        "wire",
+        "A wire straight between two pins of one part, which LTspice leaves out of the netlist.",
+        check="export",
+        provenance="same-instance-wire",
+        severity="warning",
+    ),
     Rule(
         "floating_pin",
         "structural",
         "point",
         "A pin with no wire, label or other pin on it.",
-        editor=True,
+        check="layout",
+    ),
+    Rule(
+        "dangling_wire_end",
+        "structural",
+        "point",
+        "A wire end on no pin, label or other wire.",
+        check="layout",
+    ),
+    Rule(
+        "dangling_label",
+        "structural",
+        "point",
+        "A net label on no wire and no pin.",
         check="layout",
     ),
     Rule(
@@ -83,28 +114,7 @@ _RULES = (
         "structural",
         "wire",
         "One wire drawn more than once between the same two points.",
-        editor=True,
-    ),
-    Rule(
-        "dangling_label",
-        "structural",
-        "point",
-        "A net label on no wire and no pin.",
-        editor=True,
-    ),
-    Rule(
-        "label_over_component",
-        "drawing",
-        "part",
-        "A net label placed inside a part's box and on no pin.",
-        editor=True,
-    ),
-    Rule(
-        "stacked_directive",
-        "drawing",
-        "point",
-        "Two or more directives or comments at one anchor.",
-        editor=True,
+        check="layout",
     ),
     Rule(
         "symbol_overlap",
@@ -117,21 +127,28 @@ _RULES = (
         "wire_through_symbol",
         "drawing",
         "part",
-        "A wire passing through a part's box.",
+        "A wire passing through what a part draws.",
         check="layout",
     ),
     Rule(
-        "dangling_wire_end",
-        "structural",
-        "point",
-        "A wire end on no pin, label or other wire.",
-        check="layout",
+        "label_over_component",
+        "drawing",
+        "part",
+        "A net label placed inside a part's box and on no pin.",
+        check="quality",
     ),
     Rule(
         "text_in_symbol_body",
         "drawing",
         "part",
-        "Text anchored inside another part's box.",
+        "Text anchored inside what another part draws.",
+        check="quality",
+    ),
+    Rule(
+        "stacked_directive",
+        "drawing",
+        "point",
+        "Two or more directives or comments at one anchor.",
         check="quality",
     ),
     Rule(
@@ -141,28 +158,10 @@ _RULES = (
         "A net joined only by labels of one name, with no wire on any of them.",
         check="quality",
     ),
-    Rule(
-        "dropped_wire",
-        "electrical",
-        "wire",
-        "A wire straight between two pins of one part, which LTspice leaves out of the netlist.",
-        provenance="same-instance-wire",
-        severity="warning",
-        check="export",
-    ),
-    Rule(
-        "unresolved_symbol",
-        "structural",
-        "part",
-        "A part whose symbol is not found, so that it has no pins.",
-        severity="error",
-        editor=True,
-        check="symbols",
-    ),
 )
 
-#: Every rule either tool reports on a whole sheet. The rules the schematic
-#: editor lists come in the order its reply lists them.
+#: Every rule made of a whole sheet, in the order ``findings`` lists them: what
+#: changes the circuit or leaves it undone first, how the sheet reads after.
 RULES: Mapping[str, Rule] = {rule.rule_id: rule for rule in _RULES}
 
 
@@ -172,7 +171,8 @@ class Finding:
 
     ``refs`` are the parts involved and ``points`` the places to look, both in
     the order the rule gives them. ``facts`` are the rule's own named values
-    (a pin, a label's text, a count). ``detail`` is one sentence saying it.
+    (a pin, a label's text, a count). ``detail`` is one sentence saying all of
+    it, for a reader who is shown nothing else.
     """
 
     rule: str
@@ -181,17 +181,24 @@ class Finding:
     points: tuple[Point, ...] = ()
     facts: Mapping[str, Any] = field(default_factory=dict)
 
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """What makes this the same finding as another: its rule and what it is
+        about. The sentence says no more than these do."""
+        return (self.rule, self.refs, self.points, tuple(sorted(self.facts.items())))
+
 
 @dataclass(frozen=True)
 class Part:
     """A placed part as a check sees it.
 
     ``box`` is the part's extent with its pins, the box ``inspect`` and
-    ``add_component`` report, and ``None`` when it has none. ``body`` is the
-    extent of what it draws alone, where the view knows it. ``at`` is where the
-    part is placed. ``pins`` are ``(name, x, y)`` in SpiceOrder, the order a
-    symbol gives them in, and ``texts`` the anchors of its drawn attributes as
-    ``(x, y, first line)``. ``missing`` says its symbol was not found.
+    ``add_component`` report, and ``body`` the extent of what it draws alone;
+    either is ``None`` when the part has none. ``at`` is where the part is
+    placed. ``pins`` are ``(name, x, y)`` in SpiceOrder, the order a symbol
+    gives them in, and ``texts`` the anchors of its drawn attributes as
+    ``(x, y, first line)``. ``missing`` says its symbol was not found: whatever
+    box it carries is then a placeholder's, and no rule reads it.
     """
 
     ref: str
@@ -244,12 +251,78 @@ class _Index:
         self.on_any_wire = build_on_wire_predicate(every)
         self.pins_at = {(x, y) for part in view.parts for _name, x, y in part.pins}
         self.labelled = {(x, y) for x, y, _text in view.labels}
-        #: Each part that draws something, with what it draws, by its place in the view.
+        #: The parts whose symbols were found, by their place in the view: the
+        #: only ones whose extent is known.
+        found = [(index, part) for index, part in enumerate(view.parts) if not part.missing]
+        #: Each of those with a box, and each with something drawn.
+        self.boxed = [(index, part, part.box) for index, part in found if part.box is not None]
         self.drawn = [
-            (index, part, drawn)
-            for index, part in enumerate(view.parts)
-            if (drawn := part.drawn) is not None
+            (index, part, drawn) for index, part in found if (drawn := part.drawn) is not None
         ]
+
+
+_Finder = Callable[[_Index], list[Finding]]
+_FINDERS: dict[str, _Finder] = {}
+
+
+def _finds(rule_id: str) -> Callable[[_Finder], _Finder]:
+    """Register the function that finds ``rule_id``."""
+
+    def register(finder: _Finder) -> _Finder:
+        _FINDERS[rule_id] = finder
+        return finder
+
+    return register
+
+
+def _at(point: Point) -> str:
+    return f"({point[0]},{point[1]})"
+
+
+def _wire(a: Point, b: Point) -> str:
+    return f"{_at(a)}->{_at(b)}"
+
+
+@_finds("unresolved_symbol")
+def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
+    return [
+        Finding(
+            "unresolved_symbol",
+            f"Symbol '{part.symbol}' of {part.name} was not found: the part has no pins "
+            "and no extent here, so nothing about them is checked",
+            refs=(part.name,),
+            points=(part.at,) if part.at is not None else (),
+            facts={"symbol": part.symbol},
+        )
+        for part in ix.view.parts
+        if part.missing
+    ]
+
+
+@_finds("dropped_wire")
+def _dropped_wires(ix: _Index) -> list[Finding]:
+    # LTspice leaves out a run whose two ends both land on pins of one part: the
+    # pins stay on separate nodes, so the sheet shows a tie the netlist does not
+    # have. A part is told from another by its place in the view, since two
+    # parts may carry one reference, or none.
+    owners: dict[Point, list[tuple[str, str]]] = {}
+    for index, part in enumerate(ix.view.parts):
+        for _name, x, y in part.pins:
+            owners.setdefault((x, y), []).append((str(index), ""))
+    found: list[Finding] = []
+    for drop in same_instance_dropped_segments(owners, list(ix.view.wires)):
+        x1, y1, x2, y2 = drop["segment"]
+        name = ix.view.parts[int(drop["ref"])].name
+        found.append(
+            Finding(
+                "dropped_wire",
+                f"Wire {_wire((x1, y1), (x2, y2))} joins two pins of the same instance "
+                f"{name} and is not exported",
+                refs=(name,),
+                points=((x1, y1), (x2, y2)),
+            )
+        )
+    return found
 
 
 def _floating(ix: _Index) -> list[tuple[Part, tuple[str, int, int]]]:
@@ -287,17 +360,13 @@ def floating_pins(view: SheetView) -> list[tuple[Part, tuple[str, int, int]]]:
     return _floating(_Index(view))
 
 
-# ---------------------------------------------------------------------------
-# The schematic editor's list
-# ---------------------------------------------------------------------------
-
-
-def _floating_pins_by_name(ix: _Index) -> list[Finding]:
+@_finds("floating_pin")
+def _floating_pins(ix: _Index) -> list[Finding]:
     return [
         Finding(
             "floating_pin",
-            f"Floating pin: {f'{part.ref}.{name}' if name else part.ref} at ({x},{y})",
-            refs=(part.ref,),
+            f"Floating pin: {f'{part.name}.{name}' if name else part.name} at {_at((x, y))}",
+            refs=(part.name,),
             points=((x, y),),
             facts={"pin": name},
         )
@@ -305,28 +374,36 @@ def _floating_pins_by_name(ix: _Index) -> list[Finding]:
     ]
 
 
-def _duplicate_wires(ix: _Index) -> list[Finding]:
-    drawn: dict[tuple[Point, Point], int] = {}
-    for v1, v2 in ix.wires:
-        key = (v1, v2) if v1 <= v2 else (v2, v1)
-        drawn[key] = drawn.get(key, 0) + 1
-    return [
-        Finding(
-            "duplicate_wire",
-            f"Duplicate wire ({count}×): ({a[0]},{a[1]})->({b[0]},{b[1]})",
-            points=(a, b),
-            facts={"count": count},
-        )
-        for (a, b), count in drawn.items()
-        if count > 1
-    ]
+@_finds("dangling_wire_end")
+def _dangling_wire_ends(ix: _Index) -> list[Finding]:
+    # Once per coordinate: two loose ends meeting nothing at one point are one
+    # place to look, not two findings.
+    seen: set[Point] = set()
+    found: list[Finding] = []
+    for a, b in ix.wires:
+        for end in (a, b):
+            if end in seen or end in ix.pins_at or end in ix.labelled:
+                continue
+            # Its own wire is one; a second is another wire touching it there.
+            if ix.wires_through(end) > 1:
+                continue
+            seen.add(end)
+            found.append(
+                Finding(
+                    "dangling_wire_end",
+                    f"Wire end at {_at(end)} meets no pin, net label, or other wire",
+                    points=(end,),
+                )
+            )
+    return found
 
 
+@_finds("dangling_label")
 def _dangling_labels(ix: _Index) -> list[Finding]:
     return [
         Finding(
             "dangling_label",
-            f"Dangling label '{text}' at ({x},{y})",
+            f"Dangling label '{text}' at {_at((x, y))}",
             points=((x, y),),
             facts={"label": text},
         )
@@ -335,93 +412,43 @@ def _dangling_labels(ix: _Index) -> list[Finding]:
     ]
 
 
-def _labels_over_components(ix: _Index) -> list[Finding]:
-    boxes = [(part.ref, part.box) for part in ix.view.parts if part.box is not None]
+@_finds("duplicate_wire")
+def _duplicate_wires(ix: _Index) -> list[Finding]:
+    drawn: dict[tuple[Point, Point], int] = {}
+    for v1, v2 in ix.wires:
+        key = (v1, v2) if v1 <= v2 else (v2, v1)
+        drawn[key] = drawn.get(key, 0) + 1
     return [
         Finding(
-            "label_over_component",
-            f"Label '{text}' at ({x},{y}) is inside {ref}'s bounding box",
-            refs=(ref,),
-            points=((x, y),),
-            facts={"label": text},
-        )
-        for x, y, text in ix.view.labels
-        # A label on any part's pin is the ordinary flag (pins sit on a box's
-        # edge), even where it also lies inside another part's box.
-        if (x, y) not in ix.pins_at
-        # With boxes that overlap a label can be inside more than one, and each
-        # is its own fact.
-        for ref, box in boxes
-        if box.strictly_contains(x, y)
-    ]
-
-
-def _stacked_directives(ix: _Index) -> list[Finding]:
-    anchored: dict[Point, int] = {}
-    for x, y, _text in ix.view.texts:
-        anchored[(x, y)] = anchored.get((x, y), 0) + 1
-    return [
-        Finding(
-            "stacked_directive",
-            f"{count} directives/comments share anchor ({x},{y}) — "
-            "they render on top of each other",
-            points=((x, y),),
+            "duplicate_wire",
+            f"Duplicate wire ({count}×): {_wire(a, b)}",
+            points=(a, b),
             facts={"count": count},
         )
-        for (x, y), count in anchored.items()
+        for (a, b), count in drawn.items()
         if count > 1
     ]
 
 
-def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
-    return [
-        Finding(
-            "unresolved_symbol",
-            f"Symbol '{part.symbol}' of {part.name} was not found: the part has "
-            "no pins here, so nothing at them is checked",
-            refs=(part.ref,),
-            points=(part.at,) if part.at is not None else (),
-            facts={"symbol": part.symbol},
-        )
-        for part in ix.view.parts
-        if part.missing
-    ]
-
-
-_Check = Callable[[_Index], list[Finding]]
-
-_EDITOR: tuple[_Check, ...] = (
-    _floating_pins_by_name,
-    _duplicate_wires,
-    _dangling_labels,
-    _labels_over_components,
-    _stacked_directives,
-    _parts_without_a_symbol,
-)
-
-
-def editor_findings(view: SheetView) -> list[Finding]:
-    """The whole-sheet findings the schematic editor reports after an edit.
-
-    - ``floating_pin``: a pin connected to nothing (:func:`floating_pins`).
-    - ``duplicate_wire``: two wires with the same two ends, in either order.
-    - ``dangling_label``: a label that is on no wire and at no pin.
-    - ``label_over_component``: a label strictly inside a part's box and on no
-      pin. The box also spans leads and empty corners, so this is where the
-      anchor is, not a promise that ink overlaps. A label on a pin, any part's,
-      is the ordinary flag and is never reported.
-    - ``stacked_directive``: two or more directives or comments at exactly one
-      anchor. Only an exact match counts, with no guess at how far text reaches.
-    - ``unresolved_symbol``: a part whose symbol was not found. It has no pins
-      here, so nothing at them is checked, and the pin counts leave it out.
-    """
-    ix = _Index(view)
-    return [finding for check in _EDITOR for finding in check(ix)]
-
-
-# ---------------------------------------------------------------------------
-# The checker's list
-# ---------------------------------------------------------------------------
+@_finds("symbol_overlap")
+def _symbol_overlaps(ix: _Index) -> list[Finding]:
+    found: list[Finding] = []
+    for position, (_index, part_a, box_a) in enumerate(ix.boxed):
+        for _other, part_b, box_b in ix.boxed[position + 1 :]:
+            if not box_a.overlaps(box_b):
+                continue
+            ox1, oy1 = max(box_a.x1, box_b.x1), max(box_a.y1, box_b.y1)
+            ox2, oy2 = min(box_a.x2, box_b.x2), min(box_a.y2, box_b.y2)
+            found.append(
+                Finding(
+                    "symbol_overlap",
+                    f"{part_a.name} and {part_b.name}: bounding boxes share a "
+                    f"{ox2 - ox1}x{oy2 - oy1} region at {_at((ox1, oy1))}",
+                    refs=(part_a.name, part_b.name),
+                    points=((ox1, oy1), (ox2, oy2)),
+                )
+            )
+    return found
 
 
 def _through(a: Point, b: Point, box: BBox) -> bool:
@@ -467,26 +494,7 @@ def _through(a: Point, b: Point, box: BBox) -> bool:
     return box.strictly_contains(x1 + tm * dx, y1 + tm * dy)
 
 
-def _symbol_overlaps(ix: _Index) -> list[Finding]:
-    whole = [(part, part.box) for part in ix.view.parts if part.box is not None]
-    findings: list[Finding] = []
-    for position, (part_a, box_a) in enumerate(whole):
-        for part_b, box_b in whole[position + 1 :]:
-            if not box_a.overlaps(box_b):
-                continue
-            ox1, oy1 = max(box_a.x1, box_b.x1), max(box_a.y1, box_b.y1)
-            ox2, oy2 = min(box_a.x2, box_b.x2), min(box_a.y2, box_b.y2)
-            findings.append(
-                Finding(
-                    "symbol_overlap",
-                    f"bounding boxes share a {ox2 - ox1}x{oy2 - oy1} region",
-                    refs=(part_a.name, part_b.name),
-                    points=((ox1, oy1), (ox2, oy2)),
-                )
-            )
-    return findings
-
-
+@_finds("wire_through_symbol")
 def _wires_through_symbols(ix: _Index) -> list[Finding]:
     # A wire attached to one of the part's own pins is NOT exempt: leaving a pin
     # and running straight back across the body is the very error this looks
@@ -495,7 +503,7 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
     return [
         Finding(
             "wire_through_symbol",
-            "wire segment passes through the symbol's body box",
+            f"Wire {_wire(a, b)} passes through {part.name}'s body",
             refs=(part.name,),
             points=(a, b),
         )
@@ -505,41 +513,28 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
     ]
 
 
-def _floating_pins_by_part(ix: _Index) -> list[Finding]:
+@_finds("label_over_component")
+def _labels_over_components(ix: _Index) -> list[Finding]:
     return [
         Finding(
-            "floating_pin",
-            "pin has no wire, net label, or mating pin on it",
+            "label_over_component",
+            f"Label '{text}' at {_at((x, y))} is inside {part.name}'s bounding box",
             refs=(part.name,),
             points=((x, y),),
+            facts={"label": text},
         )
-        for part, (_name, x, y) in _floating(ix)
+        for x, y, text in ix.view.labels
+        # A label on any part's pin is the ordinary flag (pins sit on a box's
+        # edge), even where it also lies inside another part's box.
+        if (x, y) not in ix.pins_at
+        # With boxes that overlap a label can be inside more than one, and each
+        # is its own fact.
+        for _index, part, box in ix.boxed
+        if box.strictly_contains(x, y)
     ]
 
 
-def _dangling_wire_ends(ix: _Index) -> list[Finding]:
-    # Once per coordinate: two loose ends meeting nothing at one point are one
-    # place to look, not two findings.
-    seen: set[Point] = set()
-    findings: list[Finding] = []
-    for a, b in ix.wires:
-        for end in (a, b):
-            if end in seen or end in ix.pins_at or end in ix.labelled:
-                continue
-            # Its own wire is one; a second is another wire touching it there.
-            if ix.wires_through(end) > 1:
-                continue
-            seen.add(end)
-            findings.append(
-                Finding(
-                    "dangling_wire_end",
-                    "wire end meets no pin, net label, or other wire",
-                    points=(end,),
-                )
-            )
-    return findings
-
-
+@_finds("text_in_symbol_body")
 def _texts_in_symbol_bodies(ix: _Index) -> list[Finding]:
     anchors: list[tuple[int, int, str, int | None]] = [
         (x, y, text, index)
@@ -550,9 +545,10 @@ def _texts_in_symbol_bodies(ix: _Index) -> list[Finding]:
     return [
         Finding(
             "text_in_symbol_body",
-            f"text {text!r} is anchored inside the symbol's body box",
+            f"Text {text!r} at {_at((x, y))} is anchored inside {part.name}'s body",
             refs=(part.name,),
             points=((x, y),),
+            facts={"text": text},
         )
         for x, y, text, owner in anchors
         for index, part, box in ix.drawn
@@ -560,103 +556,85 @@ def _texts_in_symbol_bodies(ix: _Index) -> list[Finding]:
     ]
 
 
-_CHECKER: tuple[_Check, ...] = (
-    _symbol_overlaps,
-    _wires_through_symbols,
-    _floating_pins_by_part,
-    _dangling_wire_ends,
-    _texts_in_symbol_bodies,
-)
+@_finds("stacked_directive")
+def _stacked_directives(ix: _Index) -> list[Finding]:
+    anchored: dict[Point, int] = {}
+    for x, y, _text in ix.view.texts:
+        anchored[(x, y)] = anchored.get((x, y), 0) + 1
+    return [
+        Finding(
+            "stacked_directive",
+            f"{count} directives/comments share anchor {_at(point)} — "
+            "they render on top of each other",
+            points=(point,),
+            facts={"count": count},
+        )
+        for point, count in anchored.items()
+        if count > 1
+    ]
 
 
-def checker_findings(view: SheetView) -> list[Finding]:
-    """The layout findings the checker reports, grouped by rule in this order.
-
-    Overlapping boxes, wires through a box, pins connected to nothing, wire
-    ends connected to nothing, and text anchored inside another part's box.
-    Within a rule the findings are in the sheet's own order, so the list is the
-    same for the same sheet.
-
-    Two parts overlap when their boxes do, each with its pins. A wire or a
-    text is through or inside a part when it is within what the part draws,
-    without its pins: a pin drawn apart from the body leaves room between them
-    that an ordinary wire to a nearer pin crosses. Either extent also spans
-    leads and empty corners, so sharing an area is not proof that ink does. The
-    text check tests a text's anchor only, so the later lines of a directive
-    that runs down into a part are not reported.
-    """
-    ix = _Index(view)
-    return [finding for check in _CHECKER for finding in check(ix)]
-
-
-def label_islands(view: SheetView) -> list[Finding]:
-    """Nets joined only by labels of one name, with no wire on any of them.
-
-    Such a net is electrically sound and reads as a netlist wearing symbols.
-    Ground is exempt: joining ground by flag is the ordinary practice. Whether
-    a given rail is acceptable that way is the caller's to judge.
-    """
+@_finds("label_island")
+def _label_islands(ix: _Index) -> list[Finding]:
+    # Ground is exempt: joining ground by flag is the ordinary practice.
     stubs: dict[str, list[Point]] = {}
-    for x, y, text in view.labels:
+    for x, y, text in ix.view.labels:
         name = text.strip()
         if name and name != "0":
             stubs.setdefault(name, []).append((x, y))
-    on_a_wire = build_on_wire_predicate(
-        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in view.wires if (x1, y1) != (x2, y2)]
-    )
     return [
         Finding(
             "label_island",
-            f"net '{name}' is connected by {len(points)} net-label stubs and "
+            f"Net '{name}' is connected by {len(points)} net-label stubs and "
             "no drawn wire segment",
             points=tuple(points),
             facts={"net": name},
         )
         for name, points in sorted(stubs.items())
         # A lone label is not a connection by name standing in for a wire.
-        if len(points) > 1 and not any(on_a_wire(point) for point in points)
+        if len(points) > 1 and not any(ix.on_a_wire(point) for point in points)
     ]
 
 
-def dropped_wires(view: SheetView) -> list[Finding]:
-    """Wires drawn on the sheet and absent from the netlist LTspice exports.
+assert list(_FINDERS) == list(RULES), "every rule has its finder, in the registry's order"
 
-    LTspice leaves out a run whose two ends both land on pins of one part: the
-    pins stay on separate nodes, so the sheet shows a tie the netlist does not
-    have. The rule is ``connectivity.same_instance_dropped_segments``.
+
+def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Finding]:
+    """What every rule finds of ``view``, or what the rules named in ``rules`` do.
+
+    Grouped by rule in the registry's order, and within a rule in the sheet's
+    own order, so the list is the same for the same sheet.
+
+    - ``unresolved_symbol``: a part whose symbol was not found. No other rule
+      says anything of its pins or its extent.
+    - ``dropped_wire``: a wire LTspice leaves out of the netlist because its
+      two ends land on pins of one part
+      (``connectivity.same_instance_dropped_segments``).
+    - ``floating_pin``: a pin connected to nothing (:func:`floating_pins`).
+    - ``dangling_wire_end``: a wire end on no pin, no label and no other wire.
+    - ``dangling_label``: a label that is on no wire and at no pin.
+    - ``duplicate_wire``: two wires with the same two ends, in either order.
+    - ``symbol_overlap``: two parts whose boxes share an area, each box with
+      its pins: the box ``inspect`` and ``add_component`` report.
+    - ``wire_through_symbol``: a wire through what a part draws, without its
+      pins. A pin drawn apart from the body leaves room between them that an
+      ordinary wire to a nearer pin crosses.
+    - ``label_over_component``: a label strictly inside a part's box and on no
+      pin. A label on a pin, any part's, is the ordinary flag.
+    - ``text_in_symbol_body``: text anchored inside what another part draws.
+      Only the anchor is tested, so the later lines of a directive that runs
+      down into a part are not reported.
+    - ``stacked_directive``: two or more directives or comments at exactly one
+      anchor, with no guess at how far text reaches.
+    - ``label_island``: a net joined only by labels of one name, with no wire
+      on any of them. It is electrically sound; whether a given rail is
+      acceptable drawn that way is the caller's to judge.
+
+    A box or a body also spans leads and empty corners, so sharing an area with
+    one is where something is, not proof that ink overlaps.
     """
-    owners: dict[Point, list[tuple[str, str]]] = {}
-    for part in view.parts:
-        for _name, x, y in part.pins:
-            owners.setdefault((x, y), []).append((part.ref, ""))
-    findings: list[Finding] = []
-    for drop in same_instance_dropped_segments(owners, list(view.wires)):
-        x1, y1, x2, y2 = drop["segment"]
-        ref = drop["ref"]
-        findings.append(
-            Finding(
-                "dropped_wire",
-                f"wire joins two pins of the same instance {ref} and is not exported",
-                refs=(ref,),
-                points=((x1, y1), (x2, y2)),
-            )
-        )
-    return findings
-
-
-def unresolved_symbols(view: SheetView) -> list[Finding]:
-    """One finding for each symbol that was not found, naming the parts that use it."""
-    users: dict[str, list[str]] = {}
-    for part in view.parts:
-        if part.missing:
-            users.setdefault(part.symbol, []).append(part.ref)
+    ix = _Index(view)
+    wanted = RULES if rules is None else rules
     return [
-        Finding(
-            "unresolved_symbol",
-            "drawn as a placeholder box; searched the schematic directory, "
-            "the configured symbol paths, and the stock library",
-            refs=tuple(refs),
-            facts={"symbol": name},
-        )
-        for name, refs in sorted(users.items())
+        found for rule_id, finder in _FINDERS.items() if rule_id in wanted for found in finder(ix)
     ]

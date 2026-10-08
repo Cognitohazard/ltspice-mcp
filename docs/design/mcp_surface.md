@@ -1074,17 +1074,23 @@ placement defects — the transaction guards already prevent the defect class �
 and the grid arm was strictly less efficient, so the variant was removed from
 the enum rather than shipped.
 
-**Findings are scoped to the edit.** The validation pass (floating pins,
-duplicate wires, dangling labels, a label inside a body, stacked directives,
-a part whose symbol is not found)
+**Findings are scoped to the edit.** The sheet's findings are the ones
+`verify_circuit` reports of the same sheet, sentence for sentence: a part
+whose symbol is not found, a wire LTspice leaves out of the netlist, floating
+pins, loose wire ends, dangling labels, duplicate wires, overlapping parts, a
+wire through a part, a label or a text inside a part, stacked directives, and
+a net joined only by labels (`lib/sheet_findings.py`). Both tools read them off
+a scene of the sheet; the edit's is the scene of the text it is about to
+write. They
 and the label-only-pin list are whole-sheet facts, and on an existing sheet
 most of them predate the call. One recorded edit came back with about eighteen of
 those findings and a 28-pin `label_only_pins` list, none of them about what it
-changed. So the transaction runs both passes twice — on the sheet before the
-ops and after them, which it holds in memory anyway — and reports a row only
-when it is new (the sheet did not have it before; any change to a row makes it
-new, since its identity is every field) or when it names a reference or a
-coordinate the batch named. A reference is named by an op's `reference` or a
+changed. So the transaction reads both twice — of the sheet before the
+ops and after them, each as the editor renders it — and reports a finding only
+when it is new (the sheet did not have one with that rule, those parts, those
+points and those facts before; any change to it makes it new) or when any part
+or point it names is one the batch named. A reference is named by an op's
+`reference` or a
 `REF.PIN` endpoint; a coordinate by an op's `x`/`y`, a segment's two ends, a
 waypoint, or an `{x, y}` endpoint. Everything else goes in the `preexisting`
 block:
@@ -1100,8 +1106,11 @@ the sheet, so it is counted, and the counts reconcile: `wiring.pins_total`,
 the rest, echo `cursor` as `view_cursors.preexisting` (the cheap call is an
 op-less read, `ops: []`, on which nothing is new, so its pages cover the whole
 sheet), or name `preexisting` in `return_views` to have the first page in the
-same call. Either returns `views.preexisting`: the findings as the validation
-pass reports them, then the label-only pins with `kind: "label_only_pin"`. A
+same call. Either returns `views.preexisting`: the findings, each a row with
+its `kind`, its sentence, every part (`ref`, and `refs` when there are
+several) and point (`x`/`y` and `points`, or a wire's `from`/`to`) it names
+and the rule's own facts, then the label-only pins with
+`kind: "label_only_pin"`. A
 `base: "blank"` build starts from nothing, so it withholds nothing. The op
 advisories in `warnings` (prefixed with the op that raised them) are about the
 batch itself and are never scoped.

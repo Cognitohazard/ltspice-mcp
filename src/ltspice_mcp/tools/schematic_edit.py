@@ -82,12 +82,18 @@ from ltspice_mcp.lib.schematic_ops import (
     files_written_beside,
     get_asc_editor,
     make_editor,
-    post_op_warnings,
     require_asc,
     run_op_batch,
     trace_nets,
     wiring_profile,
 )
+from ltspice_mcp.lib.schematic_scene import (
+    SymbolResolver,
+    editor_symbol_resolver,
+    scene_of_text,
+    sheet_view,
+)
+from ltspice_mcp.lib.sheet_findings import RULES, Finding, findings
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -658,9 +664,92 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
 _LABEL_ONLY_KIND = "label_only_pin"
 
 
-def _sheet_report(editor) -> tuple[list[dict], list[dict]]:
-    """``(findings, label_only_pins)`` of a placed editor: what the sheet says about itself."""
-    return post_op_warnings(editor), _pin_tables(editor, include_legend=False)[1]
+def sheet_findings_of(
+    text: str, target: Path, resolver: SymbolResolver | None = None
+) -> list[Finding]:
+    """What every sheet rule finds of the sheet ``text``, to be written at ``target``.
+
+    Read as ``verify_circuit`` reads a file, through its scene, so what an edit
+    reports of a sheet is what the checker says of it once written. Its symbols
+    are found where the editor's own pin geometry finds them
+    (``editor_symbol_resolver``, unless a resolver is given), so a finding and
+    the edit's pin counts are about the same parts. A function of the text and
+    the symbol files alone: nothing here touches an editor, and it is safe off
+    the event loop.
+    """
+    resolver = resolver or editor_symbol_resolver(target)
+    return findings(sheet_view(scene_of_text(text, target, resolver)))
+
+
+def _findings_before_and_after(
+    before: str | None, after: str, target: Path
+) -> tuple[list[Finding], list[Finding]]:
+    """The findings of a sheet's text before a batch and after it.
+
+    Both are the editor's own rendering, the one before taken ahead of the ops.
+    spicelib does not write a sheet back as it read it, so the file itself
+    would differ from the rendering in ways no op made. ``before`` is ``None``
+    for a sheet that starts from nothing. One resolver serves both, so each
+    symbol is read once.
+    """
+    resolver = editor_symbol_resolver(target)
+    found = sheet_findings_of(after, target, resolver)
+    if before is None:
+        return [], found
+    return (found if before == after else sheet_findings_of(before, target, resolver)), found
+
+
+def finding_row(finding: Finding) -> dict[str, Any]:
+    """A finding as the ``preexisting`` view lists it: a kind, a place, a sentence.
+
+    A wire's two ends are ``from`` and ``to``; anything else is at its first
+    point, with all of them under ``points`` when it has more. ``ref`` is the
+    first part and ``refs`` all of them when there are several. The rule's own
+    facts (a pin, a label, a count) ride beside them.
+    """
+    row: dict[str, Any] = {"kind": finding.rule}
+    points = [{"x": x, "y": y} for x, y in finding.points]
+    if finding.refs:
+        row["ref"] = finding.refs[0]
+    if len(finding.refs) > 1:
+        row["refs"] = list(finding.refs)
+    if RULES[finding.rule].scope == "wire":
+        row["from"], row["to"] = points
+    elif points:
+        row["x"], row["y"] = finding.points[0]
+        if len(points) > 1:
+            row["points"] = points
+    row.update(finding.facts)
+    row["message"] = finding.detail
+    return row
+
+
+def _split_findings(
+    after: Sequence[Finding],
+    before: Sequence[Finding],
+    refs: set[str],
+    coords: set[tuple[int, int]],
+) -> tuple[list[Finding], list[Finding]]:
+    """``(reported, preexisting)``: the findings of ``after`` this batch accounts for, and the rest.
+
+    A finding is reported when the sheet did not have it before the batch, or
+    when any part it names is in ``refs`` (casefolded) or any point it names is
+    in ``coords``. Every other finding was already there and involves nothing
+    the batch named. Being there before is by ``Finding.identity`` and is
+    counted, so a second finding like one that was there once is new.
+    """
+    remaining = Counter(found.identity for found in before)
+    reported: list[Finding] = []
+    preexisting: list[Finding] = []
+    for found in after:
+        was_there = remaining[found.identity] > 0
+        if was_there:
+            remaining[found.identity] -= 1
+        named = any(ref.casefold() in refs for ref in found.refs) or any(
+            point in coords for point in found.points
+        )
+        (preexisting if was_there and not named else reported).append(found)
+    return reported, preexisting
 
 
 def _names_ref(row: Mapping[str, Any], refs: set[str]) -> bool:
@@ -1400,15 +1489,19 @@ async def _evaluate_edit_schematic(
         committed_sha: str | None = None
         post_commit_stage = "response"
         try:
-            # What the sheet already said about itself, read before the ops run,
-            # so the reply can tell what this batch introduced from what it found.
-            # A blank base starts from nothing; a batch that keeps the sheet
-            # changes nothing in it, so its "before" is its "after" (None here).
-            before: tuple[list[dict], list[dict]] | None = None
-            if use_template:
-                before = ([], [])
-            elif not sheet_kept:
-                before = _sheet_report(editor)
+            # The sheet as it was, rendered and its label-only pins read before
+            # the ops run, so the reply can tell what this batch introduced from
+            # what it found. A blank base starts from nothing; a batch that
+            # keeps the sheet changes nothing in it, so its "before" is its
+            # "after". A sheet the editor cannot render yet has no "before" to
+            # read either: everything said of it then counts as the batch's, and
+            # the render after the ops raises what there is to raise.
+            before_text: str | None = None
+            before_pins: list[dict] | None = [] if use_template else None
+            if not use_template and not sheet_kept:
+                with contextlib.suppress(NetlistError):
+                    before_text = _render_editor_text(editor)
+                before_pins = _pin_tables(editor, include_legend=False)[1]
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run, plot)
 
             # --- op failure → transactional abort (nothing written)
@@ -1444,14 +1537,23 @@ async def _evaluate_edit_schematic(
             legend, label_only = _pin_tables(
                 editor, include_legend=bool({"pin_legend", "touched"} & set(views))
             )
-            findings = post_op_warnings(editor)
-            before_findings, before_pins = before or (findings, label_only)
-            refs, coords = touched_refs(args.ops), touched_coords(args.ops)
-            findings_reported, findings_left_out = _split_by_edit(
-                findings, before_findings, refs, coords
+            committed_text = _render_editor_text(editor)
+            # The sheet's findings are read off its scene, as verify_circuit
+            # reads a file's, and off the loop: only text goes to the thread.
+            found_before, found = await asyncio.to_thread(
+                _findings_before_and_after,
+                committed_text if sheet_kept else before_text,
+                committed_text,
+                target,
             )
-            pins_reported, pins_left_out = _split_by_edit(label_only, before_pins, refs, coords)
-            preexisting_rows = findings_left_out + [
+            refs, coords = touched_refs(args.ops), touched_coords(args.ops)
+            findings_reported, findings_left_out = _split_findings(
+                found, found_before, refs, coords
+            )
+            pins_reported, pins_left_out = _split_by_edit(
+                label_only, label_only if before_pins is None else before_pins, refs, coords
+            )
+            preexisting_rows = [finding_row(one) for one in findings_left_out] + [
                 {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out
             ]
             preexisting = _preexisting_block(len(findings_left_out), len(pins_left_out))
@@ -1459,9 +1561,8 @@ async def _evaluate_edit_schematic(
             # Two sources, one channel: what the ops themselves reported, then
             # what the finished sheet reports about itself that this batch
             # accounts for. The rest is counted under preexisting.
-            warnings = _op_warnings(results) + [w["message"] for w in findings_reported]
+            warnings = _op_warnings(results) + [one.detail for one in findings_reported]
             op_results = _op_results(results)
-            committed_text = _render_editor_text(editor)
             encoding = _commit_codec(
                 getattr(editor, "encoding", "utf-8") or "utf-8", sheet_was_ascii, committed_text
             )

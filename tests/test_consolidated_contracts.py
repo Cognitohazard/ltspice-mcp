@@ -764,7 +764,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # file in the LTspice window the user already has: the argument, and a
     # clause in the description so a host asked to "open it in LTspice" finds
     # it here. Measured 5,037.
-    "verify_circuit": 5040,
+    # Raised by about 60 characters for the four facts the layout and quality
+    # checks gained when the sheet rules became one list for both tools: a
+    # dangling label and a wire drawn twice, a label inside a part and stacked
+    # directives. They are named for the reason the others are. Measured 5,099.
+    "verify_circuit": 5100,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

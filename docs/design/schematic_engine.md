@@ -354,8 +354,15 @@ what must hold before the next one starts.
      their own, and the sheet whose symbol is not found.
    - *The two memberships merged.* The editor reports what the checker did and
      the reverse; an edit's findings are scoped as §8 says. *Gate:* the
-     response contracts, and the `preexisting` counts reconciled. *Not
-     started.* How it is to be done, as its review left it:
+     response contracts, and the `preexisting` counts reconciled. *Done*
+     (`sheet_findings.findings`), as its review left the plan, which follows.
+     *Gate, met:* for every sheet in the suite that the editor opens, an edit
+     and a check find the same things, rule by rule and place by place
+     (`tests/test_sheet_findings_snapshot.py`), and the same through both
+     handlers, sentence for sentence (`tests/test_edit_schematic.py`); the
+     record changed for 31 sheets, each tool gaining there what the other
+     already said. `verify_circuit`'s published description names the four
+     facts it gained, which raised its size bound by 60 characters.
      - The view the editor builds of a sheet cannot carry the checker's
        rules. It has no box of what a part draws without its pins and no
        anchor of a part's attribute text, which a wire through a part and a
@@ -418,9 +425,10 @@ what must hold before the next one starts.
        twice today, for a label placed on nothing. Overlap and a wire through
        a part will be said twice the same way until the next part turns the
        ops' checks into rules.
-     - *Gate, added:* for every sheet in the suite that the editor opens, the
-       two tools report the same findings, rule by rule and place by place,
-       the editor's taken through its own rendering of the sheet.
+     - Nothing is said of the extent of a part whose symbol is not found.
+       The checker drew it as a placeholder and judged overlaps and crossings
+       by the placeholder's box, which is not the part's; with one list that
+       would have reached an edit's reply too.
    - *Refusals as rules*, the part most likely to go wrong. The route planner's
      and the label op's refusals become rules over a transition, in the order
      they are raised today, wrong intent first. *Gate:* every test that pins a
