@@ -4000,6 +4000,38 @@
         ".raw"
       ]
     },
+    "plot/ac_grid": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/ac_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/ac_grid.plt": {
+          "bytes": 496,
+          "sha256": "07ae66c923f58a5a94a52f0ad24908a90b9eb57ad44921c43f7e8bb076493943"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "grid": "on"
+      },
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/math": {
       "behaviour": "plot-settings",
       "command": [
@@ -4146,6 +4178,36 @@
         "plot/read_ac.plt": {
           "bytes": 392,
           "sha256": "56498bcbb493c5a919b43275a0900e4e5c2f81e55002585b63103daad1945ce0"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_ac_grid": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_ac_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/ac_grid.plt": "9d3d52b31afa9f9ef95336e32c99f4bf513b689bd566ac5ed8c17f888486b171",
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_ac_grid.plt": {
+          "bytes": 430,
+          "sha256": "042aeb149f6c4bf97808bc94beeced3f302854888d34cfe285a294f207f31007"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",
