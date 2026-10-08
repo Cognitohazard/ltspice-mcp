@@ -5730,256 +5730,73 @@
  "fixtures/ltspice_recorded/inputs/export/boilerplate.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: M1.D at (0,0)",
-     "pin": "D",
-     "ref": "M1",
-     "x": 0,
-     "y": 0
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: M1.G at (-48,96)",
-     "pin": "G",
-     "ref": "M1",
-     "x": -48,
-     "y": 96
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: M1.S at (0,192)",
-     "pin": "S",
-     "ref": "M1",
-     "x": 0,
-     "y": 192
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: M2.D at (208,96)",
-     "pin": "D",
-     "ref": "M2",
-     "x": 208,
-     "y": 96
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: M2.G at (160,176)",
-     "pin": "G",
-     "ref": "M2",
-     "x": 160,
-     "y": 176
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: M2.S at (208,192)",
-     "pin": "S",
-     "ref": "M2",
-     "x": 208,
-     "y": 192
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: Q1.C at (384,96)",
-     "pin": "C",
-     "ref": "Q1",
-     "x": 384,
-     "y": 96
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: Q1.B at (320,144)",
-     "pin": "B",
-     "ref": "Q1",
-     "x": 320,
-     "y": 144
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: Q1.E at (384,192)",
-     "pin": "E",
-     "ref": "Q1",
-     "x": 384,
-     "y": 192
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: Q2.C at (544,96)",
-     "pin": "C",
-     "ref": "Q2",
-     "x": 544,
-     "y": 96
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: Q2.B at (480,144)",
-     "pin": "B",
-     "ref": "Q2",
-     "x": 480,
-     "y": 144
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: Q2.E at (544,192)",
-     "pin": "E",
-     "ref": "Q2",
-     "x": 544,
-     "y": 192
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: J1.D at (688,96)",
-     "pin": "D",
-     "ref": "J1",
-     "x": 688,
-     "y": 96
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: J1.G at (640,160)",
-     "pin": "G",
-     "ref": "J1",
-     "x": 640,
-     "y": 160
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: J1.S at (688,192)",
-     "pin": "S",
-     "ref": "J1",
-     "x": 688,
-     "y": 192
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: J2.D at (848,96)",
-     "pin": "D",
-     "ref": "J2",
-     "x": 848,
-     "y": 96
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: J2.G at (800,160)",
-     "pin": "G",
-     "ref": "J2",
-     "x": 800,
-     "y": 160
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: J2.S at (848,192)",
-     "pin": "S",
-     "ref": "J2",
-     "x": 848,
-     "y": 192
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: D1.A at (960,48)",
-     "pin": "A",
-     "ref": "D1",
-     "x": 960,
-     "y": 48
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: D1.K at (960,144)",
-     "pin": "K",
-     "ref": "D1",
-     "x": 960,
-     "y": 144
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: R1.1 at (1120,48)",
-     "pin": "1",
-     "ref": "R1",
-     "x": 1120,
-     "y": 48
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: R1.2 at (1120,144)",
-     "pin": "2",
-     "ref": "R1",
-     "x": 1120,
-     "y": 144
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: C1.1 at (1280,64)",
-     "pin": "1",
-     "ref": "C1",
-     "x": 1280,
-     "y": 64
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: C1.2 at (1280,128)",
-     "pin": "2",
-     "ref": "C1",
-     "x": 1280,
-     "y": 128
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: L1.1 at (1440,48)",
-     "pin": "1",
-     "ref": "L1",
-     "x": 1440,
-     "y": 48
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: L1.2 at (1440,144)",
-     "pin": "2",
-     "ref": "L1",
-     "x": 1440,
-     "y": 144
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: V1.+ at (1600,64)",
-     "pin": "+",
-     "ref": "V1",
-     "x": 1600,
-     "y": 64
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: V1.- at (1600,128)",
-     "pin": "-",
-     "ref": "V1",
-     "x": 1600,
-     "y": 128
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: I1.In at (1760,48)",
-     "pin": "In",
-     "ref": "I1",
-     "x": 1760,
-     "y": 48
-    },
-    {
-     "kind": "floating_pin",
-     "message": "Floating pin: I1.Out at (1760,176)",
-     "pin": "Out",
-     "ref": "I1",
-     "x": 1760,
-     "y": 176
-    }
-   ],
-   "wiring": {
-    "pins_label_only": 0,
-    "pins_total": 30,
-    "pins_wired": 0,
-    "wire_segments": 0
-   }
+   "unopenable": true
   },
   "verify": [
+   {
+    "at": {
+     "file": "boilerplate.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "J1"
+     ],
+     "symbol": "njf"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "njf"
+   },
+   {
+    "at": {
+     "file": "boilerplate.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "J2"
+     ],
+     "symbol": "pjf"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "pjf"
+   },
+   {
+    "at": {
+     "file": "boilerplate.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "M2"
+     ],
+     "symbol": "pmos"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "pmos"
+   },
+   {
+    "at": {
+     "file": "boilerplate.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "Q2"
+     ],
+     "symbol": "pnp"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "pnp"
+   },
    {
     "at": {
      "file": "boilerplate.asc",
@@ -6052,75 +5869,6 @@
    {
     "at": {
      "file": "boilerplate.asc",
-     "x": 208,
-     "y": 96
-    },
-    "evidence": {
-     "coords": [
-      [
-       208,
-       96
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "M2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "M2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 160,
-     "y": 176
-    },
-    "evidence": {
-     "coords": [
-      [
-       160,
-       176
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "M2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "M2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 208,
-     "y": 192
-    },
-    "evidence": {
-     "coords": [
-      [
-       208,
-       192
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "M2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "M2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
      "x": 384,
      "y": 96
     },
@@ -6186,213 +5934,6 @@
     "rule_id": "floating_pin",
     "severity": "observation",
     "subject": "Q1"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 544,
-     "y": 96
-    },
-    "evidence": {
-     "coords": [
-      [
-       544,
-       96
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "Q2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "Q2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 480,
-     "y": 144
-    },
-    "evidence": {
-     "coords": [
-      [
-       480,
-       144
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "Q2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "Q2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 544,
-     "y": 192
-    },
-    "evidence": {
-     "coords": [
-      [
-       544,
-       192
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "Q2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "Q2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 688,
-     "y": 96
-    },
-    "evidence": {
-     "coords": [
-      [
-       688,
-       96
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "J1"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "J1"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 640,
-     "y": 160
-    },
-    "evidence": {
-     "coords": [
-      [
-       640,
-       160
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "J1"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "J1"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 688,
-     "y": 192
-    },
-    "evidence": {
-     "coords": [
-      [
-       688,
-       192
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "J1"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "J1"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 848,
-     "y": 96
-    },
-    "evidence": {
-     "coords": [
-      [
-       848,
-       96
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "J2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "J2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 800,
-     "y": 160
-    },
-    "evidence": {
-     "coords": [
-      [
-       800,
-       160
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "J2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "J2"
-   },
-   {
-    "at": {
-     "file": "boilerplate.asc",
-     "x": 848,
-     "y": 192
-    },
-    "evidence": {
-     "coords": [
-      [
-       848,
-       192
-      ]
-     ],
-     "detail": "pin has no wire, net label, or mating pin on it",
-     "refs": [
-      "J2"
-     ]
-    },
-    "ok": false,
-    "rule_id": "floating_pin",
-    "severity": "observation",
-    "subject": "J2"
    },
    {
     "at": {
@@ -13754,35 +13295,74 @@
  "fixtures/ltspice_recorded/inputs/search/library_folder_bare.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
-   "wiring": {
-    "pins_label_only": 2,
-    "pins_total": 2,
-    "pins_wired": 0,
-    "wire_segments": 0
-   }
+   "unopenable": true
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "library_folder_bare.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "V1"
+     ],
+     "symbol": "battery"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "battery"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/search/library_folder_named.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
-   "wiring": {
-    "pins_label_only": 2,
-    "pins_total": 2,
-    "pins_wired": 0,
-    "wire_segments": 0
-   }
+   "unopenable": true
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "library_folder_named.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "V1"
+     ],
+     "symbol": "Misc\\\\battery"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "Misc\\\\battery"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/search/library_folder_wrong.asc": {
   "dropped_wire": [],
   "edit": {
    "unopenable": true
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "library_folder_wrong.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "V1"
+     ],
+     "symbol": "Wrong\\\\battery"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "Wrong\\\\battery"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/search/named_subfolder.asc": {
   "dropped_wire": [],
