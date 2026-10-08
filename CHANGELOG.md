@@ -764,8 +764,13 @@ recording that showed it.
   appends the old bytes after its own, so UTF-16 is the form neither build's
   save damages. Panes are listed bottom first in the file, and a trace is
   read only up to its first space, so a trace with whitespace is refused.
+  New panes keep the waveform grid when every pane they replace had it: a
+  pane LTspice saves with its grid setting on carries a `GridStyle` line,
+  and a pane without one has no grid whatever the setting.
   The recorder gained a `plot` case kind that runs a sheet in LTspice's
-  window, builds panes with the window's own menu commands and saves them.
+  window, builds panes with the window's own menu commands and saves them,
+  and runs every case with the waveform grid setting removed from its copy
+  of the settings, as it does the settings that change a run's results.
 - An `analyze_results` recipe, `tone`, reads the amplitude and phase of a
   transient signal at one frequency you give. It cuts the window to the whole
   periods that fit from its start and weights the samples by time, sharing
