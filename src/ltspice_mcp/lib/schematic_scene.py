@@ -47,6 +47,7 @@ from ltspice_mcp.lib.symbol_file import (
 )
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
+    library_roots,
 )
 from ltspice_mcp.lib.symbol_library import find_symbol, spellings
 
@@ -397,6 +398,7 @@ def drawn_text_extent(t: DrawText) -> BBox:
 class DrawPin:
     x: int
     y: int
+    name: str = ""
 
     def points(self) -> tuple[tuple[int, int], ...]:
         return ((self.x, self.y),)
@@ -666,6 +668,18 @@ class SymbolResolver:
         return proto
 
 
+def editor_symbol_resolver(asc_path: Path) -> SymbolResolver:
+    """A resolver that finds a symbol where the schematic editor's pin geometry does.
+
+    The sheet's own folder, then ``symbol_geometry.library_roots``, which is
+    what ``symbol_geometry.get_symbol_info`` searches, and nothing more. A
+    scene built with it has a part's pins exactly when the editor has them, so
+    what is said of a sheet from its scene and what the editor counts on it
+    are about the same parts.
+    """
+    return SymbolResolver(local_dir=asc_path.parent, project_paths=library_roots())
+
+
 def default_stock_paths() -> list[Path]:
     """Best-effort stock LTspice symbol directories (may be empty).
 
@@ -928,7 +942,7 @@ def _place_symbol(raw: _RawSymbol, proto: SymbolProto | None) -> PlacedSymbol:
             placed.graphics.append(poly)
     for pin in proto.pins:
         ax, ay = _place_point(pin.x, pin.y, ox, oy, rot)
-        placed.pins.append(DrawPin(ax, ay))
+        placed.pins.append(DrawPin(ax, ay, pin.name))
 
     placed.texts.extend(_attr_texts(raw, proto, ox, oy, rot))
     return placed
@@ -1058,8 +1072,22 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
     # that commits between them cannot make the reported provenance a hash of
     # something that was never drawn.
     data = asc_path.read_bytes()
-    doc = _parse_asc(decode_spice_bytes(data))
-    scene = Scene(source=asc_path, source_sha256=hashlib.sha256(data).hexdigest())
+    return scene_of_text(
+        decode_spice_bytes(data), asc_path, resolver, hashlib.sha256(data).hexdigest()
+    )
+
+
+def scene_of_text(
+    text: str, source: Path, resolver: SymbolResolver, source_sha256: str | None = None
+) -> Scene:
+    """The fully-placed :class:`Scene` of a sheet given as text.
+
+    ``source`` is the path the sheet has or will have; nothing is read from
+    it. This is how a sheet that is not on disk yet is drawn and checked: the
+    text an edit is about to write.
+    """
+    doc = _parse_asc(text)
+    scene = Scene(source=source, source_sha256=source_sha256)
 
     for raw in doc.symbols:
         proto = resolver.load(raw.symbol)
@@ -1126,7 +1154,7 @@ def sheet_view(scene: Scene) -> SheetView:
                 at=(sym.x, sym.y),
                 box=sym.box,
                 body=sym.body,
-                pins=tuple(("", pin.x, pin.y) for pin in sym.pins),
+                pins=tuple((pin.name, pin.x, pin.y) for pin in sym.pins),
                 texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
                 missing=sym.missing,
             )

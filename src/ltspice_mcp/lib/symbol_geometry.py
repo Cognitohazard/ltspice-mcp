@@ -104,19 +104,24 @@ def _pin_direction(
     return _DIRECTION_NAMES.get((rx, ry), "unknown")
 
 
+def library_roots() -> list[Path]:
+    """The libraries a symbol is looked for in, in order: the paths the session
+    configured for spicelib's editor, then the simulator's own.
+
+    They are class attributes of ``AscEditor`` for as long as it opens sheets,
+    so this reads them at each call.
+    """
+    roots = [*(AscEditor.custom_lib_paths or ()), *(AscEditor.simulator_lib_paths or ())]
+    return [Path(root) for root in roots]
+
+
 def _find_asy_file(symbol: str) -> Path | None:
-    """Find a .asy symbol file in AscEditor's configured library paths.
+    """Find a .asy symbol file in the libraries (``library_roots``).
 
     The search is ``symbol_library.find_symbol``, the rule the renderer's
     lookup follows too.
     """
-    search_paths: list[str] = []
-    if hasattr(AscEditor, "custom_lib_paths") and AscEditor.custom_lib_paths:
-        search_paths.extend(AscEditor.custom_lib_paths)
-    if hasattr(AscEditor, "simulator_lib_paths") and AscEditor.simulator_lib_paths:
-        search_paths.extend(AscEditor.simulator_lib_paths)
-
-    return find_symbol(symbol, None, [Path(lib_path) for lib_path in search_paths])
+    return find_symbol(symbol, None, library_roots())
 
 
 def parse_asy_file(asy_path: Path) -> SymbolInfo:

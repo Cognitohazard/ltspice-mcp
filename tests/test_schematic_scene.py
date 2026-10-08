@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from spicelib import AscEditor
 
+from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.schematic_scene import (
     DrawEllipse,
     DrawLine,
@@ -23,12 +25,15 @@ from ltspice_mcp.lib.schematic_scene import (
     Wire,
     build_scene,
     decode_text_lines,
+    default_stock_paths,
     drawn_text_extent,
+    editor_symbol_resolver,
     flag_label_anchor,
     font_px,
     ground_polygon,
     parse_symbol,
     resolve_flag_placement,
+    scene_of_text,
     text_extent,
     wire_directions_at,
 )
@@ -585,3 +590,95 @@ class TestArcPlacement:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         # Zero-height ellipse → no polyline emitted, no crash.
         assert [g for g in scene.symbols[0].graphics if isinstance(g, DrawPolyline)] == []
+
+
+class TestSceneOfText:
+    """A sheet that is not on disk is drawn from its text."""
+
+    def test_it_is_the_scene_of_the_file_holding_that_text(self, tmp_path: Path) -> None:
+        _write(tmp_path / "box2.asy", BOX2_ASY)
+        text = (
+            _asc_with_box2("R90", 96, 64)
+            + "WIRE 96 64 200 64\nFLAG 200 64 OUT\nTEXT 0 0 Left 2 !.op\n"
+        )
+        asc = _write(tmp_path / "s.asc", text)
+        resolver = SymbolResolver(local_dir=tmp_path)
+        from_the_file = build_scene(asc, resolver)
+        assert scene_of_text(text, asc, resolver, from_the_file.source_sha256) == from_the_file
+        assert from_the_file.symbols and from_the_file.wires and from_the_file.flags
+
+    def test_nothing_is_read_from_the_path(self, tmp_path: Path) -> None:
+        scene = scene_of_text(
+            "Version 4\nSHEET 1 880 680\nWIRE 0 0 16 0\n",
+            tmp_path / "not_written_yet.asc",
+            SymbolResolver(local_dir=tmp_path),
+        )
+        assert scene.wires == [Wire(0, 0, 16, 0)]
+        assert scene.source_sha256 is None
+
+    def test_a_placed_pin_keeps_its_name(self, tmp_path: Path) -> None:
+        _write(tmp_path / "box2.asy", BOX2_ASY)
+        asc = _write(tmp_path / "s.asc", _asc_with_box2("R0"))
+        (part,) = build_scene(asc, SymbolResolver(local_dir=tmp_path)).symbols
+        assert [(pin.name, pin.x, pin.y) for pin in part.pins] == [("A", 0, 8), ("B", 32, 8)]
+
+
+class TestEditorSymbolResolver:
+    """The scene an edit is checked by finds a symbol where the editor's own pin
+    geometry finds it, and nowhere else."""
+
+    @pytest.fixture
+    def libraries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        _write(tmp_path / "sheet" / "local.asy", BOX2_ASY)
+        _write(tmp_path / "configured" / "folder" / "shelved.asy", BOX2_ASY)
+        _write(tmp_path / "simulator" / "stock.asy", BOX2_ASY)
+        _write(tmp_path / "elsewhere" / "only_there.asy", BOX2_ASY)
+        monkeypatch.setattr(AscEditor, "custom_lib_paths", [str(tmp_path / "configured")])
+        monkeypatch.setattr(AscEditor, "simulator_lib_paths", [str(tmp_path / "simulator")])
+        monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        ("symbol", "found_in"),
+        [
+            ("local", "sheet"),
+            ("shelved", "configured"),
+            ("folder\\shelved", "configured"),
+            ("stock", "simulator"),
+            ("only_there", None),
+            ("absent", None),
+        ],
+    )
+    def test_it_finds_what_the_editors_geometry_finds(
+        self, symbol: str, found_in: str | None, libraries: Path
+    ) -> None:
+        sheet = libraries / "sheet" / "s.asc"
+        found = editor_symbol_resolver(sheet).resolve(symbol)
+        assert (found is not None) == (symbol_geometry.get_symbol_info(symbol, sheet) is not None)
+        if found_in is None:
+            assert found is None
+        else:
+            assert found is not None and (libraries / found_in) in found.parents
+
+    def test_its_roots_are_the_sheets_folder_and_the_editors_libraries(
+        self, libraries: Path
+    ) -> None:
+        assert symbol_geometry.library_roots() == [
+            libraries / "configured",
+            libraries / "simulator",
+        ]
+        resolver = editor_symbol_resolver(libraries / "sheet" / "s.asc")
+        assert resolver.active_set == {
+            str(libraries / name) for name in ("sheet", "configured", "simulator")
+        }
+
+    def test_a_stock_path_the_editor_does_not_search_is_left_out(
+        self, libraries: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The checker's resolver also searches these; one built for an edit
+        must not, or it would see pins the editor's counts leave out."""
+        monkeypatch.setenv("LTSPICE_MCP_SYMBOL_PATHS", str(libraries / "elsewhere"))
+        assert libraries / "elsewhere" in default_stock_paths()
+        sheet = libraries / "sheet" / "s.asc"
+        assert editor_symbol_resolver(sheet).resolve("only_there") is None
+        assert symbol_geometry.get_symbol_info("only_there", sheet) is None

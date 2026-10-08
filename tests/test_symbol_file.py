@@ -272,6 +272,8 @@ class TestBothReadersUseIt:
         scene = build_scene(sheet, SymbolResolver(local_dir=tmp_path))
         (for_the_checker,) = scene_view(scene).parts
         assert for_the_editor.box == for_the_checker.box
+        assert for_the_editor.pins == for_the_checker.pins
+        assert [name for name, _x, _y in for_the_checker.pins] == ["A", "B"]
         assert for_the_checker.box is not None and for_the_checker.body is not None
         # The shallow arc is a sliver of its circle's box, which is 96 units
         # each way: the part is nowhere near that size.
