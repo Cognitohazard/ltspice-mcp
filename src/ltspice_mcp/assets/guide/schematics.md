@@ -26,7 +26,10 @@ When the user says "this circuit" and names no file, ask what they have open:
 and marks the one in front `active`. Work on that path as on any other. A
 sheet with `differs_from_file: true` has changes in the window that are not in
 the file, so a run would simulate something else than they see: say so, and
-ask them to save.
+ask them to save. `only_in_window` and `only_in_file` list where the two
+differ, as `.asc` lines; a part whose value changed is in both, once with each
+value. Use them to tell the user what is unsaved, not as the circuit to work
+on.
 
 When they ask to see a sheet you built or changed, `verify_circuit(path=...,
 in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
