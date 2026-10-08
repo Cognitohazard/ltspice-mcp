@@ -141,6 +141,7 @@ async def _started(directory: Path) -> list[psutil.Process | None]:
 
 def _assert_gone(processes):
     for process in processes:
+        assert process is not None, "a process never identified cannot be shown gone"
         assert not process_running(process), f"Owned process {process} was not reaped"
 
 
@@ -161,7 +162,7 @@ async def _success(directory, limits):
 
 
 async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(
-    call_dir, limits, parser_deadline
+    call_dir, limits, parser_deadline_passed
 ):
     directory = call_dir()
     task = asyncio.create_task(
@@ -175,12 +176,12 @@ async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(
     )
     started = await _started(directory)
     # The deadline passes now that there is a decoder and a descendant to reap.
-    parser_deadline.expire()
+    parser_deadline_passed.set()
     with pytest.raises(ParserProcessError) as caught:
         await task
     assert caught.value.code == "deadline" and caught.value.reaped
     _assert_gone(started)
-    parser_deadline.restore()
+    parser_deadline_passed.clear()
     await _success(call_dir("fresh"), limits)
 
 
@@ -866,21 +867,18 @@ def _job_with_descendants(directory: Path):
     root = subprocess.Popen(
         [executable, "-c", _JOB_ROOT], stdin=subprocess.PIPE, cwd=directory, env=env, text=True
     )
-    owned: list[psutil.Process | None] = []
-    job = None
     try:
-        job = windows_job.WindowsJob(root.pid, allow_breakaway=False, cleanup_timeout_s=LIVENESS_S)
-        assert root.stdin is not None
-        root.stdin.write("the job holds you\n")
-        root.stdin.flush()
-        pids = wait_until(
-            written(directory / "ready.json", json.loads), what="the job's processes to start"
-        )
-        owned.extend(identify(pid) for pid in dict.fromkeys(pids))
-        yield job, root, owned
+        with contextlib.closing(
+            windows_job.WindowsJob(root.pid, allow_breakaway=False, cleanup_timeout_s=LIVENESS_S)
+        ) as job:
+            assert root.stdin is not None
+            root.stdin.write("the job holds you\n")
+            root.stdin.flush()
+            pids = wait_until(
+                written(directory / "ready.json", json.loads), what="the job's processes to start"
+            )
+            yield job, root, [identify(pid) for pid in set(pids)]
     finally:
-        if job is not None:
-            job.close()
         if root.poll() is None:
             root.kill()
         root.wait(timeout=LIVENESS_S)
@@ -893,13 +891,9 @@ _NEEDS_WINDOWS = pytest.mark.skipif(
 
 @_NEEDS_WINDOWS
 def test_a_closed_windows_job_has_no_process_still_exiting(tmp_path):
-    """A close with a cleanup bound returns once the job's processes have exited.
-
-    Windows counts a job's processes as gone the moment it is asked to
-    terminate them, while they are still exiting with their files open. The
-    tree's first process is waited for by the supervisor; its descendants are
-    confirmed by the job alone.
-    """
+    """A close with a cleanup bound returns once the job's processes have
+    exited. A parser tree's first process is also waited for by the supervisor;
+    what a decoder starts is confirmed by the job alone."""
     with _job_with_descendants(tmp_path) as (job, _root, owned):
         assert len(owned) >= 2 and all(process_running(process) for process in owned)
         job.close()

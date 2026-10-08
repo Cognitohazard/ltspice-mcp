@@ -2,12 +2,10 @@
 
 import asyncio
 import contextlib
-import json
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import psutil
 import pytest
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
@@ -18,11 +16,9 @@ from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
     await_until,
-    identify,
     stage_recorded_fixture,
-    written,
 )
-from tests.test_parser_process import _FIXTURE, _assert_gone
+from tests.test_parser_process import _FIXTURE, _assert_gone, _started
 
 
 class TestLoadRaw:
@@ -210,28 +206,19 @@ def contained_runaway(monkeypatch):
     return calls
 
 
-async def _runaway_tree(calls, task: asyncio.Task) -> list[psutil.Process | None]:
+async def _runaway_tree(calls, task: asyncio.Task):
     """The contained worker and its detached child, once the worker is at its
     runaway seam, identified while they run. Ends ``task`` if they never are."""
-
-    def started() -> dict | None:
-        directories = calls["directories"]
-        if not directories:
-            return None
-        return written(parser_file_in(directories[0], "started.json"), json.loads)()
-
     try:
-        pids = await await_until(
-            started, what="the contained worker to reach its GIL-holding seam"
+        directories = await await_until(
+            lambda: calls["directories"], what="the parse to reach its parser call"
         )
+        return await _started(directories[0])
     except BaseException:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
         raise
-    owned = [identify(pid) for pid in pids.values()]
-    assert len(owned) == 2 and all(owned)
-    return owned
 
 
 class TestLoadRawParseDeadline:
@@ -241,7 +228,7 @@ class TestLoadRawParseDeadline:
         work_dir: Path,
         monkeypatch,
         contained_runaway,
-        parser_deadline,
+        parser_deadline_passed,
     ):
         path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         source = services.source_for_raw_path(path, state_no_sim)
@@ -249,14 +236,14 @@ class TestLoadRawParseDeadline:
         task = asyncio.create_task(services.load_raw(source, state_no_sim))
         owned = await _runaway_tree(contained_runaway, task)
         # The deadline passes now that there is a tree to reap.
-        parser_deadline.expire()
+        parser_deadline_passed.set()
         with pytest.raises(AnalysisDeadlineExceeded, match="exceeded"):
             await task
         _assert_gone(owned)
         assert all(not directory.exists() for directory in contained_runaway["directories"])
         assert state_no_sim.results.entry_count == 0
         contained_runaway["runaway"] = False
-        parser_deadline.restore()
+        parser_deadline_passed.clear()
         loaded = await services.load_raw(source, state_no_sim)
         assert loaded.get_trace_names() == ["time", "V(in)", "V(out)", "I(C1)", "I(R1)", "I(V1)"]
 
