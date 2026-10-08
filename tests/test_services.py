@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import json
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -13,8 +12,13 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
 from ltspice_mcp.lib import parser_service, services
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.state import SessionState
-from tests.conftest import FIXTURES_DIR, await_until, stage_recorded_fixture, written
-from tests.test_parser_process import _FIXTURE, _assert_gone
+from tests.conftest import (
+    FIXTURES_DIR,
+    LIVENESS_S,
+    await_until,
+    stage_recorded_fixture,
+)
+from tests.test_parser_process import _FIXTURE, _assert_gone, _started
 
 
 class TestLoadRaw:
@@ -188,7 +192,7 @@ _NGSPICE_SINGULAR_LINE = "Warning: singular matrix:  check nodes out and 0\n"
 def contained_runaway(monkeypatch):
     """Reuse the supervisor's real GIL-holding worker and detached child."""
     run = parser_service.run_parser_sync
-    calls = {"runaway": True, "directories": [], "owners": []}
+    calls = {"runaway": True, "directories": []}
 
     def invoke(request, **kwargs):
         if not calls["runaway"]:
@@ -196,40 +200,50 @@ def contained_runaway(monkeypatch):
         directory = kwargs["work_dir"]
         calls["directories"].append(directory)
         parser_file_in(directory, "parser_fixture.py").write_text(_FIXTURE, encoding="utf-8")
-        try:
-            return run({"mode": "runaway"}, **kwargs, _worker_module="parser_fixture")
-        finally:
-            marker = parser_file_in(directory, "started.json")
-            if marker.exists():
-                calls["owners"].extend(json.loads(marker.read_text(encoding="utf-8")).values())
+        return run({"mode": "runaway"}, **kwargs, _worker_module="parser_fixture")
 
     monkeypatch.setattr(parser_service, "run_parser_sync", invoke)
     return calls
 
 
-def _runaway_started(calls) -> dict | None:
-    """The contained worker's record of its pids, once it is at its runaway seam."""
-    directories = calls["directories"]
-    if not directories:
-        return None
-    return written(parser_file_in(directories[0], "started.json"), json.loads)()
+async def _runaway_tree(calls, task: asyncio.Task):
+    """The contained worker and its detached child, once the worker is at its
+    runaway seam, identified while they run. Ends ``task`` if they never are."""
+    try:
+        directories = await await_until(
+            lambda: calls["directories"], what="the parse to reach its parser call"
+        )
+        return await _started(directories[0])
+    except BaseException:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        raise
 
 
 class TestLoadRawParseDeadline:
     async def test_timeout_reaps_owned_tree_and_allows_fresh_parse(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch, contained_runaway
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+        contained_runaway,
+        parser_deadline_passed,
     ):
         path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         source = services.source_for_raw_path(path, state_no_sim)
-        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 1.0)
+        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", LIVENESS_S)
+        task = asyncio.create_task(services.load_raw(source, state_no_sim))
+        owned = await _runaway_tree(contained_runaway, task)
+        # The deadline passes now that there is a tree to reap.
+        parser_deadline_passed.set()
         with pytest.raises(AnalysisDeadlineExceeded, match="exceeded"):
-            await services.load_raw(source, state_no_sim)
-        assert len(contained_runaway["owners"]) == 2
-        _assert_gone(contained_runaway["owners"])
+            await task
+        _assert_gone(owned)
         assert all(not directory.exists() for directory in contained_runaway["directories"])
         assert state_no_sim.results.entry_count == 0
         contained_runaway["runaway"] = False
-        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 10.0)
+        parser_deadline_passed.clear()
         loaded = await services.load_raw(source, state_no_sim)
         assert loaded.get_trace_names() == ["time", "V(in)", "V(out)", "I(C1)", "I(R1)", "I(V1)"]
 
@@ -239,23 +253,13 @@ class TestLoadRawParseDeadline:
         path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         source = services.source_for_raw_path(path, state_no_sim)
         task = asyncio.create_task(services.load_raw(source, state_no_sim))
-        try:
-            await await_until(
-                lambda: _runaway_started(contained_runaway),
-                what="the contained worker to reach its GIL-holding seam",
-            )
-        except BaseException:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            raise
+        owned = await _runaway_tree(contained_runaway, task)
         task.cancel()
         await asyncio.sleep(0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert len(contained_runaway["owners"]) == 2
-        _assert_gone(contained_runaway["owners"])
+        _assert_gone(owned)
         assert all(not directory.exists() for directory in contained_runaway["directories"])
         assert state_no_sim.results.entry_count == 0
         contained_runaway["runaway"] = False
@@ -296,10 +300,7 @@ async def test_log_parser_and_raw_parser_share_cancellable_admission(
     logs_task = asyncio.create_task(services.load_logs(source, state_no_sim))
     raw_task = None
     try:
-        await await_until(
-            lambda: _runaway_started(contained_runaway),
-            what="the log worker to reach its contained runaway seam",
-        )
+        owned = await _runaway_tree(contained_runaway, logs_task)
         raw_task = asyncio.create_task(services.load_raw(source, state_no_sim))
         await await_until(queued.is_set, what="the raw parse to queue behind the log parse")
         raw_task.cancel()
@@ -315,8 +316,7 @@ async def test_log_parser_and_raw_parser_share_cancellable_admission(
         logs_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await logs_task
-    assert len(contained_runaway["owners"]) == 2
-    _assert_gone(contained_runaway["owners"])
+    _assert_gone(owned)
     assert all(not directory.exists() for directory in contained_runaway["directories"])
     contained_runaway["runaway"] = False
     assert (await services.load_logs(source, state_no_sim)).section("measurements")[

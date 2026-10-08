@@ -46,6 +46,10 @@ _REPLY_BYTES = 4096
 _CANCEL_CHECK_S = 0.05
 """How often a call in flight looks at its cancel event. A reply, an early
 exit or excess diagnostics wake it at once; only cancellation waits this long."""
+_deadline_clock = time.monotonic
+"""The clock the supervisor reads a call's deadline against, at admission and
+while it waits for the reply. Cleanup grace and a kept tree's age are not
+deadlines of a call and are read from ``time.monotonic`` directly."""
 WARM_CALLS = 64
 """Calls one warm tree serves before it is replaced, which bounds what a
 long-lived worker can accumulate."""
@@ -231,7 +235,7 @@ def _admit_call(deadline: float, cancel: threading.Event | None) -> threading.Ev
     if not math.isfinite(deadline):
         raise ValueError("Parser deadline must be finite")
     cancel = cancel if cancel is not None else threading.Event()
-    if cancel.is_set() or time.monotonic() >= deadline:
+    if cancel.is_set() or _deadline_clock() >= deadline:
         code = "cancelled" if cancel.is_set() else "deadline"
         raise ParserProcessError(code, "Parser call ended before spawn", reaped=True)
     return cancel
@@ -255,8 +259,9 @@ class ParserTree:
     The first request is the gate: nothing reaches the worker before it, and on
     Windows it is sent only once the Job Object holds the worker. Closing the
     tree ends the guardian's input on Linux, which kills and reaps every
-    process the guardian adopted, or terminates the Job Object on Windows; it
-    is confirmed only when that is known to have happened.
+    process the guardian adopted, or ends the Job Object's processes on
+    Windows and waits for each to exit; it is confirmed only when that is
+    known to have happened.
     """
 
     def __init__(
@@ -427,7 +432,7 @@ class ParserTree:
                     raise _CallFailed("cancelled", "Parser call was cancelled")
                 if self._stderr_overflow.is_set():
                     raise _CallFailed("error_limit", "Parser diagnostics exceed their byte limit")
-                remaining = deadline - time.monotonic()
+                remaining = deadline - _deadline_clock()
                 if remaining <= 0:
                     raise _CallFailed("deadline", "Parser call exceeded its deadline")
                 try:
@@ -458,6 +463,8 @@ class ParserTree:
         """Whether the worker is the only process left in the tree."""
         try:
             if self.job is not None:
+                # Nothing has asked this job to terminate, so its count is of
+                # processes that have not yet exited.
                 return self.job.active_processes() == 1
             if sys.platform == "linux":
                 worker = self.worker_pid
