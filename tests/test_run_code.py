@@ -25,7 +25,14 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
 from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
-from tests.conftest import LIVENESS_S, await_until, process_running, wait_until, written
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    process_running,
+    start_when,
+    wait_until,
+    written,
+)
 
 # The worker's pipes belong to one event loop: every async test here shares
 # the module's loop, and the sync tests carry no mark.
@@ -268,18 +275,16 @@ class TestLifetime:
     ):
         before = (await run(state, "1"))["worker_pid"]
         started = state.working_dir / "timeout-started"
-        await_reply = CodeWorker._await_reply
-        timed: list[int] = []
-
+        snippet_started = written(started, str.strip)
         # The snippet's timeout counts from once it is running, so the interrupt
         # lands inside it however late the worker starts it.
-        async def once_started(worker: CodeWorker, seq: int, timeout_s: float):
-            if not timed:
-                timed.append(seq)
-                await await_until(written(started, str.strip), what="the snippet to start")
-            return await await_reply(worker, seq, timeout_s)
-
-        monkeypatch.setattr(CodeWorker, "_await_reply", once_started)
+        start_when(
+            monkeypatch,
+            CodeWorker,
+            "_await_reply",
+            lambda *_: snippet_started(),
+            what="the snippet to start",
+        )
         snippet = (
             "import pathlib, time\nprint('started')\n"
             f"pathlib.Path({str(started)!r}).write_text('1')\ntime.sleep({2 * LIVENESS_S})"
@@ -298,8 +303,7 @@ class TestLifetime:
     async def test_a_snippet_that_swallows_the_interrupt_is_killed(
         self, state: SessionState, monkeypatch: pytest.MonkeyPatch
     ):
-        # The grace is read at call time; a short one keeps the test quick.
-        # timing: the grace under test; the worker never answers the interrupt
+        # timing: the grace under test, read at call time; the worker never answers the interrupt
         monkeypatch.setattr(run_code_module, "INTERRUPT_GRACE_S", 0.5)
         # A call that has already returned makes the worker ignore the
         # interrupt, so it is ignored wherever it lands: before the timed
@@ -308,7 +312,7 @@ class TestLifetime:
         ignoring = await run(state, ignore)
         assert ignoring["status"] == "ok", ignoring
         before = ignoring["worker_pid"]
-        # The snippet outlasts the cap, so a call that waited it out fails here.
+        # The snippet sleeps past LIVENESS_S, so a call that waited it out fails here.
         reply = await asyncio.wait_for(
             # timing: the snippet timeout under test
             run(state, f"import time\ntime.sleep({2 * LIVENESS_S})", timeout_s=1),
@@ -446,7 +450,6 @@ class TestLifetime:
                 return None
             return reply
 
-        # timing: how often to ask, not how long to wait
         reply = await await_until(
             served, what="the interrupted worker to be served", interval_s=0.05
         )
