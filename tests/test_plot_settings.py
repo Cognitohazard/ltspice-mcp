@@ -42,8 +42,9 @@ def pane(
     analysis: PlotAnalysis = "tran",
     x: XScale | None = None,
     y: YScale | None = None,
+    grid: int | None = None,
 ) -> PlotPane:
-    return PlotPane(traces=traces, scales=scales_of(analysis, x, y))
+    return PlotPane(traces=traces, scales=scales_of(analysis, x, y), grid=grid)
 
 
 def section_of(settings: PlotSettings, name: str) -> PlotSection:
@@ -72,6 +73,8 @@ SERVER_WRITTEN: dict[str, list[tuple[PlotAnalysis, list[PlotPane]]]] = {
         ("tran", [pane("V(out)")]),
         ("ac", [pane("V(out)", analysis="ac")]),
     ],
+    "plot/grid.plt": [("tran", [pane("V(out)", grid=1), pane("V(in)", "I(R1)", grid=1)])],
+    "plot/ac_grid.plt": [("ac", [pane("V(out)", analysis="ac", grid=1)])],
 }
 
 
@@ -122,15 +125,6 @@ class TestWhatTheWriterWrites:
         spaced = text.replace("V(in)-V(out)", "V(in) - V(out)").encode("utf-16-le")
         assert (INPUTS / "plot/spaced.plt").read_bytes() == spaced
 
-    def test_the_file_with_a_grid_line_is_the_writers_form_with_one_in_each_pane(self):
-        """The writer writes no GridStyle line, so the file is its form for the
-        same panes with one after each Log line, as LTspice XVII saves a pane it
-        made with the waveform grid on."""
-        text = written(*SERVER_WRITTEN["plot/two_panes.plt"]).decode("utf-16-le")
-        grid = text.replace("      Log: 0 0 0\n", "      Log: 0 0 0\n      GridStyle: 1\n")
-        assert grid.count("GridStyle") == 2
-        assert (INPUTS / "plot/grid.plt").read_bytes() == grid.encode("utf-16-le")
-
     def test_the_utf8_file_handed_to_ltspice_is_the_same_text(self):
         text = written(*SERVER_WRITTEN["plot/two_panes.plt"]).decode("utf-16-le")
         assert (INPUTS / "plot/two_panes_utf8.plt").read_bytes() == text.encode("utf-8")
@@ -180,6 +174,28 @@ class TestReplacingASection:
         assert [s.name for s in changed.sections] == ["AC Analysis"]
         assert with_panes(changed, "ac", []).sections == ()
 
+    def test_new_panes_keep_the_grid_every_replaced_pane_had(self):
+        source = read_plot_settings(
+            written(("tran", [pane("V(a)", grid=1), pane("V(b)", grid=1)]))
+        )
+        changed = with_panes(source, "tran", [pane("V(c)")])
+        assert section_of(changed, "Transient Analysis").panes == (pane("V(c)", grid=1),)
+
+    def test_new_panes_get_no_grid_when_the_replaced_panes_differ(self):
+        source = read_plot_settings(written(("tran", [pane("V(a)", grid=1), pane("V(b)")])))
+        changed = with_panes(source, "tran", [pane("V(c)"), pane("V(d)")])
+        assert section_of(changed, "Transient Analysis").panes == (pane("V(c)"), pane("V(d)"))
+
+    def test_a_grid_is_kept_only_within_its_own_analysis(self):
+        source = read_plot_settings(written(("tran", [pane("V(a)", grid=1)])))
+        changed = with_panes(source, "ac", [pane("V(c)", analysis="ac")])
+        assert section_of(changed, "AC Analysis").panes == (pane("V(c)", analysis="ac"),)
+
+    def test_a_pane_that_names_its_grid_keeps_it(self):
+        source = read_plot_settings(written(("tran", [pane("V(a)", grid=1)])))
+        changed = with_panes(source, "tran", [pane("V(c)", grid=2)])
+        assert section_of(changed, "Transient Analysis").panes == (pane("V(c)", grid=2),)
+
     def test_a_pane_without_a_trace_is_refused(self):
         with pytest.raises(NetlistError, match="at least one trace"):
             with_panes(PlotSettings(), "tran", [PlotPane(traces=())])
@@ -216,6 +232,15 @@ class TestReading:
     def test_utf16_with_a_byte_order_mark(self):
         data = written(("tran", TWO_PANES))
         assert decode_plot_settings(codecs.BOM_UTF16_LE + data) == data.decode("utf-16-le")
+
+    def test_a_grid_line_is_read_wherever_it_is_in_the_pane(self):
+        """An AC pane a build saves has PltMag and PltPhi lines too (plot/ac)."""
+        text = (
+            '[AC Analysis]\n{\n   Npanes: 1\n   {\n      traces: 1 {524290,0,"V(out)"}\n'
+            "      Log: 1 2 0\n      GridStyle: 1\n      PltMag: 1\n      PltPhi: 1 0\n   }\n}\n"
+        )
+        (only,) = section_of(parse_plot_settings(text), "AC Analysis").panes
+        assert only == pane("V(out)", analysis="ac", grid=1)
 
     def test_an_empty_file_has_no_sections(self):
         assert parse_plot_settings("").sections == ()

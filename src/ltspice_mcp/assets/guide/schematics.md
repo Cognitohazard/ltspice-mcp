@@ -226,6 +226,8 @@ reads a trace in the file only up to its first space, so the op refuses one.
 The run ranges every axis to its data; `x_scale` and `y_scale` set a pane's log
 or dB scales and default to LTspice's own (linear for `tran`, log frequency and
 dB magnitude for `ac`). The op replaces that analysis's panes, leaves the
-file's other analyses alone and does not change the sheet. Its `results` entry
+file's other analyses alone and does not change the sheet. New panes keep the
+waveform grid the replaced ones all had; a pane in a new file has none, even
+for a person whose LTspice draws one on panes it makes. Its `results` entry
 names the file and the `replaced_panes`, which passed back as `panes` restore
 them; `panes: []` removes them.

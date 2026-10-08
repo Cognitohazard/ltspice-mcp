@@ -2598,7 +2598,9 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     """Replace one analysis's panes in ``plot``; report the panes it had.
 
     ``replaced_panes`` is in this op's own form, so passing it back as
-    ``panes`` restores them.
+    ``panes`` restores them. The op has no grid argument: new panes keep the
+    grid every pane they replace had (``with_panes``), so a grid survives a
+    replacement and its undo unless only some of the panes had it.
     """
     plot.load()
     panes = [

@@ -129,6 +129,24 @@ async def test_the_replaced_panes_put_back_undo_the_op(asc_state, sheet: Path):
     assert after.panes == before.panes
 
 
+async def test_panes_set_over_ones_saved_with_the_grid_on_keep_the_grid(asc_state, sheet: Path):
+    """A person whose LTspice draws the waveform grid saves panes that carry it;
+    new traces in that analysis keep it, and putting the old panes back does."""
+    plot = sheet.with_suffix(".plt")
+    plot.write_bytes(recorded("ltspice17", "plot/math_grid.plt").read_bytes())
+    before = read_plot_settings(plot.read_bytes()).section("Transient Analysis")
+    assert before is not None
+
+    first = await apply_ops(asc_state, "rc.asc", [_panes("tran", [{"traces": ["V(out)"]}])])
+    assert "      Log: 0 0 0\n      GridStyle: 1\n" in plot.read_bytes().decode("utf-16-le")
+
+    replaced = first["results"][0]["replaced_panes"]
+    await apply_ops(asc_state, "rc.asc", [_panes("tran", replaced)])
+    after = read_plot_settings(plot.read_bytes()).section("Transient Analysis")
+    assert after is not None
+    assert after.panes == before.panes
+
+
 async def test_no_panes_removes_the_analysis_and_then_the_file(asc_state, sheet: Path):
     plot = sheet.with_suffix(".plt")
     await apply_ops(
