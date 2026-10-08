@@ -847,6 +847,7 @@ class TestRunCode:
                 )
                 return None if reply["status"] == "busy" else reply
 
+            # timing: how often to ask, not how long to wait
             reply = await await_until(
                 served, what="the interrupted worker to be served", interval_s=0.05
             )

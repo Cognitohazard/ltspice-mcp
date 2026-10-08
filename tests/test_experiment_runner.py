@@ -83,7 +83,7 @@ def _request(
     max_parallel: int = 1,
     run_timeout_s: float | None = None,
     job_deadline_s: float | None = None,
-    kill_grace_s: float = 0.05,
+    kill_grace_s: float = LIVENESS_S,
     analysis_callback=None,
 ) -> ExperimentRunRequest:
     return _request_and_cases(
@@ -110,7 +110,7 @@ def _request_and_cases(
     max_parallel: int = 1,
     run_timeout_s: float | None = None,
     job_deadline_s: float | None = None,
-    kill_grace_s: float = 0.05,
+    kill_grace_s: float = LIVENESS_S,
     analysis_callback=None,
 ) -> tuple[ExperimentRunRequest, list[ExperimentCase]]:
     """The request and the cases it will stage, for a test that needs both.
@@ -205,6 +205,8 @@ async def _cancel_during_launch(
         killed.append(token)
 
     monkeypatch.setattr(runner, "_kill_case", record_kill)
+    # timing: shorter than the rescan interval, so the case gets exactly one kill;
+    # whether its exit lands inside the grace is not what these tests read
     receipt = await asyncio.shield(
         runner.submit(_request(state, work_dir, request_id="cancel-mid-launch", kill_grace_s=0.2))
     )
@@ -831,6 +833,7 @@ class TestCaseConcurrencyAndTimeouts:
                     state_no_sim,
                     work_dir,
                     request_id="run-timeout",
+                    # timing: the bounds under test; the run never exits and its kill does nothing
                     run_timeout_s=0.01,
                     kill_grace_s=0.01,
                 )
@@ -883,8 +886,8 @@ class TestCaseConcurrencyAndTimeouts:
                     state_no_sim,
                     work_dir,
                     request_id="run-timeout-grace",
+                    # timing: the run timeout under test; the run never exits on its own
                     run_timeout_s=0.01,
-                    kill_grace_s=0.2,
                 )
             )
         )
@@ -935,6 +938,7 @@ class TestCaseConcurrencyAndTimeouts:
                     request_id="capacity-backstop",
                     count=3,
                     max_parallel=1,
+                    # timing: the bounds under test; the run never exits and its kill does nothing
                     run_timeout_s=0.01,
                     kill_grace_s=0.01,
                 )
@@ -975,6 +979,15 @@ class TestCaseConcurrencyAndTimeouts:
             return {}
 
         monkeypatch.setattr(runner, "_kill_case", no_kill)
+        # The deadline counts from once the first case is running, so it finds
+        # one case active and one queued however long the launch took.
+        watch = runner._deadline_watch
+
+        async def once_launched(execution: Any, deadline_s: float) -> None:
+            await await_until(lambda: len(submissions) == 1, what="the first case to launch")
+            await watch(execution, deadline_s)
+
+        monkeypatch.setattr(runner, "_deadline_watch", once_launched)
         receipt = await asyncio.shield(
             runner.submit(
                 _request(
@@ -983,6 +996,8 @@ class TestCaseConcurrencyAndTimeouts:
                     request_id="job-deadline",
                     count=2,
                     max_parallel=1,
+                    # timing: the bounds under test; the launched run never exits, its kill
+                    # does nothing, and the queued case waits on the permit that run holds
                     job_deadline_s=0.1,
                     kill_grace_s=0.01,
                     analysis_callback=analyze,
@@ -1047,6 +1062,7 @@ class TestStoppedCaseRecord:
         monkeypatch: pytest.MonkeyPatch,
         *,
         request_id: str,
+        # timing: the run timeout under test; the run never exits on its own
         run_timeout_s: float | None = 0.01,
         log_text: str = "Circuit: deck\n",
         raw: bytes | None = None,
@@ -1066,7 +1082,6 @@ class TestStoppedCaseRecord:
                     work_dir,
                     request_id=request_id,
                     run_timeout_s=run_timeout_s,
-                    kill_grace_s=2.0,
                 )
             )
         )
@@ -1206,6 +1221,7 @@ class TestStoppedCaseRecord:
                     work_dir,
                     request_id="spicelib-bound",
                     run_timeout_s=30.0,
+                    # timing: data; read back in the bound handed to spicelib, and nothing is killed
                     kill_grace_s=2.0,
                 )
             )
@@ -1276,8 +1292,8 @@ class TestStoppedCaseRecord:
                     state_no_sim,
                     work_dir,
                     request_id="kill-rescan",
+                    # timing: the run timeout under test; the run exits only when killed
                     run_timeout_s=0.01,
-                    kill_grace_s=5.0,
                 )
             )
         )
@@ -1310,6 +1326,7 @@ class TestStoppedCaseRecord:
                     state_no_sim,
                     work_dir,
                     request_id="late-exit-progress",
+                    # timing: the bounds under test; the run never exits and its kill does nothing
                     run_timeout_s=0.01,
                     kill_grace_s=0.01,
                 )
@@ -1318,6 +1335,7 @@ class TestStoppedCaseRecord:
         assert await job_done(state_no_sim, receipt.job)
         case = receipt.job.cases[0]
         assert case.failure_code == "kill_unconfirmed"
+        # timing: data; the bounds the request set, as the case records them
         assert case.failure_evidence == {
             "stop_reason": "run_timeout",
             "run_timeout_s": 0.01,
@@ -1375,6 +1393,7 @@ class TestStoppedCaseRecord:
                     state_no_sim,
                     work_dir,
                     request_id="late-exit-order",
+                    # timing: the bounds under test; the run never exits and its kill does nothing
                     run_timeout_s=0.01,
                     kill_grace_s=0.01,
                 )
@@ -1421,7 +1440,6 @@ class TestCancellationAndAnalysis:
                     request_id="explicit-cancel",
                     count=2,
                     max_parallel=1,
-                    kill_grace_s=0.2,
                 )
             )
         )
@@ -1476,7 +1494,6 @@ class TestCancellationAndAnalysis:
                     state_no_sim,
                     work_dir,
                     request_id="cancel-an-active-case-twice",
-                    kill_grace_s=0.2,
                 )
             )
         )
@@ -1527,9 +1544,7 @@ class TestCancellationAndAnalysis:
 
         monkeypatch.setattr(runner, "_kill_case", record_kill)
         receipt = await asyncio.shield(
-            runner.submit(
-                _request(state_no_sim, work_dir, request_id="cancel-a-copy", kill_grace_s=0.2)
-            )
+            runner.submit(_request(state_no_sim, work_dir, request_id="cancel-a-copy"))
         )
         await await_until(lambda: len(submissions) == 1)
         copy = experiment_store.deserialize_job(

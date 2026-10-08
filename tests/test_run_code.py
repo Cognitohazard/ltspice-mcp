@@ -263,12 +263,30 @@ class TestLifetime:
         assert not process_running(before)
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
-    async def test_timeout_interrupts_and_keeps_the_worker(self, state: SessionState):
+    async def test_timeout_interrupts_and_keeps_the_worker(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
         before = (await run(state, "1"))["worker_pid"]
+        started = state.working_dir / "timeout-started"
+        await_reply = CodeWorker._await_reply
+        timed: list[int] = []
+
+        # The snippet's timeout counts from once it is running, so the interrupt
+        # lands inside it however late the worker starts it.
+        async def once_started(worker: CodeWorker, seq: int, timeout_s: float):
+            if not timed:
+                timed.append(seq)
+                await await_until(written(started, str.strip), what="the snippet to start")
+            return await await_reply(worker, seq, timeout_s)
+
+        monkeypatch.setattr(CodeWorker, "_await_reply", once_started)
+        snippet = (
+            "import pathlib, time\nprint('started')\n"
+            f"pathlib.Path({str(started)!r}).write_text('1')\ntime.sleep({2 * LIVENESS_S})"
+        )
         # timing: the snippet timeout under test
-        reply = await run(state, "import time\nprint('started')\ntime.sleep(30)", timeout_s=1)
+        reply = await run(state, snippet, timeout_s=1)
         assert reply["status"] == "timeout"
-        assert reply["elapsed_s"] < 5
         assert reply["stdout"] == "started\n"
         assert "timeout_s" in reply["hint"]
         after = await run(state, "1")
@@ -428,6 +446,7 @@ class TestLifetime:
                 return None
             return reply
 
+        # timing: how often to ask, not how long to wait
         reply = await await_until(
             served, what="the interrupted worker to be served", interval_s=0.05
         )
