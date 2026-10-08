@@ -39,7 +39,7 @@ evidence = "manifest: library.symbols"
 
 [behaviour.wire-connectivity]
 summary = "Which pins, labels and wires are one node: T-junctions, points on a wire's interior, crossings, overlaps, diagonal wires, pins that only touch."
-model = ["lib/schematic_ops.py", "lib/schematic_scene.py"]
+model = ["lib/connectivity.py", "lib/schematic_scene.py"]
 inputs = [
     "connectivity/crossing_wires.asc",
     "connectivity/label_at_crossing.asc",
@@ -58,9 +58,32 @@ inputs = [
 ]
 extra = ["connectivity/res.asy"]
 
+[behaviour.pins-of-one-part-on-one-point]
+summary = "Whether two pins of one component that sit on the same point are one node: with nothing else there, with a wire or a label there, and with the pins of one or two other components there."
+model = ["lib/connectivity.py", "lib/schematic_scene.py"]
+inputs = ["connectivity/pins_of_one_part_on_one_point.asc"]
+extra = ["connectivity/stacked.asy", "connectivity/stacked_reversed.asy", "connectivity/res.asy"]
+
+[behaviour.symbol-beside-sheet]
+summary = "Where a build finds a symbol kept in a folder beside the sheet: under its bare name, and under a name that says the folder."
+model = ["lib/symbol_library.py"]
+inputs = ["search/in_subfolder.asc", "search/named_subfolder.asc"]
+extra = ["search/lib/part.asy"]
+
+[behaviour.symbol-named-with-a-folder-it-is-not-in]
+summary = "Whether a build finds a symbol whose name says a folder when the symbol is right beside the sheet, in no folder."
+model = ["lib/symbol_library.py"]
+inputs = ["search_flat/named_folder_absent.asc"]
+extra = ["search/lib/part.asy"]
+
+[behaviour.symbol-in-library-folder]
+summary = "Where a build finds a symbol kept in a folder of its own library: under its bare name, under a name that says the folder, and under a name that says another."
+model = ["lib/symbol_library.py"]
+inputs = ["search/library_folder_bare.asc", "search/library_folder_named.asc", "search/library_folder_wrong.asc"]
+
 [behaviour.same-instance-wire]
 summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line."
-model = ["lib/schematic_ops.py"]
+model = ["lib/connectivity.py"]
 inputs = [
     "connectivity/same_instance_wire.asc",
     "connectivity/same_instance_detour.asc",
@@ -149,9 +172,8 @@ inputs = ["connectivity/bus_label.asc"]
 extra = ["connectivity/res.asy"]
 
 [behaviour.schematic-save-encoding]
-summary = "The encoding a build writes when it saves a sheet."
-model = ["lib/encoding.py", "lib/schematic_scene.py"]
-unrecordable = "LTspice saves a sheet only from its window: the -FixUpSchematicFonts switch rewrites sheets, but only through a save prompt there. What is recorded instead is how each build reads a sheet stored in each encoding (export-encoding), which is what decides the bytes the server may write."
+summary = "The bytes a build writes when it saves a sheet from its window: its encoding, its line endings, and the order and spelling of its records, for a sheet as the server writes one, the same sheet with its records in another order, the same sheet with CRLF line endings, and a sheet stored in each encoding."
+model = ["lib/asc_document.py", "lib/encoding.py", "lib/schematic_scene.py"]
 
 # ---------------------------------------------------------------- decks
 
@@ -762,3 +784,61 @@ kind = "plot"
 source = "plot/rc_ac.asc"
 plot = "plot/ac_grid.plt"
 note = "The AC pane of read_ac with a GridStyle line, on the build's default."
+
+# A sheet opened in the build's window and saved there, with nothing on it
+# changed: what is kept is the sheet as the build wrote it.
+[[case]]
+id = "save/built"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "save/built.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/shuffled"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "save/shuffled.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/crlf"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "save/crlf.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/micro_cp1252"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "export/micro_cp1252.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/micro_utf8"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "export/micro_utf8.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/micro_utf8_bom"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "export/micro_utf8_bom.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/micro_utf16le"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "export/micro_utf16le.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "save/micro_utf16le_bom"
+behaviour = "schematic-save-encoding"
+kind = "save"
+source = "export/micro_utf16le_bom.asc"
+extra = ["export/res.asy"]

@@ -352,6 +352,35 @@
         ".net"
       ]
     },
+    "connectivity/pins_of_one_part_on_one_point": {
+      "behaviour": "pins-of-one-part-on-one-point",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/pins_of_one_part_on_one_point.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/pins_of_one_part_on_one_point.asc": "bcd49f25b974f3524faa43ff6597c77dbe64bcfeb1b1e0e9068821a4eb5ab84f",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/stacked.asy": "20f085ba743158cd74845061d35729a5a266f59e3756fcda7bb21df142e5a386",
+        "connectivity/stacked_reversed.asy": "d18bb51d2b9a30219671127494917f45f03f2339b76edf3018c3a5e69a7bdd96"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/pins_of_one_part_on_one_point.net": {
+          "bytes": 217,
+          "sha256": "433ef015e9e39e5e4639ae208fb6fc4508814d3f47193d68a36c5878854f41cd"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_detour": {
       "behaviour": "same-instance-wire",
       "command": [
@@ -5278,6 +5307,349 @@
         ".log",
         ".op.raw",
         ".raw"
+      ]
+    },
+    "save/built": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/built.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/built.asc": "3f5565de5a705660316740f3dbefdb220a7978394845a3e3f4dd467f38ad7eea"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/built.asc": {
+          "bytes": 286,
+          "sha256": "91fddabc4ed42e8258cf54d5f03f34f388dd6d9275d5bc87c2ba02d973cb53d6"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/crlf": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/crlf.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/crlf.asc": "d328391673dcfe766aacba4e29587a66511a8e4c864834c234a4e7726cb60b19"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/crlf.asc": {
+          "bytes": 286,
+          "sha256": "91fddabc4ed42e8258cf54d5f03f34f388dd6d9275d5bc87c2ba02d973cb53d6"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_cp1252": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_cp1252.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_cp1252.asc": "801b61919a33cb768d430f8ceca8f71cd685e7321ed1c4fccfded61ad14a44c7",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_cp1252.asc": {
+          "bytes": 111,
+          "sha256": "beee9bd23d4716954aea7dce56efa4ac122688f210ee8a9176f868bb01297e44"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf16le": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf16le.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf16le.asc": "ecb4925cd4f771058293d808942a79a72d789347367b588a1d85f62cb0eec4d1",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_utf16le.asc": {
+          "bytes": 111,
+          "sha256": "beee9bd23d4716954aea7dce56efa4ac122688f210ee8a9176f868bb01297e44"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf16le_bom": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf16le_bom.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nAborting:\n\n  Unknown schematic syntax:\n\n  \ufeffVersion 4",
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf16le_bom.asc": "edb9eaff79dacb1d219a3ab1d4bfceb4ffa1d14ddbd3e5e939bae9cc107a1a1b",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "save/micro_utf8": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf8.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf8.asc": "96483884b9075970e3e3621cf22f912453dc4f211316bff9eab4377705d929bd",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/micro_utf8.asc": {
+          "bytes": 112,
+          "sha256": "38b6c7d50f6b5944d3ec916d390985ddf855c5f9403b4f4b7cfdb7590ad4699b"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "save/micro_utf8_bom": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/micro_utf8_bom.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nAborting:\n\n  Unknown schematic syntax:\n\n  \u00ef\u00bb\u00bfVersion 4",
+      "exit_code": null,
+      "inputs": {
+        "export/micro_utf8_bom.asc": "f01dfc8fd0a3a7d3a79a8e54d6531b52b156fb1cc7dca272cc6e7b1caefbe35b",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "save",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "save/shuffled": {
+      "behaviour": "schematic-save-encoding",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/shuffled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "save/shuffled.asc": "2390b94250068a0737a453f2490137495b4bd7f3a0636cf65920c522211dd919"
+      },
+      "kind": "save",
+      "outputs": {
+        "save/shuffled.asc": {
+          "bytes": 482,
+          "sha256": "77f4fbb585f3fe8763a8782518609491d861b8762a16d0c577075e9b0ee14980"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".asc"
+      ]
+    },
+    "search/in_subfolder": {
+      "behaviour": "symbol-beside-sheet",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/in_subfolder.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nCouldn't find symbol(s):\n   part ",
+      "exit_code": null,
+      "inputs": {
+        "search/in_subfolder.asc": "2e910ba0e41afb61dc70c52e2bf7f370464cb5c886012a29ad88a805b485a296",
+        "search/lib/part.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "search/library_folder_bare": {
+      "behaviour": "symbol-in-library-folder",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/library_folder_bare.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/library_folder_bare.asc": "85aba682c2efde8b7ee9a3dc9fa26ccf90d167176591028bafd98a935941f938"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/library_folder_bare.net": {
+          "bytes": 67,
+          "sha256": "c28e7a246f248246cf94803a076dd96fa0d982a5901ae9bfb5ca75138a79b13f"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search/library_folder_named": {
+      "behaviour": "symbol-in-library-folder",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/library_folder_named.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/library_folder_named.asc": "6c3a451dc6a8f490a511e1f7f42df5178c91424a205b26065bc3183ee5c92139"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/library_folder_named.net": {
+          "bytes": 68,
+          "sha256": "6ea856d83d9e643a6eb02f7a8f76704cbf1d1e51a6a5c0899fddc2a225fea605"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search/library_folder_wrong": {
+      "behaviour": "symbol-in-library-folder",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/library_folder_wrong.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/library_folder_wrong.asc": "49ff122b075ad71b4e4ae1d84e0055e5c48d153af09fccc80478c391841d2fd9"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search/library_folder_wrong.net": {
+          "bytes": 68,
+          "sha256": "42e2b248bce1d7cc8d0839b8a7bc1e0cc3d330e1c822e409a5ad7ba6840e09cb"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "search/named_subfolder": {
+      "behaviour": "symbol-beside-sheet",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/named_subfolder.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nCouldn't find symbol(s):\n   part ",
+      "exit_code": null,
+      "inputs": {
+        "search/lib/part.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "search/named_subfolder.asc": "e1f2252d7e3a3785dead89dceb171bb012a46af07cf8f308398743f55ae6c9f0"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": true,
+      "written": []
+    },
+    "search_flat/named_folder_absent": {
+      "behaviour": "symbol-named-with-a-folder-it-is-not-in",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/named_folder_absent.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "search/lib/part.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "search_flat/named_folder_absent.asc": "e1f2252d7e3a3785dead89dceb171bb012a46af07cf8f308398743f55ae6c9f0"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "search_flat/named_folder_absent.net": {
+          "bytes": 68,
+          "sha256": "29731a76b2c4d5ef9ebc199f7da8f7f240d0e9c22232ea2ed5d0c31ba4176550"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
       ]
     }
   },
