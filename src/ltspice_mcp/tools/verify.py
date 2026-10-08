@@ -131,7 +131,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FINDING_SCHEMA,
     HINT_SCHEMA,
-    LTSPICE_WINDOW_PROPERTIES,
+    LTSPICE_SHOWN_PROPERTIES,
     REPEATABLE_CHANGE_ANNOTATIONS,
     WARNINGS_SCHEMA,
     CompareSpec,
@@ -150,6 +150,7 @@ from ltspice_mcp.tools._base import (
     render_scene_artifact,
     resolve_reference,
     safe_path,
+    shown_in_window,
     symbol_resolver_for,
     window_difference,
 )
@@ -681,13 +682,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": "Present with in_ltspice: what happened in the LTspice window.",
             "properties": {
-                "shown": {"type": "boolean"},
+                **LTSPICE_SHOWN_PROPERTIES,
                 "path": {"type": "string", "description": "The file opened."},
-                **LTSPICE_WINDOW_PROPERTIES,
-                "started": {
-                    "type": "boolean",
-                    "description": "LTspice was not running and was started for this.",
-                },
                 "already_open": {
                     "type": "boolean",
                     "description": (
@@ -2133,18 +2129,13 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     """
     report: dict[str, Any] = {"shown": False, "path": str(path)}
     try:
-        started = state.open_windows.ensure_window()
-        window, held = state.open_windows.open_sheet(path)
+        shown = state.open_windows.open_sheet(path)
     except BridgeError as error:
         report["reason"] = str(error)
         return report
-    report.update(
-        shown=True, pid=window.pid, version=window.version, already_open=held is not None
-    )
-    if started:
-        report["started"] = True
-    if held is not None and path.suffix.lower() == ".asc":
-        report.update(window_difference(path.read_bytes(), held))
+    report.update(shown_in_window(shown), already_open=shown.held is not None)
+    if shown.held is not None and path.suffix.lower() == ".asc":
+        report.update(window_difference(path.read_bytes(), shown.held))
     return report
 
 

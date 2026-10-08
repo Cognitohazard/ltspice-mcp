@@ -122,7 +122,7 @@ surface already names, and a tool for the window alone would be the remote
 control LTspice's own server is.
 
 For those two, and for nothing else, LTspice is started when no window is
-open (`OpenWindows.ensure_window`, `[schematic] start_ltspice`). It is the one
+open (by the `OpenWindows` method that shows it; `[schematic] start_ltspice`). It is the one
 start of LTspice that is meant to be seen: a person asked to be shown
 something in a program that is not running. It is started with no document
 and no settings file, as from the Start menu, and outside the server's own

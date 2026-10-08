@@ -16,6 +16,7 @@ from typing import Any
 import jsonschema
 import pytest
 
+from ltspice_mcp.lib import ltspice_window
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify
@@ -195,8 +196,6 @@ async def test_an_ltspice_that_cannot_be_started_is_reported(
 async def test_an_ltspice_that_opens_no_window_is_reported(
     asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    from ltspice_mcp.lib import ltspice_window
-
     monkeypatch.setattr(ltspice_window, "_STARTED_S", 0.3)  # timing: the wait under test
     world = tmp_path / "world.json"
     put_windows(asc_state, world, [], start=FakeStart(world, opens_window=False))

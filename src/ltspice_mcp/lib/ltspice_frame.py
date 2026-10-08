@@ -22,7 +22,6 @@ front. The caller makes sure of the state first (``OpenWindows``).
 
 from __future__ import annotations
 
-import functools
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -30,32 +29,33 @@ from pathlib import Path
 import psutil
 
 from ltspice_mcp.lib import hidden_desktop, pe_menu
+from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
 
 #: The schematic editor's command that opens the results beside a sheet.
 VISIBLE_TRACES = "Visible Traces"
 # A top-level menu only the schematic editor's menu bar has, which tells its
 # menu from the waveform viewer's and the symbol editor's.
 _SHEET_MENU = "Hierarchy"
-_FRAME_CLASS = "Afx:"
-_FRAME_TITLE = "LTspice"
 
 
-class FrameError(RuntimeError):
-    """The frame of an LTspice process could not be found, or not told what was asked."""
+class FrameError(BridgeError):
+    """The frame of an LTspice process could not be found, or not told what was asked.
+
+    A ``BridgeError``, as every failure to reach an LTspice window is: a
+    caller that reports one reports this.
+    """
 
 
-@functools.lru_cache(maxsize=8)
-def _sheet_commands(executable: str, _size: int, _modified: int) -> dict[str, int]:
-    for items in pe_menu.menus(Path(executable)):
-        labels = {pe_menu.menu_label(text) for _command, text in items}
-        if _SHEET_MENU not in labels:
-            continue
-        commands: dict[str, int] = {}
-        for command, text in items:
-            if command is not None:
-                commands.setdefault(pe_menu.menu_label(text), command)
-        return commands
-    return {}
+def is_frame(window: int) -> bool:
+    """Whether a top-level window is an LTspice frame, by its class and title."""
+    return hidden_desktop.window_class(window).startswith("Afx:") and hidden_desktop.window_text(
+        window
+    ).startswith("LTspice")
+
+
+#: The schematic editor's commands by executable, read again when the file changes.
+_SHEET_COMMANDS: FileCache[dict[str, int]] = FileCache(maxsize=8)
 
 
 def menu_command(executable: Path, label: str) -> int | None:
@@ -65,8 +65,8 @@ def menu_command(executable: Path, label: str) -> int | None:
     Raises ``OSError`` when the file cannot be read and ``ValueError`` when it
     is not a Windows program.
     """
-    stat = executable.stat()
-    return _sheet_commands(str(executable), stat.st_size, stat.st_mtime_ns).get(label)
+    sheet_menu = _SHEET_COMMANDS.get(executable, lambda path: pe_menu.commands(path, _SHEET_MENU))
+    return sheet_menu.get(label)
 
 
 class LtspiceFrame:
@@ -83,9 +83,7 @@ class LtspiceFrame:
         if sys.platform != "win32":
             raise FrameError("an LTspice window is reached through Windows")
         for window in self._top_level(pid):
-            if hidden_desktop.window_class(window).startswith(
-                _FRAME_CLASS
-            ) and hidden_desktop.window_text(window).startswith(_FRAME_TITLE):
+            if is_frame(window):
                 return window
         raise FrameError(f"LTspice process {pid} has no window on this desktop")
 

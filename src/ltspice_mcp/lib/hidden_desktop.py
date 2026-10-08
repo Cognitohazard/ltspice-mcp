@@ -472,12 +472,8 @@ class HiddenDesktop:
         process runs on.
         """
         if self._handle is not None:
-            listed = self._top_level_windows()
-        elif sys.platform == "win32":
-            listed = _listed(lambda note: _user().EnumWindows(note, 0))
-        else:
-            return []
-        return [window for window, owner in listed if owner == pid]
+            return [window for window, owner in self._top_level_windows() if owner == pid]
+        return windows_here(pid) if sys.platform == "win32" else []
 
     def dialog(self, pid: int, ignore: str | None = None) -> str | None:
         """What a message box ``pid`` has open says, or None when it has none.

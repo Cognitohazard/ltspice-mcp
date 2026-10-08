@@ -665,7 +665,7 @@ an 8-bit one. The client refuses to send such text (`replace_design_text`), so
 there is nothing to record: the test is that it is never sent.
 
 The server starts LTspice itself in one case: for a caller asked to show
-something in it when no window is open (`OpenWindows.ensure_window`). The
+something in it when no window is open (`ltspice_windows.start_in_view`). The
 recorder starts one the same way, with no document, and notes that the bridge
 finds it as a window with nothing open and nothing in front; `FakeStart`, the
 start the handler tests use, is held to that. No test starts LTspice where it

@@ -66,6 +66,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib import pe_menu
 from ltspice_mcp.lib.hidden_desktop import (
     BoxWatch,
     HiddenDesktop,
@@ -74,7 +75,7 @@ from ltspice_mcp.lib.hidden_desktop import (
     window_class,
     window_text,
 )
-from ltspice_mcp.lib.pe_menu import menu_label, menus
+from ltspice_mcp.lib.ltspice_frame import is_frame
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_recorded"
 INPUTS = FIXTURES / "inputs"
@@ -784,15 +785,10 @@ def waveform_commands(exe: Path) -> dict[str, int]:
     first id: the File menu's Save Plot Settings, which writes the default
     file without asking where.
     """
-    for items in menus(exe):
-        if not any(menu_label(text) == _ADD_TRACE for _command, text in items):
-            continue
-        commands: dict[str, int] = {}
-        for command, text in items:
-            if command is not None:
-                commands.setdefault(menu_label(text), command)
-        return commands
-    raise RecorderError(f"{exe.name} has no waveform-window menu with an {_ADD_TRACE} item")
+    commands = pe_menu.commands(exe, _ADD_TRACE)
+    if not commands:
+        raise RecorderError(f"{exe.name} has no waveform-window menu with an {_ADD_TRACE} item")
+    return commands
 
 
 @functools.cache
@@ -870,14 +866,7 @@ class _WaveformWindow:
         return [window for window in self.desktop.windows(self.pid) if visible(window)]
 
     def frame(self) -> int | None:
-        return next(
-            (
-                w
-                for w in self.top_level()
-                if window_class(w).startswith("Afx:") and window_text(w).startswith("LTspice")
-            ),
-            None,
-        )
+        return next((w for w in self.top_level() if is_frame(w)), None)
 
     def waveform(self, frame: int) -> tuple[int, int] | None:
         """The waveform window of the case's raw file, and the MDI client it is in."""

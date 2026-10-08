@@ -25,6 +25,7 @@ return derived metrics. Organized by what the tool answers:
 """
 
 import asyncio
+import contextlib
 import csv
 import json
 import math
@@ -42,7 +43,6 @@ from pydantic import Field
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
-    LTSpiceMCPError,
     NetlistError,
     ResultError,
 )
@@ -52,13 +52,14 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
-from ltspice_mcp.lib.filelock import circuit_file_lock
+from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
-    ResultsAlreadyOpen,
+    OpenWindows,
     ResultsNotLookedFor,
     WindowsUnavailable,
+    results_beside,
 )
 from ltspice_mcp.lib.metrics import (
     guarded_axis,
@@ -81,10 +82,11 @@ from ltspice_mcp.lib.signal_analysis import (
     downsample_minmax,
     summarize_trace,
 )
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
-    LTSPICE_WINDOW_PROPERTIES,
+    LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
     RawSelectionFields,
@@ -94,6 +96,8 @@ from ltspice_mcp.tools._base import (
     image_content,
     registry,
     safe_path,
+    sandboxed,
+    shown_in_window,
     window_difference,
 )
 from ltspice_mcp.tools._schema import schema_from_typeddict
@@ -1087,18 +1091,27 @@ _ALREADY_OPEN_NOTE = (
     "A results file LTspice already had open keeps the traces it was showing; "
     "close it there and ask again to change them."
 )
+_TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
+_BY_HAND_NOTE = (
+    "The results are beside the sheet: View > Visible Traces on it in LTspice opens "
+    "them, and a click on a net then plots it."
+)
 
 
 def _show_in_ltspice(
-    state: SessionState, results: Path, plot_name: str, panes: list[list[str]]
+    state: SessionState,
+    results: Path,
+    circuit: Path | None,
+    log: Path | None,
+    plot_name: str,
+    panes: list[list[str]],
 ) -> dict[str, Any]:
-    """Open ``results`` in an LTspice window with ``panes`` drawn. Blocking.
+    """Open a run in an LTspice window with ``panes`` drawn, and say what happened. Blocking.
 
-    The traces are written first, as the plot settings file LTspice loads when
-    it opens the results, so they are there for a person who opens the file by
-    hand when no window could be reached. Nothing here fails the plot: the
-    chart and its numbers are already made, and what happened in LTspice is a
-    fact beside them.
+    A run of a sheet is opened from the sheet, which ties the plot to it; any
+    other run is opened on its own. Nothing here fails the plot: the chart and
+    its numbers are already made, and what happened in LTspice is a fact
+    beside them.
     """
     report: dict[str, Any] = {
         "shown": False,
@@ -1106,42 +1119,16 @@ def _show_in_ltspice(
         "plot_settings": None,
         "panes": panes,
     }
-    windows = state.open_windows
-    try:
-        windows.check()
-    except WindowsUnavailable as error:
-        report["reason"] = str(error)
-        return report
-    try:
-        left_alone = plot_settings.write_beside(results, plot_name, panes)
-    except (NetlistError, OSError) as error:
-        left_alone = f"the plot settings could not be written ({error})"
-    if left_alone is None:
-        report["plot_settings"] = str(plot_settings.plot_settings_path(results))
-    try:
-        started = windows.ensure_window()
-        window = windows.show_results(results)
-    except BridgeError as error:
-        report["reason"] = str(error)
-        if left_alone is None:
-            report["note"] = (
-                "Opened by hand in LTspice, the results file shows these traces: the "
-                "plot settings beside it name them."
-            )
-        return report
-    report.update(
-        shown=True,
-        pid=window.pid,
-        version=window.version,
-        note=_ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}.",
-    )
-    if started:
-        report["started"] = True
+    sheet = _sheet_to_tie(results, circuit, state)
+    if sheet is None:
+        _show_alone(state.open_windows, report, results, plot_name, panes)
+    else:
+        _show_from_sheet(state.open_windows, report, sheet, results, log, plot_name, panes)
     return report
 
 
 def _sheet_to_tie(results: Path, circuit: Path | None, state: SessionState) -> Path | None:
-    """The sheet a plot of ``results`` can be tied to in LTspice, or None. Blocking.
+    """The sheet a plot of ``results`` can be tied to in LTspice, or None.
 
     A job's case names the circuit it ran; results named by path belong to the
     sheet of their own name beside them. Only a sheet the sandbox admits: its
@@ -1150,106 +1137,137 @@ def _sheet_to_tie(results: Path, circuit: Path | None, state: SessionState) -> P
     candidate = circuit if circuit is not None else results.with_suffix(".asc")
     if candidate.suffix.lower() != ".asc":
         return None
+    sheet = sandboxed(str(candidate), state)
+    return sheet if sheet is not None and sheet.is_file() else None
+
+
+def _write_panes(
+    report: dict[str, Any],
+    results: Path,
+    plot_name: str,
+    panes: list[list[str]],
+    *,
+    of_a_sheet: bool = False,
+) -> str | None:
+    """Write the plot settings that name ``panes`` beside ``results``.
+
+    Returns None once written, with the file named in ``report``, and
+    otherwise why they were not, for the reply's note. A sheet's plot settings
+    are also the ``set_plot_panes`` op's to write, so they are written under
+    the lock an edit takes for them, held for this write alone.
+    """
+    target = plot_settings.plot_settings_path(results)
     try:
-        sheet = safe_path(str(candidate), state)
-    except (LTSpiceMCPError, OSError, ValueError):
-        return None
-    return sheet if sheet.is_file() else None
+        with file_lock(Store.circuit_lock(target)) if of_a_sheet else contextlib.nullcontext():
+            left_alone = plot_settings.write_beside(results, plot_name, panes)
+    except (NetlistError, OSError) as error:
+        left_alone = f"the plot settings could not be written ({error})"
+    if left_alone is None:
+        report["plot_settings"] = str(target)
+    return left_alone
+
+
+def _show_alone(
+    windows: OpenWindows,
+    report: dict[str, Any],
+    results: Path,
+    plot_name: str,
+    panes: list[list[str]],
+) -> None:
+    """Open ``results`` in an LTspice window on its own, and fill in ``report``.
+
+    The traces are written first, as the plot settings file LTspice loads when
+    it opens the results, so they are there for a person who opens the file by
+    hand when no window could be reached.
+    """
+    try:
+        windows.check()
+    except WindowsUnavailable as error:
+        report["reason"] = str(error)
+        return
+    left_alone = _write_panes(report, results, plot_name, panes)
+    try:
+        shown = windows.show_results(results)
+    except BridgeError as error:
+        report["reason"] = str(error)
+        if left_alone is None:
+            report["note"] = (
+                "Opened by hand in LTspice, the results file shows these traces: the "
+                "plot settings beside it name them."
+            )
+        return
+    report.update(
+        shown_in_window(shown),
+        note=_ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}.",
+    )
 
 
 def _place_beside_sheet(sheet: Path, results: Path, log: Path | None) -> None:
-    """Put a run's results and log beside ``sheet`` under its name. Blocking.
+    """Put a run's results and log beside ``sheet`` under its name.
 
     That is where LTspice keeps a sheet's own results and where its Visible
     Traces command looks for them. What is there is the last run's and is
     replaced, as a run in LTspice replaces it; each file whole or not at all.
     """
-    for source, suffix in ((results, ".raw"), (log, ".log")):
+    for source, target in ((results, results_beside(sheet)), (log, sheet.with_suffix(".log"))):
         if source is None or not source.is_file():
             continue
-        target = sheet.with_suffix(suffix)
         if target.exists() and os.path.samefile(source, target):
             continue
         with source.open("rb") as read, atomic_write(target, mode="wb", durable=False) as write:
             shutil.copyfileobj(read, write)
 
 
-_TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
-_BY_HAND_NOTE = (
-    "The results are beside the sheet: View > Visible Traces on it in LTspice opens "
-    "them, and a click on a net then plots it."
-)
-
-
-def _show_tied_in_ltspice(
-    state: SessionState,
+def _show_from_sheet(
+    windows: OpenWindows,
+    report: dict[str, Any],
     sheet: Path,
     results: Path,
     log: Path | None,
     plot_name: str,
     panes: list[list[str]],
-) -> dict[str, Any]:
-    """Open a run in an LTspice window from ``sheet``, tied to it. Blocking.
+) -> None:
+    """Open a run in an LTspice window from ``sheet``, tied to it, and fill in ``report``.
 
     The results are put beside the sheet under its name, with the plot
     settings that name ``panes``, and the sheet's own command opens them
     (``OpenWindows.results_from_sheet``). Nothing is written until a window is
     known that can show them, and until then the reply names the run's own
-    results and no sheet. As for a run opened on its own, nothing here fails
-    the plot.
+    results and no sheet.
     """
-    beside = sheet.with_suffix(".raw")
-    report: dict[str, Any] = {
-        "shown": False,
-        "results": str(results),
-        "plot_settings": None,
-        "panes": panes,
-    }
-    placed: dict[str, str | None] = {}
+    beside = results_beside(sheet)
+    left_alone: str | None = None
 
     def place() -> None:
+        nonlocal left_alone
         _place_beside_sheet(sheet, results, log)
         report.update(results=str(beside), sheet=str(sheet))
-        try:
-            placed["left_alone"] = plot_settings.write_beside(beside, plot_name, panes)
-        except (NetlistError, OSError) as error:
-            placed["left_alone"] = f"the plot settings could not be written ({error})"
-        if placed["left_alone"] is None:
-            report["plot_settings"] = str(plot_settings.plot_settings_path(beside))
+        left_alone = _write_panes(report, beside, plot_name, panes, of_a_sheet=True)
 
     try:
-        started = state.open_windows.ensure_window()
-        window, held = state.open_windows.results_from_sheet(sheet, place)
-    except ResultsAlreadyOpen as error:
-        report["reason"] = f"{error}; close that plot there and ask again"
-        return report
+        shown = windows.results_from_sheet(sheet, place)
     except ResultsNotLookedFor as error:
         report["reason"] = str(error)
         report["note"] = (
             f"Close {sheet.name} in LTspice and ask again: it is then opened with these "
             "results, which are beside it now."
         )
-        return report
+        return
     except BridgeError as error:
         report["reason"] = str(error)
-        if placed:
+        # The reply names the sheet once the results are beside it.
+        if "sheet" in report:
             report["note"] = _BY_HAND_NOTE
-        return report
+        return
     except OSError as error:
         report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
-        return report
-    left_alone = placed.get("left_alone")
+        return
     report.update(
-        shown=True,
-        pid=window.pid,
-        version=window.version,
+        shown_in_window(shown),
         note=_TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}.",
     )
-    if started:
-        report["started"] = True
-    if held is not None:
-        report.update(window_difference(sheet.read_bytes(), held))
-    return report
+    if shown.held is not None:
+        report.update(window_difference(sheet.read_bytes(), shown.held))
 
 
 def _ltspice_line(report: Mapping[str, Any]) -> str:
@@ -1309,12 +1327,7 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                 "type": "object",
                 "description": "Present with in_ltspice: what happened in the LTspice window.",
                 "properties": {
-                    "shown": {"type": "boolean"},
-                    **LTSPICE_WINDOW_PROPERTIES,
-                    "started": {
-                        "type": "boolean",
-                        "description": "LTspice was not running and was started for this.",
-                    },
+                    **LTSPICE_SHOWN_PROPERTIES,
                     "results": {"type": "string", "description": "The file opened."},
                     "sheet": {
                         "type": "string",
@@ -1506,21 +1519,15 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     shown_in_ltspice: dict[str, Any] | None = None
     if args.in_ltspice:
-        panes = [[sig.name for sig in group] for group in plan.groups if group]
-        plot_name = raw.descriptor.original_plot_name
-        sheet = await asyncio.to_thread(
-            _sheet_to_tie, raw_path, case.circuit_path if case is not None else None, state
+        shown_in_ltspice = await asyncio.to_thread(
+            _show_in_ltspice,
+            state,
+            raw_path,
+            case.circuit_path if case is not None else None,
+            source.log,
+            raw.descriptor.original_plot_name,
+            [[sig.name for sig in group] for group in plan.groups if group],
         )
-        if sheet is None:
-            shown_in_ltspice = await asyncio.to_thread(
-                _show_in_ltspice, state, raw_path, plot_name, panes
-            )
-        else:
-            # The sheet's plot settings are also set_plot_panes's to write.
-            async with circuit_file_lock(plot_settings.plot_settings_path(sheet)):
-                shown_in_ltspice = await asyncio.to_thread(
-                    _show_tied_in_ltspice, state, sheet, raw_path, source.log, plot_name, panes
-                )
 
     # The model's own frame: a static PNG of the same panels, on request.
     image: RenderedImage | None = None
