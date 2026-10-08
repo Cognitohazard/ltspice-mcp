@@ -1266,6 +1266,7 @@ class TestWait:
         stale = experiment_store.load_job(owner_job.job_id, work_dir, own_is_alive=True)
         assert stale is not None
         foreign_state.all_jobs[stale.job_id] = stale
+        # timing: how often the record is re-read, not how long the wait lasts
         monkeypatch.setattr(experiment_store, "FOREIGN_RECORD_POLL_S", 0.01)
 
         # The owner finishes only once the waiter has read the record as

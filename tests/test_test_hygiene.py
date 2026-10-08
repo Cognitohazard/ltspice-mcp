@@ -165,6 +165,13 @@ caps a wait as surely as ``event.wait(5)`` does."""
 _TIMEOUT_KEYWORDS = frozenset({"timeout", "timeout_s"})
 _DWELL_KEYWORDS = frozenset({"wait_s"})
 _BOUND_KEYWORDS = _TIMEOUT_KEYWORDS | _DWELL_KEYWORDS
+_SETTERS = frozenset({"setattr", "patch"})
+"""Calls that replace a named attribute with a value: ``monkeypatch.setattr``,
+the ``setattr`` builtin, and ``unittest.mock.patch`` (``patch.object`` too)."""
+_BOUND_NAME_PARTS = ("TIMEOUT", "DEADLINE", "GRACE")
+_SCHEDULERS = frozenset({"Timer", "call_later"})
+"""Calls that run a callback after a delay, so ``Timer(0.5, cancel.set)``
+claims whatever the callback acts on is ready within half a second."""
 _FILE_PROBES = frozenset({"exists", "is_file", "is_dir"})
 
 
@@ -227,15 +234,58 @@ def _number(node: ast.AST | None) -> float | None:
     return None
 
 
-def _clock_offset(node: ast.AST) -> float | None:
-    """``N`` in ``time.monotonic() + N``: a deadline handed to the code under test."""
-    if (
-        isinstance(node, ast.BinOp)
-        and isinstance(node.op, ast.Add)
-        and isinstance(node.left, ast.Call)
-        and _call_name(node.left) == "monotonic"
-    ):
-        return _number(node.right)
+def _clock_offset(node: ast.AST) -> tuple[str, float] | None:
+    """The clock and ``N`` in ``time.monotonic() + N``, or in ``started + N`` for
+    a clock read earlier: a deadline handed to the code under test."""
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
+        return None
+    clock, offset = node.left, _number(node.right)
+    if offset is None:
+        return None
+    if isinstance(clock, ast.Call) and _call_name(clock) == "monotonic":
+        return "now", offset
+    if isinstance(clock, (ast.Name, ast.Attribute)):
+        return ast.unparse(clock), offset
+    return None
+
+
+def _is_setter(node: ast.Call) -> bool:
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "object":
+        return _callable_name(func.value) == "patch"
+    return _call_name(node) in _SETTERS
+
+
+def _set_bound(node: ast.Call) -> tuple[str, float] | None:
+    """The name and value of a time bound a setter replaces.
+
+    ``("HANDSHAKE_TIMEOUT_S", 0.3)`` from ``setattr(module, "HANDSHAKE_TIMEOUT_S",
+    0.3)``, or from ``setattr("package.module.HANDSHAKE_TIMEOUT_S", 0.3)``. A name,
+    in either case, is a bound when it ends in ``_S`` (seconds) or says it is a
+    timeout, deadline or grace; its value is a number the call passes
+    positionally, last.
+    """
+    if not _is_setter(node) or len(node.args) < 2:
+        return None
+    named, value = node.args[-2], _number(node.args[-1])
+    if not (isinstance(named, ast.Constant) and isinstance(named.value, str)) or value is None:
+        return None
+    name = named.value.rsplit(".", 1)[-1]
+    upper = name.upper()
+    if upper.endswith("_S") or any(part in upper for part in _BOUND_NAME_PARTS):
+        return name, value
+    return None
+
+
+def _delay(node: ast.Call) -> float | None:
+    """The delay a scheduler is given: ``Timer(0.5, ...)``, ``call_later(0.5, ...)``."""
+    if _call_name(node) not in _SCHEDULERS:
+        return None
+    if node.args:
+        return _number(node.args[0])
+    for keyword in node.keywords:
+        if keyword.arg in ("interval", "delay"):
+            return _number(keyword.value)
     return None
 
 
@@ -346,8 +396,14 @@ class _TestScan(ast.NodeVisitor):
         for keyword in node.keywords:
             if keyword.arg in _BOUND_KEYWORDS and _short(_number(keyword.value)):
                 self._flag("short-wait", node, f"{keyword.arg}={_number(keyword.value):g}")
-            if keyword.arg == "deadline" and _short(_clock_offset(keyword.value)):
-                self._flag("short-wait", node, f"deadline=now+{_clock_offset(keyword.value):g}")
+            deadline = _clock_offset(keyword.value) if keyword.arg == "deadline" else None
+            if deadline is not None and _short(deadline[1]):
+                self._flag("short-wait", node, f"deadline={deadline[0]}+{deadline[1]:g}")
+        bound = _set_bound(node)
+        if bound is not None and _short(bound[1]):
+            self._flag("short-wait", node, f"set {bound[0]}={bound[1]:g}")
+        if _short(_delay(node)):
+            self._flag("short-wait", node, f"{name}({_delay(node):g}, ...)")
         self.generic_visit(node)
 
 
@@ -393,7 +449,11 @@ def test_no_test_polls_for_a_file_to_exist_or_go():
 
 def test_every_wait_is_capped_at_the_liveness_bound():
     """A wait that gives up before ``LIVENESS_S`` claims the runner is fast.
-    Waits that test a timeout, and a dwell carried as data, say so."""
+
+    So does a bound a test sets on the code under test (``setattr(module,
+    "..._TIMEOUT_S", 1.0)``), a timer that acts after a short delay, and a
+    deadline counted from a clock read earlier. Waits that test a timeout, and
+    a dwell carried as data, say so."""
     found = _scan_tests()["short-wait"]
     assert not found, (
         "waits capped below LIVENESS_S without a '# timing: <reason>':\n" + "\n".join(found)
@@ -473,10 +533,24 @@ def test_the_rules_catch_what_they_name():
         "    proc.wait(timeout=10)\n"
         "    run(deadline=time.monotonic() + 5)\n"
         "    await asyncio.to_thread(entered.wait, 5)\n"
+        "    monkeypatch.setattr(services, 'RAW_PARSE_TIMEOUT_S', 1.0)\n"
+        "    monkeypatch.setattr('ltspice_mcp.lib.wsl.CMD_GRACE', 0.3)\n"
+        "    patch.object(registry, 'shutdown_deadline', 2)\n"
+        "    threading.Timer(0.5, cancel.set).start()\n"
+        "    loop.call_later(0.15, finish)\n"
+        "    run(deadline=started + 5)\n"
     )
     assert len(flagged["sleep"]) == 1
     assert len(flagged["file-poll"]) == 2
-    assert len(flagged["short-wait"]) == 5
+    assert [row.split(": ", 1)[1] for row in flagged["short-wait"]][5:] == [
+        "set RAW_PARSE_TIMEOUT_S=1",
+        "set CMD_GRACE=0.3",
+        "set shutdown_deadline=2",
+        "Timer(0.5, ...)",
+        "call_later(0.15, ...)",
+        "deadline=started+5",
+    ]
+    assert len(flagged["short-wait"]) == 11
 
     excused = _scan_source(
         "async def test_x(runner, job):\n"
@@ -489,6 +563,14 @@ def test_the_rules_catch_what_they_name():
         "    await runner.wait(job, LIVENESS_S)\n"
         "    proc.wait(timeout=60)\n"
         "    await asyncio.to_thread(entered.wait, LIVENESS_S)\n"
+        "    monkeypatch.setattr(services, 'RAW_PARSE_TIMEOUT_S', 0)\n"
+        "    monkeypatch.setattr(services, 'RAW_PARSE_TIMEOUT_S', LIVENESS_S)\n"
+        "    monkeypatch.setattr(tools, '_PAGE_SIZE', 1)\n"
+        "    # timing: asserts the lock wait gives up while a peer holds it\n"
+        "    monkeypatch.setattr(lock, 'DEFAULT_TIMEOUT', 0.2)\n"
+        "    threading.Timer(LIVENESS_S, proc.kill).start()\n"
+        "    loop.call_later(0.15, finish)  # timing: fake work\n"
+        "    run(deadline=started + LIVENESS_S)\n"
     )
     assert excused == {"sleep": [], "file-poll": [], "short-wait": []}
 

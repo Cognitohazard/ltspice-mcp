@@ -1103,6 +1103,7 @@ def quick_looks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Look for a message box often, so a test of one does not wait out two
     looks at the pace a server keeps. The rule that it be seen twice is the
     same."""
+    # timing: how often to look, not how long to wait; the box stays until the program is ended
     monkeypatch.setattr(hidden_desktop, "DIALOG_LOOK_S", 0.05)
 
 
