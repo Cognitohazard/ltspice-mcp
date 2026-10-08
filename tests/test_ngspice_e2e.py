@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner, live_run_progress
 from ltspice_mcp.lib.native_execution import observe_simulator
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
@@ -28,7 +29,7 @@ from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import await_until, terminal_experiment
+from tests.conftest import await_until, start_when, terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -684,15 +685,31 @@ _SLOW_RC_DECK = (
 
 
 async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
-    ngspice_state: SessionState, work_dir: Path
+    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """A real ngspice run stopped at its run timeout says what it left behind.
 
-    The deck asks for 10^8 steps, so it is still solving when the two-second
-    run timeout kills it. The killed process leaves a raw whose ``No. Points``
-    is still 0 and a log with no progress in it, so the only record of how
-    far it got is the raw's own length, read before cleanup deletes it.
+    The deck asks for 10^8 steps, so it is still solving when the run timeout
+    kills it. The killed process leaves a raw whose ``No. Points`` is still 0
+    and a log with no progress in it, so the only record of how far it got is
+    the raw's own length, read before cleanup deletes it.
+
+    The timeout counts from once ngspice has written points, read the way a
+    status call reads a running case, so there is progress to report however
+    slowly ngspice started.
     """
+
+    async def progressing(_runner: ExperimentRunner, execution: Any, _future: Any) -> bool:
+        live = await live_run_progress(execution.job)
+        return any((item["evidence"]["points"] or 0) > 0 for item in live.values())
+
+    start_when(
+        monkeypatch,
+        ExperimentRunner,
+        "_await_case",
+        progressing,
+        what="ngspice to write its first points",
+    )
     net = _write(
         work_dir,
         "slow.cir",
@@ -703,7 +720,9 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
         {
             "request_id": "ng-run-timeout",
             "circuits": [{"path": net, "id": "dut"}],
-            "execution": {"wait_s": 90, "simulator": "ngspice", "run_timeout_s": 2},
+            # timing: the run timeout under test; it starts once there are points, and
+            # the deck solves far past it
+            "execution": {"wait_s": 90, "simulator": "ngspice", "run_timeout_s": 0.2},
         },
     )
 
@@ -712,7 +731,7 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     assert failure["code"] == "run_timeout"
     assert failure["hint"]
     evidence = failure["evidence"]
-    assert evidence["run_timeout_s"] == 2
+    assert evidence["run_timeout_s"] == 0.2
     assert evidence["run_timeout_source"] == "request"
     assert evidence["exit_code"] != 0
     assert "Circuit" in evidence["log_excerpt"]
@@ -768,7 +787,7 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
         data = status.structured_content
         assert data is not None
         [live] = [item for item in data["observations"] if item["code"] == "run_progress"]
-        return live["evidence"] if live["evidence"]["points"] > 0 else None
+        return live["evidence"] if (live["evidence"]["points"] or 0) > 0 else None
 
     # ngspice writes its first points on its own schedule: wait for them.
     reached = await await_until(live_progress, what="ngspice to write its first points")

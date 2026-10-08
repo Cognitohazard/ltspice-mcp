@@ -328,6 +328,7 @@ def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The owner leads its own session, and its simulators are in that group."""
+    # timing: the bound under test; the owner never writes its receipt
     monkeypatch.setattr(_detach, "HANDSHAKE_TIMEOUT_S", 0.3)
     child_pid_file = work_dir / "child.pid"
     program = (

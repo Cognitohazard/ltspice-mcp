@@ -289,6 +289,7 @@ _REJECTED_JOBS_ARGUMENTS: tuple[tuple[str, dict], ...] = (
     ("list-with-a-job-id", {"action": "list", "job_id": "exp-1"}),
     ("list-with-a-request-id", {"action": "list", "request_id": "req-1"}),
     ("list-with-a-null-job-id", {"action": "list", "job_id": None}),
+    # timing: data; dwells on arguments the tool refuses, which nothing waits on
     ("status-with-a-dwell", {"action": "status", "job_id": "exp-1", "timeout_s": 5}),
     ("status-with-the-default-dwell", {"action": "status", "job_id": "exp-1", "timeout_s": 60}),
     ("status-with-a-cursor", {"action": "status", "job_id": "exp-1", "cursor": "o:0"}),
@@ -1266,6 +1267,7 @@ class TestWait:
         stale = experiment_store.load_job(owner_job.job_id, work_dir, own_is_alive=True)
         assert stale is not None
         foreign_state.all_jobs[stale.job_id] = stale
+        # timing: how often the record is re-read, not how long the wait lasts
         monkeypatch.setattr(experiment_store, "FOREIGN_RECORD_POLL_S", 0.01)
 
         # The owner finishes only once the waiter has read the record as
@@ -1454,6 +1456,7 @@ class TestCancellationAuthority:
                     fingerprint="a" * 64,
                     stage=staged_decks(template.cases, template.sources),
                     simulator="MockSimulator",
+                    # timing: the grace runs out; the token names no live process to report an exit
                     kill_grace_s=0.01,
                 )
             )

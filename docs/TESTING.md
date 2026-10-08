@@ -176,6 +176,13 @@ Windows runner, one per run. These now carry it:
   `# timing: <reason>` comment saying why. A wait's timeout is
   `LIVENESS_S` (`tests/conftest.py`), a cap on a hang, never a claim about
   how fast the runner is, including a wait handed to `asyncio.to_thread`.
+  The same holds for any short bound a test hands the code under test,
+  however it is spelled: an argument, a setting patched in, a deadline, a
+  timer (`test_every_wait_is_capped_at_the_liveness_bound` lists the cases
+  the check reads). A reason says why nothing has to finish inside the bound
+  ("the peer holds the lock until released"); one saying the work is quick
+  enough to fit is the claim the rule removes, and such a test is
+  restructured as below.
 - **Fake work that must outlast a budget is held, not slept.** A stand-in
   for slow work blocks on an event the test sets once the call has returned,
   or runs until the call's own deadline has passed; a sleep sized past the
@@ -188,7 +195,11 @@ Windows runner, one per run. These now carry it:
   start another before there is a tree to reap), the call is given
   `LIVENESS_S`, the test waits for that state by its own handshake, and then
   moves the clock the deadline is read against past it
-  (`parser_deadline_passed`, `tests/conftest.py`). A one-second parse deadline
+  (`parser_deadline_passed`, `tests/conftest.py`). Where the clock is an
+  event-loop timer the code starts itself when it calls a method (a run
+  timeout, a job deadline's watch, a snippet's timeout), `start_when` holds
+  that call until the state exists, so the bound counts from there and what
+  it does once it runs out is the real code. A one-second parse deadline
   that a decoder had to start inside lost on the Windows runner exactly this
   way: the call ended before the decoder had written its marker, and the test
   found no process to check.
@@ -231,7 +242,10 @@ above assumes them:
     inside the suite instead of only being asserted about. Two clocks are
     moved in place of a bound: the one a source's stat stamp settles against
     (`parser_service._now_ns`) and the one the parser's supervisor reads a
-    call's deadline against (`parser_process._deadline_clock`).
+    call's deadline against (`parser_process._deadline_clock`). `start_when`
+    holds the method a bound's own timer starts in
+    (`ExperimentRunner._await_case`, `ExperimentRunner._deadline_watch`,
+    `CodeWorker._await_reply`) until the state a test reads exists.
 
   What is *not* substituted: handlers, the response path, the SPICE lexer and
   validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the
