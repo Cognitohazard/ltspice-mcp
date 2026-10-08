@@ -1223,6 +1223,13 @@ def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
 
 
 @pytest.fixture
+def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """spicelib caches a symbol's path by file name for the whole process; keep
+    the temporary folders a test adds out of every later test."""
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
+
+
+@pytest.fixture
 def asc_state(state_no_sim: SessionState, work_dir: Path, asc_symbols: Path) -> SessionState:
     """SessionState with .asc editor available and a Draft1.asc copied into work_dir."""
     dest = work_dir / "Draft1.asc"

@@ -481,15 +481,6 @@ _SWAPPED_DIGITS_ASY = _block_asy("Pin 1 is SpiceOrder 2", ("2", 1, 0, -48), ("1"
 
 
 @pytest.fixture
-def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """spicelib caches a symbol's path by file name for the whole process; keep
-    the temporary folders a test adds out of every later test."""
-    from spicelib import AscEditor
-
-    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
-
-
-@pytest.fixture
 def ordinal_symbols(
     asc_symbols: Path,
     work_dir: Path,

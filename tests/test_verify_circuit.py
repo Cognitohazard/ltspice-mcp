@@ -1316,6 +1316,39 @@ async def test_quality_fires_on_text_overlap(state_no_sim, work_dir, asc_symbols
         assert f["subject"]
 
 
+# Two bus taps on a labelled bus, as on the recorded export/bus_tap, which
+# both LTspice builds export; tests/test_recorded_ltspice_schematics.py makes
+# the same check of that sheet. The tap's field layout is the one KiCad's
+# LTspice importer reads (docs/spicelib_bugs.md, Bug 26).
+_BUS_TAP_ASC = (
+    "Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 D[0:3]\n"
+    "BUSTAP 80 0 80 16\nBUSTAP 120 0 120 16\nWIRE 100 100 300 100\n"
+)
+_PORT_AND_DATA_LABEL_ASC = (
+    'Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 IN\nIOPIN 0 0 In\nDATAFLAG 80 0 ""\n'
+)
+
+
+async def test_a_record_the_drawing_does_not_read_is_reported(state_no_sim, work_dir, asc_symbols):
+    """The drawing skips a record it does not model, so every check built on
+    it runs without that record; the reply says which, how many and where."""
+    asc = _write(work_dir, "bus.asc", _BUS_TAP_ASC)
+    data = await _run(state_no_sim, path=str(asc), checks=["quality"])
+    (note,) = [o for o in data["observations"] if "BUSTAP" in o]
+    assert "2 BUSTAP records" in note
+    assert "line 5" in note
+
+
+async def test_records_the_drawing_leaves_out_on_purpose_are_not_reported(
+    state_no_sim, work_dir, asc_symbols
+):
+    """A port's direction and a data label are known records with nothing to
+    trace, so leaving them out of the drawing is not a gap in any check."""
+    asc = _write(work_dir, "ports.asc", _PORT_AND_DATA_LABEL_ASC)
+    data = await _run(state_no_sim, path=str(asc), checks=["quality"])
+    assert [o for o in data["observations"] if "IOPIN" in o or "DATAFLAG" in o] == []
+
+
 # ---------------------------------------------------------------------------
 # render
 # ---------------------------------------------------------------------------
