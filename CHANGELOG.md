@@ -25,16 +25,6 @@ tool-surface changes.
   LTspice launch a recoverable experiment resumes with, which keeps its
   command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
-- On Windows, a result read that was stopped (it timed out, was cancelled or
-  failed) was reported as fully ended while processes its decoder had started
-  were still exiting. Windows counts a job's processes as gone the moment it
-  is asked to terminate them, and that count was the confirmation; measured,
-  every process of a terminated job was still running when it read zero, for
-  2 to 50 ms depending on the memory they held. The read's scratch directory
-  was removed next, which a process still exiting can hold open. A tree is
-  now confirmed gone only once each of its processes has exited: the job is
-  closed to new processes, a handle is taken to every process in it, and the
-  close waits on those handles.
 
 The entries in this group were found by holding the server against files
 LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
@@ -660,6 +650,14 @@ recording that showed it.
   once, as `jobs(action="wait")` already did. A job's record no longer carries
   anything to wait on: what a wait waits on belongs to the job this process
   runs, so a copy read from disk cannot be waited on by mistake.
+- On Windows, a result read that was stopped (it timed out, was cancelled or
+  failed) was reported as fully ended while processes its decoder had started
+  were still exiting. Windows counts a job's processes as gone the moment it
+  is asked to terminate them, and that count was the confirmation; measured,
+  every process of a terminated job was still running when it read zero, for
+  2 to 50 ms depending on the memory they held. The read's scratch directory
+  was removed next, which a process still exiting can hold open. A tree is
+  now confirmed gone only once each of its processes has exited.
 
 ### Added
 

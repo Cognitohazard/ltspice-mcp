@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
@@ -1118,37 +1119,23 @@ def settled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(parser_service, "_now_ns", lambda: time.time_ns() + 3600 * 10**9)
 
 
-class ParserDeadline:
-    """Whether the deadlines of parser calls have passed, as a test decides it."""
-
-    def __init__(self) -> None:
-        self._passed = False
-
-    def now(self) -> float:
-        return float("inf") if self._passed else time.monotonic()
-
-    def expire(self) -> None:
-        """Every parser call's deadline has passed, whatever it was."""
-        self._passed = True
-
-    def restore(self) -> None:
-        """Deadlines are read against the real clock again."""
-        self._passed = False
-
-
 @pytest.fixture
-def parser_deadline(monkeypatch: pytest.MonkeyPatch) -> ParserDeadline:
-    """A parser call's deadline, which passes when the test says so.
+def parser_deadline_passed(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """Set it, and the supervisor finds the deadline of the parser call it is
+    waiting on has passed; clear it, and it reads the real clock again.
 
     A test of what a passed deadline does gives its call ``LIVENESS_S``, waits
-    for the decoder to be where the test needs it, and then calls ``expire``.
-    A deadline short enough to pass by itself must still outlast a process
-    start, and on a slow runner it does not: the call ends before there is
-    anything for the test to find.
+    for the decoder to be where the test needs it, and then sets this. Only
+    the supervisor's own reads move with it (``parser_process._deadline_clock``):
+    the checks around a parse keep the real clock.
     """
-    deadline = ParserDeadline()
-    monkeypatch.setattr(parser_process, "_monotonic", deadline.now)
-    return deadline
+    passed = threading.Event()
+    monkeypatch.setattr(
+        parser_process,
+        "_deadline_clock",
+        lambda: float("inf") if passed.is_set() else time.monotonic(),
+    )
+    return passed
 
 
 @pytest.fixture

@@ -160,7 +160,7 @@ does not fix the race. A load test can reveal additional failures, but it is
 not a substitute for a deterministic regression of a known interleaving.
 
 That rule was written down and then broken, and each break lost only on the
-Windows runner, one per run. Three mechanisms now carry it:
+Windows runner, one per run. These now carry it:
 
 - **Work the server starts has an owner that can say when it is done.**
   `BackgroundTasks` (`lib/background.py`) holds every task the server starts
@@ -187,11 +187,11 @@ Windows runner, one per run. Three mechanisms now carry it:
   fit inside the budget cannot be made instant (a process that must start and
   start another before there is a tree to reap), the call is given
   `LIVENESS_S`, the test waits for that state by its own handshake, and then
-  moves the clock the deadline is read against past it (`parser_deadline`,
-  `tests/conftest.py`). A one-second parse deadline that a decoder had to
-  start inside lost on the Windows runner exactly this way: the call ended
-  before the decoder had written its marker, and the test found no process to
-  check.
+  moves the clock the deadline is read against past it
+  (`parser_deadline_passed`, `tests/conftest.py`). A one-second parse deadline
+  that a decoder had to start inside lost on the Windows runner exactly this
+  way: the call ended before the decoder had written its marker, and the test
+  found no process to check.
 - **Races lose on Linux first.** `--jitter-seed=N` (`tests/schedule_jitter.py`)
   delays thread-to-loop hand-offs and process starts and fires timers up to
   15.6 ms early, as Windows does, with delays drawn from the seed and the
@@ -226,9 +226,12 @@ above assumes them:
     (`lib/wsl.py`), simulator detection at bootstrap, desktop browser launch
     (`lib/desktop.py`), and the optional cairosvg raster backend — so one
     machine can exercise every platform branch.
-  - **Timeouts, lowered.** Parse deadlines and the shutdown cancel timeout are
-    dropped to fractions of a second, so a bound can be shown to fire inside
-    the suite instead of only being asserted about.
+  - **Timeouts and clocks.** The shutdown cancel timeout and bounds like it
+    are dropped to fractions of a second, so a bound can be shown to fire
+    inside the suite instead of only being asserted about. Two clocks are
+    moved in place of a bound: the one a source's stat stamp settles against
+    (`parser_service._now_ns`) and the one the parser's supervisor reads a
+    call's deadline against (`parser_process._deadline_clock`).
 
   What is *not* substituted: handlers, the response path, the SPICE lexer and
   validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the
