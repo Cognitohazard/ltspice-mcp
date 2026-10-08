@@ -594,8 +594,12 @@ writes back that it has none for.
 One setting of the person at the window reaches a plot settings file: the
 waveform window's grid, the `grid` key of the settings file, which a key
 press turns on and the build then remembers. With it on, each build writes a
-`GridStyle` line in every pane and another last number on the phase axis of
-an AC pane (`plot/ac_grid_on`). Four of XVII's plot files came out that way
+`GridStyle` line in every pane it makes, and ranges whichever Y axis has fewer
+divisions out to as many as the other has: the phase axis of an AC pane
+(`plot/ac_grid_on`), the left axis of a transient pane with a trace on each
+side (`plot/math_grid`). A pane read from a file keeps the line the file had
+and takes none from the setting (`plot/read_grid`, `plot/read_two_panes_grid`).
+Four of XVII's plot files came out that way
 on a machine where XVII's grid had been left on, which looked like a
 difference between Wine and Windows and was not one. The recorder now removes
 the key, so each build is on its default, which is off; XVII writes that

@@ -1280,7 +1280,12 @@ listed bottom first; each build works a trace's id and axis out for itself, so
 both are written 0; a trace is read only up to its first space, so whitespace
 is refused; a pane's `Log` line is kept, so it is always written, with the
 build's own default for the analysis; a run of the sheet ranges every axis, so
-no range is written. LTspice 26 writes UTF-8 and XVII UTF-16 LE, each without
+no range is written. A pane a build makes while its waveform grid setting is
+on carries a `GridStyle` line, which both builds keep when they read it, and a
+pane read without one has no grid whatever the setting; the op has no grid
+argument, so new panes keep the line when every pane they replace had the same
+one, which keeps a person's grid through new traces and through the op's
+undo. LTspice 26 writes UTF-8 and XVII UTF-16 LE, each without
 a byte order mark and with LF line ends, and each reads the other's; but XVII
 saving over a UTF-8 file appends the old bytes after its own UTF-16 section,
 so the file is written as UTF-16 LE, the one form neither build's save
