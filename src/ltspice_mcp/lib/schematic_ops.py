@@ -86,6 +86,7 @@ from ltspice_mcp.lib.plot_settings import (
     PlotSettings,
     XScale,
     YScale,
+    inherit_grid,
     plot_settings_path,
     read_plot_settings,
     scale_names,
@@ -2695,7 +2696,8 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     """Replace one analysis's panes in ``plot``; report the panes it had.
 
     ``replaced_panes`` is in this op's own form, so passing it back as
-    ``panes`` restores them.
+    ``panes`` restores them. The op has no grid argument; new panes keep the
+    replaced panes' grid (``inherit_grid``).
     """
     plot.load()
     panes = [
@@ -2705,7 +2707,7 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
         for spec in op.panes
     ]
     before = plot.settings.section(SECTION_NAMES[op.analysis])
-    plot.settings = with_panes(plot.settings, op.analysis, panes)
+    plot.settings = with_panes(plot.settings, op.analysis, inherit_grid(before, panes))
     replaced = [
         {"traces": list(pane.traces), **scale_names(pane.scales)}
         for pane in (before.panes if before is not None else ())
