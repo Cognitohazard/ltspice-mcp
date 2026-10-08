@@ -1,0 +1,6 @@
+* C:\recording\bus_tap.asc
+R1 D[0] 0 1k
+R2 D0 0 2k
+R3 N001 0 3k
+.backanno
+.end

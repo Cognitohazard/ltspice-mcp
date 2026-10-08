@@ -25,12 +25,36 @@ tool-surface changes.
   LTspice launch a recoverable experiment resumes with, which keeps its
   command, environment and timeout and still answers no box; WSL and Wine are
   unchanged.
+- An `edit_schematic` commit removed every data label (`DATAFLAG` record) from
+  the sheet it edited and reported a complete edit: the schematic editor
+  underneath skips them when it reads a sheet and never writes them. They are
+  now written back, in their order, after the sheet's labels and ports.
+- A sheet holding a line the schematic editor does not read, such as a bus tap
+  (`BUSTAP`) or an empty line, failed `edit_schematic` as an internal error and
+  `inspect`'s schematic queries as `internal_error`, naming neither the file
+  nor the line. Both now refuse it with the file, the line number and the
+  line, also when the line is in a sheet the target loads as a block. Such a
+  sheet still cannot be opened for editing, though LTspice 26 and LTspice XVII
+  both read one (`export/bus_tap`, `export/blank_line`), and a bus tap
+  connects nothing in the netlist they export. `verify_circuit`, which draws the
+  sheet with its own parser, used to leave such a record out of the drawing
+  and of every check built on it without saying so; it now reports each
+  keyword it did not read, how many lines hold it and the first.
 
 The entries in this group were found by holding the server against files
 LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
 (`tests/fixtures/ltspice_recorded`, `docs/TESTING.md`); each is pinned to the
 recording that showed it.
 
+- Neither LTspice 26 nor LTspice XVII reads a sheet that starts with a byte
+  order mark (`export/micro_utf8_bom`, `export/micro_utf16le_bom`). With a
+  UTF-8 mark, `edit_schematic` and `inspect` failed as an internal error
+  saying the sheet had no `Version` line; they now refuse it as starting with
+  the mark. With a UTF-16 mark the sheet opened and an edit wrote the mark
+  back, so the edited sheet still could not be exported; an edit now writes
+  it as UTF-16 LE without the mark, which both builds read. `verify_circuit`
+  passed either sheet, because its drawing reads past the mark; its `quality`
+  check now reports the mark as an error (`byte_order_mark`).
 - The lint and `verify_circuit` passed a `.meas` whose trig LTspice computes
   in degrees. On the default settings of LTspice 26 and XVII, `sin`, `cos`,
   `tan`, `asin`, `acos`, `atan` and `atan2` inside a `.meas` take and give
@@ -650,6 +674,14 @@ recording that showed it.
   once, as `jobs(action="wait")` already did. A job's record no longer carries
   anything to wait on: what a wait waits on belongs to the job this process
   runs, so a copy read from disk cannot be waited on by mistake.
+- On Windows, a result read that was stopped (it timed out, was cancelled or
+  failed) was reported as fully ended while processes its decoder had started
+  were still exiting. Windows counts a job's processes as gone the moment it
+  is asked to terminate them, and that count was the confirmation; measured,
+  every process of a terminated job was still running when it read zero, for
+  2 to 50 ms depending on the memory they held. The read's scratch directory
+  was removed next, which a process still exiting can hold open. A tree is
+  now confirmed gone only once each of its processes has exited.
 
 ### Added
 
@@ -998,7 +1030,7 @@ recording that showed it.
   after a failed, cancelled or timed-out read or a process it did not start;
   a tree whose exit cannot be confirmed still closes parser admission. Waits
   on a parser process are woken by the operating system (a pidfd and
-  `SIGCHLD` on Linux, the Job Object's completion port on Windows) rather than
+  `SIGCHLD` on Linux, a handle to each process on Windows) rather than
   by polling every 5 or 10 ms. On Linux each read of new results took about
   400 ms; a session's first read still does, and the reads after it take
   about 15 ms.
