@@ -675,6 +675,7 @@ class TestExperimentLifecycle:
         registry, runners, live, following = self._shutdown_pair(
             work_dir, HungRunner(), live_count=3
         )
+        # timing: the bound under test; the cancels it bounds never return
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
@@ -716,6 +717,7 @@ class TestExperimentLifecycle:
         registry.add_experiment_job(job)
         # Delegated: a runner owns this job, and its cancel is the one that hangs.
         runners = SimpleNamespace(get_experiment_runner_for=lambda _job: HungRunner())
+        # timing: the bound under test; the cancel it bounds never returns
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         # The real shutdown sequence: cancel the live work, then flush.
@@ -798,6 +800,7 @@ class TestExperimentLifecycle:
         await asyncio.sleep(0)  # let both reach their first await
 
         runners = SimpleNamespace(get_experiment_runner_for=lambda _job: None)
+        # timing: the bound under test; the tasks it bounds never finish
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         # The real shutdown sequence: cancel the live work, then flush.

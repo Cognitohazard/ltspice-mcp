@@ -161,6 +161,7 @@ class TestCircuitFileLock:
 
         # Shrink the acquisition window so the test doesn't sit out the
         # full default timeout.
+        # timing: the bound under test; the peer holds the lock until released
         monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
         t, release = _hold_lock_until_released(asc_file)
         try:
@@ -208,6 +209,7 @@ class TestCircuitFileLock:
         import ltspice_mcp.lib.filelock as lock_mod
         from ltspice_mcp.lib.deck_prep import asc_export_lock
 
+        # timing: the bound under test; the peer holds the lock until released
         monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
         t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
         try:
@@ -226,6 +228,7 @@ class TestCircuitFileLock:
         # that leaves the .plt alone does not wait for it.
         import ltspice_mcp.lib.filelock as lock_mod
 
+        # timing: the bound under test; the peer holds the lock until released
         monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
         t, release = _hold_lock_until_released(asc_file.with_suffix(".plt"))
         try:
@@ -326,6 +329,7 @@ class TestCircuitLockLocation:
             assert holder.stdout is not None
             held = await asyncio.wait_for(holder.stdout.readline(), timeout=60)
             assert held.strip() == b"held"
+            # timing: the bound under test; the other session holds the lock until its input ends
             monkeypatch.setattr(lock_mod, "DEFAULT_TIMEOUT", 0.2)
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 await apply_ops(asc_state, sheet, _SET_R1)

@@ -713,6 +713,7 @@ async def test_two_jobs_share_the_single_launch_permit(
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
 
+        # timing: a negative window; each run holds the one permit this long for a second to show
         self.loop.call_later(0.15, finish)
         return object()
 
