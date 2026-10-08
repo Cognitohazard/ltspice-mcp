@@ -30,6 +30,14 @@ are named below):
   it, with the build's own default unless the caller names a scale.
 - The axis ranges (``X:``, ``Y[0]:`` ...) are not written: a run of the sheet
   ranges every axis to its data (``plot/read_two_panes``).
+- A pane a build makes while its waveform grid setting (``grid`` in either
+  build's settings file) is on has a ``GridStyle: 1`` line after its ``Log``
+  line (``plot/math_grid``, ``plot/ac_grid``); on the default it has none
+  (``plot/one_trace``). Both builds keep the line they read
+  (``plot/read_grid``, ``plot/read_ac_grid``), and a pane read without one
+  has no grid whatever the setting (``plot/read_two_panes_grid``). So new
+  panes keep the line when every pane they replace had the same one: a
+  person's grid outlives new traces, and the file says nothing else about it.
 - LTspice 26 writes the file in UTF-8 and LTspice XVII in UTF-16 LE, neither
   with a byte order mark, and both end lines with LF alone
   (``plot/one_trace``). Each reads the other's (``plot/read_two_panes``,
@@ -44,7 +52,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -86,19 +94,23 @@ _UNWRITABLE = re.compile(r'["{}\x00-\x1f\x7f]')
 
 _TRACE = re.compile(r'\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*"([^"]*)"\s*\}')
 _LOG = re.compile(r"^\s*Log:\s*(\d+)\s+(\d+)\s+(\d+)\s*$", re.MULTILINE)
+_GRID = re.compile(r"^\s*GridStyle:\s*(\d+)\s*$", re.MULTILINE)
 _TRACES = re.compile(r"^\s*traces:\s*\d+(.*)$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
 class PlotPane:
-    """One pane: its traces left to right, and the scales of its three axes.
+    """One pane: its traces left to right, the scales of its three axes, its grid.
 
     ``scales`` is the pane's ``Log`` line (X, left Y, right Y; 0 linear, 1
     logarithmic, 2 decibels), or None for a pane read from a file without one.
+    ``grid`` is the number on its ``GridStyle`` line, or None for a pane
+    without one, which a build keeps without one whatever its grid setting.
     """
 
     traces: tuple[str, ...]
     scales: tuple[int, int, int] | None = None
+    grid: int | None = None
 
 
 @dataclass(frozen=True)
@@ -193,7 +205,9 @@ def _pane(block: str) -> PlotPane:
         traces.extend(match.group(3) for match in _TRACE.finditer(line.group(1)))
     log = _LOG.search(block)
     scales = None if log is None else (int(log[1]), int(log[2]), int(log[3]))
-    return PlotPane(traces=tuple(traces), scales=scales)
+    style = _GRID.search(block)
+    grid = None if style is None else int(style[1])
+    return PlotPane(traces=tuple(traces), scales=scales, grid=grid)
 
 
 def parse_plot_settings(text: str) -> PlotSettings:
@@ -289,8 +303,10 @@ def _render_body(panes: Sequence[PlotPane]) -> str:
             "   {",
             f"      traces: {len(pane.traces)} {entries}",
             "      Log: {} {} {}".format(*scales),
-            "   }," if index < len(written) - 1 else "   }",
         ]
+        if pane.grid is not None:
+            lines.append(f"      GridStyle: {pane.grid}")
+        lines.append("   }," if index < len(written) - 1 else "   }")
     return "\n" + "\n".join(lines) + "\n"
 
 
@@ -301,12 +317,18 @@ def with_panes(
 
     The section keeps its place among the others; a new one goes last. Its
     ``body`` is the text written for it, so ``render_plot_settings`` needs
-    nothing else. Raises ``NetlistError`` for a pane without a trace and for a
-    trace the file cannot carry (``check_trace``).
+    nothing else. A pane with no ``grid`` of its own takes the one every pane
+    of the section it replaces had, when they all had the same. Raises
+    ``NetlistError`` for a pane without a trace and for a trace the file
+    cannot carry (``check_trace``).
     """
     name = SECTION_NAMES[analysis]
     if any(not pane.traces for pane in panes):
         raise NetlistError("every pane needs at least one trace")
+    before = settings.section(name)
+    grids = {pane.grid for pane in before.panes} if before is not None else set()
+    if len(grids) == 1 and (grid := grids.pop()) is not None:
+        panes = [pane if pane.grid is not None else replace(pane, grid=grid) for pane in panes]
     replacement: PlotSection | None = None
     if panes:
         replacement = PlotSection(name=name, panes=tuple(panes), body=_render_body(panes))
@@ -342,9 +364,9 @@ def write_plot_settings(settings: PlotSettings) -> bytes:
 def holds_only_panes(data: bytes) -> bool:
     """Whether a ``.plt`` is one written here from panes, and not one a build saved.
 
-    A build's own save carries each pane's axis ranges and grid and its own
-    trace ids, in its own encoding (``plot/one_trace``), so its bytes are never
-    what writing its panes back gives.
+    A build's own save carries each pane's axis ranges and its own trace ids,
+    in its own encoding (``plot/one_trace``), so its bytes are never what
+    writing its panes back gives. A grid line is one this module writes too.
     """
     try:
         rebuilt = PlotSettings()
@@ -363,7 +385,8 @@ def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) 
 
     ``plot_name`` is the plot name the results file carries and ``panes`` the
     traces of each pane, top first; they get the scales a build gives that
-    analysis. The analysis's section is replaced and the file's others are
+    analysis, and the grid of the panes they replace (``with_panes``). The
+    analysis's section is replaced and the file's others are
     kept, as for a sheet's. Returns None once written, and otherwise why
     nothing was: the analysis's section is not recorded, or the file there
     was saved by a build, which is a person's and is left alone. Raises

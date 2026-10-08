@@ -24,6 +24,8 @@ from ltspice_mcp.lib.plot_settings import (
     check_trace,
     encode_plot_settings,
     read_plot_settings,
+    render_plot_settings,
+    with_panes,
 )
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS
@@ -103,6 +105,28 @@ class TestWhatABuildWritesForPanesItMade:
         assert micro in data
 
 
+#: What each build saved for panes it made with the waveform grid on.
+GRID_ON: dict[str, tuple[PlotPane, ...]] = {
+    "plot/math_grid": (
+        PlotPane(("V(in)-V(out)", "V(out)*I(R1)"), scales=DEFAULT_SCALES["tran"], grid=1),
+    ),
+    "plot/ac_grid": (PlotPane(("V(out)",), scales=DEFAULT_SCALES["ac"], grid=1),),
+}
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(list(GRID_ON))))
+def test_a_pane_made_with_the_waveform_grid_on_has_a_grid_line(build: str, case_id: str):
+    section = TRAN if case_id == "plot/math_grid" else AC
+    assert panes(saved(build, case_id), section) == GRID_ON[case_id]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_pane_made_on_the_default_has_no_grid_line(build: str):
+    for case_id in ("plot/one_trace", "plot/math", "plot/ac"):
+        section = AC if case_id == "plot/ac" else TRAN
+        assert all(pane.grid is None for pane in panes(saved(build, case_id), section))
+
+
 def test_the_pane_ltspice_26_adds_below_is_listed_first():
     """The first pane listed is the bottom one.
 
@@ -135,7 +159,16 @@ def test_no_build_stops_on_a_file_the_server_wrote(build: str, case_id: str):
 @pytest.mark.parametrize(
     ("build", "case_id"),
     list(
-        rec.per_build(["plot/read_two_panes", "plot/read_math", "plot/read_log_y", "plot/read_ac"])
+        rec.per_build(
+            [
+                "plot/read_two_panes",
+                "plot/read_math",
+                "plot/read_log_y",
+                "plot/read_ac",
+                "plot/read_grid",
+                "plot/read_ac_grid",
+            ]
+        )
     ),
 )
 def test_a_build_shows_the_panes_traces_and_scales_written(build: str, case_id: str):
@@ -144,6 +177,27 @@ def test_a_build_shows_the_panes_traces_and_scales_written(build: str, case_id: 
     assert [s.name for s in shown.sections] == [s.name for s in written.sections]
     for section in written.sections:
         assert panes(saved(build, case_id), section.name) == section.panes
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_pane_read_without_a_grid_line_gets_no_grid_from_the_setting(build: str):
+    """With the waveform grid on, a build saves a file the server wrote exactly
+    as it does on its default: a pane read without a GridStyle line has none,
+    so a pane written here shows no grid whatever the person's setting is."""
+    assert saved(build, "plot/read_two_panes_grid") == saved(build, "plot/read_two_panes")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_new_panes_keep_the_grid_of_the_panes_a_build_made(build: str):
+    """Replacing the panes of a section a build saved with the grid on keeps
+    the grid, in the form plot/read_grid shows each build keeps."""
+    data = saved(build, "plot/math_grid")
+    changed = with_panes(read_plot_settings(data), "tran", [PlotPane(("V(out)",), (0, 0, 0))])
+    text = render_plot_settings(changed)
+    assert "      Log: 0 0 0\n      GridStyle: 1\n   }\n" in text
+    assert panes(encode_plot_settings(text), TRAN) == (
+        PlotPane(("V(out)",), scales=(0, 0, 0), grid=1),
+    )
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

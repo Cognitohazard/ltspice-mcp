@@ -549,7 +549,13 @@ does none of this in the timeout fails the recording.
 
 The committed plot cases were recorded under Wine 11, on the same executables
 as the rest of the recording (the digests match the manifest's), and each
-entry says so in `host`. A recording made on Windows has no `host`, so
+entry says so in `host`. The grid cases (`plot/*grid*`) were recorded on
+Windows. Checked there, the Wine ones came out as committed once the recorder
+removed the waveform grid setting (`grid`), which the person recording had on
+for XVII. With it on, every pane XVII made had a `GridStyle`
+line, and where a pane's two Y axes had different numbers of divisions the one
+with fewer was ranged out to the other's; `plot/math_grid` shows both, on
+either build. A recording made on Windows has no `host`, so
 recording them again there with
 `uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`
 replaces them. A partial recording like that keeps the library facts the rest

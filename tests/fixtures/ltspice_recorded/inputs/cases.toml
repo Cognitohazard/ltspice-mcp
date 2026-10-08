@@ -629,13 +629,21 @@ kind = "plot"
 source = "plot/rc_tran.asc"
 steps = [{ trace = "V(in)-V(out)" }, { trace = "V(out)*I(R1)" }]
 ini = { grid = "on" }
-note = "plot/math with the waveform grid on, the setting LTspice XVII keeps as grid in [Options]."
+note = "plot/math with the waveform grid on (grid in [Options] of either build's settings): a GridStyle line in the pane, and the left axis ranged out to as many divisions as the right one has."
+
+[[case]]
+id = "plot/ac_grid"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_ac.asc"
+steps = [{ trace = "V(out)" }]
+ini = { grid = "on" }
+note = "plot/ac with the waveform grid on: where an AC pane's GridStyle line goes, and the phase axis ranged out to as many divisions as the magnitude axis has."
 
 # What a build makes of a file the server wrote. lib/plot_settings.py writes
-# every one of these but spaced.plt and grid.plt: spaced.plt is its form for a
-# trace with the spaces it refuses since this case was recorded, and grid.plt
-# its form with a GridStyle line, which it does not write, after each Log line.
-# tests/test_plot_settings.py holds each to the writer.
+# every one of these but spaced.plt, which is its form for a trace with the
+# spaces it refuses since this case was recorded; tests/test_plot_settings.py
+# holds each to the writer.
 [[case]]
 id = "plot/read_two_panes"
 behaviour = "plot-settings-read"
@@ -703,3 +711,11 @@ kind = "plot"
 source = "plot/rc_tran.asc"
 plot = "plot/grid.plt"
 note = "The panes of read_two_panes with a GridStyle line in each, on the build's default: whether a build keeps the line it read."
+
+[[case]]
+id = "plot/read_ac_grid"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_ac.asc"
+plot = "plot/ac_grid.plt"
+note = "The AC pane of read_ac with a GridStyle line, on the build's default."
