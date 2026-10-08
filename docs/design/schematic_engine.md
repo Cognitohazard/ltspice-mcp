@@ -258,8 +258,8 @@ model    symbol_library.py    name -> definition; the one resolver; session-owne
 kernel   geometry.py          boxes, orthogonal segments, text extents
          placement.py         orientations, placed pins and boxes, the two solvers
          connectivity.py      the net index, overlays, the signature
-policy   routing.py           shape solvers; the legality predicate
-         sheet_findings.py    finding and conflict types; layout and readability facts
+policy   sheet_findings.py    finding and conflict types; layout and readability facts
+         routing.py           shape solvers; the legality predicate
          schematic_ops.py     op models; each op is sheet -> (sheet, facts)
 view     schematic_scene.py   scene from a sheet; overlays
          schematic_renderer.py
@@ -447,7 +447,8 @@ what must hold before the next one starts.
      - The checks become functions of plain data in `routing.py`, reading
        the view and the partition the sheet rules read, filled from the
        editor by an adapter that step 6 discards. No answer changes: the
-       record is the gate.
+       record is the gate. *Done* (`routing.judge`), with the record
+       unchanged and each rule held to plain sheets in `tests/test_routing.py`.
      - They are not all separate. The overlap check, the check of a leg
        along the wire it ends on and the contact check hand a set of wires
        already refused from one to the next, and stay one stage. The pin

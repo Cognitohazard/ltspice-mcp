@@ -154,6 +154,7 @@ from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
+from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     named_labels,
@@ -162,8 +163,6 @@ from ltspice_mcp.lib.schematic_ops import (
     placed_geometry,
     require_asc,
     resolve_pin,
-    segment_json,
-    segment_text,
     wire_segments_of,
     wires_of_one_net,
 )

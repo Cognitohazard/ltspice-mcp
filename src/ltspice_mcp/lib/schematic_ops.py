@@ -15,9 +15,11 @@ What lives here:
 - ``edit_guard``, which serializes one file's mutation in-process and across
   parallel server sessions (with the files beside it a batch writes,
   ``files_written_beside``), and the cached-editor accessors it wraps;
-- the placement, routing and net-partition geometry (``placed_geometry``,
-  ``resolve_pin``, ``plan_connect_route``, ``net_partition``, ``trace_nets``),
-  which reads each symbol once per request through ``symbol_info_for``;
+- the placement and net-partition geometry (``placed_geometry``,
+  ``resolve_pin``, ``net_partition``, ``trace_nets``), which reads each
+  symbol once per request through ``symbol_info_for``, and the route
+  planner behind ``wire_pins``, which resolves the ends of a route and asks
+  ``lib/routing.py`` what drawing it would do;
 - the wiring profile. What is said of a whole sheet after an edit is
   ``lib/sheet_findings.py``, read by ``tools/schematic_edit.py``.
 
@@ -75,9 +77,7 @@ from ltspice_mcp.lib.connectivity import (
     NetPartition,
     build_on_wire_predicate,
     label_folded_nets,
-    net_members,
     partition,
-    point_on_segment,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
@@ -98,6 +98,14 @@ from ltspice_mcp.lib.plot_settings import (
     with_panes,
     write_plot_settings,
 )
+from ltspice_mcp.lib.routing import (
+    Route,
+    judge,
+    segment_json,
+    segment_text,
+    wires_through,
+)
+from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
@@ -1345,18 +1353,6 @@ def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
     return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
 
 
-def wires_through(
-    coord: tuple[int, int], segments: Sequence[tuple[int, int, int, int]]
-) -> list[tuple[int, int, int, int]]:
-    """The segments ``coord`` lies on, ends included, in the order given.
-
-    A point on a wire's interior touches that wire the way its end would: LTspice
-    joins anything placed there (see ``connectivity.partition``). More than one
-    segment comes back where wires meet, overlap or cross.
-    """
-    return [s for s in segments if point_on_segment(coord, (s[0], s[1]), (s[2], s[3]))]
-
-
 def wires_of_one_net(
     coord: tuple[int, int],
     segments: Sequence[tuple[int, int, int, int]],
@@ -1380,45 +1376,9 @@ def wires_of_one_net(
     return through
 
 
-def segment_text(seg: tuple[int, int, int, int]) -> str:
-    """A wire as a message names it: ``(x1,y1)->(x2,y2)``."""
-    return f"({seg[0]},{seg[1]})->({seg[2]},{seg[3]})"
-
-
-def segment_json(seg: tuple[int, int, int, int]) -> dict[str, dict[str, int]]:
-    """A wire as a response carries it: ``{from: {x, y}, to: {x, y}}``."""
-    return {"from": {"x": seg[0], "y": seg[1]}, "to": {"x": seg[2], "y": seg[3]}}
-
-
 def _endpoint_name(endpoint: "str | GridPoint") -> str:
     """A route endpoint as a message names it: as given, or as ``(x,y)``."""
     return endpoint if isinstance(endpoint, str) else f"({endpoint.x},{endpoint.y})"
-
-
-def _crossing_warning(x: int, y: int, wire: tuple[int, int, int, int]) -> str:
-    """The advisory for a route that crosses a wire where neither one ends.
-
-    LTspice leaves such a crossing unjoined (``tests/fixtures/t_junctions/``
-    ``crossing_wires``), so the route creates no connection there and the nets
-    stay apart. It is reported, not refused: the only cost is a reader taking
-    the crossing for a junction.
-    """
-    return (
-        f"The route crosses the wire {segment_text(wire)} at ({x},{y}) where neither "
-        "ends; LTspice leaves a plain crossing unjoined, so the two stay separate "
-        "nets. To join them, end the route on that wire instead."
-    )
-
-
-def _collinear_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
-    """True iff two orthogonal segments lie on one line and share a stretch of it."""
-    if a[0] == a[2] == b[0] == b[2]:
-        lo, hi = max(min(a[1], a[3]), min(b[1], b[3])), min(max(a[1], a[3]), max(b[1], b[3]))
-        return hi > lo
-    if a[1] == a[3] == b[1] == b[3]:
-        lo, hi = max(min(a[0], a[2]), min(b[0], b[2])), min(max(a[0], a[2]), max(b[0], b[2]))
-        return hi > lo
-    return False
 
 
 def _resolve_route_endpoint(
@@ -1470,9 +1430,11 @@ def _plan_connect_route(
 
     Returns a :class:`_ConnectPlan` whose ``segments`` are ready to append
     to ``editor.wires`` directly. Raises ``NetlistError`` for any
-    validation failure (zero-length route, diagonal segment, pin
-    collision, wire-junction overlap, named-net short, or a waypoint or
-    route segment touching another net's wiring).
+    validation failure. What was asked is checked here: an end that does not
+    resolve, a route of no length, two named nets joined, a wire LTspice
+    would drop. What drawing the route would do to the rest of the sheet (a
+    diagonal segment, a pin passed over, a wire run along, another net's
+    wiring touched) is ``routing.judge``'s, and so are the advisories.
 
     Backs the ``wire_pins`` op, so a route the planner refuses is never
     written by any caller.
@@ -1518,15 +1480,11 @@ def _plan_connect_route(
             "the requested route has zero length after deduplicating waypoints."
         )
 
-    endpoints = {(x1, y1), (x2, y2)}
     skip_refs = {
         ref.rsplit(".", 1)[0]
         for ref in (from_pin, to_pin)
         if isinstance(ref, str) and "." in ref and not ref.startswith("net:")
     }
-
-    errors: list[str] = []
-    warnings: list[str] = []
 
     # Net-label conflict — checked first because it's a "wrong intent"
     # error: rejecting it gives the user a clearer signal than a route
@@ -1594,255 +1552,38 @@ def _plan_connect_route(
             f"net)."
         )
 
-    for sx1, sy1, sx2, sy2 in segments:
-        if sx1 != sx2 and sy1 != sy2:
-            errors.append(f"Diagonal wire ({sx1},{sy1})->({sx2},{sy2}): not orthogonal")
-
-    # Pin-collision check: a pin is safe if it's already wired to the
-    # same net as our target (an existing wire reaches both that pin and
-    # one of our endpoints), e.g. T-junction onto a power rail.
-    def _pin_on_target_net(px: int, py: int) -> bool:
-        for ex1, ey1, ex2, ey2 in existing_wires:
-            wire_pts = {(ex1, ey1), (ex2, ey2)}
-            if (px, py) in wire_pts and wire_pts & endpoints:
-                return True
-        return False
-
-    # Pin-collision exemption is by exact endpoint *coordinate* (the
-    # ``(px, py) in endpoints`` check below), NOT by whole component: the
-    # OTHER pin of an endpoint component still lies on the route and must be
-    # flagged — otherwise a waypoint landing on it silently shorts the
-    # component while wire_pins reports success. ``skip_refs`` stays in the
-    # bbox-crossing *warning* loop, where exempting an endpoint component is
-    # reasonable.
-    junctions: list[dict[str, object]] = []
-    for cg in component_geo:
-        for pin in cg["pins"]:
-            px, py = pin["x"], pin["y"]
-            if (px, py) in endpoints:
-                continue
-            # A pin at the shared corner of two consecutive segments satisfies
-            # point_on_segment for both, so test the route once per pin.
-            if not wires_through((px, py), segments):
-                continue
-            pin_label = f"{cg['ref']}.{pin['name']}"
-            if _pin_on_target_net(px, py):
-                junctions.append({"x": px, "y": py, "via": "pin", "pin": pin_label})
-                warnings.append(
-                    f"The route passes over {pin_label} at ({px},{py}), already wired "
-                    "to this net; LTspice joins it there."
-                )
-                continue
-            errors.append(
-                f"Wire passes through {pin_label} at ({px},{py}): "
-                "will create unintended connection"
+    # Everything else said of a route is routing.judge's, which reads the sheet
+    # as plain data: the parts with their boxes and pins, the wires, and the
+    # partition worked out above.
+    view = SheetView(
+        parts=tuple(
+            Part(
+                ref=part["ref"],
+                box=BBox.from_origin_size(part["x"], part["y"], part["width"], part["height"]),
+                pins=tuple((pin["name"], pin["x"], pin["y"]) for pin in part["pins"]),
             )
-
-    # Wire-junction check: forbid overlaps with existing wires unless the
-    # existing wire already terminates at one of our endpoints (intended
-    # T-junction). A plain crossing, where neither wire ends, is only
-    # reported: LTspice leaves it unjoined. One with a label on the point is
-    # not plain, since a label there joins both wires (the label_at_crossing
-    # recording), and is left to the contact check below.
-    flagged: set[int] = set()
-    for sx1, sy1, sx2, sy2 in segments:
-        for ext_index, (ex1, ey1, ex2, ey2) in enumerate(existing_wires):
-            ext_endpoints = {(ex1, ey1), (ex2, ey2)}
-            if ext_endpoints & endpoints:
-                continue
-            if sx1 == sx2 and ex1 == ex2 and sx1 == ex1:
-                new_min, new_max = min(sy1, sy2), max(sy1, sy2)
-                ext_min, ext_max = min(ey1, ey2), max(ey1, ey2)
-                if new_min < ext_max and new_max > ext_min:
-                    overlap_y = max(new_min, ext_min)
-                    if (sx1, overlap_y) not in endpoints:
-                        flagged.add(ext_index)
-                        errors.append(
-                            f"Wire overlap at x={sx1} between y={max(new_min, ext_min)} "
-                            f"and y={min(new_max, ext_max)}: will create unintended junction"
-                        )
-                        break
-            elif sy1 == sy2 and ey1 == ey2 and sy1 == ey1:
-                new_min, new_max = min(sx1, sx2), max(sx1, sx2)
-                ext_min, ext_max = min(ex1, ex2), max(ex1, ex2)
-                if new_min < ext_max and new_max > ext_min:
-                    overlap_x = max(new_min, ext_min)
-                    if (overlap_x, sy1) not in endpoints:
-                        flagged.add(ext_index)
-                        errors.append(
-                            f"Wire overlap at y={sy1} between x={max(new_min, ext_min)} "
-                            f"and x={min(new_max, ext_max)}: will create unintended junction"
-                        )
-                        break
-            elif sx1 == sx2 and ey1 == ey2:
-                cross_x, cross_y = sx1, ey1
-                new_min, new_max = min(sy1, sy2), max(sy1, sy2)
-                ext_min, ext_max = min(ex1, ex2), max(ex1, ex2)
-                if (
-                    new_min < cross_y < new_max
-                    and ext_min < cross_x < ext_max
-                    and (cross_x, cross_y) not in endpoints
-                    and (cross_x, cross_y) not in part_before.label_texts
-                ):
-                    warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
-            elif sy1 == sy2 and ex1 == ex2:
-                cross_x, cross_y = ex1, sy1
-                new_min, new_max = min(sx1, sx2), max(sx1, sx2)
-                ext_min, ext_max = min(ey1, ey2), max(ey1, ey2)
-                if (
-                    ext_min < cross_y < ext_max
-                    and new_min < cross_x < new_max
-                    and (cross_x, cross_y) not in endpoints
-                    and (cross_x, cross_y) not in part_before.label_texts
-                ):
-                    warnings.append(_crossing_warning(cross_x, cross_y, existing_wires[ext_index]))
-
-    # An endpoint on a wire's interior is a T-junction onto that wire. Its leg
-    # must leave the wire: one running along it overlaps the wire it joins,
-    # which the overlap check above exempts because it starts at an endpoint.
-    for endpoint, coord, leg in (
-        (from_pin, (x1, y1), segments[0]),
-        (to_pin, (x2, y2), segments[-1]),
-    ):
-        if isinstance(endpoint, str) or coord in pin_coords:
-            continue
-        for ext_index, wire in enumerate(existing_wires):
-            if ext_index in flagged or not point_on_segment(coord, wire[:2], wire[2:]):
-                continue
-            if _collinear_overlap(leg, wire):
-                flagged.add(ext_index)
-                errors.append(
-                    f"Wire overlap: the leg from {_endpoint_name(endpoint)} runs along "
-                    f"the wire {segment_text(wire)} it ends on; leave that wire at a "
-                    "right angle"
-                )
-            elif coord not in {wire[:2], wire[2:]}:
-                junctions.append(
-                    {"x": coord[0], "y": coord[1], "via": "endpoint", "wire": segment_json(wire)}
-                )
-
-    # Contact check. LTspice joins a wire wherever another wire's end, a pin or
-    # a label touches it (see connectivity.partition), so a waypoint on existing wiring,
-    # or a route passing through an existing wire's end or a label, joins
-    # the route there as an endpoint would. Onto a net the route already joins
-    # that is a redundant junction, reported; onto any other net it would merge
-    # a net nobody named, so it is refused, pointing at the coordinate endpoint
-    # that makes the same T on purpose. Pins are the pin-collision check's, and
-    # a wire the overlap check already refused is not reported twice.
-    endpoint_nets = {net_of(from_anchor), net_of(to_anchor)}
-    vertices = [v for v in points[1:-1] if v not in endpoints and v not in pin_coords]
-    # (point, net it touches) -> (kind, the wire touched, or None for a label).
-    # One entry per point and net, the first found, in the order found.
-    contacts: dict[
-        tuple[tuple[int, int], tuple[int, int]], tuple[str, tuple[int, int, int, int] | None]
-    ] = {}
-    for ext_index, wire in enumerate(existing_wires):
-        if ext_index in flagged:
-            continue
-        touched = net_of(wire[:2])
-        for v in vertices:
-            if point_on_segment(v, wire[:2], wire[2:]):
-                contacts.setdefault((v, touched), ("waypoint", wire))
-        for end in (wire[:2], wire[2:]):
-            if end in endpoints or end in vertices or end in pin_coords:
-                continue
-            if wires_through(end, segments):
-                contacts.setdefault((end, touched), ("wire_end", wire))
-    for coord in sorted(part_before.label_texts):
-        if coord in endpoints or coord in pin_coords or not wires_through(coord, segments):
-            continue
-        # A label joins whatever passes through its point, on a wire or off
-        # one. On a wire the overlap check already refused it is not said twice.
-        under = [
-            index
-            for index, wire in enumerate(existing_wires)
-            if point_on_segment(coord, wire[:2], wire[2:])
-        ]
-        if not under or any(index not in flagged for index in under):
-            contacts.setdefault((coord, net_of(coord)), ("label", None))
-
-    def _describe_net(net: tuple[int, int]) -> str:
-        on_net = net_members(part_before, net_of, net)
-        labels = sorted({t for c in on_net for t in part_before.label_texts.get(c, ())})
-        if labels:
-            return "net " + ", ".join(f"'{t}'" for t in labels)
-        pins = sorted(
-            f"{ref}.{name}" for c in on_net for ref, name in part_before.pin_owners.get(c, ())
-        )
-        if pins:
-            more = " and others" if len(pins) > 3 else ""
-            return "the net of " + ", ".join(pins[:3]) + more
-        return "a wire no pin or label is on"
-
-    for ((cx, cy), touched), (via, wire) in contacts.items():
-        entry: dict[str, object] = {"x": cx, "y": cy, "via": via}
-        if wire is None:
-            texts = sorted(part_before.label_texts[(cx, cy)])
-            what = "the net label " + ", ".join(f"'{t}'" for t in texts) + f" at ({cx},{cy})"
-            entry["label"] = texts[0]
-        else:
-            entry["wire"] = segment_json(wire)
-            what = (
-                f"the wire {segment_text(wire)} at waypoint ({cx},{cy})"
-                if via == "waypoint"
-                else f"the end of the wire {segment_text(wire)} at ({cx},{cy})"
-            )
-        if touched in endpoint_nets:
-            junctions.append(entry)
-            warnings.append(
-                f"The route touches {what}, already on {_describe_net(touched)}; "
-                "LTspice joins them there."
-            )
-            continue
-        remedy = (
-            f"To join it on purpose, end a route there with "
-            f'{{"x": {cx}, "y": {cy}}} as from_pin or to_pin; otherwise move the '
-            "waypoint off it."
-            if via == "waypoint"
-            else "Reroute around it."
-        )
-        errors.append(
-            f"Route touches {what}, on {_describe_net(touched)}: LTspice joins "
-            f"wiring wherever it touches, so this would merge that net. {remedy}"
-        )
-
-    if errors:
+            for part in component_geo
+        ),
+        wires=tuple(existing_wires),
+    )
+    route = Route(
+        points=tuple(points),
+        segments=tuple(segments),
+        ends=((x1, y1), (x2, y2)),
+        anchors=(from_anchor, to_anchor),
+        end_names=(from_name, to_name),
+        ends_by_coordinate=(not isinstance(from_pin, str), not isinstance(to_pin, str)),
+        end_parts=frozenset(skip_refs),
+    )
+    judged = judge(view, part_before, route)
+    if judged.refusals:
         error_lines = [f"Refused to connect {from_name} to {to_name}:"]
-        for e in errors:
-            error_lines.append(f"  {e}")
+        error_lines.extend(f"  {found.detail}" for found in judged.refusals)
         error_lines.append("\nFix the route with different waypoints to avoid these issues.")
         raise NetlistError("\n".join(error_lines))
+    warnings = [found.detail for found in judged.advisories]
 
-    total_length = sum(abs(sx2 - sx1) + abs(sy2 - sy1) for sx1, sy1, sx2, sy2 in segments)
-    if total_length > 400:
-        warnings.append(
-            f"Long wire run ({total_length} units): consider placing components closer "
-            "or adding a local net label"
-        )
-
-    for sx1, sy1, sx2, sy2 in segments:
-        for bb in component_geo:
-            if bb["ref"] in skip_refs:
-                continue
-            bx, by, bw, bh = bb["x"], bb["y"], bb["width"], bb["height"]
-            if sy1 == sy2:
-                wy = sy1
-                wx_min, wx_max = min(sx1, sx2), max(sx1, sx2)
-                if by < wy < by + bh and wx_min < bx + bw and wx_max > bx:
-                    warnings.append(
-                        f"Wire at y={wy} crosses {bb['ref']} bounding box "
-                        f"({bx},{by})-({bx + bw},{by + bh})"
-                    )
-            elif sx1 == sx2:
-                wx = sx1
-                wy_min, wy_max = min(sy1, sy2), max(sy1, sy2)
-                if bx < wx < bx + bw and wy_min < by + bh and wy_max > by:
-                    warnings.append(
-                        f"Wire at x={wx} crosses {bb['ref']} bounding box "
-                        f"({bx},{by})-({bx + bw},{by + bh})"
-                    )
-
-    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings, junctions)
+    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings, judged.junctions)
 
 
 # ---------------------------------------------------------------------------
