@@ -716,6 +716,15 @@ recording that showed it.
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says
   when that is not the file that was checked.
+- `in_ltspice` on `verify_circuit` and `plot_waveform` starts LTspice when no
+  LTspice window is open, where it used to say that none was. It opens in
+  view and takes the keyboard focus, which is what a request to be shown
+  something there asks for; the reply's `ltspice` block says `started: true`.
+  `[schematic] start_ltspice = false` (`LTSPICE_MCP_START_LTSPICE`) keeps the
+  old behaviour. Nothing else starts LTspice in view: an edit to an open sheet
+  and `inspect(kind="open_in_ltspice")` still start nothing.
+  `inspect(kind="capabilities")` reports the setting under
+  `open_window_sync.starts_ltspice`.
 - `plot_waveform(in_ltspice=true)` opens a run of a sheet from the sheet, so
   that LTspice ties the plot to it and a click on a net plots it, as after a
   run made in LTspice. The run's results and log are put beside the sheet

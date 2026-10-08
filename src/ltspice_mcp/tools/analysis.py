@@ -1040,8 +1040,8 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
     in_ltspice: bool = Field(
         default=False,
         description=(
-            "Also open the run in the user's open LTspice window (26.1+) with "
-            "these traces drawn; writes a .plt beside the results file. A sheet's "
+            "Also open the run in the user's LTspice window (26.1+), started if "
+            "none is open, with these traces drawn; writes a .plt beside the results file. A sheet's "
             "run is opened from the sheet, so a click on a net plots it: its "
             "results replace those beside the sheet."
         ),
@@ -1119,6 +1119,7 @@ def _show_in_ltspice(
     if left_alone is None:
         report["plot_settings"] = str(plot_settings.plot_settings_path(results))
     try:
+        started = windows.ensure_window()
         window = windows.show_results(results)
     except BridgeError as error:
         report["reason"] = str(error)
@@ -1134,6 +1135,8 @@ def _show_in_ltspice(
         version=window.version,
         note=_ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}.",
     )
+    if started:
+        report["started"] = True
     return report
 
 
@@ -1215,6 +1218,7 @@ def _show_tied_in_ltspice(
             report["plot_settings"] = str(plot_settings.plot_settings_path(beside))
 
     try:
+        started = state.open_windows.ensure_window()
         window, held = state.open_windows.results_from_sheet(sheet, place)
     except ResultsAlreadyOpen as error:
         report["reason"] = f"{error}; close that plot there and ask again"
@@ -1241,6 +1245,8 @@ def _show_tied_in_ltspice(
         version=window.version,
         note=_TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}.",
     )
+    if started:
+        report["started"] = True
     if held is not None:
         report.update(window_difference(sheet.read_bytes(), held))
     return report
@@ -1248,7 +1254,8 @@ def _show_tied_in_ltspice(
 
 def _ltspice_line(report: Mapping[str, Any]) -> str:
     if report["shown"]:
-        return f"Opened in LTspice {report['version']} (process {report['pid']}). {report['note']}"
+        how = "LTspice was started, and it is opened there" if report.get("started") else "Opened"
+        return f"{how} in LTspice {report['version']} (process {report['pid']}). {report['note']}"
     return f"Not shown in LTspice: {report['reason']}. " + str(report.get("note", ""))
 
 
@@ -1304,6 +1311,10 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                 "properties": {
                     "shown": {"type": "boolean"},
                     **LTSPICE_WINDOW_PROPERTIES,
+                    "started": {
+                        "type": "boolean",
+                        "description": "LTspice was not running and was started for this.",
+                    },
                     "results": {"type": "string", "description": "The file opened."},
                     "sheet": {
                         "type": "string",

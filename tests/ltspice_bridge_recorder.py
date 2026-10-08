@@ -8,7 +8,9 @@ and that a bridge told where LTspice is not cannot start one.
 ``lib/ltspice_frame.py`` encodes what the window's own frame does when it is
 asked directly: that its panes are titled with their files' names, that a
 sheet's Visible Traces command opens the results put beside the sheet, and
-that with those results open the same command asks which traces to show. Each of those is recorded here from an installed build, under
+that with those results open the same command asks which traces to show. And
+``OpenWindows.ensure_window`` relies on an LTspice started with no document
+being offered to the bridge as a window, with nothing open in it. Each of those is recorded here from an installed build, under
 ``tests/fixtures/ltspice_bridge_recorded/<build>/``:
 
 - ``sheets/<name>.asc``: the window's copy of ``inputs/<name>.asc``, as UTF-8;
@@ -140,6 +142,16 @@ class _Recording:
             # The server opens a results file with this call and reads nothing
             # of what it describes, which is the main recorder's subject.
             kept = {"path": kept.get("path")}
+        listed = kept.get("instances")
+        if isinstance(listed, list):
+            # Only the LTspice this recording started. Another bridge on the
+            # machine (an assistant's own LTspice server, say) may run one for
+            # itself, which comes and goes as windows here open and close.
+            kept["instances"] = [
+                row
+                for row in listed
+                if isinstance(row, dict) and row.get("pid") == self._scrub.pid
+            ]
         step["reply"] = self._scrub(kept)
         self.steps.append(step)
         return reply
@@ -198,6 +210,44 @@ def _until(condition: Callable[[], Any], doing: str) -> Any:
             return found
         time.sleep(0.1)  # timing: between two looks; what is waited for is the window
     raise RecorderError(f"LTspice's window never got as far as {doing}")
+
+
+def _started_with_no_document(
+    recording: _Recording,
+    command: Sequence[str],
+    desktop: HiddenDesktop,
+    build: Build,
+    ini: Path,
+) -> None:
+    """What the bridge finds of an LTspice started with no document, which is
+    how the server starts one for a caller asked to show something in it."""
+    started = desktop.start([str(build.exe), "-ini", str(ini)])
+
+    def windows() -> list[int]:
+        with contextlib.suppress(BridgeError), BridgeSession(command) as session:
+            return [
+                int(row["pid"])
+                for row in session.call("status").get("instances", [])
+                if row.get("mode") == "gui"
+            ]
+        return [started.pid]  # not answered: no word on whether it is there
+
+    try:
+        _until(lambda: started.pid in windows(), "offering a window with no document")
+        recording.fact(
+            "an LTspice started with no document is offered to the bridge as a window", True
+        )
+        with BridgeSession(command) as session:
+            session.attach(started.pid)
+            recording.fact(
+                "it has no document open and none in front",
+                [session.open_designs(), session.active_design()],
+            )
+    finally:
+        started.kill()
+        started.wait(timeout=30)
+        started.close()
+    _until(lambda: started.pid not in windows(), "being gone from the bridge's list")
 
 
 def _frame_facts(
@@ -308,6 +358,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 session, "a request that needs LTspice, with none running", "list_open_designs"
             )
 
+        _started_with_no_document(recording, command, desktop, build, ini)
         window = desktop.start([str(build.exe), str(first), "-ini", str(ini)])
         try:
             scrub.pid = window.pid
@@ -416,11 +467,11 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 window.wait(timeout=30)
                 recording.call(session, "the window has closed", "list_open_designs")
                 recording.call(session, "the window has closed", "status")
+                # This bridge has no LTspice of its own: one it had started
+                # would be the one it is bound to.
                 recording.fact(
                     "no LTspice was started in its place",
-                    not any(
-                        row.get("mode") for row in session.call("status").get("instances", [])
-                    ),
+                    not session.call("status").get("current", {}).get("backendPid"),
                 )
         finally:
             window.close()

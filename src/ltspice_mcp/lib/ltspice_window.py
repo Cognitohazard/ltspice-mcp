@@ -8,8 +8,8 @@ without a word. ``OpenWindows`` is what closes that: it finds the windows that
 have a file open (``holding``), and replaces what one shows with the committed
 sheet (``show``), which LTspice records as one step of that window's undo
 history. It reaches the windows through the bridge LTspice ships
-(``BridgeSession``), attaching to instances that are already running and never
-starting one. ``open_sheet`` opens a sheet in a window and ``show_results``
+(``BridgeSession``), attaching to instances that are already running. The
+bridge is never let start one. ``open_sheet`` opens a sheet in a window and ``show_results``
 a finished run's results file, each for a caller who was asked to show it
 there; with a plot settings file beside it, the results open with its traces
 drawn. A results file opened that way stands alone. ``results_from_sheet``
@@ -17,6 +17,12 @@ opens the results beside a sheet from the sheet, as a person does with its
 Visible Traces command, and LTspice then ties the plot to the sheet: a click
 on a net plots it. The bridge has no call for that, so the window's frame is
 asked (``LtspiceFrame``).
+
+Those three are for a caller who was asked to show something in LTspice, and
+for that caller alone LTspice is started when no window is open
+(``ensure_window``, ``start_in_view``): where a person can see it, which is the
+one start of LTspice anywhere here that is meant to be seen. Keeping an open
+sheet in step, and saying what is open, never start anything.
 
 The file stays the record. Before an edit is committed, the window's copy is
 compared with the file, and one that differs holds work nobody saved: the
@@ -39,8 +45,11 @@ when it reads them the same.
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import math
 import os
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -67,6 +76,14 @@ _MICRO_SIGNS = str.maketrans({"µ": "u", "μ": "u"})
 _TEXT_GRID = 8
 _WINDOW = "gui"
 _NO_WINDOW = "no LTspice window is open, and none is started for this"
+_STARTED_S = 20.0
+"""How long a started LTspice is given to offer its window to the bridge. It
+takes a second or two; this is a cap on one that never does."""
+# Apart from the server's own console and process group, and outside its job
+# where Windows allows: the window is the person's and must not end with a
+# session.
+_APART = 0x00000008 | 0x00000200
+_OUTSIDE_THE_JOB = 0x01000000
 _RESULTS_SUFFIX = ".raw"
 _OPENED_S = 5.0
 """How long LTspice is given to show the results it was asked to open. Opening
@@ -204,6 +221,42 @@ class OpenSheet:
     text: str
 
 
+def start_in_view(executable: Path) -> int:
+    """Start LTspice where the person can see it, and return its process id.
+
+    The one start of LTspice that is meant to be seen: every other is kept
+    off the person's desktop. It is for a caller who was asked to show
+    something in LTspice when no window is open, and it takes the keyboard
+    focus, as starting any program does. No document and no settings file are
+    named, so it opens as it does from the Start menu. The process is the
+    person's from then on: nothing here waits for it or ends it. Raises
+    ``OSError`` when it cannot be started.
+    """
+    if sys.platform != "win32":
+        raise OSError("an LTspice window is started through Windows")
+
+    def started(flags: int) -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
+            [str(executable)],
+            creationflags=flags,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    try:
+        process = started(_APART | _OUTSIDE_THE_JOB)
+    except PermissionError:
+        # A job that lets no process leave it. Started inside it, the window
+        # ends when the job does, which is still the window that was asked for.
+        process = started(_APART)
+    pid = process.pid
+    # Not this process's to wait for: without this, dropping the handle of a
+    # program still running is reported as a leak.
+    process.returncode = 0
+    return pid
+
+
 def _same_file(ours: Path, theirs: str) -> bool:
     return os.path.normcase(os.path.abspath(theirs)) == os.path.normcase(os.path.abspath(ours))
 
@@ -213,7 +266,8 @@ class OpenWindows:
 
     ``available`` is False where there is no bridge to ask, and every method
     then raises ``WindowsUnavailable``. ``unavailable`` says why, for
-    ``inspect(kind="capabilities")``.
+    ``inspect(kind="capabilities")``. ``start`` starts LTspice where a person
+    can see it; without one, none is ever started.
     """
 
     def __init__(
@@ -223,23 +277,34 @@ class OpenWindows:
         unavailable: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_S,
         frame: LtspiceFrame | None = None,
+        start: Callable[[], object] | None = None,
     ) -> None:
         self._command = list(command) if command else None
         self.unavailable = None if self._command else (unavailable or "no bridge was found")
         self._timeout = timeout
         self._frame = frame or LtspiceFrame()
+        self._start = start if self._command else None
+
+    @property
+    def starts_ltspice(self) -> bool:
+        """Whether LTspice is started for a caller asked to show something in it."""
+        return self._start is not None
 
     @property
     def available(self) -> bool:
         return self._command is not None
 
     @classmethod
-    def detect(cls, executables: Iterable[str], *, enabled: bool = True) -> OpenWindows:
+    def detect(
+        cls, executables: Iterable[str], *, enabled: bool = True, start_ltspice: bool = False
+    ) -> OpenWindows:
         """The windows reachable through the bridge beside one of ``executables``.
 
         Any 26.1 bridge finds every running instance, so the first one found
-        is used. Native Windows only: under WSL the bridge is a Windows
-        program that names Windows paths, and nothing here translates them.
+        is used, and with ``start_ltspice`` the LTspice it stands beside is the
+        one started when no window is open. Native Windows only: under WSL the
+        bridge is a Windows program that names Windows paths, and nothing here
+        translates them.
         """
         if not enabled:
             return cls(None, unavailable="turned off by [schematic] sync_open_window")
@@ -248,7 +313,8 @@ class OpenWindows:
         for executable in executables:
             command = bridge_command(executable)
             if command is not None:
-                return cls(command)
+                start = functools.partial(start_in_view, Path(executable))
+                return cls(command, start=start if start_ltspice else None)
         return cls(
             None,
             unavailable="no detected LTspice has ltspice-mcp-bridge.exe beside it (LTspice 26.1 or later)",
@@ -282,6 +348,38 @@ class OpenWindows:
             for spelled in session.open_designs():
                 if _same_file(path, spelled):
                     yield window, spelled
+
+    def ensure_window(self) -> bool:
+        """Have a window to show something in; True when LTspice was started for it.
+
+        For a caller who was asked to show something in LTspice, before it
+        asks a window to. With a window open, or where starting LTspice is not
+        allowed, nothing is done and this is False: the call that follows
+        finds the window, or says there is none. Blocks until the started
+        LTspice offers its window to the bridge. Raises ``BridgeError`` when
+        there is no bridge, when LTspice cannot be started, and when it opens
+        no window in time.
+        """
+        with self._session() as session:
+            if self._windows(session):
+                return False
+        if self._start is None:
+            return False
+        try:
+            self._start()
+        except OSError as error:
+            raise BridgeError(f"LTspice could not be started: {error}") from error
+        deadline = time.monotonic() + _STARTED_S
+        while True:
+            # A bridge asked while LTspice is still coming up may not answer.
+            with contextlib.suppress(BridgeError), self._session() as session:
+                if self._windows(session):
+                    return True
+            if time.monotonic() >= deadline:
+                raise BridgeError(
+                    f"LTspice was started and did not open a window within {_STARTED_S:g} s"
+                )
+            time.sleep(0.25)
 
     def holding(self, path: Path) -> list[OpenSheet]:
         """Every window that has ``path`` open, with the sheet as it holds it.

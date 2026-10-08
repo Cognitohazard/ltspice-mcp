@@ -32,6 +32,11 @@ When they ask to see a sheet you built or changed, `verify_circuit(path=...,
 in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
 `ltspice` block says `differs_from_file: true`, the window already had the
 sheet open and is showing an older copy, not the one you checked: tell them.
+With no LTspice window open, `in_ltspice` starts LTspice (`started: true` in
+the block), which comes to the front of their screen: pass it when they asked
+to see something there, never to check your own work. Where the block says
+none was started, starting is turned off (`[schematic] start_ltspice`): ask
+them to open LTspice.
 
 When they want to plot nets by clicking the sheet in LTspice, show them a run
 of the sheet: `plot_waveform(job_id=..., signals=[...], in_ltspice=true)` for a
@@ -46,6 +51,16 @@ LTspice had the sheet open before it had any results, and looks for them only
 as it opens a sheet: they close the sheet there, and you ask again, since the
 results are beside it now. A run of a netlist has no sheet to tie to and opens
 on its own, as before.
+
+LTspice ships an MCP server of its own, which a session may have beside this
+one (its tools include `set_design_content` and `start_simulation`). It works
+on the window, not the file. Make edits with `edit_schematic`: a sheet changed
+through LTspice's server is changed in the window only, and `edit_schematic`
+then refuses that sheet until the user saves it. Run with `run_experiments`:
+a run started through LTspice's server is of the window's copy and leaves no
+job. When one of its tools answers that it could not start or attach an
+LTspice instance, no LTspice window is open: do not try its `start_headless`,
+show the user what they asked for with `in_ltspice`, which opens one.
 
 A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
 in step: a commit's reply lists the window under `open_in_ltspice`, and with

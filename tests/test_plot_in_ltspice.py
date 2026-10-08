@@ -37,7 +37,15 @@ from ltspice_mcp.lib.plot_settings import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 from tests import _ltspice_recorded as rec
-from tests._ltspice_window import PID, a_window, as_ltspice_reads, put_windows, read_world
+from tests._ltspice_window import (
+    PID,
+    STARTED_PID,
+    FakeStart,
+    a_window,
+    as_ltspice_reads,
+    put_windows,
+    read_world,
+)
 from tests.conftest import FIXTURES_DIR, make_experiment_job, stage_recorded_fixture
 
 TRAN = SECTION_NAMES["tran"]
@@ -550,3 +558,64 @@ async def test_a_sheet_outside_the_sandbox_has_nothing_written_beside_it(
     assert shown["results"] == str(raw)
     assert not exists(sheet.with_suffix(".raw"))
     assert read_world(world)["windows"][0]["shown"] == [str(raw)]
+
+
+# ---------------------------------------------------------------------------
+# No window open: LTspice is started for it
+# ---------------------------------------------------------------------------
+
+
+async def test_with_no_window_open_ltspice_is_started_for_a_run(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    world = tmp_path / "world.json"
+    start = FakeStart(world)
+    put_windows(state_no_sim, world, [], start=start)
+
+    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+
+    shown = data["ltspice"]
+    assert shown["shown"] is True
+    assert shown["started"] is True
+    assert shown["pid"] == STARTED_PID
+    assert start.calls == 1
+    assert read_world(world)["windows"][0]["shown"] == [str(raw)]
+
+
+async def test_a_started_ltspice_opens_a_sheets_run_from_the_sheet(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """LTspice is started with no document, so the sheet is opened in it only
+    once the results are beside it, which is when LTspice looks for them."""
+    sheet = a_sheet(work_dir)
+    raw = a_job_of(state_no_sim, sheet, work_dir)
+    world = tmp_path / "world.json"
+    put_windows(state_no_sim, world, [], start=FakeStart(world))
+
+    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+
+    shown = data["ltspice"]
+    assert shown["shown"] is True
+    assert shown["started"] is True
+    assert shown["sheet"] == str(sheet)
+    assert read(sheet.with_suffix(".raw")) == read(raw)
+    window = read_world(world)["windows"][0]
+    assert window["with_results"] == [str(sheet)]
+    assert window["commands"] == ["Visible Traces"]
+
+
+async def test_an_ltspice_that_cannot_be_started_leaves_a_sheets_results_alone(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    sheet = a_sheet(work_dir)
+    a_job_of(state_no_sim, sheet, work_dir)
+    world = tmp_path / "world.json"
+    put_windows(state_no_sim, world, [], start=FakeStart(world, error=OSError("access is denied")))
+
+    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+
+    shown = data["ltspice"]
+    assert shown["shown"] is False
+    assert shown["reason"] == "LTspice could not be started: access is denied"
+    assert not exists(sheet.with_suffix(".raw"))

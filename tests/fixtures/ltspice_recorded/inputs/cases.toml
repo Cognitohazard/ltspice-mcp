@@ -403,6 +403,11 @@ summary = "That a run made in a window simulates the window's copy of the sheet 
 model = ["assets/guide/schematics.md"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the three facts noted after 'run the sheet in the window', made with the window holding one resistor value and the file another"
 
+[behaviour.started-with-no-document]
+summary = "That an LTspice started with no document is offered to the bridge as a window, with no document open and none in front."
+model = ["lib/ltspice_window.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the two facts noted before 'one window is open', from an LTspice started on a desktop of its own with a settings file and no document. Started with no arguments at all it did the same; that was looked at and is not in the recording, which names a settings file so as not to run on the recording user's own."
+
 [behaviour.sheet-results-command]
 summary = "What the window's frame shows and what a sheet's Visible Traces command does: panes are titled with their files' names; the command opens the results beside a sheet that had them when it was opened and not ones put there afterwards; with those results open it shows a dialog to pick traces from; and the number the build's sheet menu gives the command."
 model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]

@@ -22,6 +22,8 @@ from tests.conftest import LIVENESS_S
 
 FAKE = Path(__file__).with_name("fake_ltspice_bridge.py")
 PID = 4242
+#: The process a stand-in start of LTspice makes.
+STARTED_PID = 5151
 VERSION = "26.1.1"
 
 
@@ -48,11 +50,43 @@ def put_windows(
     windows: list[dict[str, Any]],
     *,
     timeout: float = LIVENESS_S,
+    start: FakeStart | None = None,
     **extra: Any,
 ) -> None:
-    """Write ``windows`` into ``world`` and have ``state`` reach them through the stand-in."""
+    """Write ``windows`` into ``world`` and have ``state`` reach them through the stand-in.
+
+    Without a ``start``, LTspice is never started, as with the setting off.
+    """
     write_world(world, windows, **extra)
-    state.open_windows = OpenWindows(fake_command(world), timeout=timeout, frame=FakeFrame(world))
+    state.open_windows = OpenWindows(
+        fake_command(world), timeout=timeout, frame=FakeFrame(world), start=start
+    )
+
+
+class FakeStart:
+    """Starting LTspice, for the stand-in: a window with nothing open appears in
+    the world, as an LTspice started with no document was recorded appearing.
+
+    ``calls`` counts the starts. With ``opens_window`` false the program starts
+    and never offers a window; with an ``error`` it cannot be started.
+    """
+
+    def __init__(
+        self, world: Path, *, opens_window: bool = True, error: OSError | None = None
+    ) -> None:
+        self._world = world
+        self._opens_window = opens_window
+        self._error = error
+        self.calls = 0
+
+    def __call__(self) -> None:
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+        if self._opens_window:
+            world = read_world(self._world)
+            world["windows"].append(a_window(pid=STARTED_PID))
+            self._world.write_text(json.dumps(world), encoding="utf-8")
 
 
 def _name(path: str) -> str:

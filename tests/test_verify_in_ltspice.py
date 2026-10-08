@@ -2,7 +2,8 @@
 
 After an assistant builds or changes a sheet, the person has to find it and
 open it to look. Asked to, the server opens it in the LTspice window that is
-already running and puts it in front. These go through the real handler
+already running and puts it in front, and starts LTspice when none is (the
+stand-in for that start is ``FakeStart``). These go through the real handler
 against the stand-in bridge (``tests/fake_ltspice_bridge.py``, replayed
 against a recording of LTspice 26.1.1 in ``test_ltspice_bridge.py``).
 """
@@ -13,12 +14,21 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+import pytest
 
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-from tests._ltspice_window import PID, a_window, as_ltspice_reads, put_windows, read_world
+from tests._ltspice_window import (
+    PID,
+    STARTED_PID,
+    FakeStart,
+    a_window,
+    as_ltspice_reads,
+    put_windows,
+    read_world,
+)
 
 
 def window_of(world: Path) -> dict[str, Any]:
@@ -129,7 +139,77 @@ async def test_a_netlist_is_opened_too(asc_state: SessionState, work_dir: Path, 
     assert list(window_of(world)["designs"]) == [str(deck)]
 
 
-async def test_with_no_window_open_nothing_is_started(
+async def test_with_no_window_open_ltspice_is_started_and_shows_it(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    world = tmp_path / "world.json"
+    start = FakeStart(world)
+    put_windows(asc_state, world, [], start=start)
+
+    data = await check(asc_state, asc_file, in_ltspice=True)
+
+    assert data["ltspice"] == {
+        "shown": True,
+        "path": str(asc_file),
+        "pid": STARTED_PID,
+        "version": "26.1.1",
+        "already_open": False,
+        "started": True,
+    }
+    assert start.calls == 1
+    assert window_of(world)["active"] == str(asc_file)
+    assert data["hint"].endswith("LTspice was started, with it in front.")
+
+
+async def test_a_window_that_is_open_is_used_and_nothing_is_started(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    world = tmp_path / "world.json"
+    start = FakeStart(world)
+    put_windows(asc_state, world, [a_window()], start=start)
+
+    data = await check(asc_state, asc_file, in_ltspice=True)
+
+    assert data["ltspice"]["shown"] is True
+    assert data["ltspice"]["pid"] == PID
+    assert "started" not in data["ltspice"]
+    assert start.calls == 0
+
+
+async def test_an_ltspice_that_cannot_be_started_is_reported(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    world = tmp_path / "world.json"
+    put_windows(asc_state, world, [], start=FakeStart(world, error=OSError("access is denied")))
+
+    data = await check(asc_state, asc_file, in_ltspice=True)
+
+    assert data["ltspice"] == {
+        "shown": False,
+        "path": str(asc_file),
+        "reason": "LTspice could not be started: access is denied",
+    }
+    assert data["outcome"] != "failed"
+
+
+async def test_an_ltspice_that_opens_no_window_is_reported(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ltspice_mcp.lib import ltspice_window
+
+    monkeypatch.setattr(ltspice_window, "_STARTED_S", 0.3)  # timing: the wait under test
+    world = tmp_path / "world.json"
+    put_windows(asc_state, world, [], start=FakeStart(world, opens_window=False))
+
+    data = await check(asc_state, asc_file, in_ltspice=True)
+
+    assert data["ltspice"]["shown"] is False
+    assert data["ltspice"]["reason"] == (
+        "LTspice was started and did not open a window within 0.3 s"
+    )
+
+
+async def test_with_starting_turned_off_and_no_window_open_nothing_is_started(
     asc_state: SessionState, asc_file: Path, tmp_path: Path
 ):
     world = tmp_path / "world.json"

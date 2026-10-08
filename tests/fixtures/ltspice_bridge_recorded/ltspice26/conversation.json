@@ -27,6 +27,17 @@
   "error": "Could not start or attach an LTspice instance. Open an LTspice window, or use start_headless/attach."
  },
  {
+  "note": "an LTspice started with no document is offered to the bridge as a window",
+  "observed": true
+ },
+ {
+  "note": "it has no document open and none in front",
+  "observed": [
+   [],
+   null
+  ]
+ },
+ {
   "note": "one window is open",
   "call": "status",
   "arguments": {},

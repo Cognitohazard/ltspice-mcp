@@ -1056,6 +1056,69 @@ class TestSheetOpenInAWindow:
         assert refused["shown"] is False
         assert "already has amp.raw open" in refused["reason"]
 
+    async def test_with_no_window_open_ltspice_is_started_and_shows_the_sheet(
+        self, ltspice_state: SessionState, work_dir: Path
+    ):
+        """The start itself is the test's own, on a desktop nobody sees: a real
+        LTspice with no document, as the server starts one in view. What is
+        under test is everything after it: that the bridge is waited for until
+        it offers that window, and that the sheet is then opened there."""
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession
+        from ltspice_mcp.lib.ltspice_frame import LtspiceFrame
+        from ltspice_mcp.lib.ltspice_window import OpenWindows
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+        from tests.ltspice_recorder import identify_build, neutral_settings
+
+        command = _bridge_of(ltspice_state)
+        exe = executable_path(ltspice_state.default_simulator)
+        assert exe is not None
+
+        def windows_open() -> list[int]:
+            with BridgeSession(command) as session:
+                return [found.pid for found in session.instances() if found.mode == "gui"]
+
+        if await asyncio.to_thread(windows_open):
+            pytest.skip("an LTspice window is open on this machine; this test would use it")
+        settings = identify_build(Path(exe)).settings_file
+        if settings is None:
+            pytest.skip("this LTspice has no settings file yet; start it once")
+        sheet = work_dir / "Draft1.asc"
+        ini = work_dir / settings.name
+
+        def prepare() -> None:
+            shutil.copyfile(_FIXTURE_DIR / "Draft1.asc", sheet)
+            ini.write_bytes(neutral_settings(settings.read_bytes(), {}))
+
+        await asyncio.to_thread(prepare)
+        started: list[hidden_desktop.StartedProcess] = []
+        with hidden_desktop.HiddenDesktop(f"ltspice-mcp-started-{os.getpid()}") as desktop:
+            if not desktop.available:
+                pytest.skip("Windows gave no desktop to keep the window off this one")
+
+            def start() -> None:
+                started.append(desktop.start([exe, "-ini", str(ini)]))
+
+            ltspice_state.open_windows = OpenWindows(
+                command, frame=LtspiceFrame(desktop.windows), start=start
+            )
+            try:
+                result = await handle_verify_circuit(
+                    VerifyCircuitInput(path=str(sheet), checks=["layout"], in_ltspice=True),
+                    ltspice_state,
+                )
+                assert result.structured_content is not None
+                shown = result.structured_content["ltspice"]
+                assert len(started) == 1
+                assert (shown["shown"], shown.get("started")) == (True, True), shown
+                assert shown["pid"] == started[0].pid
+                assert shown["already_open"] is False
+            finally:
+                for process in started:
+                    process.kill()
+                    process.wait(timeout=30)
+                    process.close()
+
     def test_an_ltspice_the_bridge_starts_is_out_of_sight_and_ends_with_the_session(
         self, ltspice_state: SessionState
     ):

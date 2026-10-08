@@ -32,8 +32,16 @@ from ltspice_mcp.lib.ltspice_window import (
     WindowsUnavailable,
     content_difference,
     sheet_content,
+    start_in_view,
 )
-from tests._ltspice_window import fake_command, read_world, write_world
+from tests._ltspice_window import (
+    STARTED_PID,
+    FakeStart,
+    a_window,
+    fake_command,
+    read_world,
+    write_world,
+)
 from tests.conftest import LIVENESS_S
 from tests.ltspice_bridge_recorder import (
     FIXTURES,
@@ -106,6 +114,9 @@ class TestRecording:
             if "observed" in step
         }
         assert observed == {
+            # What OpenWindows.ensure_window relies on.
+            "an LTspice started with no document is offered to the bridge as a window": True,
+            "it has no document open and none in front": [[], None],
             "the window then reads back exactly what it was given": True,
             "the file is as it was": True,
             "after the file is rewritten the window still holds its own copy": True,
@@ -239,7 +250,11 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
     started_with, *opened_later = input_names()
     window = {
         "pid": NEUTRAL_PID,
-        "version": load_conversation(FIXTURES / build)[3]["reply"]["instances"][0]["version"],
+        "version": next(
+            step["reply"]["instances"][0]["version"]
+            for step in load_conversation(FIXTURES / build)
+            if step["note"] == "one window is open"
+        ),
         "designs": {f"{NEUTRAL_DIR}\\{started_with}.asc": recorded_sheet(build, started_with)},
     }
     files = {f"{NEUTRAL_DIR}\\{name}.asc": recorded_sheet(build, name) for name in opened_later}
@@ -521,3 +536,145 @@ class TestOpenWindows:
         assert not OpenWindows.detect([str(tmp_path / "LTspice.exe")]).available
         (tmp_path / BRIDGE_NAME).write_bytes(b"")
         assert OpenWindows.detect([str(tmp_path / "LTspice.exe")]).available
+
+
+# ---------------------------------------------------------------------------
+# Starting LTspice for a caller asked to show something in it
+# ---------------------------------------------------------------------------
+
+
+class TestStartingLtspice:
+    def windows(self, world: Path, start: FakeStart | None) -> OpenWindows:
+        return OpenWindows(fake_command(world), timeout=LIVENESS_S, start=start)
+
+    def test_with_no_window_open_it_is_started_and_its_window_waited_for(self, tmp_path: Path):
+        world = tmp_path / "world.json"
+        write_world(world, [])
+        start = FakeStart(world)
+        windows = self.windows(world, start)
+        assert windows.starts_ltspice
+        assert windows.ensure_window() is True
+        assert start.calls == 1
+        # The window is there for the call that follows, with nothing open in it.
+        assert windows.designs() == (1, [])
+        assert [w["pid"] for w in read_world(world)["windows"]] == [STARTED_PID]
+
+    @pytest.mark.parametrize("build", BUILDS)
+    def test_the_stand_in_start_leaves_what_a_started_ltspice_was_recorded_leaving(
+        self, build: str, tmp_path: Path
+    ):
+        facts = {
+            step["note"]: step["observed"]
+            for step in load_conversation(FIXTURES / build)
+            if "observed" in step
+        }
+        assert facts["an LTspice started with no document is offered to the bridge as a window"]
+        world = tmp_path / "world.json"
+        write_world(world, [])
+        FakeStart(world)()
+        with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+            assert [found.pid for found in session.instances()] == [STARTED_PID]
+            session.attach(STARTED_PID)
+            assert [session.open_designs(), session.active_design()] == facts[
+                "it has no document open and none in front"
+            ]
+
+    def test_with_a_window_open_nothing_is_started(self, tmp_path: Path):
+        world = tmp_path / "world.json"
+        write_world(world, [a_window()])
+        start = FakeStart(world)
+        assert self.windows(world, start).ensure_window() is False
+        assert start.calls == 0
+
+    def test_where_starting_is_not_allowed_nothing_is_started(self, tmp_path: Path):
+        world = tmp_path / "world.json"
+        write_world(world, [])
+        windows = self.windows(world, None)
+        assert not windows.starts_ltspice
+        assert windows.ensure_window() is False
+        assert read_world(world)["windows"] == []
+
+    def test_a_start_that_fails_is_reported(self, tmp_path: Path):
+        world = tmp_path / "world.json"
+        write_world(world, [])
+        windows = self.windows(world, FakeStart(world, error=OSError("access is denied")))
+        with pytest.raises(BridgeError, match="LTspice could not be started: access is denied"):
+            windows.ensure_window()
+
+    def test_an_ltspice_that_opens_no_window_is_given_up_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from ltspice_mcp.lib import ltspice_window
+
+        monkeypatch.setattr(ltspice_window, "_STARTED_S", 0.3)  # timing: the wait under test
+        world = tmp_path / "world.json"
+        write_world(world, [])
+        windows = self.windows(world, FakeStart(world, opens_window=False))
+        with pytest.raises(BridgeError, match=r"did not open a window within 0\.3 s"):
+            windows.ensure_window()
+
+    def test_with_no_bridge_there_is_nothing_to_start_for(self):
+        windows = OpenWindows(None, unavailable="because", start=lambda: None)
+        assert not windows.starts_ltspice
+        with pytest.raises(WindowsUnavailable):
+            windows.ensure_window()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="the bridge is a Windows program")
+    def test_the_setting_decides_whether_the_detected_ltspice_is_started(self, tmp_path: Path):
+        (tmp_path / BRIDGE_NAME).write_bytes(b"")
+        executable = str(tmp_path / "LTspice.exe")
+        assert not OpenWindows.detect([executable]).starts_ltspice
+        assert OpenWindows.detect([executable], start_ltspice=True).starts_ltspice
+        assert not OpenWindows.detect(
+            [executable], enabled=False, start_ltspice=True
+        ).starts_ltspice
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="a window is started through Windows")
+    def test_the_start_is_of_the_program_alone_and_outside_the_servers_job(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """No document and no settings file are named, so LTspice opens as it
+        does for the person; and it is asked for outside the server's job, so
+        that it does not end with a session."""
+        from ltspice_mcp.lib import ltspice_window
+
+        started: list[tuple[list[str], int]] = []
+
+        class Started:
+            pid = 77
+            returncode: int | None = None
+
+        def popen(command: list[str], *, creationflags: int, **_streams: object) -> Started:
+            started.append((command, creationflags))
+            return Started()
+
+        monkeypatch.setattr(ltspice_window.subprocess, "Popen", popen)
+        assert start_in_view(tmp_path / "LTspice.exe") == 77
+        assert started == [([str(tmp_path / "LTspice.exe")], 0x01000208)]
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="a window is started through Windows")
+    def test_a_job_that_lets_nothing_leave_still_gets_its_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from ltspice_mcp.lib import ltspice_window
+
+        flags: list[int] = []
+
+        class Started:
+            pid = 78
+            returncode: int | None = None
+
+        def popen(_command: list[str], *, creationflags: int, **_streams: object) -> Started:
+            flags.append(creationflags)
+            if creationflags & 0x01000000:
+                raise PermissionError(5, "Access is denied")
+            return Started()
+
+        monkeypatch.setattr(ltspice_window.subprocess, "Popen", popen)
+        assert start_in_view(tmp_path / "LTspice.exe") == 78
+        assert flags == [0x01000208, 0x00000208]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="off Windows there is no window to start")
+    def test_off_windows_nothing_is_started(self, tmp_path: Path):
+        with pytest.raises(OSError, match="started through Windows"):
+            start_in_view(tmp_path / "LTspice.exe")
