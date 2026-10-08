@@ -234,7 +234,8 @@ class TestReading:
         assert decode_plot_settings(codecs.BOM_UTF16_LE + data) == data.decode("utf-16-le")
 
     def test_a_grid_line_is_read_wherever_it_is_in_the_pane(self):
-        """An AC pane a build saves has PltMag and PltPhi lines too (plot/ac)."""
+        """As in an AC pane a build saves with the grid on (plot/ac_grid): the
+        line after Log, and PltMag and PltPhi after it."""
         text = (
             '[AC Analysis]\n{\n   Npanes: 1\n   {\n      traces: 1 {524290,0,"V(out)"}\n'
             "      Log: 1 2 0\n      GridStyle: 1\n      PltMag: 1\n      PltPhi: 1 0\n   }\n}\n"
