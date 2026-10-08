@@ -36,7 +36,7 @@ from ltspice_mcp.lib.recovery_journal import (
 from ltspice_mcp.lib.recovery_records import CaseAttempt, ProcessIdentity, RecoveryError
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import OwnerLiveness, Store
-from tests.conftest import coordinator_returned, ngspice_binary_raw, staged_decks
+from tests.conftest import LIVENESS_S, coordinator_returned, ngspice_binary_raw, staged_decks
 from tests.test_recovery_records import recovery_job
 
 
@@ -65,10 +65,10 @@ async def committed(state_no_sim, work_dir):
         startup=prepare_startup(store, job.job_id, RecordedNGspice),
         platform=sys.platform,
         max_parallel=1,
-        run_timeout_s=5.0,
+        run_timeout_s=LIVENESS_S,
         timeout_source="server_default",
-        job_deadline_s=20.0,
-        kill_grace_s=0.1,
+        job_deadline_s=2 * LIVENESS_S,
+        kill_grace_s=LIVENESS_S,
     )
     start_marker = process_start_marker(os.getpid())
     assert start_marker is not None
@@ -88,7 +88,8 @@ async def committed(state_no_sim, work_dir):
         stage=staged_decks(job.cases, job.sources),
         simulator="ngspice",
         recoverable=True,
-        kill_grace_s=2.0,
+        # Unlike the recorded bounds, so a test can tell which were applied.
+        kill_grace_s=2 * LIVENESS_S,
         job_deadline_s=100.0,
     )
     return runner, request, job, store

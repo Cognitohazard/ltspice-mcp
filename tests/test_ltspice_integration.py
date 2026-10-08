@@ -609,7 +609,7 @@ def _recovery_run(simulator: type, work_dir: Path) -> _WindowWatch:
         timeout_source="test",
         max_parallel=1,
         job_deadline_s=None,
-        kill_grace_s=5,
+        kill_grace_s=LIVENESS_S,
         simulator_argv=(identity.path,),
         executable=identity,
         ngbehavior=None,

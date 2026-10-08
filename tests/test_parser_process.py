@@ -118,7 +118,7 @@ def limits():
         request_bytes=65536,
         metadata_bytes=4096,
         error_bytes=1024,
-        cleanup_grace_s=2,
+        cleanup_grace_s=LIVENESS_S,
     )
 
 
@@ -445,7 +445,7 @@ def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limit
             {"padding": "x" * 1000000},
             work_dir=directory,
             deadline=time.monotonic() + LIVENESS_S,
-            # The grace runs out: a guardian in its stall never closes its output.
+            # timing: the grace runs out; a guardian in its stall never closes its output
             limits=replace(limits, request_bytes=2000000, cleanup_grace_s=0.5),
             cancel=cancel,
             _worker_module="parser_fixture",
@@ -593,7 +593,7 @@ raise SystemExit(parser_bootstrap.main())
             str(limits.memory_bytes),
             str(limits.request_bytes),
             str(limits.error_bytes),
-            str(time.monotonic() + 5),
+            str(time.monotonic() + LIVENESS_S),
             str(limits.cleanup_grace_s),
             "parser_fixture",
             "0",
@@ -814,7 +814,7 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
             str(limits.memory_bytes),
             str(limits.request_bytes),
             str(limits.error_bytes),
-            str(time.monotonic() + 5),
+            str(time.monotonic() + LIVENESS_S),
             "2",
             "parser_fixture",
             "0",

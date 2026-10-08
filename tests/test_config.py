@@ -769,6 +769,7 @@ class TestLoadCoversEveryKey:
             "max_estimated_points": 1234567,
             "max_raw_mb": 512,
             "max_points_returned": 555,
+            # timing: data; a setting read back, which nothing waits on
             "analysis_budget_s": 12.5,
             "result_set_ttl_hours": 48.0,
             "open_plot": False,
@@ -812,6 +813,7 @@ class TestLoadCoversEveryKey:
             "max_estimated_points": 7654321,
             "max_raw_mb": 256,
             "max_points_returned": 777,
+            # timing: data; a setting read back, which nothing waits on
             "analysis_budget_s": 21.5,
             "result_set_ttl_hours": 72.0,
             "open_plot": True,

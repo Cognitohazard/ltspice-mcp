@@ -175,14 +175,20 @@ Windows runner, one per run. These now carry it:
   patterns every past race used. A line that must break a rule carries a
   `# timing: <reason>` comment saying why. A wait's timeout is
   `LIVENESS_S` (`tests/conftest.py`), a cap on a hang, never a claim about
-  how fast the runner is, including a wait handed to `asyncio.to_thread`, a
-  bound a test sets on the code under test
-  (`monkeypatch.setattr(module, "..._TIMEOUT_S", 1.0)`), a `threading.Timer`
-  or `call_later` that acts after a short delay, and a deadline counted from
-  a clock read earlier (`deadline=started + 5`). A reason says why nothing
-  has to finish inside the bound ("the peer holds the lock until released");
-  one saying the work is quick enough to fit is the claim the rule removes,
-  and such a test waits for the state by a handshake instead.
+  how fast the runner is, including a wait handed to `asyncio.to_thread`.
+  The same holds for any short bound a test hands the code under test: an
+  argument, default or payload key whose name says it is one
+  (`kill_grace_s=0.2`, `"run_timeout_s": 2`), an attribute set to one
+  (`monkeypatch.setattr(module, "..._TIMEOUT_S", 1.0)`), a deadline read off
+  a clock (`time.monotonic() + 5`, a child's command line included) or
+  counted from one read earlier (`deadline=started + 5`), and a
+  `threading.Timer` or `call_later` that acts after a short delay. A reason
+  says why nothing has to finish inside the bound ("the peer holds the lock
+  until released"); one saying the work is quick enough to fit is the claim
+  the rule removes. Such a test waits for the state by a handshake, or
+  starts the bound's clock once that state exists (a job deadline's watch
+  once its first case has launched, a run timeout once the simulator has
+  written points).
 - **Fake work that must outlast a budget is held, not slept.** A stand-in
   for slow work blocks on an event the test sets once the call has returned,
   or runs until the call's own deadline has passed; a sleep sized past the
