@@ -4190,6 +4190,39 @@
         ".raw"
       ]
     },
+    "plot/math_grid": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/math_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/math_grid.plt": {
+          "bytes": 664,
+          "sha256": "050433d658f63d1732857b6535bbdf92a07663e3e6935b28d518b3bad29b756b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "grid": "on"
+      },
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/one_trace": {
       "behaviour": "plot-settings",
       "command": [
@@ -4276,6 +4309,67 @@
       "written": [
         ".log",
         ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_ac_grid": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_ac_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/ac_grid.plt": "9d3d52b31afa9f9ef95336e32c99f4bf513b689bd566ac5ed8c17f888486b171",
+        "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_ac_grid.plt": {
+          "bytes": 430,
+          "sha256": "042aeb149f6c4bf97808bc94beeced3f302854888d34cfe285a294f207f31007"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_grid": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/grid.plt": "7e4296e3356f1231fce83baee080fbb2ac8619b6542d15c4a4428ce172f1ad93",
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_grid.plt": {
+          "bytes": 1040,
+          "sha256": "734e097a80aa5c5b529e476008b8580df58eace7972f8e4b0100ba13d1ea8c09"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
         ".plt",
         ".raw"
       ]
@@ -4395,6 +4489,40 @@
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_two_panes_grid": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_two_panes_grid.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
+        "plot/two_panes.plt": "1eedf7eee6766613d99eb2bd9595ff96814cdd2e7da95b0f3ad978b6915586eb"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_two_panes_grid.plt": {
+          "bytes": 964,
+          "sha256": "8af79fa9d012c4d7f09a1d47b06888f73db848e6fc757b9c67dbe51cfc83e3be"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "grid": "on"
+      },
       "stopped": true,
       "written": [
         ".log",

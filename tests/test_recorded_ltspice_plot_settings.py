@@ -13,6 +13,7 @@ panes, so every check of it fails rather than skips.
 from __future__ import annotations
 
 import codecs
+from dataclasses import replace
 
 import pytest
 
@@ -96,7 +97,14 @@ class TestWhatABuildWritesForPanesItMade:
         )
 
     def test_math_expressions_are_kept_as_typed(self, build: str):
-        assert traces(saved(build, "plot/math"), TRAN) == [("V(in)-V(out)", "V(out)*I(R1)")]
+        assert panes(saved(build, "plot/math"), TRAN) == (
+            PlotPane(traces=("V(in)-V(out)", "V(out)*I(R1)"), scales=DEFAULT_SCALES["tran"]),
+        )
+
+    def test_a_pane_made_with_the_waveform_grid_on_has_a_grid_line(self, build: str):
+        assert panes(saved(build, "plot/math_grid"), TRAN) == (
+            PlotPane(("V(in)-V(out)", "V(out)*I(R1)"), scales=DEFAULT_SCALES["tran"], grid=1),
+        )
 
     def test_a_micro_sign_in_a_unit_is_in_the_builds_own_encoding(self, build: str):
         data = saved(build, "plot/math")
@@ -104,16 +112,17 @@ class TestWhatABuildWritesForPanesItMade:
         assert micro in data
 
 
-#: The one case recorded with the waveform window's grid on. The recorder
-#: removes that setting everywhere else (``grid`` in its ``BEHAVIOUR_KEYS``).
+#: The AC case recorded with the waveform window's grid on. The recorder removes
+#: that setting from every case that does not set it (``grid`` in its
+#: ``BEHAVIOUR_KEYS``).
 GRID_ON = "plot/ac_grid_on"
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_a_grid_left_on_adds_a_line_and_changes_no_pane_the_server_reads(build: str):
+def test_a_grid_left_on_adds_a_line_and_changes_nothing_else_the_server_reads(build: str):
     """With the grid on, each build writes a ``GridStyle`` line in the pane and
     another last number on the phase axis, and nothing else differs from
-    ``plot/ac``. The traces and scales read are the same."""
+    ``plot/ac``. The traces and scales read are the same, and the grid."""
     assert rec.entry(build, GRID_ON)["settings"] == {"grid": "on"}
     assert "settings" not in rec.entry(build, "plot/ac")
     plain, gridded = saved(build, "plot/ac"), saved(build, GRID_ON)
@@ -123,19 +132,26 @@ def test_a_grid_left_on_adds_a_line_and_changes_no_pane_the_server_reads(build: 
         "GridStyle: 1",
     ]
     assert [line.strip() for line in off if line not in on] == ["Y[1]: (' ',0,-90,9,-0)"]
-    assert panes(gridded, AC) == panes(plain, AC)
+    assert panes(gridded, AC) == tuple(replace(pane, grid=1) for pane in panes(plain, AC))
+
+
+def has_grid_line(data: bytes) -> bool:
+    # XVII's read_utf8 is its own UTF-16 followed by the UTF-8 it was handed.
+    return b"GridStyle" in data or "GridStyle".encode("utf-16-le") in data
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(WRITTEN + READ)))
-def test_a_recording_holds_a_grid_line_only_where_its_case_turned_the_grid_on(
+def test_a_recording_holds_a_grid_line_only_where_its_case_turned_the_grid_on_or_read_one(
     build: str, case_id: str
 ):
     """Every other case runs with the key removed, so on the build's own
-    default, which is off."""
-    data = saved(build, case_id)
-    # XVII's read_utf8 is its own UTF-16 followed by the UTF-8 it was handed.
-    held = b"GridStyle" in data or "GridStyle".encode("utf-16-le") in data
-    assert held == (rec.entry(build, case_id).get("settings") == {"grid": "on"})
+    default, which is off. A pane a build reads keeps the line the file it was
+    handed had, and takes none from the setting (``plot/read_two_panes_grid``)."""
+    held = has_grid_line(saved(build, case_id))
+    if case_id in READ:
+        assert held == has_grid_line(handed(case_id))
+    else:
+        assert held == (rec.entry(build, case_id).get("settings") == {"grid": "on"})
 
 
 def test_ltspice_xvii_has_the_grid_off_by_default():
@@ -175,7 +191,16 @@ def test_no_build_stops_on_a_file_the_server_wrote(build: str, case_id: str):
 @pytest.mark.parametrize(
     ("build", "case_id"),
     list(
-        rec.per_build(["plot/read_two_panes", "plot/read_math", "plot/read_log_y", "plot/read_ac"])
+        rec.per_build(
+            [
+                "plot/read_two_panes",
+                "plot/read_math",
+                "plot/read_log_y",
+                "plot/read_ac",
+                "plot/read_grid",
+                "plot/read_ac_grid",
+            ]
+        )
     ),
 )
 def test_a_build_shows_the_panes_traces_and_scales_written(build: str, case_id: str):
@@ -184,6 +209,14 @@ def test_a_build_shows_the_panes_traces_and_scales_written(build: str, case_id: 
     assert [s.name for s in shown.sections] == [s.name for s in written.sections]
     for section in written.sections:
         assert panes(saved(build, case_id), section.name) == section.panes
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_pane_read_without_a_grid_line_gets_no_grid_from_the_setting(build: str):
+    """With the waveform grid on, a build saves a file the server wrote exactly
+    as it does on its default: a pane read without a GridStyle line has none,
+    so a pane written here shows no grid whatever the person's setting is."""
+    assert saved(build, "plot/read_two_panes_grid") == saved(build, "plot/read_two_panes")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
