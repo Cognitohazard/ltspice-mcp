@@ -22,6 +22,8 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.lib import ltspice_window, plot_settings
+from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.lib.plot_settings import (
     DEFAULT_SCALES,
@@ -34,19 +36,28 @@ from ltspice_mcp.lib.plot_settings import (
     with_panes,
     write_plot_settings,
 )
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 from tests import _ltspice_recorded as rec
 from tests._ltspice_window import (
     PID,
     STARTED_PID,
+    FakeFrame,
     FakeStart,
     a_window,
     as_ltspice_reads,
+    fake_command,
     put_windows,
     read_world,
+    write_world,
 )
-from tests.conftest import FIXTURES_DIR, make_experiment_job, stage_recorded_fixture
+from tests.conftest import (
+    FIXTURES_DIR,
+    LIVENESS_S,
+    make_experiment_job,
+    stage_recorded_fixture,
+)
 
 TRAN = SECTION_NAMES["tran"]
 # What each build's own waveform window saved for panes it made.
@@ -317,6 +328,11 @@ def a_job_of(state: SessionState, sheet: Path, work_dir: Path) -> Path:
     return raw
 
 
+async def plot_the_job(state: SessionState) -> dict[str, Any]:
+    """Plot the job ``a_job_of`` made, asking for it to be shown in LTspice."""
+    return await plot(state, job_id="shown", signals=["V(out)"], in_ltspice=True)
+
+
 def exists(path: Path) -> bool:
     return path.exists()
 
@@ -330,7 +346,7 @@ async def test_a_sheets_run_is_opened_from_the_sheet(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     assert data["ltspice"] == {
         "shown": True,
@@ -387,7 +403,7 @@ async def test_results_the_window_already_has_open_are_left_alone(
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [a_window(panes=["amp.raw"])])
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is False
@@ -410,7 +426,7 @@ async def test_a_build_without_the_command_leaves_the_results_for_the_person_to_
     raw = a_job_of(state_no_sim, sheet, work_dir)
     put_windows(state_no_sim, tmp_path / "world.json", [a_window()], frame_has_no_command=True)
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is False
@@ -423,14 +439,12 @@ async def test_a_build_without_the_command_leaves_the_results_for_the_person_to_
 async def test_a_window_that_does_not_open_them_is_reported(
     state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    from ltspice_mcp.lib import ltspice_window
-
     monkeypatch.setattr(ltspice_window, "_OPENED_S", 0.3)  # timing: the wait under test
     sheet = a_sheet(work_dir)
     a_job_of(state_no_sim, sheet, work_dir)
     put_windows(state_no_sim, tmp_path / "world.json", [a_window()], frame_ignores=True)
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is False
@@ -444,15 +458,13 @@ async def test_a_sheet_that_was_open_before_it_had_results_has_to_be_opened_agai
     """LTspice looks for a sheet's results as it opens the sheet. One it opened
     with none beside it does nothing with the command, whatever is put there
     afterwards, so the reply says what will make it look again."""
-    from ltspice_mcp.lib import ltspice_window
-
     monkeypatch.setattr(ltspice_window, "_OPENED_S", 0.3)  # timing: the wait under test
     sheet = a_sheet(work_dir)
     raw = a_job_of(state_no_sim, sheet, work_dir)
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [a_window({str(sheet): as_ltspice_reads(sheet)})])
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is False
@@ -483,7 +495,7 @@ async def test_a_sheet_ltspice_knows_has_results_is_shown_them_where_it_stands(
         [a_window({str(sheet): as_ltspice_reads(sheet)}, with_results=[str(sheet)])],
     )
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is True
@@ -499,7 +511,7 @@ async def test_with_no_window_nothing_is_put_beside_the_sheet(
     raw = a_job_of(state_no_sim, sheet, work_dir)
     put_windows(state_no_sim, tmp_path / "world.json", [])
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown == {
@@ -527,7 +539,7 @@ async def test_a_window_whose_copy_of_the_sheet_differs_says_so(
         [a_window({str(sheet): held}, with_results=[str(sheet)])],
     )
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is True
@@ -550,7 +562,7 @@ async def test_a_sheet_outside_the_sandbox_has_nothing_written_beside_it(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is True
@@ -558,6 +570,59 @@ async def test_a_sheet_outside_the_sandbox_has_nothing_written_beside_it(
     assert shown["results"] == str(raw)
     assert not exists(sheet.with_suffix(".raw"))
     assert read_world(world)["windows"][0]["shown"] == [str(raw)]
+
+
+def lock_is_held(target: Path) -> bool:
+    """Whether the lock an edit takes for ``target`` is someone's right now."""
+    try:
+        with file_lock(Store.circuit_lock(target), timeout=0):
+            return False
+    except TimeoutError:
+        return True
+
+
+class FrameThatLooksAtALock(FakeFrame):
+    """Notes whether ``target``'s lock is held each time LTspice is sent a command."""
+
+    def __init__(self, world: Path, target: Path) -> None:
+        super().__init__(world)
+        self._target = target
+        self.held: list[bool] = []
+
+    def send(self, pid: int, label: str) -> None:
+        self.held.append(lock_is_held(self._target))
+        super().send(pid, label)
+
+
+async def test_a_sheets_plot_settings_are_locked_for_their_write_and_no_longer(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A sheet's plot settings are an edit's to write too (``set_plot_panes``),
+    under a lock an edit waits ten seconds for. Being started and opening the
+    results can take LTspice longer than that, so the lock is held while the
+    file is written and is free again by the time LTspice is asked."""
+    sheet = a_sheet(work_dir)
+    a_job_of(state_no_sim, sheet, work_dir)
+    settings = sheet.with_suffix(".plt")
+    world = tmp_path / "world.json"
+    write_world(world, [a_window()])
+    frame = FrameThatLooksAtALock(world, settings)
+    state_no_sim.open_windows = OpenWindows(fake_command(world), timeout=LIVENESS_S, frame=frame)
+    held_for_the_write: list[bool] = []
+    write_beside = plot_settings.write_beside
+
+    def looked_at(results: Path, plot_name: str, panes: list[list[str]]) -> str | None:
+        held_for_the_write.append(lock_is_held(settings))
+        return write_beside(results, plot_name, panes)
+
+    monkeypatch.setattr(plot_settings, "write_beside", looked_at)
+
+    data = await plot_the_job(state_no_sim)
+
+    assert data["ltspice"]["shown"] is True
+    assert data["ltspice"]["plot_settings"] == str(settings)
+    assert held_for_the_write == [True]
+    assert frame.held == [False]
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +658,7 @@ async def test_a_started_ltspice_opens_a_sheets_run_from_the_sheet(
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [], start=FakeStart(world))
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is True
@@ -613,7 +678,7 @@ async def test_an_ltspice_that_cannot_be_started_leaves_a_sheets_results_alone(
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [], start=FakeStart(world, error=OSError("access is denied")))
 
-    data = await plot(state_no_sim, job_id="shown", signals=["V(out)"], in_ltspice=True)
+    data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is False

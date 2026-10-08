@@ -20,6 +20,7 @@ from ltspice_mcp.tools import inspect_tools
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests._ltspice_window import (
     PID,
+    FakeStart,
     a_window,
     as_ltspice_reads,
     digest,
@@ -243,8 +244,6 @@ async def test_a_long_list_is_cut_and_counted(
 async def test_capabilities_say_whether_ltspice_is_started_on_request(
     asc_state: SessionState, tmp_path: Path
 ):
-    from tests._ltspice_window import FakeStart
-
     async def reported() -> dict[str, Any]:
         result = await handle_inspect(
             InspectInput.model_validate(

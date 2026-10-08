@@ -9,8 +9,9 @@ and that a bridge told where LTspice is not cannot start one.
 asked directly: that its panes are titled with their files' names, that a
 sheet's Visible Traces command opens the results put beside the sheet, and
 that with those results open the same command asks which traces to show. And
-``OpenWindows.ensure_window`` relies on an LTspice started with no document
-being offered to the bridge as a window, with nothing open in it. Each of those is recorded here from an installed build, under
+``OpenWindows`` relies on an LTspice it starts with no document being offered
+to the bridge as a window, with nothing open in it. Each of those is recorded
+here from an installed build, under
 ``tests/fixtures/ltspice_bridge_recorded/<build>/``:
 
 - ``sheets/<name>.asc``: the window's copy of ``inputs/<name>.asc``, as UTF-8;
@@ -86,6 +87,15 @@ def recorded_builds() -> list[str]:
 
 def load_conversation(directory: Path) -> list[dict[str, Any]]:
     return json.loads((directory / CONVERSATION).read_text(encoding="utf-8"))
+
+
+def observed(build: str) -> dict[str, Any]:
+    """What the recording of ``build`` noted LTspice doing, by the note that says what."""
+    return {
+        step["note"]: step["observed"]
+        for step in load_conversation(FIXTURES / build)
+        if "observed" in step
+    }
 
 
 class _Scrub:

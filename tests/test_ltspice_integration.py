@@ -1012,7 +1012,6 @@ class TestSheetOpenInAWindow:
         the sheet was looked at and cannot be asked; that the command opens
         them, and only for a sheet opened with results beside it, is in the
         bridge recording."""
-        from ltspice_mcp.lib.ltspice_bridge import Instance
         from ltspice_mcp.lib.plot_settings import read_plot_settings
         from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 
@@ -1042,8 +1041,7 @@ class TestSheetOpenInAWindow:
         assert section is not None
         assert [pane.traces for pane in section.panes] == [("V(filtered)",)]
 
-        window = Instance(pid=pid, mode="gui", version=shown["version"])
-        assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, window, sheet)
+        assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, pid, sheet)
 
         # Asked again with the plot open, nothing is replaced and nothing sent:
         # LTspice would go on showing what it read, and ask which traces to show.
@@ -1158,10 +1156,13 @@ class TestSheetOpenInAWindow:
             return found
 
         with BridgeSession([str(Path(exe).with_name(BRIDGE_NAME))], timeout=LIVENESS_S) as session:
-            if session.instances():
-                pytest.skip("an LTspice is already running: the bridge would attach to it")
+            if any(found.mode == "gui" for found in session.instances()):
+                pytest.skip("an LTspice window is open: the bridge would attach to it")
             session.call("list_open_designs")  # a read is enough for it to start one
-            (started,) = session.instances()
+            # Another bridge on the machine may run a hidden LTspice of its own,
+            # which this one lists and never uses: its own is the one it is bound to.
+            own = session.call("status")["current"]["backendPid"]
+            (started,) = [found for found in session.instances() if found.pid == own]
             assert started.mode == "headless"
             launched = psutil.Process(started.pid)
             assert launched.name().casefold() == Path(exe).name.casefold()

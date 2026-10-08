@@ -20,25 +20,12 @@ from ltspice_mcp.lib.ltspice_bridge import BridgeSession
 from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, FrameError, LtspiceFrame, menu_command
 from tests._ltspice_window import PID, FakeFrame, a_window, fake_command, write_world
 from tests.conftest import LIVENESS_S
-from tests.ltspice_bridge_recorder import (
-    FIXTURES,
-    load_conversation,
-    load_manifest,
-    recorded_builds,
-)
+from tests.ltspice_bridge_recorder import FIXTURES, load_manifest, observed, recorded_builds
 
 BUILDS = recorded_builds()
 windows_only = pytest.mark.skipif(
     sys.platform != "win32", reason="a window's frame is asked through Windows"
 )
-
-
-def observed(build: str) -> dict[str, object]:
-    return {
-        step["note"]: step["observed"]
-        for step in load_conversation(FIXTURES / build)
-        if "observed" in step
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +38,7 @@ def a_program(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menus: list) -> P
     program = tmp_path / "LTspice.exe"
     program.write_bytes(b"a build")
     monkeypatch.setattr(pe_menu, "menus", lambda _executable: menus)
-    ltspice_frame._sheet_commands.cache_clear()
+    ltspice_frame._SHEET_COMMANDS.clear()
     return program
 
 

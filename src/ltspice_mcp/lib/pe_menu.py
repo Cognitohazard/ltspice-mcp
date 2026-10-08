@@ -10,13 +10,14 @@ window is in, and works on any platform the file can be read on.
 
 from __future__ import annotations
 
+import mmap
 import struct
 from pathlib import Path
 
 RT_MENU = 4
 
 
-def resources(image: bytes, kind: int) -> list[bytes]:
+def resources(image: bytes | mmap.mmap, kind: int) -> list[bytes]:
     """The data of every resource of type ``kind`` in a PE image, in directory order.
 
     Raises ``ValueError`` for a file that is not a Windows executable.
@@ -119,5 +120,33 @@ def menu_label(text: str) -> str:
 
 
 def menus(executable: Path) -> list[list[tuple[int | None, str]]]:
-    """Every menu of the program at ``executable``, each as its ``menu_items``."""
-    return [menu_items(template) for template in resources(executable.read_bytes(), RT_MENU)]
+    """Every menu of the program at ``executable``, each as its ``menu_items``.
+
+    The file is mapped, not read: a program is tens of megabytes and its
+    menus a few pages of it.
+    """
+    with (
+        executable.open("rb") as file,
+        mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as image,
+    ):
+        return [menu_items(template) for template in resources(image, RT_MENU)]
+
+
+def commands(executable: Path, having: str) -> dict[str, int]:
+    """The command each item sends, by ``menu_label``, in the first menu of
+    ``executable`` that has an item labelled ``having``.
+
+    A program has a menu bar for each kind of window it shows, and a label can
+    be in more than one of them under different numbers; ``having`` is a label
+    only the wanted one holds. A label that appears twice in it keeps its
+    first command. Empty when no menu has ``having``.
+    """
+    for items in menus(executable):
+        if not any(menu_label(text) == having for _command, text in items):
+            continue
+        found: dict[str, int] = {}
+        for command, text in items:
+            if command is not None:
+                found.setdefault(menu_label(text), command)
+        return found
+    return {}
