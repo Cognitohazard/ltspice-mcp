@@ -99,6 +99,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     LTSPICE_WINDOW_PROPERTIES,
     OUTCOME_SCHEMA,
+    RULES_RUN_SCHEMA,
     VALIDATION_WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
@@ -363,6 +364,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             },
             "required": ["pins_total", "pins_wired", "pins_label_only", "label_only_pins"],
         },
+        "rules_run": RULES_RUN_SCHEMA,
         "preexisting": {
             "type": "object",
             "description": (
@@ -1177,6 +1179,7 @@ def _envelope(
     wiring: dict | None = None,
     views: dict | None = None,
     preexisting: dict | None = None,
+    rules_run: dict[str, int] | None = None,
     verification: dict | None = None,
     netlist: str | None = None,
     results: list[dict] | None = None,
@@ -1217,6 +1220,8 @@ def _envelope(
         data["wiring"] = wiring
     if preexisting is not None:
         data["preexisting"] = preexisting
+    if rules_run is not None:
+        data["rules_run"] = rules_run
     if views:
         data["views"] = views
     if verification is not None:
@@ -1557,6 +1562,9 @@ async def _evaluate_edit_schematic(
                 {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out
             ]
             preexisting = _preexisting_block(len(findings_left_out), len(pins_left_out))
+            # Every rule, with what it found of the sheet as it now is: what
+            # the batch is told of and what is counted as there before.
+            rules_run = dict.fromkeys(RULES, 0) | Counter(one.rule for one in found)
             left_out_hint = _preexisting_hint(preexisting, listed="preexisting" in views)
             # Two sources, one channel: what the ops themselves reported, then
             # what the finished sheet reports about itself that this batch
@@ -1596,6 +1604,7 @@ async def _evaluate_edit_schematic(
                             wiring=wiring,
                             views=presented_views,
                             preexisting=preexisting,
+                            rules_run=rules_run,
                             results=op_results,
                             warnings=warnings,
                             failures=failures,
@@ -1717,6 +1726,7 @@ async def _evaluate_edit_schematic(
                         wiring=wiring,
                         views=presented_views,
                         preexisting=preexisting,
+                        rules_run=rules_run,
                         verification=verification,
                         netlist=netlist,
                         results=op_results,

@@ -130,6 +130,7 @@ from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
     LTSPICE_WINDOW_PROPERTIES,
     REPEATABLE_CHANGE_ANNOTATIONS,
+    RULES_RUN_SCHEMA,
     WARNINGS_SCHEMA,
     CompareSpec,
     RenderPolicy,
@@ -663,6 +664,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "kind": {"type": "string"},
         "outcome": outcome_schema("complete", "partial", "failed"),
         "checks_run": {"type": "array", "items": {"type": "string"}},
+        "rules_run": RULES_RUN_SCHEMA,
         "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
         "findings": {"type": "array", "items": FINDING_SCHEMA},
         "comparison": COMPARISON_SCHEMA,
@@ -2337,6 +2339,9 @@ async def evaluate_verify_circuit(
     # --- scene-derived checks (symbols, layout, quality, dropped wires) -----
     scene: Scene | None = None
     sheet_found: list[Finding] = []
+    # The sheet rules that ran, each with its count before any cap: a rule
+    # that found nothing is listed with zero, so it is told from one not run.
+    rules_run: dict[str, int] = {}
     needs_scene = kind == "asc" and (
         wanted.get("symbols")
         or wanted.get("layout")
@@ -2363,11 +2368,14 @@ async def evaluate_verify_circuit(
             "bbox": [bbox.x1, bbox.y1, bbox.x2, bbox.y2] if bbox is not None else None,
         }
         if wanted.get("symbols"):
-            findings.extend(_symbol_findings(sheet_found, path))
+            symbol_findings = _symbol_findings(sheet_found, path)
+            findings.extend(symbol_findings)
+            rules_run["unresolved_symbol"] = len(symbol_findings)
             checks_run.append("symbols")
         if wanted.get("layout"):
             layout_findings, totals = _check_findings(sheet_found, path, "layout")
             findings.extend(layout_findings)
+            rules_run |= dict.fromkeys(_RULES_OF_CHECK["layout"], 0) | totals
             capped_rules.update(totals)
             observation_events.append(_FindingCapSummary(totals))
             observation_events.append(LAYOUT_COVERAGE)
@@ -2375,6 +2383,7 @@ async def evaluate_verify_circuit(
         if wanted.get("quality"):
             quality_findings, totals = _check_findings(sheet_found, path, "quality")
             findings.extend(quality_findings)
+            rules_run |= dict.fromkeys(_RULES_OF_CHECK["quality"], 0) | totals
             capped_rules.update(totals)
             observation_events.append(_FindingCapSummary(totals))
             checks_run.append("quality")
@@ -2405,6 +2414,7 @@ async def evaluate_verify_circuit(
                 if scene is not None:
                     dropped, _ = _check_findings(sheet_found, path, "export")
                     findings.extend(dropped)
+                    rules_run["dropped_wire"] = len(dropped)
                     if dropped:
                         capped_rules.add("dropped_wire")
                 data["export"] = export.payload
@@ -2489,6 +2499,7 @@ async def evaluate_verify_circuit(
     data.update(
         {
             "checks_run": checks_run,
+            **({"rules_run": rules_run} if rules_run else {}),
             "checks_skipped": skipped,
             "findings": findings,
             "observations": [event for event in observation_events if isinstance(event, str)],
