@@ -47,6 +47,17 @@ def a_sheet_outside(elsewhere: Path, asc_file: Path) -> Path:
     return elsewhere / "private.asc"
 
 
+#: The fixture sheet's resistor as a difference lists it: the symbol, then its
+#: attributes in a fixed order.
+R1 = (
+    "SYMBOL res 128 112 R90\n"
+    "SYMATTR InstName R1\n"
+    "SYMATTR Value {value}\n"
+    "WINDOW 0 0 56 VBottom 2\n"
+    "WINDOW 3 32 56 VTop 2"
+)
+
+
 async def ask(state: SessionState) -> dict[str, Any]:
     result = await handle_inspect(InspectInput(queries=[{"kind": "open_in_ltspice"}]), state)  # type: ignore[list-item]
     data = result.structured_content
@@ -114,6 +125,9 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
                 "only in the window: SYMBOL res 128 112 R90. "
                 "only in the file: SYMBOL res 128 112 R90"
             ),
+            # The sentence names the part; the lists say what changed in it.
+            "only_in_window": [R1.format(value="5k")],
+            "only_in_file": [R1.format(value="1k")],
         },
         # A netlist is listed; only a sheet is compared with its file.
         {
@@ -136,6 +150,21 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
     ]
     assert "refused by edit_schematic until it is saved or closed" in data["hint"]
     assert "outside the sandbox is listed and not read" in data["hint"]
+
+
+async def test_a_long_difference_is_listed_up_to_a_limit_and_the_rest_counted(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    wires = [f"WIRE {x} 2000 {x} 2016" for x in range(0, 16 * 30, 16)]
+    held = as_ltspice_reads(asc_file) + "".join(f"{wire}\n" for wire in wires)
+    put_windows(asc_state, tmp_path / "world.json", [a_window({str(asc_file): held})])
+
+    (row,) = (await ask(asc_state))["data"]["designs"]
+
+    assert row["differs_from_file"] is True
+    assert row["only_in_window"] == sorted(wires)[:25]
+    assert row["only_in_file"] == []
+    assert row["difference_omitted"] == 5
 
 
 async def test_the_digest_it_reports_is_the_one_an_edit_takes(

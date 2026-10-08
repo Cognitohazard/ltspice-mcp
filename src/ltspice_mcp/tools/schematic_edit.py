@@ -1149,7 +1149,7 @@ def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> str | None:
         if difference is not None:
             return (
                 f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
-                f"a different one from the file ({difference}): either it has changes "
+                f"a different one from the file ({difference.summary()}): either it has changes "
                 "nobody saved, or the file changed after it was opened."
             )
     return None

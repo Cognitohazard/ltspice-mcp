@@ -734,7 +734,9 @@ recording that showed it.
 - `inspect(kind="open_in_ltspice")` lists the sheets and netlists open in
   LTspice and marks the one in front, so a request about "this circuit" has
   somewhere to start. A sheet inside the sandbox comes with its `sha256` and
-  with whether its window differs from the file.
+  with whether its window differs from the file, and where: `only_in_window`
+  and `only_in_file` list the entries that differ, so a part whose value was
+  changed and not saved shows with each value.
 - `inspect(kind="simulator_docs")` lists and reads the reference documents
   LTspice 26.1 installs (keyboard shortcuts, menus, the schematic format,
   `.MEAS`, the waveform viewer), in sections paged at their headings. They are

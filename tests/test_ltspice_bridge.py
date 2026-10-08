@@ -199,18 +199,31 @@ class TestContentDifference:
     def test_a_changed_value_is_named_on_both_sides(self):
         changed = self.SHEET.replace("SYMATTR Value 1k", "SYMATTR Value 2k")
         said = content_difference(self.SHEET, changed)
-        assert said == (
+        assert said is not None
+        assert said.summary() == (
             "only in the window: SYMBOL res 128 112 R90. only in the file: SYMBOL res 128 112 R90"
         )
+        # In full, each side has the part with the value it holds.
+        (in_window,), (in_file,) = said.only_in_window, said.only_in_file
+        assert in_window.split("\n")[0] == in_file.split("\n")[0] == "SYMBOL res 128 112 R90"
+        assert "SYMATTR Value 2k" in in_window.split("\n")
+        assert "SYMATTR Value 1k" in in_file.split("\n")
 
     def test_an_added_wire_is_named(self):
         said = content_difference(self.SHEET, self.SHEET + "WIRE 336 128 240 128\n")
-        assert said == "only in the window: WIRE 336 128 240 128"
+        assert said is not None
+        assert said.summary() == "only in the window: WIRE 336 128 240 128"
+        assert (said.only_in_window, said.only_in_file) == (("WIRE 336 128 240 128",), ())
 
     def test_a_long_difference_is_cut_and_counted(self):
         extra = "".join(f"WIRE {x} 0 {x} 16\n" for x in range(0, 160, 16))
-        said = content_difference(self.SHEET, self.SHEET + extra, limit=2)
-        assert said == "only in the window: WIRE 0 0 0 16; WIRE 112 0 112 16; and 8 more"
+        said = content_difference(self.SHEET, self.SHEET + extra)
+        assert said is not None
+        assert said.summary(limit=2) == (
+            "only in the window: WIRE 0 0 0 16; WIRE 112 0 112 16; and 8 more"
+        )
+        # The sentence is cut; the difference itself holds every entry.
+        assert len(said.only_in_window) == 10
 
     def test_line_endings_do_not_count(self):
         assert content_difference(self.SHEET, self.SHEET.replace("\n", "\r\n")) is None
