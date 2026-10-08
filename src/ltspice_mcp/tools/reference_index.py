@@ -248,12 +248,14 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("verify_circuit", "layout"): (
         "Schematic only: geometric facts — overlapping bodies, wires crossing a "
-        "symbol body, floating pins, dangling wire ends."
+        "symbol body, floating pins, dangling wire ends, dangling labels, a wire "
+        "drawn twice."
     ),
     ("verify_circuit", "quality"): (
-        "Hygiene facts: on a sheet, nets joined only by label stubs and text "
-        "anchored inside a body; on a netlist, connectivity such as a net with no "
-        "DC path to ground."
+        "Hygiene facts: on a sheet, nets joined only by label stubs, text "
+        "anchored inside what a part draws, a label inside a part's box (which "
+        "includes its pins) and directives stacked on one anchor; on a netlist, "
+        "connectivity such as a net with no DC path to ground."
     ),
     ("verify_circuit", "compare"): (
         "Compare against a reference netlist or schematic: 'equivalence' "

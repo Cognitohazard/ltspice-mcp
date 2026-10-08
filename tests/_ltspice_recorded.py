@@ -233,7 +233,9 @@ def stage_sheet(build: str, case_id: str, directory: Path) -> Path:
     sheet = directory / Path(case.source).name
     shutil.copyfile(INPUTS / case.source, sheet)
     for extra in case.extra:
-        shutil.copyfile(INPUTS / extra, directory / Path(extra).name)
+        beside = directory / case.copies[extra]
+        beside.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(INPUTS / extra, beside)
     stock = manifest(build)["library"]["symbols"]
     for name, facts in stock.items():
         target = directory / f"{name}.asy"

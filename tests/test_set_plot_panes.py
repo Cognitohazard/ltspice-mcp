@@ -102,23 +102,38 @@ async def test_a_file_ltspice_26_wrote_keeps_its_other_sections(asc_state, sheet
     assert text.count("[AC Analysis]") == 1
 
 
-async def test_the_replaced_panes_put_back_undo_the_op(asc_state, sheet: Path):
+@pytest.mark.parametrize(
+    ("build", "name"),
+    [
+        ("ltspice26", "plot/math.plt"),
+        ("ltspice17", "plot/math_grid.plt"),
+        ("ltspice26", "plot/math_grid.plt"),
+    ],
+)
+async def test_the_replaced_panes_put_back_undo_the_op(
+    asc_state, sheet: Path, build: str, name: str
+):
+    """Panes a build saved with the waveform grid on keep it through new traces
+    and through putting the old ones back."""
     plot = sheet.with_suffix(".plt")
-    plot.write_bytes(recorded("ltspice26", "plot/math.plt").read_bytes())
+    plot.write_bytes(recorded(build, name).read_bytes())
     before = read_plot_settings(plot.read_bytes()).section("Transient Analysis")
+    assert before is not None
 
     first = await apply_ops(asc_state, "rc.asc", [_panes("tran", [{"traces": ["V(out)"]}])])
     replaced = first["results"][0]["replaced_panes"]
     assert replaced == [
         {"traces": ["V(in)-V(out)", "V(out)*I(R1)"], "x_scale": "linear", "y_scale": "linear"}
     ]
+    middle = read_plot_settings(plot.read_bytes()).section("Transient Analysis")
+    assert middle is not None and middle.panes[0].grid == before.panes[0].grid
 
     second = await apply_ops(asc_state, "rc.asc", [_panes("tran", replaced)])
     assert second["results"][0]["replaced_panes"] == [
         {"traces": ["V(out)"], "x_scale": "linear", "y_scale": "linear"}
     ]
     after = read_plot_settings(plot.read_bytes()).section("Transient Analysis")
-    assert before is not None and after is not None
+    assert after is not None
     assert after.panes == before.panes
 
 
