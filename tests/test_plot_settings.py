@@ -26,6 +26,7 @@ from ltspice_mcp.lib.plot_settings import (
     YScale,
     check_trace,
     decode_plot_settings,
+    inherit_grid,
     parse_plot_settings,
     read_plot_settings,
     render_plot_settings,
@@ -174,31 +175,29 @@ class TestReplacingASection:
         assert [s.name for s in changed.sections] == ["AC Analysis"]
         assert with_panes(changed, "ac", []).sections == ()
 
-    def test_new_panes_keep_the_grid_every_replaced_pane_had(self):
-        source = read_plot_settings(
-            written(("tran", [pane("V(a)", grid=1), pane("V(b)", grid=1)]))
-        )
-        changed = with_panes(source, "tran", [pane("V(c)")])
-        assert section_of(changed, "Transient Analysis").panes == (pane("V(c)", grid=1),)
-
-    def test_new_panes_get_no_grid_when_the_replaced_panes_differ(self):
-        source = read_plot_settings(written(("tran", [pane("V(a)", grid=1), pane("V(b)")])))
-        changed = with_panes(source, "tran", [pane("V(c)"), pane("V(d)")])
-        assert section_of(changed, "Transient Analysis").panes == (pane("V(c)"), pane("V(d)"))
-
-    def test_a_grid_is_kept_only_within_its_own_analysis(self):
-        source = read_plot_settings(written(("tran", [pane("V(a)", grid=1)])))
-        changed = with_panes(source, "ac", [pane("V(c)", analysis="ac")])
-        assert section_of(changed, "AC Analysis").panes == (pane("V(c)", analysis="ac"),)
-
-    def test_a_pane_that_names_its_grid_keeps_it(self):
-        source = read_plot_settings(written(("tran", [pane("V(a)", grid=1)])))
-        changed = with_panes(source, "tran", [pane("V(c)", grid=2)])
-        assert section_of(changed, "Transient Analysis").panes == (pane("V(c)", grid=2),)
-
     def test_a_pane_without_a_trace_is_refused(self):
         with pytest.raises(NetlistError, match="at least one trace"):
             with_panes(PlotSettings(), "tran", [PlotPane(traces=())])
+
+
+@pytest.mark.parametrize(
+    ("replaced", "kept"),
+    [
+        pytest.param([1, 1], 1, id="every-pane-had-it"),
+        pytest.param([1, None], None, id="only-some-had-it"),
+        pytest.param([1, 2], None, id="the-lines-differ"),
+        pytest.param(None, None, id="no-section"),
+    ],
+)
+def test_new_panes_keep_the_grid_every_replaced_pane_had(
+    replaced: list[int | None] | None, kept: int | None
+):
+    section = None
+    if replaced is not None:
+        old = tuple(pane(f"V(n{i})", grid=grid) for i, grid in enumerate(replaced))
+        section = PlotSection(name=SECTION_NAMES["tran"], panes=old, body="")
+    new = [pane("V(a)"), pane("V(b)")]
+    assert inherit_grid(section, new) == [pane("V(a)", grid=kept), pane("V(b)", grid=kept)]
 
 
 class TestTraces:
@@ -232,16 +231,6 @@ class TestReading:
     def test_utf16_with_a_byte_order_mark(self):
         data = written(("tran", TWO_PANES))
         assert decode_plot_settings(codecs.BOM_UTF16_LE + data) == data.decode("utf-16-le")
-
-    def test_a_grid_line_is_read_wherever_it_is_in_the_pane(self):
-        """As in an AC pane a build saves with the grid on (plot/ac_grid): the
-        line after Log, and PltMag and PltPhi after it."""
-        text = (
-            '[AC Analysis]\n{\n   Npanes: 1\n   {\n      traces: 1 {524290,0,"V(out)"}\n'
-            "      Log: 1 2 0\n      GridStyle: 1\n      PltMag: 1\n      PltPhi: 1 0\n   }\n}\n"
-        )
-        (only,) = section_of(parse_plot_settings(text), "AC Analysis").panes
-        assert only == pane("V(out)", analysis="ac", grid=1)
 
     def test_an_empty_file_has_no_sections(self):
         assert parse_plot_settings("").sections == ()

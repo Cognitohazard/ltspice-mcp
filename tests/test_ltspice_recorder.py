@@ -226,9 +226,12 @@ class TestPrivacyGuard:
 class TestSettingsCopy:
     """The copy of a build's settings file a case runs against."""
 
+    # grid under [Options] is the waveform grid, which changes a saved plot
+    # settings file; Grid under [Colors] is a colour and stays.
     ANSI = (
         b"[Options]\r\nLastRunVersion=26.1.1\r\nDefaultTrtol=2\r\nNoGreekMus=true\r\n"
-        b"SchFontSize=28\r\n[Colors]\r\nGrid=1\r\n[Recent File List]\r\nFile1=C:\\x\\y.asc\r\n"
+        b"grid=on\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
+        b"[Recent File List]\r\nFile1=C:\\x\\y.asc\r\n"
     )
 
     def test_keys_that_change_results_are_removed_and_the_rest_kept(self):
@@ -236,12 +239,6 @@ class TestSettingsCopy:
         assert copy == (
             b"[Options]\r\nLastRunVersion=26.1.1\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
         )
-
-    def test_the_waveform_grid_is_removed(self):
-        # With grid=on in the recording user's LTspice XVII settings, every
-        # pane the build made for itself was saved with a GridStyle line.
-        source = self.ANSI.replace(b"SchFontSize=28\r\n", b"SchFontSize=28\r\ngrid=on\r\n")
-        assert neutral_settings(source, {}) == neutral_settings(self.ANSI, {})
 
     def test_the_copy_is_never_empty_of_what_marks_a_used_install(self):
         # A build that starts on an empty settings file runs its first-launch
