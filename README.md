@@ -100,7 +100,7 @@ Everything operates on ordinary LTspice and SPICE files. You and the assistant c
 - Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state, which the assistant reads on the next request.
 - Either of you can change the file mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
 
-**With the sheet open in LTspice** (Windows, LTspice 26.1 or later): LTspice never notices a file changing under it, so the server tells it. When the assistant edits a schematic you have open, the change appears in the window at once, and Ctrl+Z there takes it back off the screen. If your window holds changes you have not saved, the assistant is refused and asks you to save or close the sheet first, so neither side's work is overwritten. This goes through the MCP bridge that ships with LTspice; the server only ever attaches to an LTspice you already have running.
+**With the sheet open in LTspice** (Windows, LTspice 26.1 or later): LTspice never notices a file changing under it, so the server tells it. When the assistant edits a schematic you have open, the change appears in the window at once, and Ctrl+Z there takes it back off the screen. If your window holds changes you have not saved, the assistant is refused and asks you to save or close the sheet first, so neither side's work is overwritten. This goes through the MCP bridge that ships with LTspice, and an edit never starts LTspice: it reaches only one you already have running.
 
 The same link works the other way round. Ask about "this circuit" and the assistant can see which sheet you have in front. Ask to see a sheet the assistant built and it opens in your LTspice window, in front. Ask to see a run in LTspice and its results open there with the traces you asked about already drawn. And for questions about LTspice itself (a shortcut, a menu, the waveform viewer) the assistant reads the reference files LTspice installs.
 
@@ -108,23 +108,22 @@ The same link works the other way round. Ask about "this circuit" and the assist
 
 From 26.1, LTspice ships an MCP server of its own, and on Windows it offers to
 add itself to Claude Code, Claude Desktop, Copilot and Cursor under the name
-`ltspice`. The two do different jobs and can be registered side by side, which
-is why this one is called `spice`.
+`ltspice`, which is why this one is called `spice`. Register both: each does
+things the other cannot. LTspice's works on the window: it reads what is on
+your screen, changes you have not saved included, and runs the design you
+have open where you can watch it. This one works on the files: it edits a
+schematic by pin with the geometry checked, runs sweeps, corners and Monte
+Carlo as jobs, returns measurements as numbers, and drives ngspice as well as
+LTspice. Together, an assistant can start from what you are looking at, do
+the engineering on the file, and put the result back in front of you.
 
-- **LTspice's** is a remote control for the LTspice window: it reads the
-  documents you have open, replaces one with text the assistant wrote, runs
-  the open design, and reads raw samples.
-- **This one** is the engineering side: schematic edits by pin with the
-  geometry checked, sweeps, corners and Monte Carlo as jobs, measurements as
-  numbers, ngspice as well as LTspice.
+The window features described above are this server's own and do not depend
+on LTspice's server. It reaches your LTspice window through the bridge
+program LTspice installs, by itself. It attaches to an LTspice you already
+have running, and starts LTspice only when you ask to see a sheet or a run
+there and none is open (`[schematic] start_ltspice = false` turns that off).
 
-You do not need LTspice's server registered for the window features described
-above. This server reaches your LTspice window through the bridge program
-LTspice installs, by itself. It attaches to an LTspice you already have
-running, and starts LTspice only when you ask to see a sheet or a run there
-and none is open (`[schematic] start_ltspice = false` turns that off).
-
-If you do register LTspice's server too, know that in its default form each
+One thing to know about LTspice's server: in its default form each
 assistant session's copy of it starts a hidden LTspice of its own whenever it
 has no window to use, and an assistant's changes can then land in an LTspice
 you cannot see. Registering it with `--ltspice-path` pointing at a file that
