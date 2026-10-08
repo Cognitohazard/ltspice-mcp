@@ -11,6 +11,10 @@ difference can be read.
 The record is ``fixtures/sheet_findings.json``. To make it again, run this file
 with ``LTSPICE_MCP_RECORD_SHEET_FINDINGS=1``; ``git diff`` then shows exactly
 which findings of which sheets changed.
+
+The record is the same on every machine: a symbol is looked for beside its
+sheet and in the suite's stand-in library only, never in an LTspice library
+the machine has.
 """
 
 from __future__ import annotations
@@ -18,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,7 @@ from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.schematic_ops import make_editor, post_op_warnings, wiring_profile
 from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import _base as tools_base
 from ltspice_mcp.tools._base import symbol_resolver_for
 from ltspice_mcp.tools.verify import (
     VerifyCircuitInput,
@@ -91,12 +95,20 @@ async def findings_of(sheet: Path, state: SessionState) -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _spicelibs_symbols_are_put_back() -> Iterator[None]:
-    remembered = dict(AscEditor.symbol_cache)
-    try:
-        yield
-    finally:
-        AscEditor.symbol_cache = remembered
+def _only_the_suites_own_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A symbol is found beside its sheet or in the suite's stand-in library,
+    and nowhere else.
+
+    An LTspice installed on the machine is otherwise searched after them, by
+    spicelib (its library paths are a class attribute read at import) and by
+    the checker's resolver (the stock paths), and a sheet that places a stock
+    symbol the suite does not hold would then be recorded with its pins on a
+    machine that has LTspice and as not found on one that has not. spicelib's
+    symbol cache, which ``findings_of`` empties, is put back afterwards.
+    """
+    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
+    monkeypatch.setattr(tools_base, "default_stock_paths", list)
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
 
 def _recorded() -> dict[str, Any]:
