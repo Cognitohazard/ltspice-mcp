@@ -745,6 +745,34 @@ start the handler tests use, is held to that. No test starts LTspice where it
 can be seen: the opt-in tier's start is on a desktop of its own, and the start
 in view is tested for the command line and flags it asks Windows for.
 
+The same recording holds what LTspice's own reader says of a results file.
+The bridge can be asked to read one, which is LTspice reading its own format,
+and the server's reader is one this project keeps up itself. So the recorder
+hands LTspice's reader every results file in the main recordings' `raw` group,
+those XVII wrote as well as LTspice 26's own, and keeps each reply under
+`reader/`. `tests/test_ltspice_reader_agreement.py` holds the server's decoder
+to them on any machine: every sample to its last bit, a stepped run divided at
+the same points, the same parameter values a step. It needs no LTspice to
+run. It does need the bridge recorder run again, on Windows with LTspice 26.1
+or later, whenever a results file in the main recordings is added or recorded
+again; until then one test fails and names the script.
+
+The two readers agree on what every file holds. They present five kinds of
+file differently, and the tests pin what LTspice's says of each:
+
+- XVII stores some time points of a compressed transient with the sign set.
+  LTspice 26's reader returns them negative; the server returns plain time.
+- A transient saved from a later start (`.tran 0 2m 1m`) comes back from
+  LTspice's reader starting at zero; the server adds the header's `Offset`.
+- LTspice's reader refuses a file of one point (an operating point, a
+  transfer function); the server reads it.
+- A stepped operating point is one sweep to LTspice's reader, with the
+  stepped parameter for its axis; the server keeps a point a step.
+- A run stopped part way is read by LTspice's reader as far as its header's
+  point count, which can lag the samples; the server's decoder refuses a file
+  whose header and samples disagree, and reports how far the run got
+  another way.
+
 Other bridges may be running on the machine, each with a hidden LTspice of
 its own that comes and goes as windows open and close: an assistant session
 with LTspice's own server registered has one. A recording keeps only the
