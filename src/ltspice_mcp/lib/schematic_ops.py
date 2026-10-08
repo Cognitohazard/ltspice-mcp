@@ -35,11 +35,11 @@ import importlib
 import math
 import re
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Callable, Container, Sequence
+from collections.abc import AsyncIterator, Callable, Container, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, cast
 from weakref import WeakKeyDictionary
 
 from pydantic import Field
@@ -666,6 +666,7 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
 def net_partition(
     editor: AscEditor,
     extra_segments: list[tuple[int, int, int, int]] | None = None,
+    without: str | None = None,
 ) -> NetPartition:
     """The sheet's nets, as ``connectivity.partition`` groups its pins, labels and wires.
 
@@ -676,11 +677,13 @@ def net_partition(
     ``extra_segments`` lets the caller include not-yet-committed wire
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
     on the post-route net layout. Shared by ``trace_nets`` (labels-per-net)
-    and ``trace_net`` (full net membership).
+    and ``trace_net`` (full net membership). ``without`` leaves one part's
+    pins out: the sheet as it is apart from a part about to be placed or moved.
     """
     pins = [
         ((pin["x"], pin["y"]), (entry["ref"], pin["name"]))
         for entry in collect_component_geometry(editor)
+        if entry["ref"] != without
         for pin in entry["pins"]
     ]
     labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
@@ -1117,6 +1120,67 @@ def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     dropped = len(editor.wires) - len(kept)
     editor.wires = kept
     return dropped
+
+
+def _pins_on_crossings(
+    editor: AscEditor,
+    reference: str,
+    pins: Sequence[Mapping[str, Any]],
+    doing: str,
+    already: Container[tuple[int, int]] = (),
+) -> list[str]:
+    """What putting ``reference``'s pins at ``pins`` would join that was apart.
+
+    A pin on a point where wires cross joins them (the ``pin_at_crossing``
+    recording), as a label there does. Anywhere else a pin lands, on a wire's
+    interior or end, a label or another part's pin, there is one net already,
+    so a crossing is the one way placing or moving a part makes one net of
+    two. Two that each carry a name are a short, refused as a wire or a label
+    that joined them is. Otherwise the join is returned to be said: unlike a
+    route's waypoint, a pin put there is taken as meant.
+
+    The sheet is read without the part itself, and ``already`` is where its
+    pins are now: what a pin joins from where it already is, is not this
+    op's doing. Called before the part is placed or moved, so a refusal
+    leaves the sheet as it was.
+    """
+    wires = wire_segments_of(editor)
+    # Nearly every pin is on one wire or none, and the sheet's nets need not
+    # be worked out for those.
+    on_wires = [
+        (pin, through)
+        for pin in pins
+        if (pin["x"], pin["y"]) not in already
+        and len(through := wires_through((pin["x"], pin["y"]), wires)) > 1
+    ]
+    if not on_wires:
+        return []
+    part = net_partition(editor, without=reference)
+    node_of = label_folded_nets(part)
+    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
+    for coord, texts in part.label_texts.items():
+        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
+    said: list[str] = []
+    for pin, through in on_wires:
+        at = (pin["x"], pin["y"])
+        nodes = sorted({node_of(seg[:2]) for seg in through})
+        if len(nodes) < 2:
+            continue
+        pin_name = f"{reference}.{pin['name']}"
+        named = [sorted(names_by_node[node]) for node in nodes if names_by_node[node]]
+        if len(named) > 1:
+            listed = "; ".join(str(names) for names in named)
+            raise NetlistError(
+                f"Refused to {doing}: {pin_name} would land at ({at[0]},{at[1]}), where "
+                f"wires of nets that each carry a name cross ({listed}). A pin on a "
+                "crossing joins the wires, shorting those nets together. Put the part "
+                "where the pin is on the one wire it is meant for."
+            )
+        said.append(
+            f"{pin_name} at ({at[0]},{at[1]}) is on a point where {len(nodes)} wires cross "
+            "that were separate nets; a pin on a crossing joins them."
+        )
+    return said
 
 
 def _move_component_warnings(
@@ -1968,6 +2032,12 @@ def apply_op_inplace(
         if op.reference in editor.components:
             raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
         erot = _parse_rotation(op.rotation)
+        joined = _pins_on_crossings(
+            editor,
+            op.reference,
+            compute_placed_geometry(symbol_info, op.x, op.y, op.rotation)["pins"],
+            f"place {op.reference}",
+        )
         create_component(
             editor,
             op.reference,
@@ -1978,18 +2048,18 @@ def apply_op_inplace(
             value=op.value,
             attributes=op.attributes,
         )
-        return {
-            "op": "add_component",
-            **_placed_component_data(
-                editor,
-                op.reference,
-                op.symbol,
-                op.x,
-                op.y,
-                op.rotation,
-                symbol_info,
-            ),
-        }
+        placed = _placed_component_data(
+            editor,
+            op.reference,
+            op.symbol,
+            op.x,
+            op.y,
+            op.rotation,
+            symbol_info,
+        )
+        if joined:
+            placed["warnings"] = [*cast("list[str]", placed["warnings"]), *joined]
+        return {"op": "add_component", **placed}
 
     if isinstance(op, OpSetComponentValue):
         if op.reference not in editor.components:
@@ -2049,11 +2119,25 @@ def apply_op_inplace(
         )
         old_pins = _component_pin_coords(editor, op.reference)
         other_pins = _other_components_pin_coords(editor, op.reference)
+        moved_symbol = editor.components[op.reference].symbol
+        moved_info = symbol_info_for(editor, moved_symbol) if moved_symbol else None
+        joined = (
+            _pins_on_crossings(
+                editor,
+                op.reference,
+                compute_placed_geometry(moved_info, op.x, op.y, new_rot.name)["pins"],
+                f"move {op.reference}",
+                already=old_pins,
+            )
+            if moved_info is not None
+            else []
+        )
         editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
         # Same bbox-overlap + orphaned-wire warnings as the standalone handler.
         mv_warnings = _move_component_warnings(
             editor, op.reference, new_rot.name, op.x, op.y, old_pins, other_pins
         )
+        mv_warnings.extend(joined)
         mv_result: dict[str, object] = {"op": "move_component", "reference": op.reference}
         if mv_warnings:
             mv_result["warnings"] = mv_warnings
