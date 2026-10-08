@@ -110,6 +110,7 @@ def test_api_routes_constructor_inputs_to_library_bootstrap(
     monkeypatch.setattr(session_module, "bootstrap_library_engine", bootstrap)
     config_path = tmp_path / "custom.toml"
 
+    # timing: data; routed to a stand-in bootstrap, which waits on nothing
     api = Api(
         working_dir=tmp_path,
         config_path=config_path,
@@ -117,6 +118,7 @@ def test_api_routes_constructor_inputs_to_library_bootstrap(
     )
     api.close()
 
+    # timing: data; the value routed above
     assert captured == {
         "working_dir": tmp_path,
         "config_path": config_path,

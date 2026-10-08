@@ -8,6 +8,7 @@ import ctypes
 import errno
 import json
 import os
+import select
 import struct
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import IO
 
 import psutil
 import pytest
@@ -115,7 +117,7 @@ def limits():
         request_bytes=65536,
         metadata_bytes=4096,
         error_bytes=1024,
-        cleanup_grace_s=2,
+        cleanup_grace_s=LIVENESS_S,
     )
 
 
@@ -368,11 +370,35 @@ async def test_blas_environment_is_clamped_only_in_children(call_dir, limits, mo
     assert all(os.environ[name] == "6" for name in names)
 
 
+def _pipe_full(stream: IO[bytes] | None) -> bool:
+    """Whether a pipe has no room left at its write end, so a write blocks (Linux)."""
+    if sys.platform != "linux":
+        return False
+    if stream is None:
+        return False
+    poller = select.poll()
+    poller.register(stream.fileno(), select.POLLOUT)
+    return not poller.poll(0)
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux guardian startup backpressure seam")
-def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limits, monkeypatch):
+async def test_startup_stall_with_full_request_pipe_has_finite_cleanup(
+    call_dir, limits, monkeypatch
+):
+    """A guardian stalled before reading its request, with the request filling
+    its input pipe, is killed once the cleanup grace runs out.
+
+    The call is cancelled once the guardian is in its stall and the pipe is
+    full, so the cleanup always starts from that state however slowly the
+    interpreter starts. The stall lasts longer than the test's time limit
+    (``LIVENESS_S``), so a cleanup that waited for the guardian fails the test
+    instead of finishing when the stall ends.
+    """
     directory = call_dir()
     parser_file_in(directory, "sitecustomize.py").write_text(
-        'import time\nfrom pathlib import Path\nPath("stalled.txt").write_text("ready")\ntime.sleep(60)\n',
+        "import time\nfrom pathlib import Path\n"
+        'Path("stalled.txt").write_text("ready")\n'
+        f"time.sleep({2 * LIVENESS_S})\n",
         encoding="utf-8",
     )
     spawned = []
@@ -393,32 +419,41 @@ def test_startup_stall_with_full_request_pipe_has_finite_cleanup(call_dir, limit
         return process
 
     monkeypatch.setattr(parser_process.subprocess, "Popen", record)
-    cancel = threading.Event()
-    canceller = threading.Timer(0.5, cancel.set)
-    canceller.start()
-    started = time.monotonic()
+    call = asyncio.create_task(
+        run_parser(
+            {"padding": "x" * 1000000},
+            work_dir=directory,
+            deadline=time.monotonic() + LIVENESS_S,
+            # timing: the grace runs out; a guardian in its stall never closes its output
+            limits=replace(limits, request_bytes=2000000, cleanup_grace_s=0.5),
+            _worker_module="parser_fixture",
+        )
+    )
     try:
+        await await_until(
+            written(parser_file_in(directory, "stalled.txt"), str),
+            what="the guardian to stall at startup",
+        )
+        await await_until(
+            lambda: bool(spawned) and _pipe_full(spawned[0].stdin),
+            what="the request to fill the guardian's input pipe",
+        )
+        call.cancel()
+        finished, _ = await asyncio.wait({call}, timeout=LIVENESS_S)
+        assert finished, "the cleanup waited on the stalled guardian"
         with pytest.raises(ParserProcessError) as caught:
-            run_parser_sync(
-                {"padding": "x" * 1000000},
-                work_dir=directory,
-                deadline=started + 5,
-                limits=replace(limits, request_bytes=2000000, cleanup_grace_s=0.5),
-                cancel=cancel,
-                _worker_module="parser_fixture",
-            )
-        assert time.monotonic() - started < 2
-        assert parser_file_in(directory, "stalled.txt").exists()
+            call.result()
         assert caught.value.code == "cleanup_failed" and not caught.value.reaped
-        assert len(spawned) == 1 and spawned[0].poll() is not None
+        assert len(spawned) == 1
+        # Ended by a signal, the cleanup's kill, and not by its stall running out.
+        assert await asyncio.to_thread(spawned[0].wait, timeout=LIVENESS_S) < 0
         assert not parser_file_in(directory, "imported.txt").exists()
     finally:
-        canceller.cancel()
-        canceller.join()
         for process in spawned:
             if process.poll() is None:
                 process.kill()
-            process.wait(timeout=LIVENESS_S)
+            await asyncio.to_thread(process.wait, timeout=LIVENESS_S)
+        await asyncio.wait({call}, timeout=LIVENESS_S)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Requires native Windows Job enforcement")
@@ -544,7 +579,7 @@ raise SystemExit(parser_bootstrap.main())
             str(limits.memory_bytes),
             str(limits.request_bytes),
             str(limits.error_bytes),
-            str(time.monotonic() + 5),
+            str(time.monotonic() + LIVENESS_S),
             str(limits.cleanup_grace_s),
             "parser_fixture",
             "0",
@@ -765,7 +800,7 @@ def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
             str(limits.memory_bytes),
             str(limits.request_bytes),
             str(limits.error_bytes),
-            str(time.monotonic() + 5),
+            str(time.monotonic() + LIVENESS_S),
             "2",
             "parser_fixture",
             "0",
