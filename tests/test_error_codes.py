@@ -251,21 +251,24 @@ class TestSchematicDependencyIsTyped:
         assert not isinstance(exc.value, SymbolResolutionError)
         assert "File not found" in str(exc.value)
 
-    def test_missing_sub_sheet_is_a_dependency_failure(self, work_dir: Path, asc_symbols: Path):
-        # A hierarchical block whose sheet is gone: the editor names the
-        # missing .asc, so a ".asy" match blamed the schematic that opened fine.
-        (work_dir / "myblock.asy").write_text(
-            "Version 4\nSymbolType BLOCK\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
+    def test_missing_model_library_is_a_dependency_failure(
+        self, work_dir: Path, asc_symbols: Path
+    ):
+        # A subcircuit symbol whose model library is gone: the editor names the
+        # missing .lib, so a ".asy" match would blame the schematic that opened.
+        (work_dir / "myamp.asy").write_text(
+            "Version 4\nSymbolType CELL\nSYMATTR Prefix X\nSYMATTR ModelFile nosuch.lib\n"
+            "SYMATTR Value myamp\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
             encoding="utf-8",
         )
         sheet = work_dir / "top.asc"
         sheet.write_text(
-            "Version 4\nSHEET 1 880 680\nSYMBOL myblock 0 0 R0\nSYMATTR InstName X1\n",
+            "Version 4\nSHEET 1 880 680\nSYMBOL myamp 0 0 R0\nSYMATTR InstName X1\n",
             encoding="utf-8",
         )
         with pytest.raises(SymbolResolutionError) as exc:
             make_editor(sheet)
-        assert "myblock.asc" in str(exc.value)
+        assert "nosuch.lib" in str(exc.value)
 
 
 class TestNoAxisIsTyped:
@@ -517,6 +520,9 @@ FROZEN_ERROR_CODES = (
     "not_recoverable",
     "op_failed",
     "open_failed",
+    "open_window_differs",
+    "open_windows_unavailable",
+    "open_windows_unreachable",
     "order_disagreement",
     "overlapping_assignment",
     "overlapping_mismatch_rules",
@@ -597,6 +603,7 @@ FROZEN_ERROR_CODES = (
     "server_restarted",
     "server_shutdown",
     "simulation_failed",
+    "simulator_docs_unavailable",
     "solve_failure",
     "source_drift",
     "source_modified_after_staging",
@@ -616,6 +623,7 @@ FROZEN_ERROR_CODES = (
     "trace_unit_unknown",
     "transport_delay",
     "unencodable_device_ref",
+    "unknown_document",
     "unknown_section",
     "unmet_request",
     "unpersisted_runs_recovered",

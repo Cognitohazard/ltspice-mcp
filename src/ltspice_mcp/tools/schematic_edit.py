@@ -48,7 +48,8 @@ from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, r
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text
-from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.ltspice_bridge import BridgeError
+from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -90,6 +91,7 @@ from ltspice_mcp.lib.schematic_ops import (
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    LTSPICE_WINDOW_PROPERTIES,
     OUTCOME_SCHEMA,
     VALIDATION_WARNINGS_SCHEMA,
     StrictModel,
@@ -451,6 +453,27 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     },
                 },
                 "required": ["index", "op"],
+            },
+        },
+        "open_in_ltspice": {
+            "type": "array",
+            "description": (
+                "Present when an LTspice window had this sheet open: one entry "
+                "per window, saying whether it now shows the committed sheet. "
+                "A window that was not updated still shows the sheet as it was, "
+                "and a save from it would overwrite this edit."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    **LTSPICE_WINDOW_PROPERTIES,
+                    "shown": {"type": "boolean"},
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the window was not updated.",
+                    },
+                },
+                "required": ["pid", "version", "shown"],
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -1071,6 +1094,7 @@ def _envelope(
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
+    open_in_ltspice: list[dict[str, object]] | None = None,
     hint: str | None = None,
 ) -> dict[str, Any]:
     """Build one response payload; the shared rule decides its outcome.
@@ -1110,9 +1134,58 @@ def _envelope(
         data["verification"] = verification
     if netlist is not None:
         data["netlist"] = netlist
+    if open_in_ltspice:
+        data["open_in_ltspice"] = open_in_ltspice
     if hint is not None:
         data["hint"] = hint
     return data
+
+
+def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> str | None:
+    """Which LTspice window holds a different sheet from the file, and how, or None."""
+    for sheet in sheets:
+        difference = file_difference(on_disk, sheet.text)
+        if difference is not None:
+            return (
+                f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
+                f"a different one from the file ({difference}): either it has changes "
+                "nobody saved, or the file changed after it was opened."
+            )
+    return None
+
+
+_WINDOW_REMEDY = (
+    "Save the sheet in LTspice (Ctrl+S) to keep the window's version, or close it there "
+    "without saving to keep the file's; then read the sha256 again and resubmit, since a "
+    "save rewrites the file."
+)
+
+
+def _window_row(sheet: OpenSheet, refusal: str | None) -> dict[str, object]:
+    """What a window that had the sheet open shows now, as the reply lists it."""
+    row: dict[str, object] = {"pid": sheet.pid, "version": sheet.version, "shown": refusal is None}
+    if refusal is not None:
+        row["reason"] = refusal
+    return row
+
+
+def _window_notes(shown: Sequence[Mapping[str, object]]) -> list[str]:
+    """One sentence per window on what it shows now, for the hint."""
+    notes: list[str] = []
+    for row in shown:
+        if row["shown"]:
+            notes.append(
+                "The LTspice window that has this sheet open now shows it; undo there "
+                "steps back to the sheet before this edit, which the file no longer holds."
+            )
+        else:
+            notes.append(
+                f"An LTspice window (process {row['pid']}) has this sheet open and could "
+                f"not be updated ({row.get('reason')}): it still shows the sheet as it "
+                "was, and saving from it would overwrite this edit. Close the sheet "
+                "there without saving and open it again."
+            )
+    return notes
 
 
 @dataclass(frozen=True)
@@ -1190,7 +1263,38 @@ async def _evaluate_edit_schematic(
         # --- revision guard (inside the guard so a peer's committed write is seen)
         exists = target.exists()
         expected = args.expected_sha256.lower() if args.expected_sha256 else None
-        current = sha256_file(target) if exists else None
+        # One read: the digest the token is checked against is of the bytes an
+        # open window is compared with and the commit's codec is chosen from.
+        on_disk = target.read_bytes() if exists else None
+        current = hashlib.sha256(on_disk).hexdigest() if on_disk is not None else None
+
+        def refused(
+            *, code: str, stage: str, failure: str, message: str, hint: str, text: str
+        ) -> EditSchematicEvaluation:
+            """The reply to a call refused before anything was written."""
+            _failed(stage, failure)
+            return finish(
+                EditSchematicEvaluation(
+                    data=_envelope(
+                        delivered=False,
+                        commit_state="not_committed",
+                        target=target,
+                        build_id=build_id,
+                        base=args.base,
+                        stages=stages,
+                        sha256=current,
+                        error={
+                            "code": code,
+                            "message": message,
+                            "stage": stage,
+                            "retryable": True,
+                        },
+                        hint=hint,
+                    ),
+                    text=text,
+                )
+            )
+
         # The token guards against a lost update, which only a write can cause:
         # a dry run or an op-less read checks one it is given and reports a
         # mismatch, but does not need one.
@@ -1203,69 +1307,41 @@ async def _evaluate_edit_schematic(
                 # write would take, so a retry that quotes it is exactly as
                 # safe as one quoting a prior read: a peer's write between the
                 # two still loses the race and comes back as revision_conflict.
-                _failed("revision_check", "expected_sha256 missing")
-                return finish(
-                    EditSchematicEvaluation(
-                        data=_envelope(
-                            delivered=False,
-                            commit_state="not_committed",
-                            target=target,
-                            build_id=build_id,
-                            base=args.base,
-                            stages=stages,
-                            sha256=current,
-                            error={
-                                "code": "expected_sha256_required",
-                                "message": (
-                                    f"{target.name} already exists, so expected_sha256 is "
-                                    "required — it is what keeps a concurrent edit from "
-                                    f"being lost. Its current sha256 is {current}; resubmit "
-                                    "with that if it is the revision you edited against."
-                                ),
-                                "stage": "revision_check",
-                                "retryable": True,
-                            },
-                            hint=(
-                                "Nothing was written. Resubmit the same ops with "
-                                f"expected_sha256={current}."
-                            ),
-                        ),
-                        text=(
-                            f"edit_schematic: {target.name} exists and needs "
-                            f"expected_sha256; its current sha256 is {current}. "
-                            "Nothing was written."
-                        ),
-                    )
+                return refused(
+                    code="expected_sha256_required",
+                    stage="revision_check",
+                    failure="expected_sha256 missing",
+                    message=(
+                        f"{target.name} already exists, so expected_sha256 is "
+                        "required — it is what keeps a concurrent edit from "
+                        f"being lost. Its current sha256 is {current}; resubmit "
+                        "with that if it is the revision you edited against."
+                    ),
+                    hint=(
+                        "Nothing was written. Resubmit the same ops with "
+                        f"expected_sha256={current}."
+                    ),
+                    text=(
+                        f"edit_schematic: {target.name} exists and needs "
+                        f"expected_sha256; its current sha256 is {current}. "
+                        "Nothing was written."
+                    ),
                 )
             if current != expected:
-                _failed("revision_check", "sha mismatch")
-                return finish(
-                    EditSchematicEvaluation(
-                        data=_envelope(
-                            delivered=False,
-                            commit_state="not_committed",
-                            target=target,
-                            build_id=build_id,
-                            base=args.base,
-                            stages=stages,
-                            sha256=current,
-                            error={
-                                "code": "revision_conflict",
-                                "message": (
-                                    f"expected_sha256 {expected} does not match the current "
-                                    f"file ({current}); nothing was written."
-                                ),
-                                "stage": "revision_check",
-                                "retryable": True,
-                            },
-                            hint="Re-read the target, then resubmit with its current sha256.",
-                        ),
-                        text=(
-                            f"edit_schematic: revision_conflict on {target.name} — the file "
-                            "changed since you read it. Re-read it and resubmit with the "
-                            "current sha256."
-                        ),
-                    )
+                return refused(
+                    code="revision_conflict",
+                    stage="revision_check",
+                    failure="sha mismatch",
+                    message=(
+                        f"expected_sha256 {expected} does not match the current "
+                        f"file ({current}); nothing was written."
+                    ),
+                    hint="Re-read the target, then resubmit with its current sha256.",
+                    text=(
+                        f"edit_schematic: revision_conflict on {target.name} — the file "
+                        "changed since you read it. Re-read it and resubmit with the "
+                        "current sha256."
+                    ),
                 )
         revision_notes: list[str] = []
         if current is not None and expected is not None and current != expected:
@@ -1280,9 +1356,42 @@ async def _evaluate_edit_schematic(
         # A batch of nothing but plot panes (or no ops at all) leaves an
         # existing sheet as it is: nothing in it is read twice or written.
         sheet_kept = not use_template and all(isinstance(op, OpSetPlotPanes) for op in args.ops)
+
+        # --- the sheet as an LTspice window holds it. LTspice never reads the
+        # file again, so a window with it open has a copy of its own: one that
+        # differs from the file may hold unsaved work, and committing under it
+        # would leave two sheets each missing the other's changes. Inside the
+        # guard, so the window is read against the file this commit replaces.
+        # A call that leaves the sheet as it is has nothing to ask a window.
+        open_sheets: list[OpenSheet] = []
+        window_notes: list[str] = []
+        if on_disk is not None and not sheet_kept and state.open_windows.available:
+            try:
+                open_sheets = await asyncio.to_thread(state.open_windows.holding, target)
+            except BridgeError as exc:
+                window_notes.append(
+                    f"LTspice could not be asked whether {target.name} is open in a window "
+                    f"({exc}); one that has it open still shows the sheet as it was."
+                )
+            differs = _window_differs(on_disk, open_sheets)
+            if differs is not None and dry_run:
+                window_notes.append(f"{differs} A commit is refused until it is saved or closed.")
+            elif differs is not None:
+                return refused(
+                    code="open_window_differs",
+                    stage="window_check",
+                    failure="the open LTspice window differs from the file",
+                    message=f"{differs} Nothing was written.",
+                    hint=_WINDOW_REMEDY,
+                    text=(
+                        f"edit_schematic: {target.name} is open in an LTspice window that "
+                        f"holds a different sheet. Nothing was written. {_WINDOW_REMEDY}"
+                    ),
+                )
+
         plot = SheetPlotSettings.beside(target)
         # Read before the ops run: what the commit's codec turns on.
-        sheet_was_ascii = use_template or target.read_bytes().isascii()
+        sheet_was_ascii = use_template or (on_disk is not None and on_disk.isascii())
         editor = _build_editor(target, use_template, state)
         # Set once the atomic rename lands. From that point every escape must be
         # reported on a committed envelope instead of re-raised (see the except
@@ -1389,7 +1498,7 @@ async def _evaluate_edit_schematic(
                             results=op_results,
                             warnings=warnings,
                             failures=failures,
-                            observations=revision_notes,
+                            observations=revision_notes + window_notes,
                             hint=" ".join(
                                 filter(
                                     None,
@@ -1444,6 +1553,19 @@ async def _evaluate_edit_schematic(
             # --- post-commit: everything below keeps commit_state='committed'
             # Each post-commit stage names itself while it runs and hands back
             # to "response" when it is over.
+            shown: list[dict[str, object]] = []
+            if open_sheets:
+                # First of the post-commit stages: a window left on the old
+                # sheet can save it back over this commit, whatever happens
+                # to the stages after this one.
+                post_commit_stage = "open_window"
+                refusals = await asyncio.to_thread(
+                    state.open_windows.show_each, open_sheets, committed_text
+                )
+                shown = [
+                    _window_row(sheet, refusal)
+                    for sheet, refusal in zip(open_sheets, refusals, strict=True)
+                ]
             post_commit_stage = "views"
             neutral_views = _build_edit_views(
                 profile, legend, pins_reported, preexisting_rows, committed_sha
@@ -1479,7 +1601,7 @@ async def _evaluate_edit_schematic(
                 if mismatch:
                     netlist = exported
 
-            hint = _commit_hint(verification, left_out_hint)
+            hint = " ".join([_commit_hint(verification, left_out_hint), *_window_notes(shown)])
             return finish(
                 EditSchematicEvaluation(
                     data=_envelope(
@@ -1498,6 +1620,8 @@ async def _evaluate_edit_schematic(
                         netlist=netlist,
                         results=op_results,
                         warnings=warnings,
+                        observations=window_notes,
+                        open_in_ltspice=shown,
                         hint=hint,
                     ),
                     text=f"edit_schematic committed {target.name} (build {build_id}).",

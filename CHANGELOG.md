@@ -165,6 +165,11 @@ recording that showed it.
   reads to the number LTspice ran. `8%` stays refused: LTspice 26 refuses it.
   Where a value has to be told from a name (comparing two netlists, Monte
   Carlo, a variation's assignment), `2N2222` and `1N4148` are still names.
+- `inspect(kind="hierarchy")` read the same infix values wrongly: it took
+  `4R7` for 4 followed by a stray 7 and gave 4.07, and `1k5` as 1000.05. A
+  bare element value is now read as LTspice reads it. Inside an expression
+  (`{1k5}`, or a `.param`) what LTspice makes of a digit after the letters is
+  not recorded, so the value is left unresolved with that reason.
 - Three refusals LTspice 26 states on a line of their own (`No analysis
   specified.`, `More than one analysis specified.`, `R1: Resistance must not
   be zero.`) were not extracted, so the caller got a log excerpt and no
@@ -191,6 +196,15 @@ recording that showed it.
   a UTF-8 sheet's bytes into its export and reads the export as cp1252, so that
   value runs as 1, not 1e-6. An export that opens with its schematic's path and
   names no generator is now read as XVII's, and the micro sign is a warning.
+- `inspect(kind="symbol")` gave a symbol's pins but not what an instance of it
+  is netlisted with, so a model name such as an A-device's had to be read from
+  the `.asy`. It now lists the symbol's `SymbolType` and every attribute it
+  carries (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`...).
+- A sheet using a block symbol with no sheet of its own (`SymbolType BLOCK`,
+  its subcircuit defined in a library, or not yet) could not be opened at all:
+  `edit_schematic`, `inspect` and `verify_circuit` failed with "File ….asc not
+  found", though LTspice exports it. Such an instance now opens with its
+  subcircuit unresolved, as LTspice reads it, and the sheet can be edited.
 - `verify_circuit`'s comparison read a subcircuit instance LTspice exported
   with an added `X` (`Xe` as `X§Xe` from LTspice 24 on, `XXe` from XVII) as a
   different part from the `Xe` a netlist written by hand names, so every leaf
@@ -712,6 +726,47 @@ recording that showed it.
 - The warning for an ngspice run that skipped `.four` names the `tone` and
   `thd` recipes, which read harmonics from the raw it still wrote, instead of
   saying Fourier and THD are unavailable.
+- A schematic that is open in LTspice now follows `edit_schematic` (Windows,
+  LTspice 26.1 or later). LTspice reads a sheet once: an edit to the file was
+  invisible in the window, and the window's next save wrote the old sheet back
+  over it. The committed sheet now appears in the window at once, as one step
+  of its undo history, and the reply lists the window under `open_in_ltspice`.
+  An edit is refused as `open_window_differs`, with nothing written, while the
+  window holds a different sheet from the file (unsaved changes, or a file
+  that changed after it was opened); the comparison reads content, since
+  LTspice rewrites a sheet's text on opening it. This goes through the MCP
+  bridge LTspice ships, started where an LTspice it launched could not be seen
+  or left behind. LTspice is never started for it, and text holding a NUL
+  character, which makes LTspice stop answering, is never sent to a window.
+  `[schematic] sync_open_window = false` turns it off, and
+  `inspect(kind="capabilities")` reports it under `open_window_sync`.
+- `inspect(kind="open_in_ltspice")` lists the sheets and netlists open in
+  LTspice and marks the one in front, so a request about "this circuit" has
+  somewhere to start. A sheet inside the sandbox comes with its `sha256` and
+  with whether its window differs from the file.
+- `inspect(kind="simulator_docs")` lists and reads the reference documents
+  LTspice 26.1 installs (keyboard shortcuts, menus, the schematic format,
+  `.MEAS`, the waveform viewer), in sections paged at their headings. They are
+  read from the install and not packaged.
+- `plot_waveform(in_ltspice=true)` opens the run in the LTspice window that is
+  already running. For a transient or AC run the plotted traces are drawn: it
+  writes the plot settings file LTspice loads beside the results, in the form
+  `set_plot_panes` writes one, and keeps the file's other analyses. Settings a
+  person saved from LTspice are left alone.
+- `verify_circuit(in_ltspice=true)` opens the checked sheet or netlist in the
+  LTspice window that is already running and puts it in front. A sheet the
+  window already had open is shown as the window holds it, and the reply says
+  when that is not the file that was checked.
+- The guide says what to do when a person wants to plot nets by clicking the
+  sheet in LTspice. LTspice offers that only after a run made in its own
+  window, and a job's results opened there are drawn but not tied to the
+  sheet. So that one run is started through LTspice's own MCP server where it
+  is connected, or by the person, and measured by path with
+  `analyze_results(raw_path)`. Such a run simulates the window's copy of the
+  sheet, not the file.
+- The server is also published as `osic-mcp` (open-source IC), a third alias
+  beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
+
 - Opt-in recoverable experiments freeze circuit inputs, simulator startup
   settings, seeds and attempt history. `jobs(action="resume")` retains
   verified completed cases and retries eligible unfinished cases under the
@@ -938,6 +993,16 @@ recording that showed it.
   `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
+
+- The server's name in a client is `spice`, where the README and the Claude
+  Code plugin used `ltspice`. LTspice 26.1 ships an MCP server of its own and
+  registers it as `ltspice`, so the two would have shared a name. **For plugin
+  users the tool names change once**, from `…_ltspice__<tool>` to
+  `…_spice__<tool>`: a saved permission rule or an instruction that names the
+  old ones needs the new. A server registered by hand keeps whatever name its
+  entry has; rename an entry called `ltspice`.
+  The package, the command (`ltspice-mcp`), the repository and the Claude
+  Desktop extension keep their names.
 
 - `jobs(action="wait")` on a job another server process owns notices the
   owner finishing within half a second; it re-read the record every two

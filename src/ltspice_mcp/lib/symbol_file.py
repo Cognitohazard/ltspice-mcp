@@ -37,9 +37,6 @@ class PinInfo:
     x: int
     y: int
 
-    def to_dict(self) -> dict:
-        return {"name": self.name, "order": self.order, "x": self.x, "y": self.y}
-
 
 #: Slack for an angle or a coordinate that arithmetic left a hair off the value
 #: it stands for, so that an arc ending on a quarter turn reaches it.
@@ -131,8 +128,9 @@ class SymbolFile:
     ``pins`` are in SPICE order, the order a netlist lists the terminals in.
     ``lines``, ``rects`` and ``circles`` are each two corner points; a circle's
     are the corners of its box. ``attrs`` are the ``SYMATTR`` lines in file
-    order. ``unread_pins`` holds each ``PIN`` or pin-order line that did not
-    read.
+    order, and ``symbol_type`` is the ``SymbolType`` (``CELL``, ``BLOCK``),
+    empty when the file states none. ``unread_pins`` holds each ``PIN`` or
+    pin-order line that did not read.
     """
 
     pins: tuple[PinInfo, ...] = ()
@@ -142,6 +140,7 @@ class SymbolFile:
     arcs: tuple[SymbolArc, ...] = ()
     windows: tuple[Window, ...] = ()
     attrs: tuple[tuple[str, str], ...] = ()
+    symbol_type: str = ""
     unread_pins: tuple[str, ...] = ()
 
     def attr(self, name: str) -> str:
@@ -224,6 +223,7 @@ def read_symbol(text: str) -> SymbolFile:
     arcs: list[SymbolArc] = []
     windows: list[Window] = []
     attrs: list[tuple[str, str]] = []
+    symbol_type = ""
     unread_pins: list[str] = []
 
     index = 0
@@ -249,6 +249,8 @@ def read_symbol(text: str) -> SymbolFile:
                 windows.append(window)
         elif keyword == "SYMATTR" and len(words) > 1:
             attrs.append((words[1], value_of(line)))
+        elif keyword == "SymbolType" and len(words) > 1:
+            symbol_type = line.split(None, 1)[1].strip()
         elif keyword == "PIN":
             at = leading_ints(words[1:], 2)
             if at is None:
@@ -279,5 +281,6 @@ def read_symbol(text: str) -> SymbolFile:
         arcs=tuple(arcs),
         windows=tuple(windows),
         attrs=tuple(attrs),
+        symbol_type=symbol_type,
         unread_pins=tuple(unread_pins),
     )

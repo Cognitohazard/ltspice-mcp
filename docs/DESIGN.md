@@ -75,12 +75,88 @@ Python, and there's an extra process to maintain.
 |`xuio/ltspice-mcp`|create/modify/lint|not compared|not compared|macOS-only|
 |`daviditkin/ltspice-mcp`|netlist-level (9 tools)|none|none|not compared|
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
+|LTspice's own MCP server (26.1+)|replaces a whole open sheet with text the model wrote|none|none: one run of the open design, raw waveform reads|Windows only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
 "not compared" means we have not run that project and are not claiming
 anything about it either way. It is not a statement that the capability is
 absent — the other cells are read from each project's own description, and
 none of the third-party rows have been benchmarked against this one.
+
+The row for LTspice's own server is read from the tools the 26.1.1 bridge
+lists, not from a description of it.
+
+### LTspice's own MCP server
+
+From 26.1 LTspice carries an MCP server: each LTspice window listens on the
+loopback interface, and `ltspice-mcp-bridge.exe`, installed beside
+`LTspice.exe`, is the stdio program a client registers. It does a different
+job from this server. It is a remote control for the window: it lists and reads
+the documents that are open, replaces one with text the model wrote, asks for
+the netlist, starts a run of the open design and reads a log or samples from a
+raw file. It has no notion of a pin, a sweep, a job or a metric, and its own
+help advises keeping a model away from drawing.
+
+Most of that this server already does on files, with more behind it: typed and
+validated ops in place of whole-sheet text, experiments in place of one run,
+recipes in place of raw samples. None of it is routed through the bridge. Its
+reference documents are files in the install, and `inspect(kind="simulator_docs")`
+reads them from there.
+
+The one thing only LTspice can reach is the window, and that is what the bridge
+is used for. LTspice reads a sheet once: a sheet edited on disk while it is
+open stays as it was on screen, and the window's next save writes the old sheet
+back over the edit. So `edit_schematic` asks the bridge whether a window has
+the target open, refuses to commit under one whose copy differs from the file,
+and after a commit replaces the window's copy with the committed sheet, which
+appears at once and is one step of the window's undo history
+(`lib/ltspice_window.py`; the contract is in
+[mcp_surface.md](design/mcp_surface.md), "A sheet open in LTspice"). The same
+route answers "what do I have open" (`inspect(kind="open_in_ltspice")`), and
+puts things in the window when a person asks to see them there: a sheet
+(`verify_circuit(in_ltspice=true)`) or a finished run's results
+(`plot_waveform(in_ltspice=true)`, under *Export & plot surface* below). Each
+is an argument on the tool that already shows that thing, a sheet or a run,
+and not a tool of its own: there are two such actions, each has an object the
+surface already names, and a tool for the window alone would be the remote
+control LTspice's own server is.
+
+The file stays the record, and the window is a view of it. LTspice's server
+takes the other side: the window is the document and saving is the user's. Had
+this server followed, every tool that reads a file (a run, an export, a
+comparison) would read something behind what the user sees.
+
+Two constraints came from observing the bridge and are recorded in
+`tests/fixtures/ltspice_bridge_recorded`. The first is that it starts an
+LTspice of its own when it has none to talk to, on any request that needs one
+and even when told which instance to use. Nothing in the bridge turns that off,
+so it is contained instead: the bridge is started on the server's hidden
+desktop, in a job that ends with the session, and whatever it launches has its
+windows there and does not outlive the session
+(`lib/hidden_desktop.py`, which is where anything that can start LTspice on
+Windows is started from). It is also run with `--ltspice-path` naming a file
+that does not exist, which makes the launch fail before it starts; that keeps
+the common case from starting anything at all, but it is a failure the bridge
+reports, not a mode it offers, so it is the second line and not the first. The
+session lists the windows and attaches to one by process id before it asks for
+anything, so a launch is attempted only when that window closes in between.
+
+The second is that what a window hands back is LTspice's own writing of the
+sheet, which differs from the file in ways that change nothing, so the
+comparison reads content and not text. Only the bridge's stdio interface is
+used; the loopback protocol behind it is not documented and is left alone.
+
+One thing stays with LTspice's server: a run made in the window. It is the
+only run whose waveform pane LTspice ties to the sheet, so that clicking a net
+plots it. A job's results opened in the window are drawn and not tied, and
+putting them beside the sheet under its name changes nothing (26.1.1, looked
+at in all four combinations of where the results came from and how the panes
+were laid out). Such a run is also of the window's copy and not of the file,
+and leaves no record: the opposite of a job on each count the job system
+exists for. So this server does not start one. The guide tells a session to
+use LTspice's `start_simulation` for it when that server is connected, or to
+ask the person to run the sheet, and then to measure the results it leaves
+beside the sheet by path, which is what `analyze_results(raw_path)` is for.
 
 Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,
@@ -382,6 +458,28 @@ so zoom / pan / hover does nothing for it.
   Both always return the file path and a text summary, so a host with neither
   surface still gets a usable result (the fallback the MCP Apps spec
   describes).
+- **In the user's LTspice — on request, on `plot_waveform`.** A person who
+  works in LTspice wants to look in LTspice: its cursors, its Add Trace box,
+  the viewer they already know. `in_ltspice` opens the run's results file in
+  the LTspice window that is already running, through the bridge LTspice
+  ships (`OpenWindows.show_results`). A results file opened there shows an
+  empty plot unless a plot settings file of the same name sits beside it, so
+  the server writes one naming the panels' traces, with the module that
+  writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`), replacing
+  the section of the run's analysis and keeping the others. That covers the
+  two analyses whose section is recorded, a transient and an AC run; any
+  other run opens with an empty plot and the reply says why. A settings file
+  a person saved from LTspice is left alone: writing its panes back never
+  gives its bytes, which is how it is told from one written here. LTspice is
+  not started for
+  this; with no window open the settings are still written, so the file opens
+  with its traces when the person opens it by hand. It is the one place the
+  server opens anything in a window, and it does so only when asked, which is
+  why it is an argument and not a setting. The chart and the trace summaries
+  are made all the same, and the browser is not opened as well. What LTspice
+  loads when it opens a results file it does not load again while the file
+  stays open, and nothing the bridge answers says whether it was open, so the
+  reply says that a file already open keeps the traces it had.
 - **Static PNG (the vision tier) — opt-in, on `plot_waveform`.** A config
   default `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
   parameter that overrides it: an operator can attach a plot to every

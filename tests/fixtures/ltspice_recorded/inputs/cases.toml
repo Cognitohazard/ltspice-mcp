@@ -398,6 +398,39 @@ summary = "That a build started on a desktop of its own, where its window cannot
 model = ["lib/hidden_desktop.py", "lib/ltspice_windows.py"]
 evidence = "every case here was recorded with the build on a desktop of its own; manifest: cases.*.dialog holds the two message boxes LTspice XVII stopped on there"
 
+# ---------------------------------------------------------------- an open window
+
+[behaviour.open-window-copy]
+summary = "That a window holds its own copy of a sheet: how that copy differs in text from the file it read (the first line, the order of wires and of a symbol's attributes, an attribute with no value, the micro sign, text off the grid), that replacing it leaves the file alone, and that it never follows the file."
+model = ["lib/ltspice_window.py", "tools/schematic_edit.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded (sheets/ and conversation.json), recorded from LTspice 26.1 by tests/ltspice_bridge_recorder.py, which needs a window and so is a recorder of its own; LTspice XVII has no bridge to ask"
+
+[behaviour.pushed-sheet-undo]
+summary = "That a sheet put into a window is one step of that window's undo history: Undo gives back the sheet the window held before, one push at a time, and Redo puts it back."
+model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
+unrecordable = "Undo is a key press in the window, and the bridge has no call for it. It was looked at on LTspice 26.1.1, on a desktop of its own: two changed sheets were put into a window one after the other, Ctrl+Z was posted to the sheet's view with the Control key down in that window's own key state, and the window's copy was read back through the bridge after each. One Ctrl+Z gave back the first pushed sheet, a second the sheet as opened, and Ctrl+Shift+Z the first pushed sheet again. The file was never written."
+
+[behaviour.bridge-replies]
+summary = "What ltspice-mcp-bridge.exe answers to each call the server makes, that started with --ltspice-path naming no file it attaches to a window and its launch of an LTspice fails, and that it reaches a window on a desktop it is not on."
+model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json, which test_ltspice_bridge.py also replays against the stand-in bridge the suite uses"
+
+[behaviour.plot-settings-on-open]
+summary = "That LTspice loads the plot settings file beside a results file when that file is opened on its own, as it does when a sheet runs, and that a results file already open keeps the traces it had."
+model = ["lib/ltspice_window.py", "tools/analysis.py"]
+unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded is around it: how each build reads a file the server wrote when a sheet runs with it beside it (plot-settings-read), and that reading a results file's description opens it and leaves it the one in front (tests/fixtures/ltspice_bridge_recorded, conversation.json). LTspice XVII has no bridge to open a file through."
+
+[behaviour.window-run]
+summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it; and that only such a run's waveform pane is tied to the sheet, so that clicking a net plots it."
+model = ["assets/guide/schematics.md"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the three facts noted after 'run the sheet in the window', made with the window holding one resistor value and the file another"
+unrecordable = "The tie between a pane and a sheet is seen and not reported: nothing lists what a click added. It was looked at on LTspice 26.1.1, on a desktop of its own, by posting the same grid of clicks to the sheet's view and capturing the window. After a run made in the window the clicks added traces, with the panes tiled or with the sheet covering the results. With results from a batch run of the same sheet, beside it under its name and opened in the window, they added none in either layout."
+
+[behaviour.reference-documents]
+summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."
+model = ["lib/simulator_docs.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/manifest.json: reference, the file names and front matter keys of the install (the documents are the vendor's and are not recorded); LTspice XVII installs none"
+
 # ---------------------------------------------------------------- plot settings
 
 [behaviour.plot-settings]

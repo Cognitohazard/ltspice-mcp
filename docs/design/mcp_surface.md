@@ -1132,6 +1132,52 @@ rebuild from its own ops. What is lost is a one-call "undo everything this
 session". Specifying a real restore feature — snapshot ids, lifetimes,
 cross-session rules — was judged worse half-done than absent.
 
+**A sheet open in LTspice.** LTspice reads a sheet once. A window that has the
+target open holds a copy of its own from then on: a write to the file changes
+nothing on screen, and the window's next save puts the old sheet back over the
+new file. So a transaction that replaces the sheet looks for such a window,
+inside the edit guard, through the MCP bridge LTspice ships from 26.1
+(`lib/ltspice_window.py`). One that leaves the sheet as it is (a read with no
+ops, a batch of nothing but `set_plot_panes`) replaces nothing a window holds,
+and asks nothing:
+
+- **Before the commit** the window's copy is compared with the file. A window
+  that differs either has changes nobody saved or was opened before the file
+  last changed, and committing under it would leave two sheets each missing the
+  other's changes. The call fails as `open_window_differs` at stage
+  `window_check`, naming a few of the entries that differ, with nothing
+  written; the remedy is the user's (save the window to keep its version, or
+  close it without saving to keep the file's). A dry run reports the same thing
+  in `observations` and is not refused. The comparison is of content, not text:
+  LTspice hands back its own writing of a sheet, which differs from the file it
+  read in the first line, the order of wires and attributes, attributes with no
+  value, the micro sign and off-grid text, none of which is a change.
+- **After the commit** the committed sheet replaces the window's copy, which
+  LTspice records as one step of that window's undo history. `open_in_ltspice`
+  has one entry per window, `{pid, version, shown, reason?}`. A window that
+  could not be updated (`shown: false`) does not fail the call, since the file
+  is committed and that is what was asked for, but the entry and the `hint` say
+  that it still shows the old sheet and that a save from it would overwrite the
+  edit.
+
+The file stays the record: `expected_sha256` is still of the file, the window
+is never read in place of it, and a save from the window afterwards is an
+external write like any other (LTspice rewrites the sheet its own way, so the
+digest changes and the next edit must read it again). The alternative, editing
+the window's copy and leaving the save to the user as LTspice's own MCP server
+does, would make every other tool on the surface read a file that is behind
+what the user sees. LTspice is not started for this, and a sheet is never
+opened in a window that did not have it. The bridge would start an LTspice of
+its own if the window closed under it, so it runs on the server's hidden
+desktop in a job that ends with the call, where one it started could not be
+seen or left behind, and it is told where LTspice is not, so that the launch
+fails (`lib/ltspice_bridge.py`). It applies where the server
+runs on Windows itself with LTspice 26.1 or later; elsewhere, and with
+`[schematic] sync_open_window = false`, nothing is asked and
+`inspect(kind: "capabilities")` says why under `open_window_sync`. A bridge
+that cannot be asked does not stop an edit: the commit goes ahead and
+`observations` says the window could not be checked.
+
 **Per-op facts.** `results` carries what each op found on the sheet, one entry
 per op, keyed by `index` and `op` like a `failures` entry: for `wire_pins` the
 segments it found `already_present` and the `junctions` it made, for the
@@ -1268,6 +1314,7 @@ compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 preexisting {count, findings, label_only_pins, cursor},
 views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
+open_in_ltspice? (one entry per LTspice window that had the sheet open),
 warnings, failures, observations, hint`.
 
 ### 3.5 `verify_circuit` — gate
@@ -1282,6 +1329,8 @@ render        {format: "png"|"svg", scale?, max_pixels?,
                delivery: "artifact"|"inline"|"both"}
               `true` selects the default policy; `false` or omitted renders
               nothing
+in_ltspice    also open the file in the LTspice window the user has running,
+              in front; default false
 export_to     "sidecar" (default) | "managed"
 ```
 
@@ -1294,6 +1343,22 @@ into. A tool never advertises a field it cannot honour, which is also why
 the flat `reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with
 said nothing the object did not, and a call carrying both was refused rather
 than resolved.
+
+**In LTspice, on request.** After an assistant builds or changes a sheet, the
+person has to go and find it to look. `in_ltspice` opens the checked file in
+the LTspice window that is already running and puts it in front, through the
+bridge LTspice ships (`OpenWindows.open_sheet`); a netlist opens the same way.
+It is here and not on `edit_schematic` for the reason `render` is: this is the
+tool for looking at a sheet, and LTspice's window is one more place to look. The
+reply's `ltspice` block says what happened: `{shown, path, pid, version,
+already_open, differs_from_file?, difference?, reason?}`. A sheet the window
+already had open is put in front as the window holds it, because LTspice does
+not read a file again, so its copy is compared with the file and
+`differs_from_file` says when the person is looking at something else than was
+checked. LTspice is not started for this: with no window open the block says so
+and the checks stand. It never fails the call. Like `plot_waveform`'s argument
+of the same name, it opens something in a window and so is an argument a caller
+passes when asked, never a default.
 
 `sidecar`, the default, overwrites the schematic's `<name>.net` under lock and
 returns `{path, sha256, diff_vs_prior?}`. That is the file LTspice itself
@@ -1392,7 +1457,9 @@ Python API), which are never capped. The gate stays a whole-file answer.
     one the `remediation` that would turn it on; named_executables: the same
     facts and the family for each [simulator.executables] entry bound at
     startup, keyed by the selector execution.simulator takes ("ltspice:xvii");
-    exporter presence, dialects, persistence,
+    exporter presence, `open_window_sync: {available, reason}` (whether
+    edit_schematic can keep a sheet open in an LTspice window in step with
+    its file), dialects, persistence,
     allowed roots, profile, the tool listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,
@@ -1459,10 +1526,62 @@ Python API), which are never capped. The gate stays a whole-file answer.
     session reads first, ending in an index of the topic sections and task
     playbooks; a `section` from that index returns that part. An unknown name
     fails the item as `unknown_section`, listing the names that exist
+{kind: "simulator_docs", name?, cursor?}
+    the reference documents the simulator's vendor installs with it; for
+    LTspice 26.1 and later, about fifteen Markdown files on the program itself
+    (keyboard shortcuts, menus, the schematic file format, .MEAS, the waveform
+    viewer, troubleshooting). No `name` lists them as {name, title,
+    description} with the `source` directory; a `name` from that list returns
+    the document as `sections`, each {heading, text}, cut at its second-level
+    headings and paged there. An unknown name fails as `unknown_document`,
+    listing the names; an install with none fails as
+    `simulator_docs_unavailable`
+{kind: "open_in_ltspice"}
+    the documents open in the LTspice windows on this machine: `windows`
+    (how many are running), `total`, and `designs`, each {path, kind:
+    "schematic"|"netlist"|"other", active (the one in front in its window),
+    pid, version, in_sandbox}. A sheet inside the sandbox adds its `sha256`
+    and `differs_from_file`, with `difference` naming a few entries when the
+    window's copy is not the file's. A document outside the sandbox is named
+    and not read. Fails as `open_windows_unavailable` where there is no bridge
+    to ask (not Windows, LTspice before 26.1, the setting off) and as
+    `open_windows_unreachable` when the bridge does not answer
 ```
 
 `path` is required except on `capabilities`, `symbols`, `symbol`,
-`reference` and `guide`; `results` accepts either `path` or `job_id`.
+`reference`, `guide`, `simulator_docs` and `open_in_ltspice`; `results`
+accepts either `path` or `job_id`.
+
+**Why the vendor's documents are a query, and not part of the guide.** The
+guide is this server's: how to use these tools, and what goes wrong in a deck.
+What the keyboard shortcut is, where a menu item lives, how the waveform viewer
+adds a trace, are questions about the program, and from 26.1 LTspice installs
+its own answers as files written for an assistant, which its own MCP server
+serves. A client with file access could read them where they lie, but the
+clients this surface is first for have none, which is the reason the guide has
+a query kind too. They are read from the install when asked (`lib/simulator_docs.py`)
+and never packaged: they are the vendor's, and the installed copy is the one
+that describes the installed build. They stay out of the guide because the
+guide is one text behind three doors, the same on every machine, and these are
+on some machines and not others. A document comes back in sections so that the
+longest (about sixty thousand characters) pages where a reader would stop, by
+the same cursor and the same response budget as every other listing. A name is
+looked up only among the files the directory lists.
+
+**Why what is open is a query.** A person working in LTspice says "this
+circuit", and until now the surface could only be handed a path. LTspice knows
+which documents are open and which is in front, and from 26.1 it can be asked
+(`lib/ltspice_window.py`). The answer is a starting point and nothing more: it
+names files, and every tool still reads the file. That is why a sheet comes
+with `differs_from_file`: when the window holds something the file does not,
+a run or a check on that path would answer about a circuit the person is not
+looking at, and `edit_schematic` would refuse. The `sha256` is there so that an
+edit of the sheet in front is one call after this one. The window's copy is
+compared and never returned, so nothing reaches a caller that is not in a file,
+and a document outside the sandbox is named, as its path is not a secret from
+a client on the same machine, but neither it nor the window's copy of it is
+read. A query that cannot be answered fails; an empty list would say that
+nothing is open.
 
 **Why the guide is a query kind.** The instructions send every session to the
 guide's core first, and the one door every client has is a tool call: some

@@ -264,7 +264,6 @@ class TestComputePlacedGeometry:
         """
         return SymbolInfo(
             name="res",
-            description="Resistor",
             pins=(
                 PinInfo(name="A", order=1, x=0, y=-50),
                 PinInfo(name="B", order=2, x=0, y=50),
@@ -344,7 +343,6 @@ class TestComputePlacedGeometry:
         body show the flip; the on-axis pins stay where they were."""
         gated = SymbolInfo(
             name="gated",
-            description="Two pins on the axis, one off it to the left",
             pins=(
                 PinInfo(name="A", order=1, x=0, y=-50),
                 PinInfo(name="B", order=2, x=0, y=50),
