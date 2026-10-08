@@ -4,9 +4,10 @@
 refusals are a dozen checks made in one function in one order. Work that moves
 those checks is held to this: on every sheet in the suite the editor opens,
 a fixed set of proposals (pin to pin straight and by each corner, pin to the
-middle of each wire, a detour through each other part, a waypoint on an end)
-is put to the planner, and what it answers, refusal or route with its
-advisories, is as it was when the record was made.
+middle of each wire, a detour through each other part, a waypoint on an end,
+and an end given by the name of its net) is put to the planner, and what it
+answers, refusal or route with its advisories, is as it was when the record
+was made.
 
 The record is ``fixtures/route_planner_record.json``. It keeps, for each sheet,
 how many proposals there were, a digest of every answer in order, and how many
@@ -47,9 +48,11 @@ from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 _RECORD = TESTS / "fixtures" / "route_planner_record.json"
 _RECORDING = os.environ.get("LTSPICE_MCP_RECORD_ROUTE_PLANNER") == "1"
 
-#: The most proposals put to one sheet. A sheet with more has every n-th taken,
+#: The most proposals put to one sheet between pins and coordinates, and the
+#: most with an end given by net name. A sheet with more has every n-th taken,
 #: which keeps the largest sheets from being most of the run.
 _MOST = 600
+_MOST_BY_NAME = 150
 
 Proposal = tuple[Any, Any, list[GridPoint]]
 
@@ -89,7 +92,22 @@ def _proposals(editor: AscEditor) -> list[Proposal]:
             asked.append((name_a, GridPoint(x=beyond, y=across), [GridPoint(x=ax, y=across)]))
     if len(asked) > _MOST:
         asked = asked[:: -(-len(asked) // _MOST)]
-    return asked
+    # An end given by the name of its net, for each name the sheet labels: to
+    # each pin straight and round a corner, and from each pin round the other.
+    by_name: list[Proposal] = []
+    names: set[str] = set()
+    for label in editor.labels:
+        if label.text in names:
+            continue
+        names.add(label.text)
+        lx, ly = int(label.coord.X), int(label.coord.Y)
+        for pin, px, py in pins:
+            by_name.append((f"net:{label.text}", pin, []))
+            by_name.append((f"net:{label.text}", pin, [GridPoint(x=lx, y=py)]))
+            by_name.append((pin, f"net:{label.text}", [GridPoint(x=px, y=ly)]))
+    if len(by_name) > _MOST_BY_NAME:
+        by_name = by_name[:: -(-len(by_name) // _MOST_BY_NAME)]
+    return asked + by_name
 
 
 def _answer(editor: AscEditor, proposal: Proposal) -> dict[str, Any]:
@@ -111,6 +129,7 @@ def _shape(answer: dict[str, Any]) -> str:
         text = "refused: " + answer["refused"]
     else:
         text = "routed: " + " | ".join(answer["warnings"]) if answer["warnings"] else "routed"
+    text = re.sub(r"net:[^\s:,]+", "net:NAME", text)
     text = re.sub(r"'[^']*'", "'…'", text)
     text = re.sub(r"\b[\w+\-]+\.[\w+\-]+", "PIN", text)
     return re.sub(r"-?\d+", "#", text)
@@ -203,6 +222,8 @@ def test_the_record_asks_enough_to_hold_every_check():
         "resolve to the same coordinate",
         "zero length after deduplicating",
         "Connecting them would short",
+        "net:NAME is on net",
+        "Multiple '…' labels found",
         "would merge named nets",
         "same-instance wire",
         "Diagonal wire",
