@@ -122,6 +122,15 @@ class TestWhatTheWriterWrites:
         spaced = text.replace("V(in)-V(out)", "V(in) - V(out)").encode("utf-16-le")
         assert (INPUTS / "plot/spaced.plt").read_bytes() == spaced
 
+    def test_the_file_with_a_grid_line_is_the_writers_form_with_one_in_each_pane(self):
+        """The writer writes no GridStyle line, so the file is its form for the
+        same panes with one after each Log line, as LTspice XVII saves a pane it
+        made with the waveform grid on."""
+        text = written(*SERVER_WRITTEN["plot/two_panes.plt"]).decode("utf-16-le")
+        grid = text.replace("      Log: 0 0 0\n", "      Log: 0 0 0\n      GridStyle: 1\n")
+        assert grid.count("GridStyle") == 2
+        assert (INPUTS / "plot/grid.plt").read_bytes() == grid.encode("utf-16-le")
+
     def test_the_utf8_file_handed_to_ltspice_is_the_same_text(self):
         text = written(*SERVER_WRITTEN["plot/two_panes.plt"]).decode("utf-16-le")
         assert (INPUTS / "plot/two_panes_utf8.plt").read_bytes() == text.encode("utf-8")
