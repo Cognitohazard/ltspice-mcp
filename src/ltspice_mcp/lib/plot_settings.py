@@ -105,7 +105,7 @@ class PlotPane:
     ``scales`` is the pane's ``Log`` line (X, left Y, right Y; 0 linear, 1
     logarithmic, 2 decibels), or None for a pane read from a file without one.
     ``grid`` is the number on its ``GridStyle`` line, or None for a pane
-    without one, which a build keeps without one whatever its grid setting.
+    without one.
     """
 
     traces: tuple[str, ...]
@@ -317,18 +317,12 @@ def with_panes(
 
     The section keeps its place among the others; a new one goes last. Its
     ``body`` is the text written for it, so ``render_plot_settings`` needs
-    nothing else. A pane with no ``grid`` of its own takes the one every pane
-    of the section it replaces had, when they all had the same. Raises
-    ``NetlistError`` for a pane without a trace and for a trace the file
-    cannot carry (``check_trace``).
+    nothing else. Raises ``NetlistError`` for a pane without a trace and for a
+    trace the file cannot carry (``check_trace``).
     """
     name = SECTION_NAMES[analysis]
     if any(not pane.traces for pane in panes):
         raise NetlistError("every pane needs at least one trace")
-    before = settings.section(name)
-    grids = {pane.grid for pane in before.panes} if before is not None else set()
-    if len(grids) == 1 and (grid := grids.pop()) is not None:
-        panes = [pane if pane.grid is not None else replace(pane, grid=grid) for pane in panes]
     replacement: PlotSection | None = None
     if panes:
         replacement = PlotSection(name=name, panes=tuple(panes), body=_render_body(panes))
@@ -344,6 +338,20 @@ def with_panes(
     if not placed and replacement is not None:
         kept.append(replacement)
     return PlotSettings(sections=tuple(kept))
+
+
+def inherit_grid(replaced: PlotSection | None, panes: Sequence[PlotPane]) -> list[PlotPane]:
+    """``panes`` with the grid every pane of ``replaced`` had, when they all had the same.
+
+    ``replaced`` is the section the panes are about to replace. Anything else
+    leaves the panes as they are: no section, a pane without the line, or
+    panes whose lines differ.
+    """
+    grids = {pane.grid for pane in replaced.panes} if replaced is not None else set()
+    if len(grids) != 1 or None in grids:
+        return list(panes)
+    (grid,) = grids
+    return [replace(pane, grid=grid) for pane in panes]
 
 
 def render_plot_settings(settings: PlotSettings) -> str:
@@ -366,7 +374,7 @@ def holds_only_panes(data: bytes) -> bool:
 
     A build's own save carries each pane's axis ranges and its own trace ids,
     in its own encoding (``plot/one_trace``), so its bytes are never what
-    writing its panes back gives. A grid line is one this module writes too.
+    writing its panes back gives.
     """
     try:
         rebuilt = PlotSettings()
@@ -385,7 +393,7 @@ def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) 
 
     ``plot_name`` is the plot name the results file carries and ``panes`` the
     traces of each pane, top first; they get the scales a build gives that
-    analysis, and the grid of the panes they replace (``with_panes``). The
+    analysis, and the grid of the panes they replace (``inherit_grid``). The
     analysis's section is replaced and the file's others are
     kept, as for a sheet's. Returns None once written, and otherwise why
     nothing was: the analysis's section is not recorded, or the file there
@@ -407,10 +415,14 @@ def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) 
             "window shows the traces saved in it"
         )
     scales = DEFAULT_SCALES[analysis]
+    settings = read_plot_settings(existing)
     drawn = with_panes(
-        read_plot_settings(existing),
+        settings,
         analysis,
-        [PlotPane(tuple(names), scales) for names in panes],
+        inherit_grid(
+            settings.section(SECTION_NAMES[analysis]),
+            [PlotPane(tuple(names), scales) for names in panes],
+        ),
     )
     atomic_write_bytes(target, write_plot_settings(drawn), durable=False)
     return None
