@@ -664,6 +664,19 @@ every document a person has open; it was seen by pushing a UTF-16 sheet read as
 an 8-bit one. The client refuses to send such text (`replace_design_text`), so
 there is nothing to record: the test is that it is never sent.
 
+The server starts LTspice itself in one case: for a caller asked to show
+something in it when no window is open (`OpenWindows.ensure_window`). The
+recorder starts one the same way, with no document, and notes that the bridge
+finds it as a window with nothing open and nothing in front; `FakeStart`, the
+start the handler tests use, is held to that. No test starts LTspice where it
+can be seen: the opt-in tier's start is on a desktop of its own, and the start
+in view is tested for the command line and flags it asks Windows for.
+
+Other bridges may be running on the machine, each with a hidden LTspice of
+its own that comes and goes as windows open and close: an assistant session
+with LTspice's own server registered has one. A recording keeps only the
+LTspice the recorder started, so those do not reach it.
+
 The bridge can start an LTspice of its own, and one thing about that is not
 in the recording because the recording is made with the launch disabled. The
 opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to

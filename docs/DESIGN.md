@@ -121,6 +121,17 @@ and not a tool of its own: there are two such actions, each has an object the
 surface already names, and a tool for the window alone would be the remote
 control LTspice's own server is.
 
+For those two, and for nothing else, LTspice is started when no window is
+open (`OpenWindows.ensure_window`, `[schematic] start_ltspice`). It is the one
+start of LTspice that is meant to be seen: a person asked to be shown
+something in a program that is not running. It is started with no document
+and no settings file, as from the Start menu, and outside the server's own
+job where Windows allows, so that the window is the person's and does not end
+with a session; the bridge finds it as a window within a second or two
+(recorded), and the call goes on as if it had been open. Keeping an open
+sheet in step with an edit, and saying what is open, start nothing. Nor does
+the bridge: letting it start one is what the hidden desktop below is against.
+
 The file stays the record, and the window is a view of it. LTspice's server
 takes the other side: the window is the document and saving is the user's. Had
 this server followed, every tool that reads a file (a run, an export, a
@@ -484,12 +495,12 @@ so zoom / pan / hover does nothing for it.
   two analyses whose section is recorded, a transient and an AC run; any
   other run opens with an empty plot and the reply says why. A settings file
   a person saved from LTspice is left alone: writing its panes back never
-  gives its bytes, which is how it is told from one written here. LTspice is
-  not started for
-  this; with no window open the settings are still written, so the file opens
-  with its traces when the person opens it by hand. It is the one place the
-  server opens anything in a window, and it does so only when asked, which is
-  why it is an argument and not a setting. The chart and the trace summaries
+  gives its bytes, which is how it is told from one written here. With no
+  window open LTspice is started for this, unless `[schematic] start_ltspice`
+  is off; the settings are written first either way, so the file opens with
+  its traces when the person opens it by hand. It opens something in a
+  window, and can bring LTspice to the front, only when asked, which is why
+  it is an argument and not a setting. The chart and the trace summaries
   are made all the same, and the browser is not opened as well. What LTspice
   loads when it opens a results file it does not load again while the file
   stays open, and nothing the bridge answers says whether it was open, so the

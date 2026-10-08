@@ -684,6 +684,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "shown": {"type": "boolean"},
                 "path": {"type": "string", "description": "The file opened."},
                 **LTSPICE_WINDOW_PROPERTIES,
+                "started": {
+                    "type": "boolean",
+                    "description": "LTspice was not running and was started for this.",
+                },
                 "already_open": {
                     "type": "boolean",
                     "description": (
@@ -850,7 +854,10 @@ class VerifyCircuitInput(ToolInput):
 
     in_ltspice: bool = Field(
         default=False,
-        description=("Also open the file in the user's open LTspice window (26.1+), in front."),
+        description=(
+            "Also open the file in the user's LTspice window (26.1+), in front; "
+            "LTspice is started if none is open."
+        ),
     )
 
     export_to: Literal["sidecar", "managed"] = Field(
@@ -2126,6 +2133,7 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     """
     report: dict[str, Any] = {"shown": False, "path": str(path)}
     try:
+        started = state.open_windows.ensure_window()
         window, held = state.open_windows.open_sheet(path)
     except BridgeError as error:
         report["reason"] = str(error)
@@ -2133,6 +2141,8 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     report.update(
         shown=True, pid=window.pid, version=window.version, already_open=held is not None
     )
+    if started:
+        report["started"] = True
     if held is not None and path.suffix.lower() == ".asc":
         report.update(window_difference(path.read_bytes(), held))
     return report
@@ -2150,6 +2160,8 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
             f"that was checked ({shown['difference']}); to see the file's, close it there "
             "without saving and ask again."
         )
+    if shown.get("started"):
+        return "LTspice was started, with it in front."
     return "In front in LTspice."
 
 

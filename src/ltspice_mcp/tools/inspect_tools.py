@@ -1120,6 +1120,8 @@ def _do_capabilities(
         "open_window_sync": {
             "available": state.open_windows.available,
             "reason": state.open_windows.unavailable,
+            # Whether in_ltspice starts LTspice when no window is open.
+            "starts_ltspice": state.open_windows.starts_ltspice,
         },
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)

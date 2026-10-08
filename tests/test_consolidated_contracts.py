@@ -764,7 +764,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # file in the LTspice window the user already has: the argument, and a
     # clause in the description so a host asked to "open it in LTspice" finds
     # it here. Measured 5,037.
-    "verify_circuit": 5040,
+    # Raised by about 30 characters: in_ltspice now says that LTspice is
+    # started if none is open. A caller should know before it asks that the
+    # argument can bring a program to the front. Measured 5,068.
+    "verify_circuit": 5070,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot
@@ -781,7 +784,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # run is opened from the sheet, and its results replace those beside the
     # sheet. That is a file written beside the caller's circuit, which a caller
     # has to be told before it asks. Measured 4,408.
-    "plot_waveform": 4410,
+    # About 20 more for the same reason as on verify_circuit: in_ltspice says
+    # that LTspice is started if none is open. Measured 4,429.
+    "plot_waveform": 4430,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

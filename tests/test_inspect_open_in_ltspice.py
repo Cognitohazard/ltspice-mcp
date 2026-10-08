@@ -238,3 +238,26 @@ async def test_a_long_list_is_cut_and_counted(
 
     assert len(data["designs"]) == 3
     assert data["total"] == 3 + extra
+
+
+async def test_capabilities_say_whether_ltspice_is_started_on_request(
+    asc_state: SessionState, tmp_path: Path
+):
+    from tests._ltspice_window import FakeStart
+
+    async def reported() -> dict[str, Any]:
+        result = await handle_inspect(
+            InspectInput.model_validate(
+                {"queries": [{"kind": "capabilities", "fields": ["open_window_sync"]}]}
+            ),
+            asc_state,
+        )
+        assert result.structured_content is not None
+        (item,) = result.structured_content["results"]
+        return item["data"]["open_window_sync"]
+
+    world = tmp_path / "world.json"
+    put_windows(asc_state, world, [])
+    assert await reported() == {"available": True, "reason": None, "starts_ltspice": False}
+    put_windows(asc_state, world, [], start=FakeStart(world))
+    assert await reported() == {"available": True, "reason": None, "starts_ltspice": True}

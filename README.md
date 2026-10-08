@@ -120,8 +120,17 @@ is why this one is called `spice`.
 
 You do not need LTspice's server registered for the window features described
 above. This server reaches your LTspice window through the bridge program
-LTspice installs, by itself, and only attaches to an LTspice you already have
-running.
+LTspice installs, by itself. It attaches to an LTspice you already have
+running, and starts LTspice only when you ask to see a sheet or a run there
+and none is open (`[schematic] start_ltspice = false` turns that off).
+
+If you do register LTspice's server too, know that in its default form each
+assistant session's copy of it starts a hidden LTspice of its own whenever it
+has no window to use, and an assistant's changes can then land in an LTspice
+you cannot see. Registering it with `--ltspice-path` pointing at a file that
+does not exist leaves it able to use only a window you have open. That is a
+workaround and not a mode LTspice documents, so check it again after an
+LTspice update.
 
 Asked to show a run of a sheet in LTspice, this server opens it so that
 clicking a net on the sheet plots it, as after a run you made there yourself.

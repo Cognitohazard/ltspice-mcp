@@ -529,6 +529,14 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_bool("LTSPICE_MCP_SYNC_OPEN_WINDOW"),
     ),
     _Setting(
+        field="start_ltspice",
+        section="schematic",
+        key="start_ltspice",
+        from_toml=_toml_bool("schematic.start_ltspice"),
+        env="LTSPICE_MCP_START_LTSPICE",
+        from_env=_env_bool("LTSPICE_MCP_START_LTSPICE"),
+    ),
+    _Setting(
         field="tool_listing",
         section="tools",
         key="listing",
@@ -740,6 +748,16 @@ class ServerConfig:
     server on Windows itself; LTspice is never started for it. ``False``
     leaves open windows alone. ``[schematic] sync_open_window`` or
     ``LTSPICE_MCP_SYNC_OPEN_WINDOW``."""
+
+    start_ltspice: bool = True
+    """Start LTspice when a caller asks for a sheet or a run to be shown in it
+    (``in_ltspice``) and no LTspice window is open. It opens where the person
+    can see it and takes the keyboard focus, which is what was asked for; it
+    is the only time the server starts LTspice in view, and it is never
+    started for anything else. ``False`` shows things only in a window that is
+    already open, and says so when there is none. Has no effect where
+    ``sync_open_window`` is off. ``[schematic] start_ltspice`` or
+    ``LTSPICE_MCP_START_LTSPICE``."""
 
     tool_listing: ToolListing = "compact"
     """How much of each tool definition the tool list carries.
@@ -1062,6 +1080,11 @@ def generate_default_config(path: Path) -> None:
     schem.add(comment("Windows with LTspice 26.1 or later; LTspice is never started for it."))
     schem.add(comment("false leaves windows alone."))
     _shown_default(schem, "sync_open_window")
+    schem.add(nl())
+    schem.add(comment("Start LTspice when asked to show a sheet or a run in it and no LTspice"))
+    schem.add(comment("window is open. It opens in view and takes the keyboard focus. false"))
+    schem.add(comment("shows things only in a window that is already open."))
+    _shown_default(schem, "start_ltspice")
     doc.add("schematic", schem)
     doc.add(nl())
 
