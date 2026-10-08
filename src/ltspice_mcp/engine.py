@@ -39,6 +39,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "result_set_ttl_hours",
         "symbol_paths",
         "sync_open_window",
+        "start_ltspice",
         "persist_jobs",
         "preload_recent_count",
     }

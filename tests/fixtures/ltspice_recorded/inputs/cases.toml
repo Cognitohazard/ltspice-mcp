@@ -425,10 +425,24 @@ model = ["lib/ltspice_window.py", "tools/analysis.py"]
 unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded is around it: how each build reads a file the server wrote when a sheet runs with it beside it (plot-settings-read), and that reading a results file's description opens it and leaves it the one in front (tests/fixtures/ltspice_bridge_recorded, conversation.json). LTspice XVII has no bridge to open a file through."
 
 [behaviour.window-run]
-summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it; and that only such a run's waveform pane is tied to the sheet, so that clicking a net plots it."
+summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it."
 model = ["assets/guide/schematics.md"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the three facts noted after 'run the sheet in the window', made with the window holding one resistor value and the file another"
-unrecordable = "The tie between a pane and a sheet is seen and not reported: nothing lists what a click added. It was looked at on LTspice 26.1.1, on a desktop of its own, by posting the same grid of clicks to the sheet's view and capturing the window. After a run made in the window the clicks added traces, with the panes tiled or with the sheet covering the results. With results from a batch run of the same sheet, beside it under its name and opened in the window, they added none in either layout."
+
+[behaviour.started-with-no-document]
+summary = "That an LTspice started with no document is offered to the bridge as a window, with no document open and none in front."
+model = ["lib/ltspice_window.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the two facts noted before 'one window is open', from an LTspice started on a desktop of its own with a settings file and no document. Started with no arguments at all it did the same; that was looked at and is not in the recording, which names a settings file so as not to run on the recording user's own."
+
+[behaviour.sheet-results-command]
+summary = "What the window's frame shows and what a sheet's Visible Traces command does: panes are titled with their files' names; the command opens the results beside a sheet that had them when it was opened and not ones put there afterwards; with those results open it shows a dialog to pick traces from; and the number the build's sheet menu gives the command."
+model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json, the facts noted after 'a results file that is not there', made by asking the frame of a window on a desktop of its own; manifest.json, sheet_commands. LTspice XVII is not recorded: it has no bridge to find the window through."
+
+[behaviour.plot-tied-to-sheet]
+summary = "That LTspice ties a plot to a sheet, so that clicking a net plots it, when the results are opened from the sheet (a run made in that window, or the sheet's Visible Traces command), and not when they are opened on their own; and that the command reads the results file as it is when the command is given."
+model = ["lib/ltspice_window.py", "tools/analysis.py", "assets/guide/schematics.md"]
+unrecordable = "The tie is seen and not reported: nothing lists what a click added, nor which run a plot draws. It was looked at on LTspice 26.1.1, on a desktop of its own, by posting the same grid of clicks to the sheet's view and capturing the window. Not tied: results opened through the bridge, by the results file's name or the sheet's, with the panes tiled or the sheet covering them, with either opened first, for a batch run's results and for a window run's once that LTspice was closed. Tied: results of a run made in that window, and results opened by the sheet's Visible Traces command, for a window run's results in a later session and for a batch run's. Read when the command is given: results of another resistor value, copied over the file after the sheet was opened with results beside it and after a run in that window whose plot was then closed, were the ones drawn."
 
 [behaviour.reference-documents]
 summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."

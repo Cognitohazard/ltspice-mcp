@@ -748,13 +748,25 @@ recording that showed it.
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says
   when that is not the file that was checked.
-- The guide says what to do when a person wants to plot nets by clicking the
-  sheet in LTspice. LTspice offers that only after a run made in its own
-  window, and a job's results opened there are drawn but not tied to the
-  sheet. So that one run is started through LTspice's own MCP server where it
-  is connected, or by the person, and measured by path with
-  `analyze_results(raw_path)`. Such a run simulates the window's copy of the
-  sheet, not the file.
+- `in_ltspice` on `verify_circuit` and `plot_waveform` starts LTspice when no
+  LTspice window is open, where it used to say that none was. It opens in
+  view and takes the keyboard focus, which is what a request to be shown
+  something there asks for; the reply's `ltspice` block says `started: true`.
+  `[schematic] start_ltspice = false` (`LTSPICE_MCP_START_LTSPICE`) keeps the
+  old behaviour. Nothing else starts LTspice in view: an edit to an open sheet
+  and `inspect(kind="open_in_ltspice")` still start nothing.
+  `inspect(kind="capabilities")` reports the setting under
+  `open_window_sync.starts_ltspice`.
+- `plot_waveform(in_ltspice=true)` opens a run of a sheet from the sheet, so
+  that LTspice ties the plot to it and a click on a net plots it, as after a
+  run made in LTspice. The run's results and log are put beside the sheet
+  under its name, replacing the ones there, and the sheet's own Visible Traces
+  command opens them: no second simulation. The reply's `ltspice` block names
+  the `sheet`. Nothing is written when no window is open, when the sheet is
+  outside the sandbox, or when LTspice already has that plot open (it would go
+  on showing what it read); a sheet LTspice had open before it had any
+  results has to be closed there once, and the reply says so. A run of a
+  netlist opens on its own, as before.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 
