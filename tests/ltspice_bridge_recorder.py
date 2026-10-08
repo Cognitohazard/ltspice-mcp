@@ -4,7 +4,14 @@
 LTspice answers through ``ltspice-mcp-bridge.exe``: what a window hands back
 for a sheet it has open, that replacing it leaves the file alone, that it
 never reads the file again, that a run in the window is of the window's copy,
-and that a bridge told where LTspice is not cannot start one. Each of those is recorded here from an installed build, under
+and that a bridge told where LTspice is not cannot start one.
+``lib/ltspice_frame.py`` encodes what the window's own frame does when it is
+asked directly: that its panes are titled with their files' names, that a
+sheet's Visible Traces command opens the results put beside the sheet, and
+that with those results open the same command asks which traces to show. And
+``OpenWindows`` relies on an LTspice it starts with no document being offered
+to the bridge as a window, with nothing open in it. Each of those is recorded
+here from an installed build, under
 ``tests/fixtures/ltspice_bridge_recorded/<build>/``:
 
 - ``sheets/<name>.asc``: the window's copy of ``inputs/<name>.asc``, as UTF-8;
@@ -33,14 +40,15 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.guide import split_front_matter
-from ltspice_mcp.lib.hidden_desktop import HiddenDesktop
+from ltspice_mcp.lib.hidden_desktop import HiddenDesktop, post_command, window_class, window_text
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
+from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame, menu_command
 from tests import ltspice_recorder
 from tests.ltspice_recorder import (
     MANIFEST,
@@ -79,6 +87,15 @@ def recorded_builds() -> list[str]:
 
 def load_conversation(directory: Path) -> list[dict[str, Any]]:
     return json.loads((directory / CONVERSATION).read_text(encoding="utf-8"))
+
+
+def observed(build: str) -> dict[str, Any]:
+    """What the recording of ``build`` noted LTspice doing, by the note that says what."""
+    return {
+        step["note"]: step["observed"]
+        for step in load_conversation(FIXTURES / build)
+        if "observed" in step
+    }
 
 
 class _Scrub:
@@ -135,6 +152,16 @@ class _Recording:
             # The server opens a results file with this call and reads nothing
             # of what it describes, which is the main recorder's subject.
             kept = {"path": kept.get("path")}
+        listed = kept.get("instances")
+        if isinstance(listed, list):
+            # Only the LTspice this recording started. Another bridge on the
+            # machine (an assistant's own LTspice server, say) may run one for
+            # itself, which comes and goes as windows here open and close.
+            kept["instances"] = [
+                row
+                for row in listed
+                if isinstance(row, dict) and row.get("pid") == self._scrub.pid
+            ]
         step["reply"] = self._scrub(kept)
         self.steps.append(step)
         return reply
@@ -181,6 +208,122 @@ def _run_in_window(session: BridgeSession, recording: _Recording, sheet: Path) -
     return results
 
 
+_DIALOG_CLASS = "#32770"
+_IDCANCEL = 2
+
+
+def _until(condition: Callable[[], Any], doing: str) -> Any:
+    deadline = time.monotonic() + _STARTED_S
+    while time.monotonic() < deadline:
+        found = condition()
+        if found:
+            return found
+        time.sleep(0.1)  # timing: between two looks; what is waited for is the window
+    raise RecorderError(f"LTspice's window never got as far as {doing}")
+
+
+def _started_with_no_document(
+    recording: _Recording,
+    command: Sequence[str],
+    desktop: HiddenDesktop,
+    build: Build,
+    ini: Path,
+) -> None:
+    """What the bridge finds of an LTspice started with no document, which is
+    how the server starts one for a caller asked to show something in it."""
+    started = desktop.start([str(build.exe), "-ini", str(ini)])
+
+    def windows() -> list[int]:
+        with contextlib.suppress(BridgeError), BridgeSession(command) as session:
+            return [
+                int(row["pid"])
+                for row in session.call("status").get("instances", [])
+                if row.get("mode") == "gui"
+            ]
+        return [started.pid]  # not answered: no word on whether it is there
+
+    try:
+        _until(lambda: started.pid in windows(), "offering a window with no document")
+        recording.fact(
+            "an LTspice started with no document is offered to the bridge as a window", True
+        )
+        with BridgeSession(command) as session:
+            session.attach(started.pid)
+            recording.fact(
+                "it has no document open and none in front",
+                [session.open_designs(), session.active_design()],
+            )
+    finally:
+        started.kill()
+        started.wait(timeout=30)
+        started.close()
+    _until(lambda: started.pid not in windows(), "being gone from the bridge's list")
+
+
+def _frame_facts(
+    recording: _Recording,
+    session: BridgeSession,
+    desktop: HiddenDesktop,
+    pid: int,
+    open_sheet: Path,
+    results: Path,
+) -> None:
+    """What the window's frame shows, and when a sheet's Visible Traces
+    command opens the results beside the sheet.
+
+    ``results`` are a run's, copied beside a sheet under the sheet's name,
+    which is how a job's results come to stand there: once beside
+    ``open_sheet``, which the window opened with none, and once beside a sheet
+    it has yet to open.
+    """
+    frame = LtspiceFrame(desktop.windows)
+
+    def dialogs() -> list[int]:
+        # A waveform viewer keeps untitled dialogs of its own, for its cursors.
+        return [
+            w for w in desktop.windows(pid) if window_class(w) == _DIALOG_CLASS and window_text(w)
+        ]
+
+    late = open_sheet.with_suffix(".raw")
+    before = frame.panes(pid)
+    recording.fact(
+        "the frame has a pane titled for an open sheet, and none for results it has not opened",
+        [open_sheet.name in before, late.name in before],
+    )
+    shutil.copyfile(results, late)
+    recording.call(session, "put the open sheet in front", "bring_to_front", path=str(open_sheet))
+    frame.send(pid, VISIBLE_TRACES)
+    time.sleep(3.0)  # timing: nothing is waited for; what is recorded is that nothing came
+    recording.fact(
+        "results put beside a sheet that was already open are not opened by its command",
+        late.name not in frame.panes(pid) and not dialogs(),
+    )
+
+    placed = open_sheet.with_name("placed.asc")
+    shutil.copyfile(INPUTS / f"{EDITED}.asc", placed)
+    shutil.copyfile(results, placed.with_suffix(".raw"))
+    recording.call(
+        session, "open a sheet that has results beside it", "open_design", path=str(placed)
+    )
+    recording.call(session, "put it in front", "bring_to_front", path=str(placed))
+    frame.send(pid, VISIBLE_TRACES)
+    _until(
+        lambda: placed.with_suffix(".raw").name in frame.panes(pid),
+        "opening the results beside the sheet",
+    )
+    recording.fact("results beside a sheet when it is opened are opened by its command", True)
+    recording.fact("it asks nothing on the way", not dialogs())
+    recording.call(session, "put the sheet in front again", "bring_to_front", path=str(placed))
+    frame.send(pid, VISIBLE_TRACES)
+    (asked,) = _until(dialogs, "asking which traces to show")
+    recording.fact(
+        "with those results open the same command asks which traces to show",
+        window_text(asked),
+    )
+    post_command(asked, _IDCANCEL)
+    _until(lambda: not dialogs(), "closing the dialog")
+
+
 def _resistor_value(netlist: Path) -> str | None:
     """The value of R1 in the netlist a run in the window wrote beside its sheet.
 
@@ -225,6 +368,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 session, "a request that needs LTspice, with none running", "list_open_designs"
             )
 
+        _started_with_no_document(recording, command, desktop, build, ini)
         window = desktop.start([str(build.exe), str(first), "-ini", str(ini)])
         try:
             scrub.pid = window.pid
@@ -327,16 +471,17 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     "get_raw_info",
                     path=str(work / "absent.raw"),
                 )
+                _frame_facts(recording, session, desktop, window.pid, first, results)
 
                 window.kill()
                 window.wait(timeout=30)
                 recording.call(session, "the window has closed", "list_open_designs")
                 recording.call(session, "the window has closed", "status")
+                # This bridge has no LTspice of its own: one it had started
+                # would be the one it is bound to.
                 recording.fact(
                     "no LTspice was started in its place",
-                    not any(
-                        row.get("mode") for row in session.call("status").get("instances", [])
-                    ),
+                    not session.call("status").get("current", {}).get("backendPid"),
                 )
         finally:
             window.close()
@@ -359,6 +504,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         },
         "inputs": {name: sha256_bytes((INPUTS / f"{name}.asc").read_bytes()) for name in names},
         "reference": reference_record(build),
+        "sheet_commands": {VISIBLE_TRACES: menu_command(build.exe, VISIBLE_TRACES)},
         "files": {name: sha256_bytes(data) for name, data in sorted(files.items())},
     }
     if out.exists():

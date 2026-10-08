@@ -157,6 +157,8 @@ class Bridge:
             else:
                 raise _Refused("file not found")
             entry["active"] = path
+            if Path(path).with_suffix(".raw").is_file():
+                entry.setdefault("with_results", []).append(path)
 
         if not already:
             self._in_window(load)
@@ -210,8 +212,9 @@ class Bridge:
         if name == "get_active_design_path":
             window = self._window()
             if not window["designs"]:
-                # What the bridge answers for a window with no document is not
-                # recorded; the client reads a refusal and an empty path alike.
+                # A window with no document has none in front: the recording
+                # has that, and not the bridge's wording, which the client
+                # does not read (a refusal and an empty path are alike to it).
                 raise _Refused("document not found")
             in_front = window.get("active") or list(window["designs"])[-1]
             return {"path": in_front, "type": _kind(in_front)}
