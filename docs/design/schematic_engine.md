@@ -355,44 +355,72 @@ what must hold before the next one starts.
    - *The two memberships merged.* The editor reports what the checker did and
      the reverse; an edit's findings are scoped as §8 says. *Gate:* the
      response contracts, and the `preexisting` counts reconciled. *Not
-     started.* How it is to be done, as proposed and not yet reviewed:
+     started.* How it is to be done, as its review left it:
      - The view the editor builds of a sheet cannot carry the checker's
        rules. It has no box of what a part draws without its pins and no
        anchor of a part's attribute text, which a wire through a part and a
        text inside one are judged by, and working either out from spicelib's
        editor would be a second copy of the scene's placement. So
-       `edit_schematic` builds the scene of the text it is about to write,
-       and of the sheet before the batch, and reads the view `verify_circuit`
-       reads; the view built from the editor goes. What an edit reports is
-       then what the checker would say of the file once written. Measured on
-       LTspice's own example sheets: a scene takes 30 to 110 ms on the
-       largest and every rule together under 20 ms, where spicelib takes 0.5
-       to 3.4 s to open the same sheet; and with an arc bounded by what is
-       drawn of it (§7) the two views already agree on every part's box and
-       on every finding of the rules both hold, on all 146 of the 150
-       largest that spicelib opens.
+       `edit_schematic` builds the scene of the text it is about to write and
+       reads the view `verify_circuit` reads; the view built from the editor
+       goes. What an edit reports is then what the checker would say of the
+       file once written. Measured on LTspice's own example sheets: a scene
+       takes 30 to 110 ms on the largest and every rule together under 20 ms,
+       where spicelib takes 0.5 to 3.4 s to open the same sheet; and with an
+       arc bounded by what is drawn of it (§7) the two views already agree on
+       every part's box and on every finding of the rules both hold, on all
+       146 of the 150 largest that spicelib opens.
+     - The sheet before the batch is read from the editor's rendering of it
+       too, taken before the ops run, and not from the file. spicelib does
+       not write a sheet back as it read it: two parts of one reference
+       become one, a text line it cannot read is dropped, and the records
+       are regrouped. Read from the file, every such difference on a sheet
+       the batch did not touch would be reported as the batch's.
+     - Both scenes are built off the event loop, in one call: they are pure
+       functions of text and symbol files. The editor is rendered and
+       changed on the loop, as it must be.
+     - The scene an edit reads is resolved from the roots the editor's pin
+       geometry searches, and no others, with a test that the two are the
+       same list. `verify_circuit`'s resolver also searches the stock
+       library in one configuration where the editor's does not (WSL with
+       `[schematic] symbol_paths` set, where the configured paths replace the
+       stock ones for the editor), and an edit whose findings saw a part's
+       pins while its pin counts did not would contradict itself in one
+       reply. That the two tools search different roots there is the
+       leftover of step 2 and goes when the session owns the library.
      - One list of findings in the registry's order, and one sentence for
        each that names its parts and its place, since an edit's reply shows
-       the sentence alone. A part whose symbol is not found is one finding a
+       the sentence alone. Everything a sentence says is also in the
+       finding's parts, points and facts (the text of a text inside a part
+       is a fact, not only words), so two findings are the same finding when
+       those are the same. A part whose symbol is not found is one finding a
        part; `verify_circuit` groups them by symbol where it words them.
      - `edit_schematic` gains overlapping parts, a wire through a part, a
        loose wire end, text inside a part, a net joined only by labels, and a
        wire LTspice leaves out. `verify_circuit` gains a wire drawn twice and
        a label on nothing under `layout`, and a label inside a part and
-       stacked directives under `quality`, all as observations.
+       stacked directives under `quality`, all as observations. A label is
+       inside a part by the part's box with its pins and a text by what the
+       part draws, and the description of the `quality` check says so.
      - An edit's findings are scoped as findings, by every part and every
        point one names, where today a row's first part and first point are
-       looked at. The criterion §8 adds, a net whose membership the batch
-       changed, is applied to electrical and structural rules only: a
-       drawing rule's points lie on nets without the finding being about
-       them.
+       looked at; and the row an edit's `preexisting` view lists carries all
+       of them, where today it carries the first.
+     - The criterion §8 adds, a net whose membership the batch changed, is
+       not built. Worked through, every case it was meant for is already
+       caught: a pin left floating at the far end of removed wires is a new
+       finding, and so is what is said of the other labels of a net when one
+       is removed. What it adds is only what was there before and is
+       unchanged, on any net the batch touched, which on a rail is every
+       loose end and repeated wire of the rail, listed again on every batch
+       that connects to it.
      - An op's own advisory and a finding of the sheet already say one thing
        twice today, for a label placed on nothing. Overlap and a wire through
        a part will be said twice the same way until the next part turns the
        ops' checks into rules.
-     - *Gate, added:* for every sheet in the suite the two tools report the
-       same findings, rule by rule and place by place, and the build at
-       scale keeps its time bound.
+     - *Gate, added:* for every sheet in the suite that the editor opens, the
+       two tools report the same findings, rule by rule and place by place,
+       the editor's taken through its own rendering of the sheet.
    - *Refusals as rules*, the part most likely to go wrong. The route planner's
      and the label op's refusals become rules over a transition, in the order
      they are raised today, wrong intent first. *Gate:* every test that pins a
@@ -561,12 +589,15 @@ a maintainer need to know about it; what it does stays a function.
   project's rule on result trust allows; the guide says what limits are
   usual, and each layout practice there names the rule that measures it.
 - **What an edit is told.** As now: a finding that is new, any change to it
-  making it new, or one that names a part or a point the batch named. One
-  criterion is added: a finding on a net whose membership the batch changed.
-  An edit can change a finding far from where it touched, as when removing a
-  part with its wires leaves a pin floating at the far end, or removing one
-  label changes what is said of every other label on its net, so the scope
-  is not a region of the sheet.
+  making it new, or one that names a part or a point the batch named, by
+  any of the parts and points the finding names. An edit can change a
+  finding far from where it touched, as when removing a part with its wires
+  leaves a pin floating at the far end, or removing one label changes what
+  is said of every other label on its net, so the scope is not a region of
+  the sheet; each of those is a new finding and is told for that. A further
+  criterion was considered, a finding on a net whose membership the batch
+  changed, and is not taken: it adds only findings that are unchanged, and
+  on a rail it lists every one of them again on every batch (§6, step 4).
 - **Every reply says what ran.** The rules that ran are listed with their
   counts, and a rule the caller waived is listed as waived with its count, so
   that no findings is never read as no rules.
