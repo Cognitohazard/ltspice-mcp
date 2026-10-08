@@ -324,13 +324,47 @@ def shown_in_window(shown: Shown) -> dict[str, Any]:
     return report
 
 
-def window_difference(on_disk: bytes, window_text: str) -> dict[str, Any]:
+#: How a reply that lists them says where a window's sheet differs from its file.
+LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
+    "only_in_window": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Where it differs: what the window has and the file lacks, each a "
+            "symbol with its attributes or one other line, as .asc lines. A part "
+            "whose value changed is in both lists, once with each value."
+        ),
+    },
+    "only_in_file": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "The same, for what the file has and the window lacks.",
+    },
+    "difference_omitted": {
+        "type": "integer",
+        "description": "How many more entries differ than the two lists hold.",
+    },
+}
+
+
+def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> dict[str, Any]:
     """Whether an LTspice window's copy of a sheet is the file's, as a reply says it:
-    ``differs_from_file``, and ``difference`` when it does."""
+    ``differs_from_file``, and ``difference`` when it does.
+
+    With ``entries``, where they differ is listed too, up to that many entries
+    from each side, and the rest are counted (``LTSPICE_DIFFERENCE_ENTRIES``).
+    """
     difference = file_difference(on_disk, window_text)
     if difference is None:
         return {"differs_from_file": False}
-    return {"differs_from_file": True, "difference": difference}
+    said: dict[str, Any] = {"differs_from_file": True, "difference": difference.summary()}
+    if entries:
+        sides = (difference.only_in_window, difference.only_in_file)
+        said["only_in_window"], said["only_in_file"] = (list(side[:entries]) for side in sides)
+        omitted = sum(max(0, len(side) - entries) for side in sides)
+        if omitted:
+            said["difference_omitted"] = omitted
+    return said
 
 
 # A sheet finding as edit_schematic's preexisting view publishes it

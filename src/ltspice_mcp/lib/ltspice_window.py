@@ -157,34 +157,51 @@ def sheet_content(text: str) -> list[str]:
     )
 
 
-def content_difference(file_text: str, window_text: str, *, limit: int = 3) -> str | None:
-    """How a window's sheet differs from its file's, or None when it does not.
+@dataclass(frozen=True)
+class Difference:
+    """How a window's copy of a sheet differs from its file's.
 
-    Names up to ``limit`` entries from each side by their first line, which is
-    enough to recognise the change and short enough to put in a refusal.
+    Each side holds the entries of ``sheet_content`` it has and the other
+    lacks, sorted: a symbol with its attributes, or one other line. A part
+    whose value changed is on both sides, once with each value.
     """
+
+    only_in_window: tuple[str, ...]
+    only_in_file: tuple[str, ...]
+
+    def summary(self, limit: int = 3) -> str:
+        """The difference in a sentence, naming up to ``limit`` entries a side.
+
+        An entry is named by its first line, which is enough to recognise the
+        change and short enough to put in a refusal.
+        """
+
+        def named(entries: tuple[str, ...]) -> str:
+            shown = "; ".join(entry.split("\n", 1)[0] for entry in entries[:limit])
+            more = len(entries) - limit
+            return shown + (f"; and {more} more" if more > 0 else "")
+
+        parts = []
+        if self.only_in_window:
+            parts.append(f"only in the window: {named(self.only_in_window)}")
+        if self.only_in_file:
+            parts.append(f"only in the file: {named(self.only_in_file)}")
+        return ". ".join(parts)
+
+
+def content_difference(file_text: str, window_text: str) -> Difference | None:
+    """How a window's sheet differs from its file's, or None when it does not."""
     in_file = Counter(sheet_content(file_text))
     in_window = Counter(sheet_content(window_text))
     if in_file == in_window:
         return None
-
-    def named(side: Counter[str]) -> str:
-        entries = sorted(side.elements())
-        shown = "; ".join(entry.split("\n", 1)[0] for entry in entries[:limit])
-        more = len(entries) - limit
-        return shown + (f"; and {more} more" if more > 0 else "")
-
-    parts = []
-    only_window = in_window - in_file
-    only_file = in_file - in_window
-    if only_window:
-        parts.append(f"only in the window: {named(only_window)}")
-    if only_file:
-        parts.append(f"only in the file: {named(only_file)}")
-    return ". ".join(parts)
+    return Difference(
+        only_in_window=tuple(sorted((in_window - in_file).elements())),
+        only_in_file=tuple(sorted((in_file - in_window).elements())),
+    )
 
 
-def file_difference(on_disk: bytes, window_text: str) -> str | None:
+def file_difference(on_disk: bytes, window_text: str) -> Difference | None:
     """How a window's copy of a sheet differs from the file's bytes, or None.
 
     The file is read both as this server reads it and as LTspice does, which
