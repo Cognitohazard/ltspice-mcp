@@ -16,7 +16,18 @@ here from an installed build, under
 
 - ``sheets/<name>.asc``: the window's copy of ``inputs/<name>.asc``, as UTF-8;
 - ``conversation.json``: every call made and what came back, in order;
+- ``reader/<build>/<case>.json``: what LTspice's own reader says of a results
+  file the main recordings hold (below);
 - ``manifest.json``: the build, and the digest of each input and recording.
+
+The bridge can also read a results file: its samples, how a stepped run
+divides, and the parameter values of each step. That is LTspice reading its
+own format, and the server's reader (``lib/raw_parser.py``) is one this
+project keeps up itself. So every results file in the main recordings' ``raw``
+group, from each build that wrote one, is handed to LTspice's reader, and what
+it says is kept for the server's reading to be held to
+(``tests/test_ltspice_reader_agreement.py``). A file it refuses is kept as its
+refusal.
 
 It is a recorder of its own because it needs a window: the main recorder
 (``tests/ltspice_recorder.py``) runs a build once per input and reads the
@@ -67,6 +78,7 @@ from tests.ltspice_recorder import load_manifest as load_manifest
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ltspice_bridge_recorded"
 INPUTS = FIXTURES / "inputs"
 CONVERSATION = "conversation.json"
+READER = "reader"
 MANIFEST_SCHEMA = 1
 
 NEUTRAL_PID = 1000
@@ -75,6 +87,12 @@ NOT_A_PROCESS = 999999
 #: The sheet the write and read-back steps are made on.
 EDITED = "older_version"
 _STARTED_S = 60.0
+#: More than any results file in the main recordings holds, so each is read whole.
+_READER_MAX_VALUES = 2_000_000
+_RECORDING_S = 600.0
+"""How long the session that records a window may take in all: a cap on a
+recording that has stopped, where the server's own sessions are a handful of
+calls and are capped at seconds."""
 
 
 def input_names() -> list[str]:
@@ -324,6 +342,71 @@ def _frame_facts(
     _until(lambda: not dialogs(), "closing the dialog")
 
 
+def reader_subjects() -> dict[str, list[str]]:
+    """The results files LTspice's reader is asked about, by the build that wrote them.
+
+    Every file with samples in a main recording's ``raw`` group: one of each
+    layout the server reads.
+    """
+    subjects: dict[str, list[str]] = {}
+    for label in ltspice_recorder.recorded_builds(ltspice_recorder.FIXTURES):
+        directory = ltspice_recorder.FIXTURES / label / "raw"
+        names = sorted(
+            path.name.removesuffix(".raw")
+            for path in directory.glob("*.raw")
+            if path.stat().st_size
+        )
+        if names:
+            subjects[label] = names
+    return subjects
+
+
+def reader_reply(build: str, written_by: str, name: str) -> dict[str, Any]:
+    """What the reader of ``build`` said of the results file ``name`` that ``written_by`` wrote."""
+    path = FIXTURES / build / READER / written_by / f"{name}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _reader_replies(
+    session: BridgeSession, work: Path, scrub: _Scrub
+) -> tuple[dict[str, bytes], dict[str, dict[str, str]]]:
+    """What LTspice's own reader says of each results file in the main recordings.
+
+    Each is copied with its log beside it, which is where the reader finds a
+    stepped run's parameter values, and read whole. Returns the files to
+    record and the digest of each results file read.
+    """
+    files: dict[str, bytes] = {}
+    digests: dict[str, dict[str, str]] = {}
+    for label, names in reader_subjects().items():
+        recorded = ltspice_recorder.FIXTURES / label / "raw"
+        copies = work / "results" / label
+        copies.mkdir(parents=True)
+        for name in names:
+            copy = copies / f"{name}.raw"
+            shutil.copyfile(recorded / copy.name, copy)
+            log = recorded / f"{name}.log"
+            if log.is_file():
+                shutil.copyfile(log, copies / log.name)
+            try:
+                info = session.call("get_raw_info", path=str(copy))
+                said: dict[str, Any] = {
+                    "info": info,
+                    "read": session.call(
+                        "read_raw_waveforms",
+                        path=str(copy),
+                        signals=info["signals"],
+                        max_values=_READER_MAX_VALUES,
+                    ),
+                }
+            except BridgeError as error:
+                said = {"refused": scrub.text(str(error))}
+            reply = json.dumps(scrub(said), separators=(",", ":"), ensure_ascii=False)
+            files[f"{READER}/{label}/{name}.json"] = reply.encode("utf-8") + b"\n"
+            digests.setdefault(label, {})[name] = sha256_bytes(copy.read_bytes())
+    return files, digests
+
+
 def _resistor_value(netlist: Path) -> str | None:
     """The value of R1 in the netlist a run in the window wrote beside its sheet.
 
@@ -373,7 +456,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         try:
             scrub.pid = window.pid
             scrub.port = wait_for_window(command, window.pid, first)
-            with BridgeSession(command) as session:
+            with BridgeSession(command, timeout=_RECORDING_S) as session:
                 recording.call(session, "one window is open", "status")
                 recording.call(session, "attach to the window", "attach", pid=window.pid)
                 recording.call(session, "attached", "status")
@@ -472,6 +555,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     path=str(work / "absent.raw"),
                 )
                 _frame_facts(recording, session, desktop, window.pid, first, results)
+                reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()
                 window.wait(timeout=30)
@@ -489,7 +573,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
     conversation = (
         json.dumps(recording.steps, indent=1, ensure_ascii=False).encode("utf-8") + b"\n"
     )
-    files = {CONVERSATION: conversation, **sheets}
+    files = {CONVERSATION: conversation, **sheets, **reader_files}
     assert_private(files, private_strings())
     manifest = {
         "schema": MANIFEST_SCHEMA,
@@ -505,6 +589,8 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         "inputs": {name: sha256_bytes((INPUTS / f"{name}.asc").read_bytes()) for name in names},
         "reference": reference_record(build),
         "sheet_commands": {VISIBLE_TRACES: menu_command(build.exe, VISIBLE_TRACES)},
+        # The results files the reader was handed, as the main recordings held them then.
+        "reader": results_read,
         "files": {name: sha256_bytes(data) for name, data in sorted(files.items())},
     }
     if out.exists():
