@@ -764,11 +764,17 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # file in the LTspice window the user already has: the argument, and a
     # clause in the description so a host asked to "open it in LTspice" finds
     # it here. Measured 5,037.
+    # Raised by about 30 characters: in_ltspice now says that LTspice is
+    # started if none is open. A caller should know before it asks that the
+    # argument can bring a program to the front. Measured 5,068.
+    # Raised by 40 characters for the byte order mark the quality check
+    # reports, named in the description beside the other things that check
+    # looks at, for the reason above. Measured 5,103 with both.
     # Raised by about 60 characters for the four facts the layout and quality
     # checks gained when the sheet rules became one list for both tools: a
     # dangling label and a wire drawn twice, a label inside a part and stacked
-    # directives. They are named for the reason the others are. Measured 5,099.
-    "verify_circuit": 5100,
+    # directives. They are named for the reason the others are. Measured 5,165 with all three.
+    "verify_circuit": 5170,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot
@@ -781,7 +787,13 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # the LTspice window the user already has, with the plotted traces drawn:
     # the argument, and a clause in the description so that a host asked to
     # "show it in LTspice" finds it. Measured 4,294.
-    "plot_waveform": 4300,
+    # Raised by about 110 characters for one sentence on in_ltspice: a sheet's
+    # run is opened from the sheet, and its results replace those beside the
+    # sheet. That is a file written beside the caller's circuit, which a caller
+    # has to be told before it asks. Measured 4,408.
+    # About 20 more for the same reason as on verify_circuit: in_ltspice says
+    # that LTspice is started if none is open. Measured 4,429.
+    "plot_waveform": 4430,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

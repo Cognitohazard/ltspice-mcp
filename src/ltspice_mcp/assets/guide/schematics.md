@@ -32,23 +32,35 @@ When they ask to see a sheet you built or changed, `verify_circuit(path=...,
 in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
 `ltspice` block says `differs_from_file: true`, the window already had the
 sheet open and is showing an older copy, not the one you checked: tell them.
+With no LTspice window open, `in_ltspice` starts LTspice (`started: true` in
+the block), which comes to the front of their screen: pass it when they asked
+to see something there, never to check your own work. Where the block says
+none was started, starting is turned off (`[schematic] start_ltspice`): ask
+them to open LTspice.
 
-When they want to plot nets by clicking the sheet in LTspice, a job cannot
-give them that. LTspice ties a waveform pane to a sheet only for a run made in
-that window: a job's results open and draw there (`plot_waveform(...,
-in_ltspice=true)`), but a click on the sheet adds nothing to them, even with
-the results put beside the sheet. So that one run is made in the window. If
-LTspice's own MCP server is connected in this session (LTspice registers it as
-`ltspice`; its tools include `start_simulation`), call
-`start_simulation(path=...)`, then `is_simulation_running(path=...)` until it
-answers false; otherwise ask the user to run the sheet in LTspice themselves.
-Either way LTspice simulates the window's copy of the sheet, which is not the
-file when `differs_from_file` is true, and leaves `<sheet>.raw` and
-`<sheet>.log` beside the sheet without saving it. Measure them with
-`analyze_results(sources=[{"raw_path": ...}])`. That run is not a job: it has
-no record, no variations and nothing for `jobs` to wait on or cancel, and its
-analysis carries the observation `raw_path_without_deck_provenance`. Use it
-for the look in the window, and `run_experiments` for everything else.
+When they want to plot nets by clicking the sheet in LTspice, show them a run
+of the sheet: `plot_waveform(job_id=..., signals=[...], in_ltspice=true)` for a
+job that ran an `.asc`. The run's results are put beside the sheet under its
+name, replacing the ones there, and opened from the sheet, which is what makes
+LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, and
+a click on a net there plots it. Results beside a sheet of the same name,
+which is what a run in LTspice leaves, open the same way by `raw_file`. Two
+replies ask something of the user. LTspice already has that plot open, and
+goes on showing what it read: they close it there, and you ask again. Or
+LTspice had the sheet open before it had any results, and looks for them only
+as it opens a sheet: they close the sheet there, and you ask again, since the
+results are beside it now. A run of a netlist has no sheet to tie to and opens
+on its own, as before.
+
+LTspice ships an MCP server of its own, which a session may have beside this
+one (its tools include `set_design_content` and `start_simulation`). It works
+on the window, not the file. Make edits with `edit_schematic`: a sheet changed
+through LTspice's server is changed in the window only, and `edit_schematic`
+then refuses that sheet until the user saves it. Run with `run_experiments`:
+a run started through LTspice's server is of the window's copy and leaves no
+job. When one of its tools answers that it could not start or attach an
+LTspice instance, no LTspice window is open: do not try its `start_headless`,
+show the user what they asked for with `in_ltspice`, which opens one.
 
 A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
 in step: a commit's reply lists the window under `open_in_ltspice`, and with

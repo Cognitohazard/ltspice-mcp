@@ -662,6 +662,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_LOG_LEVEL": "error",
     "LTSPICE_MCP_SYMBOL_PATHS": f"/tmp/env-sym-a{os.pathsep}/tmp/env-sym-b",
     "LTSPICE_MCP_SYNC_OPEN_WINDOW": "on",
+    "LTSPICE_MCP_START_LTSPICE": "on",
     "LTSPICE_MCP_TOOL_LISTING": "full",
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_RUN_CODE": "off",
@@ -713,6 +714,7 @@ level = "debug"
 [schematic]
 symbol_paths = ["/tmp/sym-a", "/tmp/sym-b"]
 sync_open_window = false
+start_ltspice = false
 
 [tools]
 listing = "compact"
@@ -769,6 +771,7 @@ class TestLoadCoversEveryKey:
             "max_estimated_points": 1234567,
             "max_raw_mb": 512,
             "max_points_returned": 555,
+            # timing: data; a setting read back, which nothing waits on
             "analysis_budget_s": 12.5,
             "result_set_ttl_hours": 48.0,
             "open_plot": False,
@@ -777,6 +780,7 @@ class TestLoadCoversEveryKey:
             "log_level": "DEBUG",
             "symbol_paths": [Path("/tmp/sym-a"), Path("/tmp/sym-b")],
             "sync_open_window": False,
+            "start_ltspice": False,
             "tool_listing": "compact",
             "run_code": True,
             "persist_jobs": False,
@@ -812,6 +816,7 @@ class TestLoadCoversEveryKey:
             "max_estimated_points": 7654321,
             "max_raw_mb": 256,
             "max_points_returned": 777,
+            # timing: data; a setting read back, which nothing waits on
             "analysis_budget_s": 21.5,
             "result_set_ttl_hours": 72.0,
             "open_plot": True,
@@ -820,6 +825,7 @@ class TestLoadCoversEveryKey:
             "log_level": "ERROR",
             "symbol_paths": [Path("/tmp/env-sym-a"), Path("/tmp/env-sym-b")],
             "sync_open_window": True,
+            "start_ltspice": True,
             "tool_listing": "full",
             "run_code": False,
             "persist_jobs": True,

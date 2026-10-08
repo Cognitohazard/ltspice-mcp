@@ -608,6 +608,7 @@ class TestRequestGateContention:
         which is how one experiment ends up running twice. The caller has to
         be told the id is held and to ask again with the same one.
         """
+        # timing: the bound under test; the peer holds the gate until released
         monkeypatch.setattr(experiment_runner_mod, "REQUEST_GATE_TIMEOUT_S", 0.2)
         deck = _deck(work_dir / "gate-busy.cir")
         store_for_dir = Store(work_dir)

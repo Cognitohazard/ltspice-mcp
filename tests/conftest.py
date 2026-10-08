@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
@@ -1102,6 +1103,7 @@ def quick_looks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Look for a message box often, so a test of one does not wait out two
     looks at the pace a server keeps. The rule that it be seen twice is the
     same."""
+    # timing: how often to look, not how long to wait; the box stays until the program is ended
     monkeypatch.setattr(hidden_desktop, "DIALOG_LOOK_S", 0.05)
 
 
@@ -1116,6 +1118,53 @@ def settled_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     timestamp tick, and a slower machine only widens that gap.
     """
     monkeypatch.setattr(parser_service, "_now_ns", lambda: time.time_ns() + 3600 * 10**9)
+
+
+def start_when(
+    monkeypatch: pytest.MonkeyPatch,
+    owner: object,
+    name: str,
+    ready: Callable[..., object],
+    *,
+    what: str,
+) -> None:
+    """Hold each call of the coroutine method ``owner.name`` until ``ready``
+    holds, then run it unchanged.
+
+    For a bound that starts its clock when that method is called (a run
+    timeout, a job deadline's watch, a snippet's timeout): the clock then
+    starts once the state the test reads exists, however long the work before
+    it took, and everything the bound does once it runs out is the real code.
+    ``ready`` gets the call's arguments and may be a coroutine function; every
+    later call waits on it too, so it should stay true once it holds.
+    """
+    original = getattr(owner, name)
+
+    @functools.wraps(original)
+    async def once_ready(*args: object, **kwargs: object) -> object:
+        await await_until(lambda: ready(*args, **kwargs), what=what)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, once_ready)
+
+
+@pytest.fixture
+def parser_deadline_passed(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """Set it, and the supervisor finds the deadline of the parser call it is
+    waiting on has passed; clear it, and it reads the real clock again.
+
+    A test of what a passed deadline does gives its call ``LIVENESS_S``, waits
+    for the decoder to be where the test needs it, and then sets this. Only
+    the supervisor's own reads move with it (``parser_process._deadline_clock``):
+    the checks around a parse keep the real clock.
+    """
+    passed = threading.Event()
+    monkeypatch.setattr(
+        parser_process,
+        "_deadline_clock",
+        lambda: float("inf") if passed.is_set() else time.monotonic(),
+    )
+    return passed
 
 
 @pytest.fixture
@@ -1200,6 +1249,13 @@ def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
         AscEditor.custom_lib_paths = previous_paths
         symbol_geometry._symbol_cache.clear()
         symbol_geometry._symbol_cache.update(previous_geometry)
+
+
+@pytest.fixture
+def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """spicelib caches a symbol's path by file name for the whole process; keep
+    the temporary folders a test adds out of every later test."""
+    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
 
 @pytest.fixture

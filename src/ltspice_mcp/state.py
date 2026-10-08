@@ -295,6 +295,7 @@ class SessionState:
                     ),
                 ),
                 enabled=config.sync_open_window,
+                start_ltspice=config.start_ltspice,
             ),
         )
 

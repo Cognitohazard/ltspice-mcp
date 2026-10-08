@@ -2444,7 +2444,391 @@ such a log, the last candidate in `make_log_reader` goes.
 
 ---
 
-## Bug 25 — `AsyReader` cannot read a symbol with a space in a pin name
+## Bug 25 — `AscEditor` drops a sheet's `DATAFLAG` records on save
+
+**Status:** draft for an upstream spicelib pull request. Found by reading the
+source; reproduced 2026-10-07, and on a sheet LTspice 26 and LTspice XVII are
+both recorded reading (`export/data_flags`; see *Reproduction*).
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist` ~line 272 and `AscEditor.save_netlist` ~line 81).
+**Our workaround:** `tools/schematic_edit.py` reads the sheet's DATAFLAG
+lines from the bytes the edit already read (`_data_flag_lines`), and
+`_render_editor_text` writes them back (`_with_data_flags`).
+
+### Summary
+
+A `DATAFLAG` record is a data label: an expression LTspice shows at a point on
+the sheet. spicelib's own comment calls it "the placeholder to show simulation
+information", and KiCad's LTspice importer reads it as
+`DATAFLAG <x> <y> <expression>`. The example sheets both LTspice builds
+install hold it in that form with an empty expression (`DATAFLAG 2128 1360 ""`
+in `examples/Educational/DCopPnt.asc`). `reset_netlist` skips the line and keeps
+nothing of it, and `save_netlist` therefore has no `DATAFLAG` to write, so
+loading a sheet and saving it, with or without a change, removes every data
+label on it. The 1.3.2 changelog lists "AscEditor: Adding support to
+DATAFLAG"; in 1.5.1 that support is the skip, so the line no longer stops the
+read the way an unmodelled one does (Bug 26).
+
+### Affected code
+
+`spicelib/editor/asc_editor.py`, `reset_netlist` (~line 272):
+
+```python
+elif line.startswith("DATAFLAG"):
+    pass  # DATAFLAG is the placeholder to show simulation information. It is ignored by AscEditor
+```
+
+`save_netlist` writes `Version`, `SHEET`, the wires, the labels, each symbol
+with its `WINDOW` and `SYMATTR` lines, the texts and the drawings, and nothing
+else.
+
+### Reproduction
+
+```python
+import io
+from pathlib import Path
+from spicelib.editor.asc_editor import AscEditor
+
+sheet = Path("dataflag.asc")
+sheet.write_bytes(
+    b"Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 IN\n"
+    b'DATAFLAG 80 0 ""\nDATAFLAG 160 0 "$*2"\nTEXT 0 64 Left 2 !.op\n'
+)
+out = io.StringIO()
+AscEditor(sheet).save_netlist(out)
+assert "DATAFLAG" not in out.getvalue()   # both data labels are gone
+```
+
+Through our server before the workaround, an `edit_schematic` commit that
+added one net label to such a sheet reported a complete, committed edit, and
+the file it wrote held no `DATAFLAG` line.
+
+The sheet above is the smallest that shows the loss. The same loss is
+reproduced on a recorded one,
+`tests/fixtures/ltspice_recorded/inputs/export/data_flags.asc`: a resistor, a
+wire, a port and two data labels. LTspice 26 and LTspice XVII each export it
+(`export/data_flags` in the recordings), and neither exports a sheet holding a
+keyword it does not know (`export/unknown_record`), so both read the record.
+The netlist is the resistor and nothing else.
+
+What a recording cannot show is where LTspice puts the record when it saves a
+sheet, because it saves one only from its window (`schematic-save-encoding` in
+`tests/fixtures/ltspice_recorded/inputs/cases.toml`). The written evidence for
+that is the example sheets each build installs, which LTspice saved:
+`examples/Educational/DCopPnt.asc` and `Linkwitz.asc` in both builds, and
+`examples/Applications/AD8397.asc` and `ADA4691.asc` in LTspice 26. Each lists
+its `DATAFLAG` records together, after the last `FLAG` and ahead of the first
+`SYMBOL`, every one as `DATAFLAG <x> <y> ""`. None of them holds a port
+(`IOPIN`) or an expression that is not empty, so where a data label goes
+beside a port's record, and how an expression is spelled, are not on record.
+An export tells neither: both builds exported a sheet with the record after a
+symbol, between a `FLAG` and its `IOPIN`, and with no expression at all, each
+to the netlist of the sheet without it (looked at 2026-10-07, not recorded).
+
+### Impact
+
+- Any tool that edits a sheet through `AscEditor` and saves it deletes the
+  sheet's data labels and reports nothing. The circuit is unchanged, so
+  neither a netlist comparison nor a simulation shows the loss; the user finds
+  the labels gone the next time the sheet is open in LTspice.
+
+### Proposed fix
+
+Keep each `DATAFLAG` as a positioned text (coordinate and expression, the
+expression verbatim) in a list of its own, and write those records in
+`save_netlist` after the labels and their `IOPIN` records. A data label is
+placed by its coordinate alone, so it needs no association with another
+record.
+
+### Suggested upstream test
+
+```python
+def test_data_flags_survive_a_save(tmp_path):
+    p = tmp_path / "flags.asc"
+    p.write_text('Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nDATAFLAG 80 0 ""\n')
+    out = io.StringIO()
+    AscEditor(p).save_netlist(out)
+    assert 'DATAFLAG 80 0 ""\n' in out.getvalue()
+```
+
+### Cross-reference
+
+`tests/test_edit_schematic.py::TestDataFlagPreservation` edits a sheet holding
+two data labels and a hierarchical port and reads the file back: both labels,
+in their order, after the labels and their ports. A second sheet is cp1252
+with a micro sign in its label, which comes back in the sheet's own codec.
+`tests/test_recorded_ltspice_schematics.py::TestSheetRecords` holds the same
+to the recorded sheet: both builds export it with nothing of the labels in the
+netlist, and an edit that sets the resistor's value commits the sheet as it
+was but for that value. The workaround places the records together after the
+labels and ahead of the first symbol, which is where the example sheets both
+builds install have them (*Reproduction*), and which keeps them out of a
+symbol's block of `WINDOW` and `SYMATTR` lines and from between a `FLAG` and
+its `IOPIN`. `TestPathsThatLeaveTheSheetAsItIs` pins that a read, a dry run
+and a batch of plot panes alone leave such a sheet's bytes as they were. Once
+upstream keeps the records, `_data_flag_lines` and `_with_data_flags` go.
+
+---
+
+## Bug 26 — a line `AscEditor` does not model makes the whole sheet unreadable (limitation)
+
+**Status:** known limitation; draft for an upstream enhancement. Found by
+reading the source; reproduced 2026-10-07. LTspice 26 and LTspice XVII are
+both recorded reading the two kinds of sheet it refuses (`export/bus_tap`,
+`export/blank_line`).
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist` ~line 274).
+**Our workaround:** `lib/schematic_ops.py::make_editor` turns the
+`NotImplementedError` into a `NetlistError` (`_unreadable_record`) naming the
+sheet that holds the line, the target or a sheet it loads, with the line's
+number and text. It finds that sheet in the traceback: the innermost
+`reset_netlist` frame is the read that refused, its editor names the file and
+codec, and its `line` the line.
+
+### Summary
+
+`reset_netlist` dispatches each line on the keyword it starts with and ends in
+`raise NotImplementedError`. A record it does not model therefore makes the
+whole sheet unreadable, and so does any line that does not start with a known
+keyword in its first column: an empty line, or an indented one. The message
+quotes the line but names neither the file nor the line number, and since the
+sheet of a block symbol is read while its parent loads, the line may be in a
+different file from the one being opened.
+
+The record most likely to reach this in a sheet LTspice wrote is a bus tap.
+KiCad's LTspice importer reads every keyword spicelib reads and one more,
+`BUSTAP <x1> <y1> <x2> <y2>`. Both LTspice builds know the keyword: each
+exports a sheet holding two taps (`export/bus_tap` in
+`tests/fixtures/ltspice_recorded`), and neither exports a sheet holding a
+keyword it does not know (`export/unknown_record`: LTspice 26 exits 0 having
+written nothing, XVII stops on a message box, "Unknown schematic syntax").
+Both also export a sheet holding an empty line (`export/blank_line`). So
+spicelib refuses sheets that LTspice reads.
+
+In the netlist a tap connects nothing. Of the recorded sheet's three
+resistors, the one on the bus `D[0:3]` is on node `D[0]`, the one on a tapped
+wire labelled `D0` is on `D0`, and the one on a tapped wire with no label is
+on a node of its own, `N001`. A reader that keeps the record and takes no
+connection from it therefore has the connections LTspice has at the tap. What
+node a bus's own label names is a separate matter and not spicelib's: both
+builds put a wire labelled `D[0:3]` on the node of a wire labelled `D[0]`
+(`connectivity/bus_label`), and our net partition does not, which
+`tests/test_recorded_ltspice_schematics.py` pins as
+`JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY`.
+
+The field layout is still KiCad's reading and not a recording. No example
+sheet either build installs holds a bus tap, the reference documents LTspice
+26 installs name it only as a menu command (Place Bus Tap), and an export does
+not check the fields: both builds exported a sheet whose `BUSTAP` had two of
+the four (looked at 2026-10-07, not recorded). Where LTspice puts the record
+in a sheet it saves is not on record either.
+
+### Affected code
+
+`spicelib/editor/asc_editor.py`, `reset_netlist` (~line 274):
+
+```python
+elif line.startswith("DATAFLAG"):
+    pass  # DATAFLAG is the placeholder to show simulation information. It is ignored by AscEditor
+else:
+    raise NotImplementedError("Primitive not supported for ASC file\n"
+                              f'"{line}"')
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib.editor.asc_editor import AscEditor
+
+Path("bustap.asc").write_bytes(
+    b"Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nFLAG 0 0 D[0:3]\n"
+    b"BUSTAP 80 0 80 16\n"
+)
+AscEditor("bustap.asc")
+# NotImplementedError: Primitive not supported for ASC file
+# "BUSTAP 80 0 80 16
+# "
+
+Path("blank_line.asc").write_bytes(b"Version 4\nSHEET 1 880 680\n\nWIRE 0 0 160 0\n")
+AscEditor("blank_line.asc")    # the same error, for the line "\n"
+```
+
+Through our server before the workaround, `edit_schematic` on the first sheet
+failed as `Internal error in edit_schematic: NotImplementedError: ...`, and
+`inspect`'s `components` and `net` queries on it answered `internal_error`.
+
+The two sheets above are the smallest that show the error. The recorded ones,
+`export/bus_tap.asc` and `export/blank_line.asc` under
+`tests/fixtures/ltspice_recorded/inputs`, raise it the same way, and those are
+the sheets both builds are recorded exporting.
+
+### Impact
+
+- One record spicelib does not model makes a sheet impossible to open, read or
+  edit through `AscEditor`, and with it every sheet that uses that sheet as a
+  block.
+- LTspice reads these sheets (*Summary*), so a sheet a person drew, and that
+  LTspice opens, exports and runs, cannot be opened at all.
+- The exception type says "not implemented" and the message gives no file or
+  line, so a caller cannot tell an unreadable sheet from a defect, or find the
+  line in a hierarchy.
+- Downstream, `verify_circuit` reads a sheet with its own parser
+  (`lib/schematic_scene.py::_parse_asc`), which skips a keyword it does not
+  draw, so it draws and checks such a sheet without that record while the
+  editing tools refuse it. It used to do so silently; it now reports each
+  such keyword, how many lines hold it and the first, as an observation.
+
+### Proposed fix
+
+Two parts. Raise a parse error that names the file and the line number (a
+`ValueError` subclass, say) instead of `NotImplementedError`. And keep a
+record the editor does not model verbatim, in its place among the records
+around it, writing it back on save, so a sheet holding a bus tap can be opened
+and edited without losing it.
+
+### Suggested upstream test
+
+```python
+def test_an_unmodelled_record_is_kept(tmp_path):
+    p = tmp_path / "bus.asc"
+    p.write_text("Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\nBUSTAP 80 0 80 16\n")
+    out = io.StringIO()
+    AscEditor(p).save_netlist(out)
+    assert "BUSTAP 80 0 80 16\n" in out.getvalue()
+
+def test_an_unreadable_line_names_its_file_and_line(tmp_path):
+    p = tmp_path / "bad.asc"
+    p.write_text("Version 4\nSHEET 1 880 680\nNOSUCHRECORD 1 2\n")
+    with pytest.raises(ValueError, match=r"bad\.asc.*line 3"):
+        AscEditor(p)
+```
+
+### Cross-reference
+
+`tests/test_edit_schematic.py::TestRecordTheEditorCannotRead`: an edit of a
+sheet holding a bus tap, or an empty line, is refused with a `NetlistError`
+naming the file, line 5 and the line, and the sheet is left as it was;
+`inspect`'s `components` and `net` queries answer with the same refusal
+instead of `internal_error`; and a bus tap in a block's sheet is named in that
+sheet, not in the parent being opened.
+`tests/test_verify_circuit.py::test_a_record_the_drawing_does_not_read_is_reported`
+pins the observation `verify_circuit` makes of the same record.
+`tests/test_recorded_ltspice_schematics.py::TestSheetRecords` holds all of it
+to the recorded sheets: what each build does with a bus tap, an empty line and
+an unknown keyword, the refusal the editor gives the two sheets LTspice reads
+(listed there as `EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR`, with the
+line each refusal names), the observation `verify_circuit` makes, and that its
+drawing, which reads past a tap, has each tapped wire ending on nothing, as
+the netlist does. Once upstream opens such a sheet, `_unreadable_record` goes,
+and an edit of a sheet holding a bus tap then needs the check Bug 25 needed: a
+commit must write the record back, not drop it.
+
+---
+
+## Bug 27 — `detect_encoding` refuses a sheet behind a UTF-8 byte order mark as having no `Version` line, and reads one behind a UTF-16 mark
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-07
+on the recorded inputs `export/micro_utf8_bom.asc` and
+`export/micro_utf16le_bom.asc`.
+**Affected version:** spicelib 1.5.1 (`spicelib/utils/detect_encoding.py`,
+`detect_encoding`; reached from `AscEditor.__init__` with the pattern
+`^VERSION `).
+**Our workaround:** `lib/schematic_ops.py::make_editor` turns the
+`EncodingDetectError` into a `NetlistError` (`_unrecognised_sheet`) that names
+the UTF-8 mark; `tools/schematic_edit.py::_commit_codec` writes a sheet that
+started with a UTF-16 mark back as UTF-16 LE without it; and `verify_circuit`'s
+quality check reports either mark (`byte_order_mark`). Which marks LTspice
+refuses, and what is said of them, is `lib/encoding.py`'s `refused_sheet_mark`
+and `refused_sheet_mark_note`.
+
+### Summary
+
+`detect_encoding` opens the file in each codec of a fixed list and keeps the
+first whose text matches the pattern. `utf-8` decodes a UTF-8 byte order mark
+to U+FEFF, which stays at the start of the text, so `^VERSION ` does not match
+there or in any later codec, and the error says the pattern was not found in a
+sheet whose first line, after the mark, is `Version 4`. A UTF-16 mark is the
+other way round: Python's `utf-16` stream decoder consumes it, so that sheet
+opens, and since `save_netlist` reopens the file in the codec it was read in,
+a save writes the mark back.
+
+Neither LTspice build reads either sheet (recorded): LTspice 26 exits 0
+having written no netlist, and XVII stops on "Aborting: Unknown schematic
+syntax: ... Version 4". Refusing them is therefore what LTspice does. What is
+wrong is the message, and that the two marks are treated differently.
+
+### Affected code
+
+`spicelib/utils/detect_encoding.py`, `detect_encoding` (~line 49):
+
+```python
+for encoding in ('utf-8', 'utf-16', 'utf_16_le', 'windows-1252', 'cp1252', 'cp1250', 'shift_jis'):
+    ...
+    if expected_pattern:
+        if not re.match(expected_pattern, lines, re_flags):
+            continue
+    ...
+else:
+    if expected_pattern:
+        raise EncodingDetectError(f"Expected pattern \"{expected_pattern}\" not found in file:{file_path}")
+```
+
+### Reproduction
+
+```python
+from spicelib.editor.asc_editor import AscEditor
+
+AscEditor("micro_utf8_bom.asc")
+# EncodingDetectError: Expected pattern "^VERSION " not found in file:micro_utf8_bom.asc
+
+editor = AscEditor("micro_utf16le_bom.asc")
+editor.encoding                    # 'utf-16'
+editor.save_netlist("saved.asc")   # saved.asc starts with b'\xff\xfe'
+```
+
+Both sheets are the recorded inputs named above. Through our server before the
+workaround, `inspect` and `edit_schematic` on the first failed as an internal
+error, and an edit of the second committed a sheet that still started with the
+mark, so neither build could export the edited sheet either.
+
+### Impact
+
+- A caller cannot tell a sheet with a byte order mark from a file that is not
+  a schematic: the message points at the `Version` line, which is there.
+- A sheet with a UTF-16 mark opens and saves with the mark, so a tool that
+  edits it hands back a sheet LTspice does not read, without saying so.
+
+### Proposed fix
+
+Match the pattern after a byte order mark, and return a codec that names the
+mark (`utf-8-sig` for UTF-8, as `utf-16` already does for UTF-16), so both
+marks are read and written back alike; a caller that wants to refuse or drop a
+mark can then see one. When nothing matches, say what the file starts with
+rather than only that the pattern was not found.
+
+### Suggested upstream test
+
+```python
+def test_a_utf8_byte_order_mark_is_read_past_and_named(tmp_path):
+    p = tmp_path / "bom.asc"
+    p.write_bytes(codecs.BOM_UTF8 + b"Version 4\nSHEET 1 880 680\n")
+    assert detect_encoding(p, r"^VERSION ", re.IGNORECASE) == "utf-8-sig"
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::TestExportEncoding` holds the
+server to the recordings: `test_the_editor_names_the_utf8_byte_order_mark_it_cannot_read`,
+`test_an_edit_writes_a_utf16_sheet_without_the_mark_neither_build_reads` and
+`test_verify_reports_the_byte_order_mark_neither_build_reads`. If upstream
+starts reading the UTF-8 sheet, it opens the way the UTF-16 one does:
+`_unrecognised_sheet` then no longer runs for it, and `_commit_codec` must drop
+that mark as it drops the UTF-16 one.
+
+---
+
+## Bug 28 — `AsyReader` cannot read a symbol with a space in a pin name
 
 **Status:** draft for an upstream spicelib pull request. Observed 2026-10-07
 against the symbol library and example sheets installed with LTspice 26.1.1.

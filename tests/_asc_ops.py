@@ -23,6 +23,12 @@ def sha_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def file_at(path: Path) -> tuple[bytes, int, int]:
+    """The file at ``path``, bytes and identity: a rewrite renames a new one into place."""
+    st = path.stat()
+    return path.read_bytes(), st.st_ino, st.st_mtime_ns
+
+
 def _envelope(result: Any) -> dict[str, Any]:
     data = result.structured_content
     assert data is not None, "edit_schematic must always return structuredContent"

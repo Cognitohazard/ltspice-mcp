@@ -114,7 +114,7 @@ inputs = ["export/boilerplate.asc"]
 
 [behaviour.export-encoding]
 summary = "The bytes of an exported netlist: its encoding, its line endings, and how the micro sign is spelled, for a sheet stored in each encoding and with each Version header."
-model = ["lib/encoding.py", "lib/deck_prep.py", "lib/format.py", "tools/verify.py", "lib/spice_lex_ops.py"]
+model = ["lib/encoding.py", "lib/deck_prep.py", "lib/format.py", "tools/verify.py", "lib/spice_lex_ops.py", "lib/schematic_scene.py", "lib/schematic_ops.py", "tools/schematic_edit.py"]
 inputs = [
     "export/micro_cp1252.asc",
     "export/micro_utf8.asc",
@@ -144,6 +144,32 @@ summary = "How directive text on a sheet reaches the netlist: .include and .lib 
 model = ["lib/netlist_diff.py", "lib/deck_staging.py", "lib/schematic_scene.py"]
 inputs = ["export/directives.asc"]
 extra = ["export/res.asy"]
+
+[behaviour.sheet-records]
+summary = "The lines a sheet holds besides its symbols, wires, labels and text: a data label (DATAFLAG) and a bus tap (BUSTAP) are read by both builds and put nothing in the netlist, an empty line is read past, and a keyword a build does not know stops the export."
+model = ["lib/schematic_ops.py", "tools/schematic_edit.py", "lib/schematic_scene.py"]
+# unknown_record is what makes an export a statement that a build reads a
+# record: neither build exports a sheet holding a keyword it does not know.
+# data_flags lists its records in the order of the example sheets both builds
+# install, where the data labels follow the net labels and come ahead of the
+# first symbol. bus_tap has R1 on the bus itself, R2 on a tapped wire labelled
+# D0 and R3 on a tapped wire with no label, so the export names the node on
+# each side of a tap.
+inputs = [
+    "export/data_flags.asc",
+    "export/bus_tap.asc",
+    "export/blank_line.asc",
+    "export/unknown_record.asc",
+]
+extra = ["export/res.asy"]
+
+[behaviour.bus-labels]
+summary = "The node of a pin on a wire labelled as a bus (D[0:3]): the bus's first member, D[0], which is the node of a wire labelled D[0] and not that of one labelled D[1]."
+model = ["lib/schematic_ops.py"]
+# No bus tap, so the schematic editor opens the sheet and its net partition
+# can be set beside the export.
+inputs = ["connectivity/bus_label.asc"]
+extra = ["connectivity/res.asy"]
 
 [behaviour.schematic-save-encoding]
 summary = "The bytes a build writes when it saves a sheet from its window: its encoding, its line endings, and the order and spelling of its records, for a sheet as the server writes one, the same sheet with its records in another order, the same sheet with CRLF line endings, and a sheet stored in each encoding."
@@ -421,10 +447,24 @@ model = ["lib/ltspice_window.py", "tools/analysis.py"]
 unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded is around it: how each build reads a file the server wrote when a sheet runs with it beside it (plot-settings-read), and that reading a results file's description opens it and leaves it the one in front (tests/fixtures/ltspice_bridge_recorded, conversation.json). LTspice XVII has no bridge to open a file through."
 
 [behaviour.window-run]
-summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it; and that only such a run's waveform pane is tied to the sheet, so that clicking a net plots it."
+summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it."
 model = ["assets/guide/schematics.md"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the three facts noted after 'run the sheet in the window', made with the window holding one resistor value and the file another"
-unrecordable = "The tie between a pane and a sheet is seen and not reported: nothing lists what a click added. It was looked at on LTspice 26.1.1, on a desktop of its own, by posting the same grid of clicks to the sheet's view and capturing the window. After a run made in the window the clicks added traces, with the panes tiled or with the sheet covering the results. With results from a batch run of the same sheet, beside it under its name and opened in the window, they added none in either layout."
+
+[behaviour.started-with-no-document]
+summary = "That an LTspice started with no document is offered to the bridge as a window, with no document open and none in front."
+model = ["lib/ltspice_window.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the two facts noted before 'one window is open', from an LTspice started on a desktop of its own with a settings file and no document. Started with no arguments at all it did the same; that was looked at and is not in the recording, which names a settings file so as not to run on the recording user's own."
+
+[behaviour.sheet-results-command]
+summary = "What the window's frame shows and what a sheet's Visible Traces command does: panes are titled with their files' names; the command opens the results beside a sheet that had them when it was opened and not ones put there afterwards; with those results open it shows a dialog to pick traces from; and the number the build's sheet menu gives the command."
+model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json, the facts noted after 'a results file that is not there', made by asking the frame of a window on a desktop of its own; manifest.json, sheet_commands. LTspice XVII is not recorded: it has no bridge to find the window through."
+
+[behaviour.plot-tied-to-sheet]
+summary = "That LTspice ties a plot to a sheet, so that clicking a net plots it, when the results are opened from the sheet (a run made in that window, or the sheet's Visible Traces command), and not when they are opened on their own; and that the command reads the results file as it is when the command is given."
+model = ["lib/ltspice_window.py", "tools/analysis.py", "assets/guide/schematics.md"]
+unrecordable = "The tie is seen and not reported: nothing lists what a click added, nor which run a plot draws. It was looked at on LTspice 26.1.1, on a desktop of its own, by posting the same grid of clicks to the sheet's view and capturing the window. Not tied: results opened through the bridge, by the results file's name or the sheet's, with the panes tiled or the sheet covering them, with either opened first, for a batch run's results and for a window run's once that LTspice was closed. Tied: results of a run made in that window, and results opened by the sheet's Visible Traces command, for a window run's results in a later session and for a batch run's. Read when the command is given: results of another resistor value, copied over the file after the sheet was opened with results beside it and after a run in that window whose plot was then closed, were the ones drawn."
 
 [behaviour.reference-documents]
 summary = "Where LTspice 26.1 keeps the reference documents it installs (a 'reference' directory beside its library), that they are Markdown files, and that each opens with front matter naming its title and description."
@@ -434,7 +474,7 @@ evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/manifest.json: refe
 # ---------------------------------------------------------------- plot settings
 
 [behaviour.plot-settings]
-summary = "The plot settings file (.plt) a build's waveform window saves: its encoding and line ends, the section an analysis's panes are under, the order the panes are listed in, the trace entries and the Log line of a pane it made itself."
+summary = "The plot settings file (.plt) a build's waveform window saves: its encoding and line ends, the section an analysis's panes are under, the order the panes are listed in, the trace entries and the Log line of a pane it made itself, and the GridStyle line it adds when the window's grid is on."
 model = ["lib/plot_settings.py"]
 # Each [[case]] of kind "plot" runs an RC sheet in the window (-Run), as a
 # person opening it would, makes the panes with the window's own menu
@@ -643,6 +683,17 @@ behaviour = "plot-settings"
 kind = "plot"
 source = "plot/rc_ac.asc"
 steps = [{ trace = "V(out)" }]
+
+# The waveform window's grid, a settings key the recorder removes from every
+# other case (BEHAVIOUR_KEYS in tests/ltspice_recorder.py says why).
+[[case]]
+id = "plot/ac_grid_on"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_ac.asc"
+steps = [{ trace = "V(out)" }]
+ini = { grid = "on" }
+note = "plot/ac with the grid on: a GridStyle line in the pane, and a phase axis written differently."
 
 # What a build makes of a file the server wrote. lib/plot_settings.py writes
 # every one of these but spaced.plt, which is its form for a trace with the

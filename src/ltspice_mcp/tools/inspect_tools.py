@@ -202,6 +202,7 @@ from ltspice_mcp.tools._base import (
     resolve_response_budget,
     safe_library_path,
     safe_path,
+    sandboxed,
     symbol_resolver_for,
     window_difference,
 )
@@ -1121,6 +1122,8 @@ def _do_capabilities(
         "open_window_sync": {
             "available": state.open_windows.available,
             "reason": state.open_windows.unavailable,
+            # Whether in_ltspice starts LTspice when no window is open.
+            "starts_ltspice": state.open_windows.starts_ltspice,
         },
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
@@ -1924,14 +1927,6 @@ def _simulator_docs_page(
 _OPEN_DESIGNS_LIMIT = 100
 
 
-def _sandboxed(spelled: str, state: SessionState) -> Path | None:
-    """``spelled`` as a path this server may read, or None when it may not."""
-    try:
-        return safe_path(spelled, state)
-    except (LTSpiceMCPError, OSError, ValueError):
-        return None
-
-
 def _design_kind(spelled: str) -> str:
     suffix = Path(spelled).suffix.lower()
     if suffix == ".asc":
@@ -1972,7 +1967,7 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
         admitted: dict[str, Path | None] = {}
 
         def is_readable_sheet(spelled: str) -> bool:
-            admitted[spelled] = _sandboxed(spelled, state)
+            admitted[spelled] = sandboxed(spelled, state)
             return admitted[spelled] is not None and _design_kind(spelled) == "schematic"
 
         count, designs = state.open_windows.designs(is_readable_sheet)
