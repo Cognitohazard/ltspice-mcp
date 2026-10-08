@@ -100,50 +100,49 @@ Everything operates on ordinary LTspice and SPICE files. You and the assistant c
 - Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state, which the assistant reads on the next request.
 - Either of you can change the file mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
 
-**With the sheet open in LTspice** (Windows, LTspice 26.1 or later): LTspice never notices a file changing under it, so the server tells it. When the assistant edits a schematic you have open, the change appears in the window at once, and Ctrl+Z there takes it back off the screen. If your window holds changes you have not saved, the assistant is refused and asks you to save or close the sheet first, so neither side's work is overwritten. This goes through the MCP bridge that ships with LTspice; the server only ever attaches to an LTspice you already have running.
+**With the schematic open in LTspice** (Windows, LTspice 26.1 or later): LTspice doesn't reload a file that changes on disk, so the server updates the window itself. When the assistant edits a schematic you have open, the change shows up in the window straight away, and Ctrl+Z there undoes it on screen. If the window has unsaved changes, the edit is refused and the assistant asks you to save or close the schematic first, so nobody's work gets overwritten. This uses the MCP bridge that ships with LTspice. An edit never starts LTspice; it only reaches a copy that is already running.
 
-The same link works the other way round. Ask about "this circuit" and the assistant can see which sheet you have in front. Ask to see a sheet the assistant built and it opens in your LTspice window, in front. Ask to see a run in LTspice and its results open there with the traces you asked about already drawn. And for questions about LTspice itself (a shortcut, a menu, the waveform viewer) the assistant reads the reference files LTspice installs.
+It works in the other direction too. The assistant can see which schematic you have in front, so "this circuit" means something. It can open a schematic it built in your LTspice window, or open a run there with the traces you asked about already plotted. For questions about LTspice itself, such as a shortcut or a menu, it reads the reference files that LTspice installs.
 
 ### Alongside LTspice's own MCP server
 
-From 26.1, LTspice ships an MCP server of its own, and on Windows it offers to
-add itself to Claude Code, Claude Desktop, Copilot and Cursor under the name
-`ltspice`. The two do different jobs and can be registered side by side, which
-is why this one is called `spice`.
+LTspice 26.1 and later ships its own MCP server. On Windows it offers to add
+itself to Claude Code, Claude Desktop, Copilot and Cursor as `ltspice`, which
+is why this server is called `spice`.
 
-- **LTspice's** is a remote control for the LTspice window: it reads the
-  documents you have open, replaces one with text the assistant wrote, runs
-  the open design, and reads raw samples.
-- **This one** is the engineering side: schematic edits by pin with the
-  geometry checked, sweeps, corners and Monte Carlo as jobs, measurements as
-  numbers, ngspice as well as LTspice.
+Install both. LTspice's server controls the LTspice window: it can read a
+schematic you haven't saved and run it on screen while you watch. What you
+get back is raw samples and the log, so working out a phase margin or setting
+up a Monte Carlo run is left to the assistant, and the only way it can edit
+is by replacing the whole file's text. This server works from the files on
+disk instead. It places and wires parts with the geometry checked, runs
+sweeps and Monte Carlo as background jobs, returns measurements as numbers,
+and also runs ngspice.
 
-You do not need LTspice's server registered for the window features described
-above. This server reaches your LTspice window through the bridge program
-LTspice installs, by itself. It attaches to an LTspice you already have
-running, and starts LTspice only when you ask to see a sheet or a run there
-and none is open (`[schematic] start_ltspice = false` turns that off).
+The window features described above come from this server and work without
+LTspice's. It talks to your LTspice window through the bridge program that
+LTspice installs. It uses an LTspice you already have running, and starts one
+only when you ask to see a schematic or a run there and LTspice isn't open.
+Set `[schematic] start_ltspice = false` to turn that off.
 
-If you do register LTspice's server too, know that in its default form each
-assistant session's copy of it starts a hidden LTspice of its own whenever it
-has no window to use, and an assistant's changes can then land in an LTspice
-you cannot see. Registering it with `--ltspice-path` pointing at a file that
-does not exist leaves it able to use only a window you have open. That is a
-workaround and not a mode LTspice documents, so check it again after an
-LTspice update.
+By default, LTspice's server starts a hidden copy of LTspice whenever it has
+no window to use, one per assistant session. Changes made through it can then
+end up in an LTspice you can't see. To prevent that, register it with
+`--ltspice-path` set to a file that doesn't exist, which leaves it able to
+use only a window you have open. This is a workaround, not a documented
+option, so check it again after updating LTspice.
 
-Asked to show a run of a sheet in LTspice, this server opens it so that
-clicking a net on the sheet plots it, as after a run you made there yourself.
-LTspice ties a plot to a sheet only when the results are opened from the
-sheet, so the run's results are put beside the sheet, in place of the ones
-there, and the sheet's own Visible Traces command is what opens them. No
-second simulation is run, and LTspice's server is not needed for it.
+When you ask to see a schematic's run in LTspice, this server opens it so
+that clicking a net plots it, the same as after running it in LTspice
+yourself. To do that it copies the run's results next to the schematic,
+replacing the ones there, and opens them with the schematic's own Visible
+Traces command. It doesn't simulate again, and it doesn't need LTspice's
+server.
 
-If you registered this server as `ltspice`, rename the entry to
-`spice`. In the Claude Code plugin the rename is already made, so the tool
-names an assistant sees change once, from `…_ltspice__run_experiments` to
-`…_spice__run_experiments`: a saved permission rule or an instruction that
-spells out the old names needs the new ones.
+If you registered this server as `ltspice`, rename it to `spice`. The Claude
+Code plugin has already been renamed, so its tool names change once, from
+`…_ltspice__run_experiments` to `…_spice__run_experiments`. Update any saved
+permission rule or instruction that uses the old names.
 
 ### When to shell out instead
 
