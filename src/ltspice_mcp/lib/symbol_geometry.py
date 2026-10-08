@@ -39,29 +39,36 @@ _TRANSFORMS: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
 
 @dataclass(frozen=True)
 class SymbolInfo:
-    """Parsed symbol metadata: pins, bounding box, description, netlist prefix.
+    """Parsed symbol metadata: pins, bounding box, type and attributes.
 
     The bounding box is in the symbol's local coordinate space. LTspice
     symbols are typically centered around the origin, so ``bbox.x1`` and
-    ``bbox.y1`` are usually negative. ``prefix`` is the symbol's
-    ``SYMATTR Prefix`` (``R``, ``QN``, ``MN``, ``X``...), empty when it has
-    none; its first letter is the element class LTspice netlists the part as,
-    whatever the instance is named.
+    ``bbox.y1`` are usually negative. ``attributes`` is every ``SYMATTR`` the
+    symbol carries, in file order (``Prefix``, ``Description``, ``SpiceModel``,
+    ``Value``, ``SpiceLine``, ``ModelFile``...), and ``symbol_type`` its
+    ``SymbolType`` (``CELL``, ``BLOCK``), empty when it states none.
     """
 
     name: str
-    description: str
     pins: tuple[PinInfo, ...]
     bbox: BBox
-    prefix: str = ""
+    symbol_type: str = ""
+    attributes: tuple[tuple[str, str], ...] = ()
 
-    def to_dict(self) -> dict:
-        return {
-            "symbol": self.name,
-            "description": self.description,
-            "pins": [p.to_dict() for p in self.pins],
-            "bounding_box": self.bbox.to_origin_size_dict(),
-        }
+    def attribute(self, name: str) -> str:
+        """The value of the symbol's last ``SYMATTR name``, "" when it has none."""
+        return dict(self.attributes).get(name, "")
+
+    @property
+    def description(self) -> str:
+        return self.attribute("Description")
+
+    @property
+    def prefix(self) -> str:
+        """``SYMATTR Prefix`` (``R``, ``QN``, ``MN``, ``X``...): its first letter
+        is the element class LTspice netlists the part as, whatever the
+        instance is named."""
+        return self.attribute("Prefix")
 
 
 def _apply_rotation(x: int, y: int, rotation: str) -> tuple[int, int]:
@@ -130,10 +137,10 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
         raise ValueError(f"{asy_path.name}: unreadable pin line {symbol.unread_pins[0]!r}")
     return SymbolInfo(
         name=asy_path.stem,
-        description=symbol.description,
         pins=symbol.pins,
         bbox=symbol.bbox,
-        prefix=symbol.prefix,
+        symbol_type=symbol.symbol_type,
+        attributes=symbol.attrs,
     )
 
 

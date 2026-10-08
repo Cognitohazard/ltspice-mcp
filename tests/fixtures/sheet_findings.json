@@ -407,6 +407,3062 @@
    }
   ]
  },
+ "fixtures/ltspice_bridge_recorded/inputs/micro_sign.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (224,112)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 224,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (224,176)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 224,
+     "y": 176
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (176,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 176,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (80,112)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 80,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 7
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 240,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       128
+      ],
+      [
+       208,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 224,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 224,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 176,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 80,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       80,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,128)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 112,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,128)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 240,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,144)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 240,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       208
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,208)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/inputs/older_version.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (176,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 176,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (80,112)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 80,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (224,112)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 224,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (224,176)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 224,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 7
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 240,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       128
+      ],
+      [
+       208,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 176,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 80,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       80,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 224,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 224,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 112,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,128)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,128)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 240,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,144)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 240,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       208
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,208)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/inputs/symbol_attributes.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (176,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 176,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (80,112)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 80,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (224,112)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 224,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (224,176)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 224,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 7
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 240,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       128
+      ],
+      [
+       208,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 176,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 80,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       80,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 224,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 224,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,128)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 112,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,128)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 240,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,144)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 240,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       208
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,208)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/inputs/text_off_grid.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (16,80)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 16,
+     "y": 80
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (16,176)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 16,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 5
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 16,
+     "y": 80
+    },
+    "evidence": {
+     "coords": [
+      [
+       16,
+       80
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 16,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       16,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,144)"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,224)"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/ltspice26/sheets/micro_sign.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (224,112)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 224,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (224,176)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 224,
+     "y": 176
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (176,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 176,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (80,112)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 80,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 7
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 240,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       128
+      ],
+      [
+       208,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 224,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 224,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 176,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 80,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       80,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,128)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 112,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,128)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 240,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,144)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": 240,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       208
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,208)"
+   },
+   {
+    "at": {
+     "file": "micro_sign.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/ltspice26/sheets/older_version.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (176,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 176,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (80,112)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 80,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (224,112)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 224,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (224,176)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 224,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 7
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 240,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       128
+      ],
+      [
+       208,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 176,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 80,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       80,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 224,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 224,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,128)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 112,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,128)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 240,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,144)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": 240,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       208
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,208)"
+   },
+   {
+    "at": {
+     "file": "older_version.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/ltspice26/sheets/symbol_attributes.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (176,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 176,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (80,112)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 80,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (224,112)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 224,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (224,176)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 224,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 7
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 240,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       128
+      ],
+      [
+       208,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 176,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 80,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       80,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 224,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       112
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 224,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       224,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,128)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 112,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       128
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,128)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 240,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,144)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": 240,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       240,
+       208
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(240,208)"
+   },
+   {
+    "at": {
+     "file": "symbol_attributes.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
+ "fixtures/ltspice_bridge_recorded/ltspice26/sheets/text_off_grid.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (-48,96)",
+     "pin": "+",
+     "ref": "V1",
+     "x": -48,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (-48,160)",
+     "pin": "-",
+     "ref": "V1",
+     "x": -48,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (16,80)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 16,
+     "y": 80
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (16,176)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 16,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 5
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       128
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ],
+      [
+       -48,
+       128
+      ]
+     ],
+     "detail": "wire segment passes through the symbol's body box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       96
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       160
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 16,
+     "y": 80
+    },
+    "evidence": {
+     "coords": [
+      [
+       16,
+       80
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 16,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       16,
+       176
+      ]
+     ],
+     "detail": "pin has no wire, net label, or mating pin on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,144)"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       144
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,144)"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": 32,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,224)"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -48,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       -48,
+       224
+      ]
+     ],
+     "detail": "wire end meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(-48,224)"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc": {
   "dropped_wire": [],
   "edit": {
@@ -2287,7 +5343,110 @@
  "fixtures/ltspice_recorded/inputs/export/block_symbol.asc": {
   "dropped_wire": [],
   "edit": {
-   "unopenable": true
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.a at (112,512)",
+     "pin": "a",
+     "ref": "U1",
+     "x": 112,
+     "y": 512
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.b at (144,464)",
+     "pin": "b",
+     "ref": "U1",
+     "x": 144,
+     "y": 464
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.c at (64,544)",
+     "pin": "c",
+     "ref": "U1",
+     "x": 64,
+     "y": 544
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.d at (32,432)",
+     "pin": "d",
+     "ref": "U1",
+     "x": 32,
+     "y": 432
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: X2.a at (416,512)",
+     "pin": "a",
+     "ref": "X2",
+     "x": 416,
+     "y": 512
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: X2.b at (448,464)",
+     "pin": "b",
+     "ref": "X2",
+     "x": 448,
+     "y": 464
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: X2.c at (368,544)",
+     "pin": "c",
+     "ref": "X2",
+     "x": 368,
+     "y": 544
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: X2.d at (336,432)",
+     "pin": "d",
+     "ref": "X2",
+     "x": 336,
+     "y": 432
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: x3.a at (716,512)",
+     "pin": "a",
+     "ref": "x3",
+     "x": 716,
+     "y": 512
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: x3.b at (748,464)",
+     "pin": "b",
+     "ref": "x3",
+     "x": 748,
+     "y": 464
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: x3.c at (668,544)",
+     "pin": "c",
+     "ref": "x3",
+     "x": 668,
+     "y": 544
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: x3.d at (636,432)",
+     "pin": "d",
+     "ref": "x3",
+     "x": 636,
+     "y": 432
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 12,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
   },
   "verify": [
    {

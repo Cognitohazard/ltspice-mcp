@@ -661,6 +661,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_MAX_RAW_MB": "256",
     "LTSPICE_MCP_LOG_LEVEL": "error",
     "LTSPICE_MCP_SYMBOL_PATHS": f"/tmp/env-sym-a{os.pathsep}/tmp/env-sym-b",
+    "LTSPICE_MCP_SYNC_OPEN_WINDOW": "on",
     "LTSPICE_MCP_TOOL_LISTING": "full",
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_RUN_CODE": "off",
@@ -711,6 +712,7 @@ level = "debug"
 
 [schematic]
 symbol_paths = ["/tmp/sym-a", "/tmp/sym-b"]
+sync_open_window = false
 
 [tools]
 listing = "compact"
@@ -774,6 +776,7 @@ class TestLoadCoversEveryKey:
             "default_budget": 2500,
             "log_level": "DEBUG",
             "symbol_paths": [Path("/tmp/sym-a"), Path("/tmp/sym-b")],
+            "sync_open_window": False,
             "tool_listing": "compact",
             "run_code": True,
             "persist_jobs": False,
@@ -816,6 +819,7 @@ class TestLoadCoversEveryKey:
             "default_budget": 3300,
             "log_level": "ERROR",
             "symbol_paths": [Path("/tmp/env-sym-a"), Path("/tmp/env-sym-b")],
+            "sync_open_window": True,
             "tool_listing": "full",
             "run_code": False,
             "persist_jobs": True,

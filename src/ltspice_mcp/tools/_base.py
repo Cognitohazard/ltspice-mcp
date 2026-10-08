@@ -23,6 +23,7 @@ from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
+from ltspice_mcp.lib.ltspice_window import file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
@@ -291,6 +292,22 @@ BBOX_SCHEMA: dict[str, Any] = {
         "height": {"type": "integer"},
     },
 }
+
+#: The LTspice window a reply names: its process, and the build it runs.
+LTSPICE_WINDOW_PROPERTIES: dict[str, Any] = {
+    "pid": {"type": "integer", "description": "The LTspice process."},
+    "version": {"type": "string"},
+}
+
+
+def window_difference(on_disk: bytes, window_text: str) -> dict[str, Any]:
+    """Whether an LTspice window's copy of a sheet is the file's, as a reply says it:
+    ``differs_from_file``, and ``difference`` when it does."""
+    difference = file_difference(on_disk, window_text)
+    if difference is None:
+        return {"differs_from_file": False}
+    return {"differs_from_file": True, "difference": difference}
+
 
 # The rows ``schematic_ops.post_op_warnings`` returns, as edit_schematic's
 # preexisting view publishes them. ``message`` is always present and

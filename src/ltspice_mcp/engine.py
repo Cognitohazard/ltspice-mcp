@@ -38,6 +38,7 @@ _LIBRARY_OVERRIDE_NAMES = frozenset(
         "analysis_budget_s",
         "result_set_ttl_hours",
         "symbol_paths",
+        "sync_open_window",
         "persist_jobs",
         "preload_recent_count",
     }

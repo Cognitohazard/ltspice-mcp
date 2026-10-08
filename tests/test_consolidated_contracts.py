@@ -725,7 +725,18 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # find out. Measured 9,151.
     # Results inventory, signal/table pages and log facts also
     # contribute to the merged schema bound.
-    "inspect": 10550,
+    # Raised by about 200 characters for the 'open_in_ltspice' kind and the
+    # open_window_sync report key: a request about "this circuit" had nowhere
+    # to start without a path, and LTspice can now be asked what is in front.
+    # The kind takes no arguments, so this is its name, its one-line
+    # description and its branch. Measured 10,739.
+    # Raised by about 500 characters for the 'simulator_docs' kind, the door to
+    # the reference documents LTspice installs: the keyboard shortcuts, menus
+    # and waveform viewer are questions about the program that the guide does
+    # not answer, and a client that cannot read files had no way to the
+    # vendor's own account of them. Its name and cursor arguments are most of
+    # the cost. Measured 11,246.
+    "inspect": 11250,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -749,7 +760,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Cairo and that inspect capabilities reports whether it works here: the
     # extra was the only requirement it named, and a host with the extra but
     # no libcairo had no way to find out before a render fell back to SVG.
-    "verify_circuit": 4880,
+    # Raised by about 160 characters for in_ltspice, which opens the checked
+    # file in the LTspice window the user already has: the argument, and a
+    # clause in the description so a host asked to "open it in LTspice" finds
+    # it here. Measured 5,037.
+    "verify_circuit": 5040,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot
@@ -758,7 +773,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # by scale), attach_plot, and open, whose default now comes from
     # [analysis] open_plot. Measured 3,695 characters.
     # Explicit plot and dialect selection also contribute to the schema bound.
-    "plot_waveform": 4100,
+    # Raised by about 200 characters for in_ltspice, which opens the run in
+    # the LTspice window the user already has, with the plotted traces drawn:
+    # the argument, and a clause in the description so that a host asked to
+    # "show it in LTspice" finds it. Measured 4,294.
+    "plot_waveform": 4300,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
