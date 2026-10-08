@@ -1565,9 +1565,12 @@ Python API), which are never capped. The gate stays a whole-file answer.
     (how many are running), `total`, and `designs`, each {path, kind:
     "schematic"|"netlist"|"other", active (the one in front in its window),
     pid, version, in_sandbox}. A sheet inside the sandbox adds its `sha256`
-    and `differs_from_file`, with `difference` naming a few entries when the
-    window's copy is not the file's. A document outside the sandbox is named
-    and not read. Fails as `open_windows_unavailable` where there is no bridge
+    and `differs_from_file`. When the window's copy is not the file's,
+    `difference` names a few entries in a sentence, and `only_in_window` and
+    `only_in_file` list the entries that differ (a symbol with its
+    attributes, or one other line), up to 25 a side, with
+    `difference_omitted` counting the rest. A document outside the sandbox is
+    named and not read. Fails as `open_windows_unavailable` where there is no bridge
     to ask (not Windows, LTspice before 26.1, the setting off) and as
     `open_windows_unreachable` when the bridge does not answer
 ```
@@ -1601,8 +1604,11 @@ with `differs_from_file`: when the window holds something the file does not,
 a run or a check on that path would answer about a circuit the person is not
 looking at, and `edit_schematic` would refuse. The `sha256` is there so that an
 edit of the sheet in front is one call after this one. The window's copy is
-compared and never returned, so nothing reaches a caller that is not in a file,
-and a document outside the sandbox is named, as its path is not a secret from
+compared and never returned as a sheet. What a caller gets is where it differs
+from the file, entry by entry, each marked as the window's or the file's:
+enough to tell the person what they have not saved, and to see what an edit
+was refused over, and not something that could be taken for the circuit a run
+would use. A document outside the sandbox is named, as its path is not a secret from
 a client on the same machine, but neither it nor the window's copy of it is
 read. A query that cannot be answered fails; an empty list would say that
 nothing is open.

@@ -187,6 +187,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     HINT_SCHEMA,
+    LTSPICE_DIFFERENCE_ENTRIES,
     LTSPICE_WINDOW_PROPERTIES,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
@@ -1925,6 +1926,8 @@ def _simulator_docs_page(
 
 #: The most documents one reply lists; the rest are counted.
 _OPEN_DESIGNS_LIMIT = 100
+#: The most differing entries listed from each side of one sheet; the rest are counted.
+_DIFFERENCE_ENTRIES_LIMIT = 25
 
 
 def _design_kind(spelled: str) -> str:
@@ -1949,7 +1952,7 @@ def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
         return row
     on_disk = resolved.read_bytes()
     row["sha256"] = hashlib.sha256(on_disk).hexdigest()
-    row.update(window_difference(on_disk, design.text))
+    row.update(window_difference(on_disk, design.text, entries=_DIFFERENCE_ENTRIES_LIMIT))
     return row
 
 
@@ -1990,7 +1993,8 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
     if any(row.get("differs_from_file") for row in rows):
         hints.append(
             "A sheet whose window differs from its file is refused by edit_schematic until "
-            "it is saved or closed in LTspice; a run or a check reads the file, not the window."
+            "it is saved or closed in LTspice; a run or a check reads the file, not the "
+            "window. only_in_window and only_in_file list where the two differ."
         )
     if any(not row["in_sandbox"] for row in rows):
         hints.append(
@@ -2502,6 +2506,7 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
                     ),
                 },
                 "difference": {"type": "string"},
+                **LTSPICE_DIFFERENCE_ENTRIES,
             },
             "required": ["path", "kind", "active", "pid", "version", "in_sandbox"],
         },
