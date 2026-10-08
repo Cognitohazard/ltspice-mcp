@@ -433,8 +433,13 @@ what must hold before the next one starts.
      and the label op's refusals become rules over a transition, in the order
      they are raised today, wrong intent first. *Gate:* every test that pins a
      refusal's wording, the archetype and at-scale builds with no rejection,
-     the recorded connectivity sheets through the planner, and the refusals of
-     each archetype's routes captured beforehand and compared after.
+     the recorded connectivity sheets through the planner, and the planner's
+     answers captured beforehand and compared after. *The capture is made:*
+     `tests/fixtures/route_planner_record.json` holds what the planner answers
+     to some 8,500 proposals on the 79 sheets of the suite the editor opens
+     (pin to pin straight and by each corner, pin to the middle of each wire,
+     a detour level with each part), every refusal and advisory it has among
+     them, and `tests/test_route_planner_record.py` holds it to that.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose.
