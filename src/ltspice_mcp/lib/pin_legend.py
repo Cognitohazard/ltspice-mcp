@@ -8,8 +8,8 @@ simulates correctly but reads as a wiring list rather than a drawn schematic.
 
 This module holds only the assembly, classification, and pagination logic. The
 connectivity itself — which net a coordinate is on, whether a wire passes
-through it — is resolved by the caller through the shared ``net_partition`` /
-``build_on_wire_predicate`` machinery in ``lib/schematic_ops.py`` and handed in as
+through it — is resolved by the caller through ``schematic_ops.net_partition``
+and ``connectivity.build_on_wire_predicate`` and handed in as
 plain data + closures, so this stays a pure leaf module (no ``tools`` import,
 no re-implementation of the union-find).
 """

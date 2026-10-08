@@ -38,6 +38,7 @@ from ltspice_mcp.lib.runner_base import (
 )
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
+from ltspice_mcp.lib.sheet_findings import RULES as SHEET_RULES
 from ltspice_mcp.lib.simulator import (
     family_refusal,
     no_simulator_message,
@@ -332,17 +333,21 @@ def window_difference(on_disk: bytes, window_text: str) -> dict[str, Any]:
     return {"differs_from_file": True, "difference": difference}
 
 
-# The rows ``schematic_ops.post_op_warnings`` returns, as edit_schematic's
-# preexisting view publishes them. ``message`` is always present and
-# human-readable; the other keys depend on ``kind``. A new kind there extends
-# ``VALIDATION_WARNING_KINDS`` here, so producer and schema stay in lockstep.
-VALIDATION_WARNING_KINDS: tuple[str, ...] = (
-    "floating_pin",
-    "duplicate_wire",
-    "dangling_label",
-    "label_over_component",
-    "stacked_directive",
-)
+# A sheet finding as edit_schematic's preexisting view publishes it
+# (``schematic_edit.finding_row``). ``message`` is always present and stands
+# alone; the other keys depend on ``kind``. The kinds are the rules of the
+# registry in ``lib/sheet_findings.py``, so producer and schema cannot fall
+# out of step.
+VALIDATION_WARNING_KINDS: tuple[str, ...] = tuple(SHEET_RULES)
+
+RULES_RUN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "The sheet rules that ran, each with how many findings it had, zero "
+        "included: a rule that found nothing is told from one that did not run."
+    ),
+    "additionalProperties": {"type": "integer"},
+}
 
 VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
     "type": "array",
@@ -352,10 +357,26 @@ VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
             "kind": {"type": "string", "enum": list(VALIDATION_WARNING_KINDS)},
             "message": {"type": "string"},
             "ref": {"type": "string"},
+            "refs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Every part the finding names, when it names more than one.",
+            },
             "pin": {"type": "string"},
             "label": {"type": "string"},
+            "symbol": {"type": "string"},
+            "net": {"type": "string"},
+            "text": {"type": "string"},
             "x": {"type": "integer"},
             "y": {"type": "integer"},
+            "points": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                },
+                "description": "Every point the finding names, when x and y are only the first.",
+            },
             "from": {
                 "type": "object",
                 "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},

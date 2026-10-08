@@ -385,13 +385,15 @@ class TestCommittedRecordings:
         assert not stale, f"inputs changed since they were recorded; record again: {stale}"
 
     def test_every_command_is_the_one_the_server_launches(self, build: str):
-        """A plot case is the one exception: it runs the sheet in the window,
-        as the person the sheet is handed to does."""
+        """A plot case and a save case are the exceptions: one runs the sheet in
+        the window, as the person the sheet is handed to does, and the other
+        only opens it there."""
         manifest = load_manifest(FIXTURES / build)
         for case_id, entry in manifest["cases"].items():
             command = entry["command"]
             assert command[0] == manifest["executable"]["name"], case_id
-            mode = {"netlist": ["-netlist"], "plot": ["-Run"]}.get(entry["kind"], ["-Run", "-b"])
+            modes = {"netlist": ["-netlist"], "plot": ["-Run"], "save": []}
+            mode = modes.get(entry["kind"], ["-Run", "-b"])
             assert command[1 : 1 + len(mode)] == mode, case_id
             assert command[1 + len(mode)].startswith("<dir>/"), case_id
 
@@ -467,16 +469,103 @@ def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tm
     )
 
 
+def _menu_item(flags: int, text: str, command: int | None = None) -> bytes:
+    """One item of a classic menu template, the form both builds' menus are in."""
+    head = flags.to_bytes(2, "little")
+    if command is not None:
+        head += command.to_bytes(2, "little")
+    return head + text.encode("utf-16-le") + b"\0\0"
+
+
+def _inputs(tmp_path: Path, source: str, cases: str) -> Path:
+    """An inputs folder: the bare sheet ``source`` and a cases file of one
+    behaviour, ``b``, and ``cases``."""
+    (tmp_path / source).parent.mkdir()
+    (tmp_path / source).write_text("Version 4\n", encoding="utf-8")
+    (tmp_path / "cases.toml").write_text(
+        '[behaviour.b]\nsummary = "s"\nmodel = ["m"]\n\n' + cases, encoding="utf-8"
+    )
+    return tmp_path
+
+
+class TestSaveCases:
+    """The parts of a save case that run anywhere: its command, what it keeps,
+    and the menu its Save is read from."""
+
+    def _case(self, tmp_path: Path, extra: str = "") -> recorder.Case:
+        inputs = _inputs(
+            tmp_path,
+            "save/sheet.asc",
+            '[[case]]\nid = "save/x"\nbehaviour = "b"\nkind = "save"\n'
+            'source = "save/sheet.asc"\n' + extra,
+        )
+        return load_cases(inputs).case("save/x")
+
+    def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path):
+        case = self._case(tmp_path)
+        build = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "modern", None)
+        deck, ini = tmp_path / "work" / case.work_name, tmp_path / "x.ini"
+        assert recorder._command(build, case, deck, ini) == [
+            str(build.exe),
+            deck.as_posix(),
+            "-ini",
+            str(ini),
+        ]
+
+    def test_what_it_keeps_is_the_sheet_the_build_wrote(self, tmp_path: Path):
+        case = self._case(tmp_path)
+        assert case.kept() == ("asc",)
+        assert case.work_name == "x.asc"
+
+    def test_it_takes_no_steps(self, tmp_path: Path):
+        with pytest.raises(RecorderError, match="only a plot case"):
+            self._case(tmp_path, 'steps = [{ command = "Save" }]\n')
+
+    def test_its_save_is_the_schematic_menus_own(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Several of a build's menus have a Save; the one sent is in the menu
+        that also has Label Net, which only the schematic window's does."""
+        waveform = (
+            b"\0\0\0\0"
+            + _menu_item(0x10, "&File")
+            + _menu_item(0x80, "&Save Plot Settings\tCtrl+S", 111)
+            + _menu_item(0x10 | 0x80, "&Plot Settings")
+            + _menu_item(0x80, "Add trace\tCtrl+A", 112)
+        )
+        schematic = (
+            b"\0\0\0\0"
+            + _menu_item(0x10, "&File")
+            + _menu_item(0x80, "&Save\tCtrl+S", 221)
+            + _menu_item(0x10 | 0x80, "&Edit")
+            + _menu_item(0x80, "Label &Net\tF4", 222)
+        )
+        exe = tmp_path / "LTspice.exe"
+        exe.write_bytes(b"")
+        menus = [pe_menu.menu_items(waveform), pe_menu.menu_items(schematic)]
+        monkeypatch.setattr(pe_menu, "menus", lambda _executable: menus)
+        recorder.schematic_commands.cache_clear()
+        recorder.waveform_commands.cache_clear()
+        try:
+            assert recorder.schematic_commands(exe) == {"Save": 221, "Label Net": 222}
+            assert recorder.waveform_commands(exe) == {
+                "Save Plot Settings": 111,
+                "Add trace": 112,
+            }
+            monkeypatch.setattr(pe_menu, "menus", lambda _executable: menus[:1])
+            recorder.schematic_commands.cache_clear()
+            with pytest.raises(RecorderError, match="no schematic-window menu"):
+                recorder.schematic_commands(exe)
+        finally:
+            recorder.schematic_commands.cache_clear()
+            recorder.waveform_commands.cache_clear()
+
+
 class TestPlotCases:
     """The parts of a plot case that run anywhere: its steps and the menu it reads."""
 
     def _case_file(self, tmp_path: Path, case: str) -> Path:
-        (tmp_path / "plot").mkdir()
-        (tmp_path / "plot" / "rc.asc").write_text("Version 4\n", encoding="utf-8")
-        (tmp_path / "cases.toml").write_text(
-            '[behaviour.b]\nsummary = "s"\nmodel = ["m"]\n\n' + case, encoding="utf-8"
-        )
-        return tmp_path
+        return _inputs(tmp_path, "plot/rc.asc", case)
 
     def test_a_step_is_a_trace_or_a_command(self, tmp_path: Path):
         inputs = self._case_file(
@@ -536,20 +625,13 @@ class TestPlotCases:
 
     def test_a_menu_template_gives_each_item_its_command(self):
         """The classic template form both builds' waveform menus are in."""
-
-        def item(flags: int, text: str, command: int | None = None) -> bytes:
-            head = flags.to_bytes(2, "little")
-            if command is not None:
-                head += command.to_bytes(2, "little")
-            return head + text.encode("utf-16-le") + b"\0\0"
-
         template = (
             b"\0\0\0\0"
-            + item(0x10, "&File")
-            + item(0x80, "&Save Plot Settings\tCtrl+S", 57603)
-            + item(0x10 | 0x80, "&Plot Settings")
-            + item(0, "Add trace\tCtrl+A", 32855)
-            + item(0x80, "Save Plot Settings As...", 32914)
+            + _menu_item(0x10, "&File")
+            + _menu_item(0x80, "&Save Plot Settings\tCtrl+S", 57603)
+            + _menu_item(0x10 | 0x80, "&Plot Settings")
+            + _menu_item(0, "Add trace\tCtrl+A", 32855)
+            + _menu_item(0x80, "Save Plot Settings As...", 32914)
         )
         assert pe_menu.menu_items(template) == [
             (None, "&File"),

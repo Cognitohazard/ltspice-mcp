@@ -40,6 +40,34 @@ tool-surface changes.
   sheet with its own parser, used to leave such a record out of the drawing
   and of every check built on it without saying so; it now reports each
   keyword it did not read, how many lines hold it and the first.
+- `wire_pins` drew a wire that shorted two named nets in two cases it
+  now refuses, as it always refused the plain one. With an end given as
+  `net:NAME`, the check for two differently named nets was skipped
+  altogether, so `net:VDD` to a pin on `VSS` was drawn without a word. And a
+  route that crossed a wire at the very point a label sits on was reported as
+  a plain crossing that LTspice leaves unjoined, where LTspice joins two
+  wires that cross at a label (the `label_at_crossing` recording): the route
+  took on that net and its name. Such a crossing is now a contact like any
+  other, refused onto another net and reported as a junction on the route's
+  own.
+- `add_component` and `move_component` could short two named nets and say
+  nothing. A pin on the point where two wires cross joins them (the
+  `pin_at_crossing` recording), and a part placed or moved so that a pin
+  landed on such a point, between wires of two differently named nets, was
+  written. It is now refused, with the pin, the point and the names, and the
+  part stays where it was. Where one of the two wires has no name the part
+  is placed and the join is said in the op's warnings.
+- The bounding box `inspect` and `edit_schematic` report for a part took
+  each `ARC` of its symbol as the whole ellipse the arc is cut from, so a part
+  drawn with arcs was reported larger than it is: a polarized capacitor 64 by
+  100 where it is 32 by 64, an inductor 4 units wider than its coil. A label
+  or a part beside one was then reported as overlapping it. `verify_circuit`
+  judged overlap by the arc as drawn, so the two disagreed on any sheet with
+  an inductor. An arc now counts as what is drawn of it, in one place, for
+  both tools. The boxes of 593 of the 6,678 symbols installed with LTspice
+  26.1.1 change, `ind`, `ind2` and `polcap` among them, and with them the
+  direction reported for thirteen pins of the `and`, `or` and `xor` gates,
+  whose inputs are now reported as leaving to the left.
 
 The entries in this group were found by holding the server against files
 LTspice 26.1.1 and LTspice XVII 17.0.37 wrote for a fixed set of inputs
@@ -55,6 +83,36 @@ recording that showed it.
   it as UTF-16 LE without the mark, which both builds read. `verify_circuit`
   passed either sheet, because its drawing reads past the mark; its `quality`
   check now reports the mark as an error (`byte_order_mark`).
+- `edit_schematic` and `verify_circuit` each had a reading of their own of
+  a floating pin. Both now follow what LTspice was recorded doing. A pin on
+  the interior of a diagonal wire is connected: `edit_schematic` reported it
+  floating and left it out of `wiring.pins_wired`. Two pins of one part on
+  one point do not connect each other, which `edit_schematic` took for a
+  connection. And where another part's pin is on that point too, only the
+  first part's highest pin in SpiceOrder is connected to it; the other is
+  on a node of its own, and neither tool reported it. A wire of no length
+  connects nothing.
+- `edit_schematic` left a part whose symbol is not found out of every
+  geometry pass without saying so: its pins were missing from the
+  floating-pin check and from the pin counts. It now reports the part
+  (`unresolved_symbol`, a new kind among its findings), as `verify_circuit`
+  does.
+- `verify_circuit` judged two parts to overlap by what each draws, and
+  `edit_schematic` by the box it reports, which includes the pins. Both now
+  use the box with pins. The two are the same box for nearly every symbol;
+  they differ for one with a pin drawn apart from its body.
+- Where a symbol is looked for was two rules, one for `edit_schematic`'s pin
+  geometry and one for `verify_circuit`'s drawing and symbol check, and
+  neither was LTspice's. It is now one, recorded from both builds.
+  `verify_circuit` no longer finds a symbol kept in a folder beside the
+  sheet under its bare name, which neither build does; such a symbol is
+  drawn as the placeholder and reported as not found. `edit_schematic` now
+  finds a symbol whose name says a folder when the file is right beside the
+  sheet, as XVII does, and one whose name says a library folder the library
+  keeps it out of, as both builds do. On Linux and macOS it also finds a
+  symbol named with a library folder at all: the backslashes in the name
+  were taken for part of a file name there, and the part was left with no
+  pins.
 - The lint and `verify_circuit` passed a `.meas` whose trig LTspice computes
   in degrees. On the default settings of LTspice 26 and XVII, `sin`, `cos`,
   `tan`, `asin`, `acos`, `atan` and `atan2` inside a `.meas` take and give
@@ -685,6 +743,13 @@ recording that showed it.
 
 ### Added
 
+- `edit_schematic` and `verify_circuit` say which sheet rules ran. `rules_run`
+  in each reply names every rule that ran with how many findings it had, zero
+  included, so that no findings of a kind is told from that kind not having
+  been looked for. In an edit's reply the counts are of the sheet as it now
+  is, so a rule whose findings all predate the batch still shows; in a
+  check's they are for the rules of the checks that ran, counted before the
+  cap on how many of one rule a reply lists.
 - `edit_schematic` has a twelfth op, `set_plot_panes`, which writes the
   waveform panes LTspice opens for a sheet into the `.plt` beside it: the
   traces of each pane, top to bottom, for the `tran` or `ac` analysis, with
@@ -1001,6 +1066,32 @@ recording that showed it.
   `remove_wire`. An unknown pin's error lists each pin as `name (order)`.
 
 ### Changed
+
+- `edit_schematic` and `verify_circuit` now report one list of sheet findings.
+  Each told a caller things the other did not: an edit never said that a part
+  it placed overlapped another's box as a finding of the sheet, that a wire ran
+  through a part, that a wire end was left on nothing, that text sat inside a
+  part, that a net was joined only by labels, or that LTspice would leave a
+  wire out of the netlist; a check never said that a wire was drawn twice, a
+  label was on nothing or inside a part, or directives were stacked. Each now
+  says all of it, in the same sentences, and an edit says of a sheet what a
+  check of the written file says. For `verify_circuit` the four it gained are
+  observations, a wire drawn twice and a dangling label under `layout`, a
+  label inside a part and stacked directives under `quality`; a finding's
+  `evidence.detail` is now a sentence that names its parts and its place, and
+  findings come in one order, what changes the circuit or leaves it undone
+  before how the sheet reads. For `edit_schematic` the `preexisting` view's
+  rows gain the six kinds, and a row carries every part (`refs`) and point
+  (`points`) its finding names.
+- An edit's findings are scoped by every part and point a finding names. A
+  finding of two parts used to be the batch's only when the batch named the
+  first.
+- Neither tool says anything of the extent of a part whose symbol is not
+  found. `verify_circuit` used to report overlaps with, and wires through, the
+  placeholder box such a part is drawn as, which is not the part's.
+- A wire between a pin of one part and a pin of another that carries the same
+  reference, or none, is no longer reported as a wire LTspice leaves out: the
+  rule is about two pins of one part.
 
 - The server's name in a client is `spice`, where the README and the Claude
   Code plugin used `ltspice`. LTspice 26.1 ships an MCP server of its own and

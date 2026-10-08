@@ -1,13 +1,34 @@
-"""Shared inline fixtures for the schematic scene/renderer tests.
+"""Shared fixtures for the schematic tests.
 
 Kept as a non-test helper module (leading underscore) so pytest does not try to
-collect it. All ``.asy``/``.asc`` content is authored here and written to a
-``tmp_path`` by the tests — nothing depends on a stock LTspice library install.
+collect it. The inline ``.asy``/``.asc`` content is authored here and written to
+a ``tmp_path`` by the tests — nothing depends on a stock LTspice library
+install. ``SUITE_SHEETS`` and ``SUITE_SYMBOLS`` are the other kind: every sheet
+and symbol file the suite holds, which the document, symbol, connectivity and
+finding tests are each run over.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
+
+from ltspice_mcp.lib.asc_document import AscDocument
+
+TESTS = Path(__file__).parent
+SUITE_SHEETS = sorted(TESTS.rglob("*.asc"))
+SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"))
+
+
+def suite_name(path: Path) -> str:
+    """A file of the suite by its path under ``tests/``: a parametrized test's id."""
+    return path.relative_to(TESTS).as_posix()
+
+
+def formatted(doc: AscDocument) -> AscDocument:
+    """``doc`` with every record cut loose from the lines it was read from."""
+    return dataclasses.replace(doc, records=tuple(r.changed() for r in doc.records))
+
 
 # A deliberately asymmetric symbol so every rotation/mirror is distinguishable.
 # Rect 0,0..32,16; pin A at (0,8) order 1; pin B at (32,8) order 2.

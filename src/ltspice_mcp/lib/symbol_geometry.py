@@ -6,7 +6,6 @@ compute absolute coordinates for placed components.
 """
 
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +14,8 @@ from spicelib import AscEditor
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.symbol_file import PinInfo, read_symbol
+from ltspice_mcp.lib.symbol_library import find_beside, find_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -34,108 +35,6 @@ _TRANSFORMS: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "M180": ((1, 0), (0, -1)),
     "M270": ((0, -1), (-1, 0)),
 }
-
-
-@dataclass(frozen=True)
-class PinInfo:
-    """A symbol pin with name, SPICE order, and position."""
-
-    name: str
-    order: int
-    x: int
-    y: int
-
-
-# .asy graphic primitives. Bbox-relevant fields only — line style ("Normal",
-# "Dotted", ...) is parsed but discarded since nothing downstream uses it.
-
-
-@dataclass(frozen=True)
-class LineEl:
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-
-    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
-        return ((self.x1, self.y1), (self.x2, self.y2))
-
-
-@dataclass(frozen=True)
-class RectEl:
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-
-    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
-        return ((self.x1, self.y1), (self.x2, self.y2))
-
-
-@dataclass(frozen=True)
-class CircleEl:
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-
-    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
-        return ((self.x1, self.y1), (self.x2, self.y2))
-
-
-@dataclass(frozen=True)
-class ArcEl:
-    """Arc described by its underlying ellipse's bounding rectangle.
-
-    LTspice's ARC syntax is ``ARC <style> x1 y1 x2 y2 sx sy ex ey`` where
-    (x1,y1)-(x2,y2) is the ellipse bbox and (sx,sy)/(ex,ey) are the start
-    and end points (which lie on the arc, hence inside the bbox). For the
-    bbox of the arc itself we therefore only need the four bbox corners.
-    """
-
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-
-    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
-        return ((self.x1, self.y1), (self.x2, self.y2))
-
-
-Element = LineEl | RectEl | CircleEl | ArcEl
-
-
-def _parse_shape(line: str) -> Element | None:
-    """Parse one graphic-primitive line. Returns ``None`` for non-shape lines."""
-    parts = line.split()
-    if len(parts) < 6:
-        return None
-    kw = parts[0]
-    try:
-        x1, y1, x2, y2 = int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
-    except ValueError:
-        return None
-    if kw == "LINE":
-        return LineEl(x1, y1, x2, y2)
-    if kw == "RECTANGLE":
-        return RectEl(x1, y1, x2, y2)
-    if kw == "CIRCLE":
-        return CircleEl(x1, y1, x2, y2)
-    if kw == "ARC":
-        return ArcEl(x1, y1, x2, y2)
-    return None
-
-
-def bbox_from_elements(
-    elements: Sequence[Element], extra_points: Sequence[tuple[int, int]] | None = None
-) -> BBox | None:
-    """Smallest BBox enclosing all element points and any extras (e.g. pins)."""
-    pts: list[tuple[int, int]] = []
-    for e in elements:
-        pts.extend(e.points())
-    if extra_points:
-        pts.extend(extra_points)
-    return BBox.from_points(pts)
 
 
 @dataclass(frozen=True)
@@ -205,29 +104,24 @@ def _pin_direction(
     return _DIRECTION_NAMES.get((rx, ry), "unknown")
 
 
+def library_roots() -> list[Path]:
+    """The libraries a symbol is looked for in, in order: the paths the session
+    configured for spicelib's editor, then the simulator's own.
+
+    They are class attributes of ``AscEditor`` for as long as it opens sheets,
+    so this reads them at each call.
+    """
+    roots = [*(AscEditor.custom_lib_paths or ()), *(AscEditor.simulator_lib_paths or ())]
+    return [Path(root) for root in roots]
+
+
 def _find_asy_file(symbol: str) -> Path | None:
-    """Find a .asy symbol file in AscEditor's configured library paths."""
-    search_paths: list[str] = []
-    if hasattr(AscEditor, "custom_lib_paths") and AscEditor.custom_lib_paths:
-        search_paths.extend(AscEditor.custom_lib_paths)
-    if hasattr(AscEditor, "simulator_lib_paths") and AscEditor.simulator_lib_paths:
-        search_paths.extend(AscEditor.simulator_lib_paths)
+    """Find a .asy symbol file in the libraries (``library_roots``).
 
-    for lib_path in search_paths:
-        candidate = Path(lib_path) / f"{symbol}.asy"
-        if candidate.exists():
-            return candidate
-        # Search subdirectories (LTspice organizes symbols in folders)
-        for match in Path(lib_path).rglob(f"{symbol}.asy"):
-            return match
-
-    return None
-
-
-def _symattr(line: str) -> tuple[str, str]:
-    """The name and value of a ``SYMATTR <name> <value>`` line; "" for no value."""
-    _, name, *value = line.split(None, 2)
-    return name, value[0].strip() if value else ""
+    The search is ``symbol_library.find_symbol``, the rule the renderer's
+    lookup follows too.
+    """
+    return find_symbol(symbol, None, library_roots())
 
 
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
@@ -238,60 +132,20 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
     bytes (``µ``/``°``/``±``/``©`` in description fields), and a strict-UTF-8
     read raises ``UnicodeDecodeError`` on them — which previously escaped
     ``add_component`` as an opaque "Internal error".
+
+    Raises ``ValueError`` for a symbol with a pin line that does not read: a
+    pin left out is a terminal no wire could be checked against, so the symbol
+    is refused whole (``_parse_or_none`` turns that into an unusable symbol).
     """
-    lines = read_spice_text(asy_path).splitlines()
-
-    pins: list[PinInfo] = []
-    attributes: list[tuple[str, str]] = []
-    symbol_type = ""
-    elements: list[Element] = []
-
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-
-        # PIN x y ...  followed by zero or more PINATTR lines
-        if line.startswith("PIN "):
-            parts = line.split()
-            px, py = int(parts[1]), int(parts[2])
-            pin_name = ""
-            pin_order = 0
-            j = i + 1
-            while j < len(lines) and lines[j].strip().startswith("PINATTR"):
-                attr_line = lines[j].strip()
-                if attr_line.startswith("PINATTR PinName"):
-                    pin_name = (
-                        attr_line.split(None, 2)[2] if len(attr_line.split(None, 2)) > 2 else ""
-                    )
-                elif attr_line.startswith("PINATTR SpiceOrder"):
-                    pin_order = int(attr_line.split()[-1])
-                j += 1
-            pins.append(PinInfo(name=pin_name, order=pin_order, x=px, y=py))
-            i = j
-            continue
-
-        # Graphic primitives — typed parse contributes via .points()
-        shape = _parse_shape(line)
-        if shape is not None:
-            elements.append(shape)
-
-        if line.startswith("SYMATTR "):
-            attributes.append(_symattr(line))
-        elif line.startswith("SymbolType "):
-            symbol_type = line.split(None, 1)[1].strip()
-
-        i += 1
-
-    pin_points = [(p.x, p.y) for p in pins]
-    bbox = bbox_from_elements(elements, extra_points=pin_points) or BBox(0, 0, 0, 0)
-
-    pins.sort(key=lambda p: p.order)
+    symbol = read_symbol(read_spice_text(asy_path))
+    if symbol.unread_pins:
+        raise ValueError(f"{asy_path.name}: unreadable pin line {symbol.unread_pins[0]!r}")
     return SymbolInfo(
         name=asy_path.stem,
-        pins=tuple(pins),
-        bbox=bbox,
-        symbol_type=symbol_type,
-        attributes=tuple(attributes),
+        pins=symbol.pins,
+        bbox=symbol.bbox,
+        symbol_type=symbol.symbol_type,
+        attributes=symbol.attrs,
     )
 
 
@@ -321,7 +175,8 @@ def get_symbol_info(symbol: str, asc_path: Path | None) -> SymbolInfo | None:
     ``asc_path`` is the schematic the symbol is placed on, or ``None`` for a
     library-only lookup. Its folder is searched first, as LTspice does, so a
     symbol saved beside the sheet wins over a same-named library one. That
-    search is the one exact path ``<folder>/<symbol>.asy``, never a walk.
+    search is ``symbol_library.find_beside``: the place the name says, or the
+    bare name right beside the sheet, and never a walk.
     ``schematic_ops.symbol_info_for`` is the per-request memo placed
     components go through.
 
@@ -330,10 +185,8 @@ def get_symbol_info(symbol: str, asc_path: Path | None) -> SymbolInfo | None:
     path via ``rglob``.
     """
     if asc_path is not None:
-        # LTspice writes a symbol in a subfolder with backslash separators.
-        relative = symbol.replace("\\", "/")
-        local = asc_path.parent / f"{relative}.asy"
-        if local.is_file():
+        local = find_beside(asc_path.parent, symbol)
+        if local is not None:
             return _local_symbol_cache.get(local, _parse_or_none)
 
     if symbol not in _symbol_cache:

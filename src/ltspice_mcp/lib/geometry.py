@@ -54,6 +54,10 @@ class BBox:
     def contains_point(self, x: int, y: int) -> bool:
         return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
 
+    def strictly_contains(self, x: float, y: float) -> bool:
+        """True if the point is inside the box and not on its edge."""
+        return self.x1 < x < self.x2 and self.y1 < y < self.y2
+
     def union(self, other: BBox) -> BBox:
         return BBox(
             min(self.x1, other.x1),
