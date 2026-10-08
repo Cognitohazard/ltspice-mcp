@@ -281,17 +281,22 @@ class TestLifetime:
         self, state: SessionState, monkeypatch: pytest.MonkeyPatch
     ):
         # The grace is read at call time; a short one keeps the test quick.
+        # timing: the grace under test; the worker never answers the interrupt
         monkeypatch.setattr(run_code_module, "INTERRUPT_GRACE_S", 0.5)
-        before = (await run(state, "1"))["worker_pid"]
-        code = (
-            "import time\n"
-            "try:\n    time.sleep(30)\n"
-            "except KeyboardInterrupt:\n    time.sleep(30)\n"
+        # A call that has already returned makes the worker ignore the
+        # interrupt, so it is ignored wherever it lands: before the timed
+        # snippet starts or inside it.
+        ignore = "import signal\nsignal.signal(signal.SIGINT, lambda *_: None)\n"
+        ignoring = await run(state, ignore)
+        assert ignoring["status"] == "ok", ignoring
+        before = ignoring["worker_pid"]
+        # The snippet outlasts the cap, so a call that waited it out fails here.
+        reply = await asyncio.wait_for(
+            # timing: the snippet timeout under test
+            run(state, f"import time\ntime.sleep({2 * LIVENESS_S})", timeout_s=1),
+            LIVENESS_S,
         )
-        # timing: the snippet timeout under test
-        reply = await run(state, code, timeout_s=1)
         assert reply["status"] == "timeout"
-        assert reply["elapsed_s"] < 3
         after = await run(state, "'fresh'")
         assert after["status"] == "ok"
         assert after["worker_pid"] != before
