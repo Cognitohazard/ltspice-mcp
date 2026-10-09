@@ -240,11 +240,19 @@ waveform window reads when the sheet is run there:
 `I(R1)`. Panes are listed top to bottom. A trace is an expression as typed into
 LTspice's Add Traces dialog, written without spaces (`V(in)-V(out)`): LTspice
 reads a trace in the file only up to its first space, so the op refuses one.
-The run ranges every axis to its data; `x_scale` and `y_scale` set a pane's log
-or dB scales and default to LTspice's own (linear for `tran`, log frequency and
-dB magnitude for `ac`). The op replaces that analysis's panes, leaves the
-file's other analyses alone and does not change the sheet. New panes keep the
+`analysis` is `tran`, `ac`, `dc` (a DC sweep) or `noise`. The run ranges every
+axis to its data; `x_scale` and `y_scale` set a pane's log or dB scales and
+default to LTspice's own (linear for `tran` and `dc`, log frequency and dB
+magnitude for `ac`, log frequency for `noise`). The op replaces that analysis's
+panes, leaves the file's other analyses alone and does not change the sheet. New panes keep the
 waveform grid the replaced ones all had; a pane in a new file has none, even
 for a person whose LTspice draws one on panes it makes. Its `results` entry
 names the file and the `replaced_panes`, which passed back as `panes` restore
 them; `panes: []` removes them.
+
+`plot_waveform(in_ltspice=true)` writes these panes itself for the traces it
+plots, unless the `.plt` there was saved from LTspice: that one is the user's
+and is left as it is. The reply's `ltspice` block then lists the traces the
+window draws instead under `saved_panes`. When the user wants others, or more,
+set them with this op: pass the saved traces along with the new ones to keep
+both. The axis ranges they saved with them are not kept.

@@ -21,6 +21,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.plot_settings import (
     DEFAULT_SCALES,
     SECTION_NAMES,
+    PlotAnalysis,
     PlotPane,
     check_trace,
     decode_plot_settings,
@@ -29,11 +30,14 @@ from ltspice_mcp.lib.plot_settings import (
 )
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS
+from tests.test_recorded_ltspice_results import header_fields
 
 WRITTEN = rec.cases_of("plot-settings")
 READ = rec.cases_of("plot-settings-read")
 TRAN = SECTION_NAMES["tran"]
 AC = SECTION_NAMES["ac"]
+DC = SECTION_NAMES["dc"]
+NOISE = SECTION_NAMES["noise"]
 CURRENT = next(build for build in rec.BUILDS if rec.generation(build) == "current")
 XVII = next(build for build in rec.BUILDS if rec.generation(build) == "xvii")
 
@@ -95,6 +99,36 @@ class TestWhatABuildWritesForPanesItMade:
         assert panes(saved(build, "plot/ac"), AC) == (
             PlotPane(traces=("V(out)",), scales=DEFAULT_SCALES["ac"]),
         )
+
+    def test_a_dc_sweep_pane_is_linear_on_both_axes(self, build: str):
+        assert panes(saved(build, "plot/dc"), DC) == (
+            PlotPane(traces=("V(out)",), scales=DEFAULT_SCALES["dc"]),
+        )
+        assert DEFAULT_SCALES["dc"] == (0, 0, 0)
+
+    def test_a_noise_pane_is_log_frequency_and_a_linear_density(self, build: str):
+        (pane,) = panes(saved(build, "plot/noise"), NOISE)
+        assert pane.scales == DEFAULT_SCALES["noise"] == (1, 0, 0)
+        # Typed as V(onoise): LTspice 26 writes it in lower case, XVII as typed.
+        current = rec.generation(build) == "current"
+        assert pane.traces == (("v(onoise)",) if current else ("V(onoise)",))
+
+    def test_the_one_half_sign_in_the_noise_sections_name_is_in_the_builds_own_encoding(
+        self, build: str
+    ):
+        assert NOISE.count("½") == 2
+        encoding = "utf-16-le" if rec.generation(build) == "xvii" else "utf-8"
+        assert saved(build, "plot/noise").startswith(f"[{NOISE}]\n".encode(encoding))
+
+    @pytest.mark.parametrize(
+        ("analysis", "run"),
+        [("tran", "raw/tran"), ("ac", "raw/ac"), ("dc", "raw/dc"), ("noise", "raw/noise")],
+    )
+    def test_a_section_has_the_plot_name_the_builds_results_file_carries(
+        self, build: str, analysis: PlotAnalysis, run: str
+    ):
+        """Which is how the section of a finished run is found from its results."""
+        assert header_fields(build, run)["Plotname"] == [SECTION_NAMES[analysis]]
 
     def test_math_expressions_are_kept_as_typed(self, build: str):
         assert panes(saved(build, "plot/math"), TRAN) == (
@@ -197,6 +231,7 @@ def test_no_build_stops_on_a_file_the_server_wrote(build: str, case_id: str):
                 "plot/read_math",
                 "plot/read_log_y",
                 "plot/read_ac",
+                "plot/read_dc",
                 "plot/read_grid",
                 "plot/read_ac_grid",
             ]
@@ -209,6 +244,18 @@ def test_a_build_shows_the_panes_traces_and_scales_written(build: str, case_id: 
     assert [s.name for s in shown.sections] == [s.name for s in written.sections]
     for section in written.sections:
         assert panes(saved(build, case_id), section.name) == section.panes
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_build_shows_a_noise_pane_written_here_with_its_scales(build: str):
+    """The section's name holds a one-half sign, written here in UTF-16; both
+    builds find the section. LTspice 26 puts the trace in lower case when it
+    saves, as it does for one it made itself."""
+    (written,) = panes(handed("plot/read_noise"), NOISE)
+    (shown,) = panes(saved(build, "plot/read_noise"), NOISE)
+    assert shown.scales == written.scales
+    assert [trace.lower() for trace in shown.traces] == [t.lower() for t in written.traces]
+    assert (shown.traces == written.traces) == (rec.generation(build) == "xvii")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

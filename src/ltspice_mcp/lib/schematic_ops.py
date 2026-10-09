@@ -1965,10 +1965,10 @@ class PlotPaneSpec(StrictModel):
         description="Expressions as typed in Add Traces, no spaces: 'V(out)', 'V(in)-V(out)'.",
     )
     x_scale: XScale | None = Field(
-        default=None, description="Default: linear for tran, log for ac."
+        default=None, description="Default: log for ac and noise, else linear."
     )
     y_scale: YScale | None = Field(
-        default=None, description="Left Y axis. Default: linear for tran, db for ac."
+        default=None, description="Left Y axis. Default: db for ac, else linear."
     )
 
 

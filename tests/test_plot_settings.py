@@ -76,6 +76,8 @@ SERVER_WRITTEN: dict[str, list[tuple[PlotAnalysis, list[PlotPane]]]] = {
     ],
     "plot/grid.plt": [("tran", [pane("V(out)", grid=1), pane("V(in)", "I(R1)", grid=1)])],
     "plot/ac_grid.plt": [("ac", [pane("V(out)", analysis="ac", grid=1)])],
+    "plot/dc.plt": [("dc", [pane("V(out)", analysis="dc")])],
+    "plot/noise.plt": [("noise", [pane("V(onoise)", analysis="noise")])],
 }
 
 
@@ -135,6 +137,9 @@ class TestScales:
     def test_a_pane_gets_the_analysis_default_unless_a_scale_is_named(self):
         assert scales_of("tran", None, None) == DEFAULT_SCALES["tran"] == (0, 0, 0)
         assert scales_of("ac", None, None) == DEFAULT_SCALES["ac"] == (1, 2, 0)
+        assert scales_of("dc", None, None) == DEFAULT_SCALES["dc"] == (0, 0, 0)
+        assert scales_of("noise", None, None) == DEFAULT_SCALES["noise"] == (1, 0, 0)
+        assert scales_of("noise", None, "log") == (1, 1, 0)
         assert scales_of("tran", None, "log") == (0, 1, 0)
         assert scales_of("ac", "linear", "linear") == (0, 0, 0)
 

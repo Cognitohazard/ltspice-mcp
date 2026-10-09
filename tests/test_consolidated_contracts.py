@@ -751,7 +751,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # waveform panes LTspice opens for the sheet, written to the .plt beside
     # it. Most of it is the pane model's structure (a trace list and two scale
     # enums); the descriptions are a line each. Measured 13,070.
-    "edit_schematic": 13080,
+    # Raised by about 15 characters for two more analyses on set_plot_panes, a
+    # DC sweep and a noise run: a run of either had no way to open in LTspice
+    # with its traces drawn. Measured 13,085.
+    "edit_schematic": 13090,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
