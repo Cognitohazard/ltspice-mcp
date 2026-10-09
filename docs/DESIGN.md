@@ -496,10 +496,14 @@ so zoom / pan / hover does nothing for it.
   the server writes one naming the panels' traces, with the module that
   writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`), replacing
   the section of the run's analysis and keeping the others. That covers the
-  two analyses whose section is recorded, a transient and an AC run; any
-  other run opens with an empty plot and the reply says why. A settings file
-  a person saved from LTspice is left alone: writing its panes back never
-  gives its bytes, which is how it is told from one written here. With no
+  four analyses whose section is recorded: a transient, an AC run, a DC sweep
+  and a noise run. Any other run opens with an empty plot and the reply says
+  why. A settings file a person saved from LTspice is left alone: writing its
+  panes back never gives its bytes, which is how it is told from one written
+  here. The reply then lists the traces that file holds (`saved_panes`),
+  since those are what the window draws, and for a sheet's run names
+  `set_plot_panes` as the way to replace them: showing a run does not
+  overwrite a layout someone saved, and an edit asked for does. With no
   window open LTspice is started for this, unless `[schematic] start_ltspice`
   is off; the settings are written first either way, so the file opens with
   its traces when the person opens it by hand. It opens something in a

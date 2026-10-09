@@ -689,6 +689,20 @@ kind = "plot"
 source = "plot/rc_ac.asc"
 steps = [{ trace = "V(out)" }]
 
+[[case]]
+id = "plot/dc"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/div_dc.asc"
+steps = [{ trace = "V(out)" }]
+
+[[case]]
+id = "plot/noise"
+behaviour = "plot-settings"
+kind = "plot"
+source = "plot/rc_noise.asc"
+steps = [{ trace = "V(onoise)" }]
+
 # The waveform window's grid, a settings key the recorder removes from every
 # case that does not set it (BEHAVIOUR_KEYS in tests/ltspice_recorder.py says
 # why).
@@ -748,6 +762,21 @@ behaviour = "plot-settings-read"
 kind = "plot"
 source = "plot/rc_ac.asc"
 plot = "plot/ac.plt"
+
+[[case]]
+id = "plot/read_dc"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/div_dc.asc"
+plot = "plot/dc.plt"
+
+[[case]]
+id = "plot/read_noise"
+behaviour = "plot-settings-read"
+kind = "plot"
+source = "plot/rc_noise.asc"
+plot = "plot/noise.plt"
+note = "The section's name holds a one-half sign, which the file carries in UTF-16."
 
 [[case]]
 id = "plot/read_two_sections"

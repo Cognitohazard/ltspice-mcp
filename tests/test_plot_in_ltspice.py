@@ -119,7 +119,9 @@ class TestWhoseSettings:
     def test_a_section_is_found_by_the_name_a_raw_file_gives_its_plot(self):
         assert analysis_of("Transient Analysis") == "tran"
         assert analysis_of("AC Analysis") == "ac"
-        assert analysis_of("DC transfer characteristic") is None
+        assert analysis_of("DC transfer characteristic") == "dc"
+        assert analysis_of("Noise Spectral Density - (V/Hz½ or A/Hz½)") == "noise"
+        assert analysis_of("Operating Point") is None
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,16 @@ async def test_settings_saved_from_ltspice_are_left_as_they_are(
     assert data["ltspice"]["plot_settings"] is None
     assert "was saved from LTspice and is left as it is" in data["ltspice"]["note"]
     assert read(raw.with_suffix(".plt")) == saved
+    # What the window draws in place of the trace asked for: the transient
+    # panes the saved file holds, which is none when it was saved from a run
+    # of another kind.
+    section = read_plot_settings(saved).section(TRAN)
+    held = [list(pane.traces) for pane in section.panes] if section is not None else []
+    assert data["ltspice"]["saved_panes"] == held
+    if case_id == "plot/one_trace":
+        assert held == [["V(out)"]]
+    # There is no sheet here, so no edit that could replace them is named.
+    assert "set_plot_panes" not in data["ltspice"]["note"]
 
 
 async def test_settings_written_before_are_replaced(
@@ -236,18 +248,48 @@ async def test_an_ac_run_is_given_the_scales_ltspice_gives_one(
     )
 
 
-async def test_a_run_whose_plot_settings_are_not_recorded_is_opened_without_any(
-    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+@pytest.mark.parametrize(
+    ("fixture", "analysis", "signal"),
+    [("ltspice_dc_div", "dc", "V(out)"), ("ltspice_noise_rc", "noise", "v(onoise)")],
+)
+async def test_a_dc_sweep_and_a_noise_run_open_with_their_traces_too(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    tmp_path: Path,
+    fixture: str,
+    analysis: Any,
+    signal: str,
 ):
-    raw = stage_recorded_fixture(work_dir, "ltspice_dc_div")
+    raw = stage_recorded_fixture(work_dir, fixture)
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, raw_file=str(raw), in_ltspice=True)
+    data = await plot(state_no_sim, raw_file=str(raw), signals=[signal], in_ltspice=True)
+
+    assert data["ltspice"]["shown"] is True
+    assert data["ltspice"]["plot_settings"] == str(raw.with_suffix(".plt"))
+    # Under the section LTspice keeps that analysis's panes in, on its scales.
+    assert panes_of(raw.with_suffix(".plt"), SECTION_NAMES[analysis]) == (
+        PlotPane((signal,), DEFAULT_SCALES[analysis]),
+    )
+    assert read_world(world)["windows"][0]["shown"] == [str(raw)]
+
+
+async def test_a_run_whose_plot_settings_are_not_recorded_is_opened_without_any(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """A results file whose plot name is not one LTspice gives a run: this one
+    is ngspice's, whose noise plot has a name of its own."""
+    raw = stage_recorded_fixture(work_dir, "ngspice_noise_2plot")
+    world = tmp_path / "world.json"
+    one_window(state_no_sim, world)
+
+    data = await plot(state_no_sim, raw_file=str(raw), dialect="ngspice", in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
     assert data["ltspice"]["plot_settings"] is None
     assert "is not recorded" in data["ltspice"]["note"]
+    assert "saved_panes" not in data["ltspice"]
     assert not raw.with_suffix(".plt").exists()
     assert read_world(world)["windows"][0]["shown"] == [str(raw)]
 
@@ -572,6 +614,36 @@ async def test_a_sheet_outside_the_sandbox_has_nothing_written_beside_it(
     assert read_world(world)["windows"][0]["shown"] == [str(raw)]
 
 
+async def test_a_sheets_saved_traces_are_named_with_the_edit_that_replaces_them(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """The person saved the sheet's plot settings from LTspice. They are left as
+    they are, and the reply says which traces the window draws and how to put
+    others there, since a caller asked for different ones."""
+    sheet = a_sheet(work_dir)
+    a_job_of(state_no_sim, sheet, work_dir)
+    saved = rec.recorded(SAVED_BY_A_BUILD[0][0], "plot/math.plt").read_bytes()
+    write(sheet.with_suffix(".plt"), saved)
+    world = tmp_path / "world.json"
+    one_window(state_no_sim, world)
+
+    data = await plot_the_job(state_no_sim)
+
+    shown = data["ltspice"]
+    assert shown["shown"] is True
+    assert shown["panes"] == [["V(out)"]]
+    assert shown["saved_panes"] == [["V(in)-V(out)", "V(out)*I(R1)"]]
+    assert shown["plot_settings"] is None
+    assert shown["note"] == (
+        "The plot is tied to the sheet: a click on a net there plots it. amp.plt was "
+        "saved from LTspice and is left as it is, so the window shows the traces saved "
+        "in it. saved_panes lists them. To draw others, replace them with the "
+        "set_plot_panes op of edit_schematic on the sheet; the axis ranges saved with "
+        "them go too."
+    )
+    assert read(sheet.with_suffix(".plt")) == saved
+
+
 def lock_is_held(target: Path) -> bool:
     """Whether the lock an edit takes for ``target`` is someone's right now."""
     try:
@@ -611,7 +683,9 @@ async def test_a_sheets_plot_settings_are_locked_for_their_write_and_no_longer(
     held_for_the_write: list[bool] = []
     write_beside = plot_settings.write_beside
 
-    def looked_at(results: Path, plot_name: str, panes: list[list[str]]) -> str | None:
+    def looked_at(
+        results: Path, plot_name: str, panes: list[list[str]]
+    ) -> plot_settings.Kept | None:
         held_for_the_write.append(lock_is_held(settings))
         return write_beside(results, plot_name, panes)
 
