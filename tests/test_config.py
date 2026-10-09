@@ -265,7 +265,7 @@ class TestToolProfile:
 class TestToolListing:
     """[tools] listing selects how the tool list is served."""
 
-    def test_default_listing_is_full(self):
+    def test_default_listing_is_compact(self):
         assert ServerConfig().tool_listing == "compact"
 
     @pytest.mark.parametrize("mode", ["full", "compact"])
@@ -296,6 +296,30 @@ class TestToolListing:
         message = "\n".join(record.getMessage() for record in caplog.records)
         assert "sparse" in message
         assert "compact" in message, "the warning must enumerate the valid values"
+
+    @pytest.mark.parametrize("source", ["toml", "env"])
+    def test_the_warning_for_an_unknown_value_says_it_is_ignored(
+        self,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        source: str,
+    ):
+        """An unknown value leaves whatever was already in effect, here the
+        default; the warning must not name some other listing as the one used."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        if source == "toml":
+            monkeypatch.delenv("LTSPICE_MCP_TOOL_LISTING", raising=False)
+            toml_path.write_text('[tools]\nlisting = "sparse"\n')
+        else:
+            monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "sparse")
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(toml_path)
+        assert config.tool_listing == ServerConfig().tool_listing
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert "sparse" in message
+        assert "ignoring" in message
+        assert "using" not in message
 
     def test_unknown_env_value_does_not_clobber_a_valid_toml_listing(
         self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
