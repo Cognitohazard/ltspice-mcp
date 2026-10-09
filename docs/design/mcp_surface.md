@@ -1245,11 +1245,19 @@ silently. A route crossing a wire where neither ends is drawn with a warning
 naming the wire: LTspice leaves the crossing unjoined, so the nets stay apart,
 and the only cost is a reader taking it for a junction. It was refused until
 the LTspice export showed it joined nothing. The planner's own advisories
-(long run, bounding-box crossing) now reach the response's `warnings` too;
-they used to stop at the op.
+(a long run, a wire crossed) reach the response's `warnings` too; they used
+to stop at the op.
 
-`add_net_label` calls a label floating only when it touches no wire and no pin.
-It refuses a label that would join two nets that each carry a name — a name
+An op does not repeat what the finished sheet says of itself. A route drawn
+through a part, a part placed or moved over another and a label put on nothing
+were each said twice in one reply, once by the op and once by the sheet
+finding; the op's sentence is gone and the finding is the one voice
+(`wire_through_symbol`, `symbol_overlap`, `dangling_label`). The finding is
+of the sheet the batch leaves: a label placed before the wire that reaches
+it is never called loose, and a route asked for again that is already drawn
+through a part is counted under `preexisting`, since the batch drew nothing.
+
+`add_net_label` refuses a label that would join two nets that each carry a name — a name
 another net already has, or a new name placed where two named nets cross —
 because that is a short at netlist time. A new name on a net that is already
 named joins nothing; it is placed with a warning that the node now has two

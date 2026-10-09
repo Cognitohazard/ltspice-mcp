@@ -42,7 +42,6 @@ def route(
     *points: Point,
     by_coordinate: tuple[bool, bool] = (False, False),
     anchors: tuple[Point, Point] | None = None,
-    end_parts: tuple[str, ...] = (),
 ) -> Route:
     """A route through ``points`` in the order given, from the first to the last."""
     start, end = points[0], points[-1]
@@ -54,7 +53,6 @@ def route(
         anchors=anchors or (start, end),
         end_names=("FROM", "TO"),
         ends_by_coordinate=by_coordinate,
-        end_parts=frozenset(end_parts),
     )
 
 
@@ -79,7 +77,7 @@ class TestTheRegistry:
 class TestARouteThatMayBeDrawn:
     def test_between_two_pins_with_nothing_in_the_way(self) -> None:
         view, nets = sheet(parts=(resistor("R1", 100, 300), resistor("R2", 300, 300)))
-        found = judge(view, nets, route((100, 252), (300, 252), end_parts=("R1", "R2")))
+        found = judge(view, nets, route((100, 252), (300, 252)))
         assert rules(found) == ([], [])
         assert found.junctions == []
 
@@ -93,17 +91,15 @@ class TestARouteThatMayBeDrawn:
         # A wire runs from the route's own start to R2's pin; the route goes on past it.
         parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
         view, nets = sheet(parts=parts, wires=((0, 0, 200, 0),))
-        found = judge(view, nets, route((0, 0), (400, 0), end_parts=("R1", "R3")))
+        found = judge(view, nets, route((0, 0), (400, 0)))
         assert rules(found) == ([], ["route_passes_own_pin"])
         assert found.junctions == [{"x": 200, "y": 0, "via": "pin", "pin": "R2.1"}]
         assert found.advisories[0].refs == ("R2",)
 
-    def test_a_part_it_crosses_is_said_unless_it_ends_on_that_part(self) -> None:
+    def test_a_part_it_crosses_is_not_its_to_say(self) -> None:
+        """That is the sheet rule's, of the sheet once the route is drawn."""
         view, nets = sheet(parts=(resistor("R1", 200, 100),))
-        across = route((0, 100), (400, 100))
-        assert rules(judge(view, nets, across)) == ([], ["route_crosses_part"])
-        own = route((0, 100), (400, 100), end_parts=("R1",))
-        assert rules(judge(view, nets, own)) == ([], [])
+        assert rules(judge(view, nets, route((0, 100), (400, 100)))) == ([], [])
 
     def test_a_long_one_is_said_with_its_length(self) -> None:
         view, nets = sheet()
@@ -122,7 +118,7 @@ class TestARouteThatIsRefused:
     def test_over_a_pin_of_another_net(self) -> None:
         parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
         view, nets = sheet(parts=parts)
-        found = judge(view, nets, route((0, 0), (400, 0), end_parts=("R1", "R3")))
+        found = judge(view, nets, route((0, 0), (400, 0)))
         assert rules(found) == (["route_through_pin"], [])
         refusal = found.refusals[0]
         assert (refusal.refs, refusal.points, refusal.facts) == (

@@ -421,10 +421,10 @@ what must hold before the next one starts.
        unchanged, on any net the batch touched, which on a rail is every
        loose end and repeated wire of the rail, listed again on every batch
        that connects to it.
-     - An op's own advisory and a finding of the sheet already say one thing
-       twice today, for a label placed on nothing. Overlap and a wire through
-       a part will be said twice the same way until the next part turns the
-       ops' checks into rules.
+     - An op's own advisory and a finding of the sheet said one thing twice,
+       for a label placed on nothing, a part over another and a route through
+       a part. The next part ends that: the op's sentence goes and the finding
+       stays.
      - Nothing is said of the extent of a part whose symbol is not found.
        The checker drew it as a placeholder and judged overlaps and crossings
        by the placeholder's box, which is not the part's; with one list that
@@ -469,7 +469,21 @@ what must hold before the next one starts.
        for advice, and the guide names what is usual instead; and placing or
        moving a part is checked for the one way it can join two named nets,
        a pin landing where two wires cross. *The last is done*
-       (`schematic_ops._pins_on_crossings`); the other two are not.
+       (`schematic_ops._pins_on_crossings`). *The first is done too,* by the
+       sheet rule itself: a rule that does not read the op is the same check
+       at every moment (section 8), so the route rule is gone and what an
+       edit reports of the finished sheet says it. On the record's 11,283
+       proposals no route crossed a part's box without crossing what it
+       draws, so nothing the op said goes unsaid; 154 answers lost the
+       advisory and nothing else changed. The same holds for a part placed
+       or moved over another (`symbol_overlap`) and a label on nothing
+       (`dangling_label`), whose op sentences went with it. A fact of a
+       moment inside the batch is no longer said: a label placed before its
+       wire, an overlap a later op undoes. And a route asked for again that
+       is already drawn through a part is counted with what was there
+       before, the batch having drawn nothing. Before the sheet rule became
+       the one voice it was made right about a part's own pins (section 7).
+       The advisory for a long run is not yet gone.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
