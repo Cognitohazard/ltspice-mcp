@@ -3,27 +3,26 @@
 <!-- mcp-name: io.github.cognitohazard/ltspice-mcp -->
 
 > **WIP**
-> **0.6.0 was a breaking release:** the tool surface consolidated to six
-> operations plus a waveform widget and a code runner, and the same engine
-> became importable as a Python API. Pin `ltspice-mcp==0.5.*` if you need the
-> old 49-tool surface.
+> **0.6.0 was a breaking release:** the old per-operation tools were merged
+> into the set described below, and the engine became importable as a Python
+> API. Pin `ltspice-mcp==0.5.*` if you need the old tools.
 
-ltspice-mcp lets LLM assistants run LTspice and ngspice simulations and edit LTspice `.asc` schematics. It returns structured measurements such as cutoff frequency, overshoot, phase margin, rise time, and per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …). Callers access these values by name without parsing raw files. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
+ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit LTspice `.asc` schematics. Instead of raw output files, the assistant gets measurements back by name: cutoff frequency, overshoot, phase margin, rise time, and per-device operating-point values such as `gm`, `gds` and `vth`. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
-**Claude Code** — two commands, and the tools are there in your next session:
+**Claude Code:**
 
 ```
 /plugin marketplace add cognitohazard/ltspice-mcp
 /plugin install ltspice-mcp
 ```
 
-**Claude Desktop** — build the extension in [`packaging/mcpb/`](packaging/mcpb/)
-and drag the `.mcpb` file onto Claude Desktop. It installs in one click and
-asks which folder your circuits are in.
+**Claude Desktop:** build the extension in [`packaging/mcpb/`](packaging/mcpb/)
+and drag the `.mcpb` file onto Claude Desktop. It asks which folder your
+circuits are in.
 
-**Any other MCP client** — [Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp) and others. Install the server, then add it to that client's MCP config file (each client's own docs say where that file lives):
+**Any other MCP client** ([Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp), …): install the server and add it to the client's MCP config.
 
 ```bash
 uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
@@ -37,295 +36,181 @@ uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
 }
 ```
 
-Needs Python 3.11 or newer; `ltspice-mcp --help` confirms it installed. In
-[Claude Code](https://code.claude.com/docs/en/mcp) you can skip the JSON with
-`claude mcp add -s project spice -- ltspice-mcp`. The same server is also
-published as `circuit-mcp`, `ngspice-mcp` and `osic-mcp` — same program, in
-case one of those names is easier to remember.
+This needs Python 3.11 or newer. In Claude Code you can skip the JSON with
+`claude mcp add -s project spice -- ltspice-mcp`.
 
-**You also need a simulator on the same machine.** LTspice or ngspice —
-auto-detected on Windows, Linux and macOS; on WSL you point at LTspice
-yourself ([WSL notes](#configuration)). Install LTspice if you can: `.asc`
-schematic work needs its symbol libraries. Reading and checking netlists works
-with no simulator at all. The plugin and the extension fetch the server for
-you, so those two routes need [`uv`](https://docs.astral.sh/uv/) installed.
+**You also need a simulator** on the same machine: LTspice or ngspice, found
+automatically on Windows, Linux and macOS. On WSL, set the LTspice path
+yourself ([WSL](docs/USAGE.md#wsl)). Editing `.asc` schematics needs LTspice,
+because it uses LTspice's symbol libraries. Reading and checking netlists
+works without a simulator. The plugin and the extension need
+[`uv`](https://docs.astral.sh/uv/).
 
-**If your assistant ignores it.** Some clients don't show an assistant what a
-tool does until it picks one, so it may reach for the command line instead.
-Start with the name: the assistant sees every tool prefixed with it
-(`mcp__spice__run_experiments`), so a name carrying the domain reads as a
-SPICE tool even before anything else loads. That name is the key in the JSON
-above, or the word after `claude mcp add`; the plugin already uses `spice`,
-and the extension is listed under its own name. If yours is something like
-`sim1`, rename it. If it is `ltspice`, rename that too: it is the name
-LTspice's own MCP server takes ([below](#alongside-ltspices-own-mcp-server)).
-Then say so outright, in your project's `CLAUDE.md` (or whatever your client
-calls it):
+**Make sure the assistant uses it.** An assistant may run the simulator from
+the shell out of habit. Keep the server's name `spice` (the plugin already
+does; avoid `ltspice`, which LTspice's own MCP server uses), and add this to
+your project's `CLAUDE.md` or your client's equivalent:
 
 > Always use the spice MCP server for any SPICE/circuit simulation, sweep,
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
-That rule is absolute on purpose. An assistant invited to weigh it up will
-usually reach for the shell it already knows, which is the behaviour you are
-trying to correct. If you would rather it judge case by case, [when to shell
-out instead](#when-to-shell-out-instead) gives the real boundary.
+[When the shell is fine](docs/USAGE.md#when-the-shell-is-fine) covers the
+exceptions, if you prefer a softer rule.
 
-## Using it
+## What you can ask
 
-Once connected, you ask for circuit work in plain language. The assistant designs the circuit and decides what to measure; the server runs the simulator, parses the binary output, and returns the numbers. You and the assistant decide whether the results are acceptable.
+You describe the circuit work; the assistant writes the circuit and picks
+what to measure; the server runs the simulator and returns the numbers.
 
 > **"Bias this NMOS common-source stage into saturation at the target drain current and report gm/ID."**
 
-The assistant writes the netlist, solves the bias point on LTspice, and reads the device's operating point back by name — drain current, gm, gds, VDS against VDSAT to confirm it's in saturation, and the gm/ID that analog designers size to. If the bias is off, it adjusts the gate reference or W/L and re-runs, a couple of seconds per pass.
+The assistant writes the netlist, solves the bias point, and reads the
+transistor's operating point back by name: drain current, gm, gds, and VDS
+against VDSAT to confirm saturation. If the bias is off, it adjusts and runs
+again, a couple of seconds per pass.
 
-Other requests that work the same way:
+Other examples:
 
-- *"What's the overshoot and settling time of this regulator's step response?"* — runs a transient analysis and measures both from the waveform, plus rise time, ringing frequency, and the final value.
-- *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."* — perturbs components per run, simulates the batch, and reports mean, sigma, and worst-case values per measurement.
-- *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."* — parameter sweep with per-run results.
-- *"Characterize this NMOS: gm and gm/ID vs VGS."* — writes a `.dc Vgs` deck with `.save @m1[gm] @m1[id]`, runs it on ngspice, and returns the gm/ID table as one CSV (no `.control` block, no rawfile parsing).
-- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."* — searches the libraries the deck pulls in for a part (`inspect(kind="model")`), puts it into a pulsed-gate transient, and reads Vds(on) and load current back from the `.meas` results.
-- *"Build this differential pair as a schematic I can open in LTspice."* — places and wires the components into a real `.asc`, with orthogonal routing and pin-collision checks.
-- *"Is this loop stable?"* — AC analysis of the loop gain; reports phase and gain margin at every crossover, not just the first.
-- *"What's the resonant frequency and Q of this series RLC?"* — runs an AC sweep and reports each peak's center frequency, Q, and −3 dB bandwidth.
+- *"What's the overshoot and settling time of this regulator's step response?"*
+- *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."*
+- *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."*
+- *"Characterize this NMOS: gm and gm/ID vs VGS."*
+- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."*
+- *"Build this differential pair as a schematic I can open in LTspice."*
+- *"Is this loop stable?"* (phase and gain margin at every crossover)
+- *"What's the resonant frequency and Q of this series RLC?"*
 
-**Warnings are returned with the measurements they affect.** A simulator such as ngspice can report a "singular matrix" warning in its log and still finish the run and write plausible values. The server includes that diagnostic in an `observations` field next to the returned value.
+Simulator warnings come back with the numbers they affect. If ngspice reports
+a singular matrix but still writes plausible values, the reply says so next
+to the value.
 
-### Working on the same files
+## Working with LTspice
 
-Everything operates on ordinary LTspice and SPICE files. You and the assistant can edit the same files:
+Everything works on ordinary LTspice and SPICE files, so you and the
+assistant can take turns. Sketch a schematic in LTspice and ask *"why doesn't
+the output move?"*, or let the assistant build one and open it yourself. The
+assistant reads your hand edits from the file on its next request.
 
-- Sketch a schematic in LTspice, then ask the assistant to work on it: *"what's the bias point?"*, *"why doesn't the output move?"*, *"add compensation and check the phase margin."*
-- Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state, which the assistant reads on the next request.
-- Either of you can change the file mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
+**With the schematic open in LTspice** (Windows, LTspice 26.1 or later), the
+assistant's edits show up in the window, and Ctrl+Z undoes them. If the
+window has unsaved changes, the assistant asks you to save first instead of
+overwriting them. The assistant can also see which schematic you have open,
+open a schematic or a simulation result in LTspice for you, and look things
+up in LTspice's own documentation. See [Working with LTspice
+open](docs/USAGE.md#working-with-ltspice-open) for details.
 
-**With the schematic open in LTspice** (Windows, LTspice 26.1 or later): LTspice doesn't reload a file that changes on disk, so the server updates the window itself. When the assistant edits a schematic you have open, the change shows up in the window straight away, and Ctrl+Z there undoes it on screen. If the window has unsaved changes, the edit is refused and the assistant asks you to save or close the schematic first, so nobody's work gets overwritten. This uses the MCP bridge that ships with LTspice. An edit never starts LTspice; it only reaches a copy that is already running.
-
-It works in the other direction too. The assistant can see which schematic you have in front, so "this circuit" means something. It can open a schematic it built in your LTspice window, or open a run there with the traces you asked about already plotted. For questions about LTspice itself, such as a shortcut or a menu, it reads the reference files that LTspice installs.
-
-### Alongside LTspice's own MCP server
-
-LTspice 26.1 and later ships its own MCP server. On Windows it offers to add
-itself to Claude Code, Claude Desktop, Copilot and Cursor as `ltspice`, which
-is why this server is called `spice`.
-
-Install both. LTspice's server controls the LTspice window: it can read a
-schematic you haven't saved and run it on screen while you watch. What you
-get back is raw samples and the log, so working out a phase margin or setting
-up a Monte Carlo run is left to the assistant, and the only way it can edit
-is by replacing the whole file's text. This server works from the files on
-disk instead. It places and wires parts with the geometry checked, runs
-sweeps and Monte Carlo as background jobs, returns measurements as numbers,
-and also runs ngspice.
-
-The window features described above come from this server and work without
-LTspice's. It talks to your LTspice window through the bridge program that
-LTspice installs. It uses an LTspice you already have running, and starts one
-only when you ask to see a schematic or a run there and LTspice isn't open.
-Set `[schematic] start_ltspice = false` to turn that off.
-
-By default, LTspice's server starts a hidden copy of LTspice whenever it has
-no window to use, one per assistant session. Changes made through it can then
-end up in an LTspice you can't see. To prevent that, register it with
-`--ltspice-path` set to a file that doesn't exist, which leaves it able to
-use only a window you have open. This is a workaround, not a documented
-option, so check it again after updating LTspice.
-
-When you ask to see a schematic's run in LTspice, this server opens it so
-that clicking a net plots it, the same as after running it in LTspice
-yourself. To do that it copies the run's results next to the schematic,
-replacing the ones there, and opens them with the schematic's own Visible
-Traces command. It doesn't simulate again, and it doesn't need LTspice's
-server.
-
-If you registered this server as `ltspice`, rename it to `spice`. The Claude
-Code plugin has already been renamed, so its tool names change once, from
-`…_ltspice__run_experiments` to `…_spice__run_experiments`. Update any saved
-permission rule or instruction that uses the old names.
-
-### When to shell out instead
-
-The rule in the quick start forbids the shell outright, which is the right
-default for an assistant that would otherwise never find the server. The real
-boundary is narrower, and it matters if you drop the rule.
-
-An agent with a shell can run quick one-off ngspice simulations directly. Local ngspice runs are scriptable and usually take under a second, so MCP adds little in that case. Use the server when you need LTspice execution, named values parsed from binary raw files, declared sweep and Monte Carlo matrices with durable idempotent submission, jobs that outlive a call, or geometry-checked `.asc` editing. `analyze_results` can also read a bare `raw_path` produced outside the server, so a simulation can run in the shell and be analyzed here.
+**LTspice's own MCP server.** LTspice 26.1 and later ships its own MCP server,
+which registers as `ltspice`. You can install both. LTspice's server drives
+the LTspice window and returns raw samples and logs. This server works on the
+files: checked schematic edits, sweeps and Monte Carlo as background jobs,
+measurements as numbers, and ngspice support. The features above don't need
+LTspice's server. If you registered this server as `ltspice`, rename it to
+`spice`. See [Alongside LTspice's own MCP
+server](docs/USAGE.md#alongside-ltspices-own-mcp-server) for a setting worth
+changing on LTspice's side.
 
 ## What it does
 
-**Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS, THD), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q, integrated noise), DC operating points, and `.MEAS` directive results including the ones that failed. Per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …) come back by name on **both** simulators — LTspice via an auto-added `.options logopinfo` block in the log, ngspice via `.save @dev[param]` traces. Read the set across a `.dc` sweep as a gm/ID table with the `waveform` recipe in `format: "csv"`, or a single bias point with the `operating_point` recipe (address them as `m1.gm` / `@m1[gm]`, no rawfile parsing).
+**Simulation and measurement.** Runs LTspice or ngspice and reads the binary
+output directly. Measurements come back as numbers: time-domain (rise/fall,
+overshoot, settling, delay, period, duty cycle, jitter, RMS, THD),
+frequency-domain (filter cutoffs, gain and phase, stability margins,
+resonance and Q, integrated noise), DC operating points, and `.MEAS` results,
+including failed ones. Per-device operating-point values (`gm`, `gds`, `vth`,
+…) are available by name on both simulators.
 
-**Schematic editing.** Creates and edits LTspice `.asc` files by placing components, wiring pins, and labeling nets. It rejects wires that collide with pins, overlap junctions, or run diagonally, and reports floating pins and dangling labels. Every edit to a file that already exists carries that file's `expected_sha256`; if the file changed since you read it, the call is refused and nothing is written. Plain netlists (`.cir`/`.net`/`.sp`) are read and checked rather than edited — you write them with your own file tools, and a static validation pass catches malformed cards before simulation begins.
+**Schematic editing.** Creates and edits LTspice `.asc` files: places
+components, wires pins and labels nets. It refuses diagonal wires and wires
+that cross pins or junctions, and reports floating pins and dangling labels.
+An edit is refused if the file changed since the assistant last read it.
+Plain netlists (`.cir`, `.net`, `.sp`) are checked before they run; the
+assistant edits them with its own file tools.
 
-**Sweeps and Monte Carlo.** Multi-dimensional parameter sweeps and Monte Carlo with per-component tolerances, `.MODEL` process variation, and Pelgrom W·L device mismatch. Per-measurement statistics are aggregated across runs, and any single run can be pulled out and analyzed like a standalone simulation.
+**Sweeps and Monte Carlo.** Multi-dimensional parameter sweeps, model
+swaps, and Monte Carlo with component tolerances, `.MODEL` process variation
+and device mismatch. Statistics are aggregated across runs, and any single
+run can be analyzed on its own.
 
-**Jobs and trust.** Simulations run as cancellable jobs with timeouts and a concurrency cap; long runs return a job ID immediately and job state survives a server restart. Results include simulator warnings, missing measurements, and extreme node values as structured observations. The server does not assign a trust rating; the caller evaluates these observations.
+**Jobs.** Simulations run as jobs that can be cancelled or given a time
+limit, and that survive a server restart. Long runs return a job ID right
+away. Results list simulator warnings, missing measurements and extreme
+values; the server reports these and leaves the judgment to the assistant.
 
 ## Supported simulators
 
 | Simulator | Status |
 |-|-|
-| LTspice | Primary. Windows native, WSL2 (Windows LTspice.exe via interop), Linux via Wine. Required for `.asc` schematic editing (needs `.asy` symbol libraries). |
-| ngspice | Supports simulation, parsing, diagnostics, and analysis. Does not require LTspice. |
-| QSPICE, Xyce | Supported but secondary. A run selects either with `execution.simulator`; QSPICE only when the server runs natively on Windows. Both take a hand-written netlist, not a `.asc`. |
+| LTspice | Primary. Windows, WSL2 (runs the Windows LTspice), Linux via Wine. Required for `.asc` schematic editing. |
+| ngspice | Simulation and analysis. Does not need LTspice. |
+| QSPICE, Xyce | Secondary, selected per run. Netlists only, not `.asc`. QSPICE only when the server runs natively on Windows. |
+
+## Tools
+
+The server has 8 tools:
+
+| Tool | What it does |
+|-|-|
+| `run_experiments` | Run a circuit, or a sweep or Monte Carlo set of runs, optionally measuring each |
+| `jobs` | Check on, wait for, cancel, or list submitted runs |
+| `analyze_results` | Measure finished runs, or a `.raw` file produced elsewhere |
+| `inspect` | Read circuits, schematics, symbols, nets, models, and server capabilities |
+| `edit_schematic` | Create and edit `.asc` schematics: place, move, wire, label |
+| `verify_circuit` | Check a circuit, compare a schematic with a netlist, draw a schematic |
+| `plot_waveform` | Interactive waveform chart, in the chat where the client supports it, otherwise in a browser |
+| `run_code` | Run a Python snippet against the engine, for loops and number crunching |
+
+The assistant learns how to use them from the server itself:
+`inspect(kind="guide")` for guidance on simulators and common tasks, and
+`inspect(kind="reference")` for every option of every tool.
 
 ## Configuration
 
-No configuration is required. To customize, copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml`; any setting can be overridden with an `LTSPICE_MCP_`-prefixed environment variable, and `--config PATH` or `LTSPICE_MCP_CONFIG` picks the file. Key options:
+None is needed. To change a setting, copy
+[`ltspice-mcp.example.toml`](ltspice-mcp.example.toml) to `ltspice-mcp.toml`
+in your working directory; every option is described there and can also be
+set with an `LTSPICE_MCP_` environment variable. The server keeps job records
+and results in `.ltspice-mcp/` in the working directory; add it to
+`.gitignore`.
 
-```toml
-[simulator]
-default = "ltspice"      # ltspice, ngspice, qspice, xyce (null = auto-detect)
-path = ""                # explicit executable path (required on WSL)
-ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
-hidden_desktop = true    # Windows: LTspice runs on a desktop of its own, so its window never takes your keyboard focus; false shows it
+**`run_code` runs Python with the server's own permissions,** not inside the
+folder sandbox. Approve it in your client as you would a shell command, and
+set `[tools] run_code = false` if anyone else can reach the server.
 
-[simulator.executables]  # more builds, run per call as execution.simulator = "ltspice:xvii"
-# xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"
+**Schematic and plot images** for the assistant to look at need an optional
+extra and the Cairo library: see [PNG rendering](docs/USAGE.md#png-rendering).
 
-[security]
-# allowed_paths = ["."]  # sandbox, re-read on the next call; unset = working dir + the Claude Code scratch dir (<tempdir>/claude-<uid>; %TEMP%\claude on Windows)
+[docs/USAGE.md](docs/USAGE.md) covers the common settings, WSL, which files
+the server creates, and running it on another machine.
 
-[simulation]
-# max_parallel = 4       # default: number of CPU cores, capped at 8
-timeout = 300.0          # seconds, for LTspice netlist export
-# run_timeout = 3600     # seconds per case when a request sets no execution.run_timeout_s; default: no limit
+## Python API
 
-[schematic]
-sync_open_window = true  # Windows, LTspice 26.1+: an edit shows up in the LTspice window that has the sheet open; false leaves windows alone
-
-[tools]
-listing = "compact"      # "full" serves every per-argument description on the wire, about 45% more to load
-run_code = true          # false removes run_code; the snippet has the server's own authority, not the sandbox
-
-[state]
-persist_jobs = true
-```
-
-`listing = "compact"`, the default, keeps about 45% off what a session loads before it can call anything; the tools accept exactly the same calls, `inspect(kind="reference", query="...")` looks up a branch's arguments with their descriptions when you need them, and a rejected call ends with the branch's field table. `listing = "full"` puts every description back on the wire.
-
-`run_code`, on by default, runs a Python snippet in a worker process holding the engine as `api` (the same six ops as methods, complete results), for loops over runs and numpy on samples. The snippet runs with the server process's own file and process authority, not inside `allowed_paths`: permission `mcp__ltspice__run_code` in your client the way you permission a shell, and never blanket-allow it as part of `mcp__ltspice__*`. Set `run_code = false` when the server is reachable by more than one trusted client, for example through a proxy in front of it; the change takes effect at the next start, and `inspect(kind="capabilities")` reports whether the tool is on.
-
-`plot_waveform` opens its chart in a browser window when the client cannot show it in-chat; set `[analysis] open_plot = false` to get only the file path. `[analysis] attach_plot = true` makes it return a PNG of the chart for a vision model (about a thousand tokens per call); the PNG needs the two pieces listed under [PNG rendering](#png-rendering-optional).
-
-See [`src/ltspice_mcp/config.py`](src/ltspice_mcp/config.py) for the full option list (`[analysis]`, `[schematic]`, `[logging]`, ...).
-
-**What the server writes, and where.** Nothing it keeps goes beside your circuits; only files you ask for do (an edited sheet, a `sidecar` export, a plot's `out_dir`), plus the `<name>.net` LTspice's own exporter writes beside a schematic it runs. Job records, runs, result sets, export snapshots and plots go to the working directory's `.ltspice-mcp/` store. The recent-circuits index and per-circuit lock files go to a per-user directory (`%LOCALAPPDATA%\ltspice-mcp` on Windows, `~/.local/state/ltspice-mcp` elsewhere, `LTSPICE_MCP_HOME` to override). Two environment settings reduce that further:
-
-- `LTSPICE_MCP_WRITE_CONFIG=false` stops the first tool call from writing a default `ltspice-mcp.toml` into the working directory.
-- `LTSPICE_MCP_STORE_DIR=<dir>` keeps the store in `<dir>` (one subdirectory per working directory) instead. The trade-off: a server, script or Python API session only finds those job records, and replays their `request_id`s, if it carries the same setting.
-
-<details>
-<summary><strong>WSL specifics</strong></summary>
-
-On WSL, LTspice.exe runs via Windows interop (not Wine), and spicelib can't auto-detect it across the WSL boundary. Set the Windows-side path explicitly:
-
-```toml
-[simulator]
-path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
-```
-
-Simulation output is automatically redirected to a Windows temp directory: LTspice's `.MEAS` results go through SQLite `.db` files that fail on UNC paths (`\\wsl.localhost\...`), and without the redirect measurement data silently disappears from the logs.
-
-`.asy` symbol paths for `.asc` editing are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS`. A symbol saved in the same folder as the `.asc` is found first, as LTspice finds it, and needs no configuration.
-
-</details>
-
-### PNG rendering (optional)
-
-`verify_circuit` draws a schematic as SVG. An assistant sees the drawing only as a PNG, because PNG is the only format returned inline as image content; clients do not reliably display SVG. The plain install leaves out two things PNG needs:
-
-1. **The `raster` extra** (cairosvg). Install the server with it:
-
-   ```bash
-   uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
-   ```
-
-   If you launch the server with `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude Code plugin and the Claude Desktop extension already include the extra.
-
-2. **The native Cairo library**, which no Python wheel ships:
-   - **Linux and WSL:** `sudo apt install libcairo2` (Fedora: `sudo dnf install cairo`). Under WSL the server is a Linux process, so install it inside the distro.
-   - **macOS:** `brew install cairo`. On Apple silicon, Homebrew's `/opt/homebrew/lib` is not searched by default, so also set `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` in the server's environment.
-   - **Windows:** install a Cairo runtime, for example the [GTK for Windows runtime](https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer). Then either add the folder holding `libcairo-2.dll` and the DLLs it depends on (the runtime's `bin` folder) to `PATH`, or name that folder in `CAIROCFFI_DLL_DIRECTORIES` (separate several folders with `;`).
-
-`plot_waveform`'s `attach_plot` image needs the same two pieces; without them the chart and its trace summaries still come back, and the reply says the image was skipped and why.
-
-Restart the server afterwards. If either piece is missing, a PNG request comes back as an SVG file and nothing is returned inline; the reply names the missing piece and how to install it on your platform. `inspect(kind="capabilities")` reports the same before anything is drawn:
-
-```json
-"render": {"png": false, "missing": "native_library", "reason": "...", "remedy": "..."}
-```
-
-`missing` is `"extra"` or `"native_library"`, and all three are null when `png` is true.
-
-### The tool surface
-
-The server exposes **8 tools**: six arranged over three planes, the waveform widget, and `run_code`, which is registered always and served unless the operator turns it off:
-
-| Plane | Tool | What it does |
-|-|-|-|
-| Execute | `run_experiments` | Run one deck, or a grid of value assignments, model swaps, and Monte Carlo runs, in one declarative call — optionally returning the measurements with the receipt |
-| Execute | `jobs` | Follow, wait on, cancel, list, or page the runs of a submitted job |
-| Understand | `analyze_results` | Measure a finished job (or a bare `.raw` this server never ran) through named recipes |
-| Understand | `inspect` | Read decks, schematics, symbols, nets, models, and server capabilities — never results |
-| Author | `edit_schematic` | Create and mutate `.asc` transactionally: place, move, wire, label, set attributes |
-| Author | `verify_circuit` | Syntax, symbol, layout, and quality checks, schematic-vs-netlist equivalence, and rendering |
-| — | `plot_waveform` | Interactive chart of a run's waveforms, in-chat where the client renders widgets, otherwise opened on your desktop; the reply summarizes each trace, and `attach_plot` adds a PNG for the model |
-| — | `run_code` | Run a Python snippet in a warm worker that holds the engine as `api`: loops over runs, numpy on samples. On by default; `[tools] run_code = false` removes it, see Configuration |
-
-Netlists are written and edited with the agent's own file tools; the server does not wrap text edits. The same six operations are importable as `ltspice_mcp.api` (`Api(working_dir=...)`), so a Python script can drive the same engine without an MCP client.
-
-The domain knowledge that pairs with the surface is the server's guide: a short core every session reads, then topic sections (each simulator's syntax, the tools, trace math, nested instances) and task playbooks (amplifier bench craft). Any client reads it with `inspect(kind="guide")` or the `spice://guide` resources, and Python with `Api.guide()`. The Claude Code plugin's one skill, `skills/spice-guide/SKILL.md`, sends a session there; on another client, point its persistent instructions at the same call.
-
-**Migration from 0.5.** The `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6.0; the consolidated surface above replaces them. `[tools] profile` is no longer a key the server reads — a config that still sets it loads with the key ignored. Keep the `[tools]` section rather than deleting it: it now holds `listing`, above. Pin `ltspice-mcp==0.5.*` if you need the old per-operation tools.
-
-**Where it runs.** The server shells out to a local LTspice/ngspice and reads circuit files from disk, so it must run where the simulator and the files are. Two setups work: a local MCP host (Claude Desktop, Claude Code, Cursor, Gemini CLI, Codex, …) on your own machine, or a browser-based cloud agent whose sandbox can install ngspice and register the server (verified with Claude). LTspice is local-only (a Windows app); ngspice is open-source and works in either place. Consumer web chat with no sandbox has no simulator and no file access, so it can't run this server directly; bridge it to a machine you control with a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) if you want that UI. Only expose the server on a network you fully control: it writes files and spawns processes inside `allowed_paths`.
-
-## Two ways to use it
-
-You can use the same six operations as an **MCP server** or as a **Python
-API**. Both run the same engine: the same code handles each operation,
-reads the same files, and writes the same job records to disk.
-
-| | MCP server | Python API |
-|-|-|-|
-| Who calls it | an assistant in Claude Code, Claude Desktop, Cursor, or another MCP client | a script, notebook, or CI job — usually one an assistant wrote |
-| What a call looks like | a tool call in the conversation; large results are split into pages and continued with a cursor | a method call; results are returned in full, with waveforms as numpy arrays |
-| Long runs | the server keeps the job running; check on it with `jobs` | the process owns the job; `api.close()` or normal interpreter shutdown cancels unfinished work |
-| Good for | interactive work: explore, edit, run a few checks per turn | code: optimizers, custom post-processing, pipelines, full result sets |
-
-A sweep or Monte Carlo matrix is one call through either interface. Use the
-Python API when each run depends on code that processes the previous result,
-such as an optimizer, curve fit, or CI check. The API returns the complete
-result set, while MCP paginates large results. Both interfaces use the same
-working directory and job records. An assistant can start a sweep over MCP,
-and a script can read the completed job by its `job_id`. A script can also
-run a batch for an assistant to analyze later.
-
-**An assistant can use either.** Over MCP it calls the six tools; where it can
-execute code it can drive the same engine in Python instead, through `run_code`
-or an installed package (see below). Either way it starts from the server's
-guide — a short core, then the section or task playbook a job needs —
-`inspect(kind="guide")` over MCP, `api.guide()` in Python, and reads the full
-argument tree for itself — `inspect(kind="reference")` over MCP,
-`api.reference()` in Python.
-
-## Driving it from code
-
-To write your own script against the engine, or to have an assistant write one
-that outlives the conversation, install the package:
+The same engine is importable as `ltspice_mcp.api`, for scripts and notebooks:
+optimizers, curve fits, CI checks, or anything where each run depends on the
+last. It returns complete results and numpy arrays where the MCP tools return
+pages. Scripts and the server share job records in the working directory, so
+either can read a job the other ran.
 
 ```bash
 pip install ltspice-mcp        # or: uv add ltspice-mcp
 ```
 
-This is a separate step from the quick start. The plugin and the Desktop
-extension run the server in an environment of their own, so neither one puts
-the package where your code can `import` it. An assistant working inside a
-session does not need this install to write Python against the engine —
-`run_code` runs its snippet in the server's own process, with `api` already
-bound — but a standalone script does.
+The plugin and the Desktop extension install the server in their own
+environment, so a script needs this install. An assistant inside a session
+doesn't: it can use the API through `run_code`.
+
+With an RC low-pass in `circuits/rc.cir`:
+
+```spice
+* RC low-pass
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.155n
+.ac dec 50 1 1Meg
+.end
+```
+
+this sweeps R1 and returns the lowest and highest cutoff frequency:
 
 ```python
 from ltspice_mcp.api import Api
@@ -342,128 +227,18 @@ with Api(working_dir="circuits") as api:
     print(result["analysis"]["result"]["results"]["fc"]["reduced"])
 ```
 
-`run_experiments` defines a three-case sweep, measures each case, and returns
-the minimum and maximum cutoff frequencies with their assignments. `rc.cir` is
-the RC low-pass deck printed under
-[the tool-level loop](#under-the-hood-the-tool-level-loop) above.
-`api.reference()` lists the six operations. `api.reference("run_experiments")`
-prints that operation's full argument tree, and `api.guide("python")` the
-guide's section on this interface. From a shell, use
-`python -m ltspice_mcp.api reference [op]` or `python -m ltspice_mcp.api guide [section]`. `api.load_raw()` returns numpy
-arrays for direct waveform access.
-
-### Using both at once
-
-The two run side by side. The MCP server is the long-lived process: it owns jobs that must outlive a call, serves the
-packaged guide and job resources, and renders the waveform widget on hosts
-that support it. A script using the Python API works in the same directory
-against the same job records, so a job started by either can be read by the
-other by its `job_id`. A job the script submits belongs to the script, and
-exiting cancels it — unless it asks for a detached owner
-(`run_experiments(wait=False, detach=True)`), which hands that one job to a
-process spawned to supervise it. The script can then exit, and the job, the
-server and any later script all still see the same record.
-
-### What the Python side does differently
-
-`Api` starts the same engine in the caller's process and does not require an
-MCP server. Its interface differs from MCP:
-
-- **Complete results.** Large MCP responses may be paginated or capped. The
-  API collects every page and returns the complete result. It rejects
-  MCP-only controls such as response budgets, pagination cursors, and wait
-  dwells instead of rewriting them. This keeps replayed calls consistent
-  between MCP and Python.
-- **The Python process owns its jobs, unless you detach them.**
-  `run_experiments(wait=False)` returns a receipt immediately, and unfinished
-  jobs are cancelled by `api.close()`, at the end of a `with` block, or during
-  normal interpreter shutdown. Adding `detach=True` gives that job its own
-  supervising process instead: the call still returns as soon as the
-  submission is durable, the receipt names the owner and its log, and the job
-  runs on after this process exits. Read it back or cancel it later by
-  `job_id`, from here, a later script, or a server.
-- **One live engine per process.** An `Api` created inside a running server
-  process raises an error. A cold `Api()` starts in well under a second; the
-  heavy imports are loaded by the first call that needs them.
-- `api.load_raw()` / `api.measurements()` return numpy-backed data for your
-  own post-processing, and `api.reference(op)` prints any operation's full
-  argument tree.
-
-## Under the hood: the tool-level loop
-
-What the assistant actually does for "design a 1 kHz RC low-pass and verify it". It writes the netlist (R=1k, C=159.155n → fc = 1 kHz):
-
-```spice
-* rc.cir — RC low-pass
-V1 in 0 AC 1
-R1 in out 1k
-C1 out 0 159.155n
-.ac dec 50 1 1Meg
-.end
-```
-
-then drives two tools:
-
-```
-verify_circuit(path="rc.cir", checks=["syntax"])
-  → outcome "complete", no findings: directives valid, element arities check out
-
-run_experiments(
-  circuits=[{"path": "rc.cir"}],
-  analyze={"recipes": [{"key": "lp", "metric": "bode_filter", "signal": "V(out)"}]},
-)
-```
-
-The `lp` recipe returns these scalar results:
-
-```json
-{
-  "signal": "V(out)",
-  "filter_type": "lowpass",
-  "passband_gain_db": 0.0,
-  "passband_ripple_db": 0.02,
-  "cutoff_low_hz": null,
-  "cutoff_high_hz": 1000.4,
-  "stopband_rejection_db": 59.97,
-  "rolloff_slope_db_per_decade": -19.9,
-  "estimated_order": 1,
-  "warnings": []
-}
-```
-
-(abridged — the full response also includes passband bounds and transition bandwidth)
-
-If the result is off target, edit the netlist, run it again, and repeat the measurement. Long simulations return a job ID instead of blocking. Use `jobs` with `action="status"`, `action="wait"`, or `action="cancel"` to manage them. Job records persist in the working directory's store (`.ltspice-mcp/experiments/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
-
-<details>
-<summary><strong>The capability vocabulary</strong></summary>
-
-Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and an `outputSchema` for `structuredContent` introspection. The capabilities live one level down, as the named values each tool accepts:
-
-| Surface | Values |
-|-|-|
-| `analyze_results` recipes | `summary`, `measurements`, `value`, `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd`, `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure`, `resonance`, `return_loss`, `noise_integral`, `operating_point`, `waveform` (inline envelope or full-fidelity CSV), `plot` |
-| `inspect` kinds | `capabilities`, `components`, `symbol`, `symbols`, `net`, `model` |
-| `edit_schematic` ops | `add_component`, `set_component_value`, `set_component_attribute`, `move_component`, `remove_component`, `wire_pins`, `add_net_label`, `remove_net_label`, `remove_wire`, `add_directive`, `remove_directive`, `set_plot_panes` |
-| `jobs` actions | `status`, `wait`, `cancel`, `list`, `runs` |
-| `verify_circuit` checks | `syntax`, `symbols`, `export`, `layout`, `quality`, `compare` |
-
-Sweeps and Monte Carlo are not separate tools: they are `run_experiments` `variations`, of which there are two kinds.
-
-- `assign` sets values — a grid across entries, or lock-step lists within one entry. A target is a declared `.param`, a component reference (so a supply level is an assignment to the source's value), `REF@model`, which swaps one device's model card, or `X1:delvto`, a per-instance offset on the FET inside a subcircuit instance. That model swap is what "corners" means here.
-- `random` adds Monte Carlo runs: component tolerances, `.param` and `.MODEL` parameter spread, and Pelgrom W·L device mismatch.
-
-There is no temperature axis. Temperature is a simulator setting, so it goes in the deck (`.temp`, `.step temp`, `.options temp=`); a `.param TEMP` is rejected by the deck lint, because SPICE never reads it as the simulation temperature and every point of such a sweep would solve at the same temperature.
-
-</details>
+`api.reference()` lists the operations and `api.guide()` returns the guide.
+See [Python API](docs/USAGE.md#python-api) for how it differs from the tools,
+and [docs/design/python_api.md](docs/design/python_api.md) for the full
+contract.
 
 ## Why it is shaped this way
 
-Three published studies by other groups support the main design choices.
+Published studies by other groups support the main design choices:
 
-- **Measurements come back as named numbers.** SPICEAssistant (Nau, Krummenauer, Zimmermann, [arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) hands the model scalar LTspice results instead of raw output, and reports o3's solve rate on a 269-task power-supply benchmark rising from 25.4% to 84.9%, against 18.7 points for retrieval-augmented prompting alone. Here the measurement recipes return scalars and `plot_waveform` is for shape.
-- **Schematic edits are typed and validated.** NetlistBench (Ma et al., [arXiv:2608.12197](https://arxiv.org/html/2608.12197)) put 2,342 LLM netlist edits through a benchmark: for the strongest model, accuracy on compound edits fell from 80% at 3 dependent steps to 26% at 15, and the authors conclude models should not be relied on as netlist editors without verification. It measured unassisted edits on text netlists, so this is a response to that finding rather than a measured fix for it: `edit_schematic` takes a batch of typed operations, validates before writing, and returns the resulting geometry, and `verify_circuit` compares the schematic against an exported netlist.
-- **The tool interface is typed.** An RTL-to-GDS agent benchmark ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) attributes 31.7% of physical-design errors to tool-interface failures: valid commands defeated by tool state or version. Different domain, so it is supporting context rather than evidence; its recommendations — registered APIs, persistent sessions, structured results instead of log parsing — are what the server does.
+- **Measurements come back as named numbers.** SPICEAssistant ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) gave a model scalar LTspice results instead of raw output, and o3's solve rate on a 269-task power-supply benchmark rose from 25.4% to 84.9%.
+- **Schematic edits are typed and checked.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on compound netlist edits fell from 80% at 3 dependent steps to 26% at 15. That study tested unassisted edits to text netlists, so `edit_schematic` (typed operations, validated before writing) is a response to the finding, not a measured fix for it.
+- **The tool interface is typed.** An RTL-to-GDS agent benchmark ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to tool-interface failures. It is a different domain, so this is context rather than evidence; its recommendations (registered APIs, persistent sessions, structured results) are what the server does.
 
 ## Development
 
@@ -475,13 +250,13 @@ uv run ruff check src/ tests/  # lint
 uv run ltspice-mcp             # run the server (stdio)
 ```
 
-Release with `scripts/release.sh 0.6.2`. The script refuses a dirty tree or a version with no dated `CHANGELOG.md` section, stamps the plugin manifests, commits, and creates an annotated tag. The package version comes from hatch-vcs. Push the tag to publish to PyPI.
-
-More: [docs/DESIGN.md](docs/DESIGN.md) (scope, architecture, non-goals) and [docs/spice_lex.md](docs/spice_lex.md) (SPICE parser internals).
+To release, run `scripts/release.sh <version>` (it needs a dated
+`CHANGELOG.md` section for that version) and push the tag it creates; the tag
+publishes to PyPI.
 
 ## Contributing
 
-The tool-surface and Python API contracts are in [docs/design/](docs/design/), the architecture in [docs/DESIGN.md](docs/DESIGN.md), and the test practice in [docs/TESTING.md](docs/TESTING.md). Vendored components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The project is not taking outside contributions at this stage; bug reports with a reproduction are welcome as issues.
+The architecture is in [docs/DESIGN.md](docs/DESIGN.md), the tool and Python API contracts in [docs/design/](docs/design/), and the test practice in [docs/TESTING.md](docs/TESTING.md). Vendored components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The project is not taking outside contributions at this stage; bug reports with a reproduction are welcome as issues.
 
 ## License
 
