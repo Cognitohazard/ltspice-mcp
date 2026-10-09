@@ -50,6 +50,16 @@ tool-surface changes.
   took on that net and its name. Such a crossing is now a contact like any
   other, refused onto another net and reported as a junction on the route's
   own.
+- `verify_circuit` and `edit_schematic` reported a wire as passing through a
+  part's body whenever it ended on a pin of that part lying inside what the
+  part draws, which is every wire to such a pin. About one symbol in twenty of
+  LTspice's own library has one (a frame drawn a unit outside its column of
+  pins, a pin on the slanted side of a triangle), and on its 4,366 example
+  sheets this made 1,343 of the 1,440 wires reported, on 323 sheets. A wire
+  that ends on such a pin and runs straight out of the body by the nearer
+  edge on its line is now the connection it is. One that runs back across
+  the body, or ends inside it, is still reported; 136 are left on 62 of those
+  sheets.
 - `add_component` and `move_component` could short two named nets and say
   nothing. A pin on the point where two wires cross joins them (the
   `pin_at_crossing` recording), and a part placed or moved so that a pin

@@ -328,6 +328,16 @@ class TestWhatLtspiceLeavesOut:
         assert only(view, "dropped_wire") == []
 
 
+#: A part that draws a frame one unit outside its two columns of pins, as many
+#: of LTspice's own symbols of an integrated circuit do, with one pin deep inside.
+FRAMED = Part(
+    "U1",
+    box=BBox(-1, 0, 161, 96),
+    body=BBox(-1, 0, 161, 96),
+    pins=(("IN", 0, 48), ("OUT", 160, 48), ("REF", 112, 64)),
+)
+
+
 class TestHowTheSheetReads:
     def test_boxes_that_share_an_area_and_boxes_that_only_touch(self) -> None:
         view = SheetView(
@@ -373,6 +383,43 @@ class TestHowTheSheetReads:
 
     def test_a_view_that_knows_no_body_uses_the_box(self) -> None:
         assert Part("R1", box=BBox(0, 0, 64, 96)).drawn == BBox(0, 0, 64, 96)
+
+    def test_a_wire_out_from_a_pin_inside_the_body_is_not_through_the_part(self) -> None:
+        """Out by the nearer edge on the wire's own line, wherever the pin is:
+        just inside a frame, or deep in a box larger than what it encloses."""
+        view = SheetView(
+            parts=(FRAMED,),
+            wires=((-64, 48, 0, 48), (160, 48, 224, 48), (112, 64, 112, 128), (112, 64, 200, 64)),
+        )
+        assert only(view, "wire_through_symbol") == []
+
+    def test_a_wire_from_such_a_pin_back_across_the_body_is_through_it(self) -> None:
+        view = SheetView(parts=(FRAMED,), wires=((0, 48, 224, 48), (112, 64, 112, -32)))
+        assert [found.points for found in only(view, "wire_through_symbol")] == [
+            ((0, 48), (224, 48)),
+            ((112, 64), (112, -32)),
+        ]
+
+    def test_a_wire_from_such_a_pin_that_ends_inside_the_body_is_through_it(self) -> None:
+        """It has not left the body, so it is no way out of it. Between two of
+        the part's pins, and to a corner the next wire leaves from."""
+        view = SheetView(parts=(FRAMED,), wires=((0, 48, 160, 48), (112, 64, 144, 64)))
+        assert len(only(view, "wire_through_symbol")) == 2
+
+    def test_a_wire_over_such_a_pin_and_on_is_through_it(self) -> None:
+        view = SheetView(parts=(FRAMED,), wires=((-64, 48, 64, 48),))
+        assert len(only(view, "wire_through_symbol")) == 1
+
+    def test_a_diagonal_wire_from_such_a_pin_is_through_it(self) -> None:
+        view = SheetView(parts=(FRAMED,), wires=((0, 48, -64, 16),))
+        assert len(only(view, "wire_through_symbol")) == 1
+
+    def test_only_the_parts_own_pin_makes_a_wire_its_way_in(self) -> None:
+        """Another part's pin at that point is a wire into this one's body."""
+        other = Part("R1", pins=(("A", 0, 48),))
+        frame = Part("U1", box=FRAMED.box, body=FRAMED.body)
+        view = SheetView(parts=(frame, other), wires=((-64, 48, 0, 48),))
+        assert len(only(view, "wire_through_symbol")) == 1
 
     def test_a_label_inside_a_box_and_on_no_pin(self) -> None:
         view = SheetView(
