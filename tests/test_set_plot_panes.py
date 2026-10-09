@@ -86,6 +86,23 @@ async def test_an_ac_pane_gets_ltspices_own_scales_unless_it_names_them(asc_stat
     assert [pane.scales for pane in section.panes] == [(1, 2, 0), (1, 0, 0)]
 
 
+@pytest.mark.parametrize(
+    ("analysis", "section", "scales"),
+    [
+        ("dc", "DC transfer characteristic", (0, 0, 0)),
+        ("noise", "Noise Spectral Density - (V/Hz½ or A/Hz½)", (1, 0, 0)),
+    ],
+)
+async def test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own(
+    asc_state, sheet: Path, analysis: str, section: str, scales: tuple[int, int, int]
+):
+    data = await apply_ops(asc_state, "rc.asc", [_panes(analysis, [{"traces": ["V(out)"]}])])
+    assert data["outcome"] == "complete"
+    found = read_plot_settings(sheet.with_suffix(".plt").read_bytes()).section(section)
+    assert found is not None
+    assert [(pane.traces, pane.scales) for pane in found.panes] == [(("V(out)",), scales)]
+
+
 async def test_a_file_ltspice_26_wrote_keeps_its_other_sections(asc_state, sheet: Path):
     """LTspice 26 writes the file in UTF-8 and with a micro sign in a unit; the
     section the op does not name keeps its text, in the encoding written here."""

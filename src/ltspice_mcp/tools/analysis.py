@@ -1096,6 +1096,10 @@ _BY_HAND_NOTE = (
     "The results are beside the sheet: View > Visible Traces on it in LTspice opens "
     "them, and a click on a net then plots it."
 )
+_REPLACE_NOTE = (
+    "saved_panes lists them. To draw others, replace them with the set_plot_panes op "
+    "of edit_schematic on the sheet; the axis ranges saved with them go too."
+)
 
 
 def _show_in_ltspice(
@@ -1152,19 +1156,24 @@ def _write_panes(
     """Write the plot settings that name ``panes`` beside ``results``.
 
     Returns None once written, with the file named in ``report``, and
-    otherwise why they were not, for the reply's note. A sheet's plot settings
-    are also the ``set_plot_panes`` op's to write, so they are written under
-    the lock an edit takes for them, held for this write alone.
+    otherwise why they were not, for the reply's note. Where the file there
+    was saved from LTspice and is left as it is, ``report`` gets the traces it
+    holds (``saved_panes``), since those are what the window draws. A sheet's
+    plot settings are also the ``set_plot_panes`` op's to write, so they are
+    written under the lock an edit takes for them, held for this write alone.
     """
     target = plot_settings.plot_settings_path(results)
     try:
         with file_lock(Store.circuit_lock(target)) if of_a_sheet else contextlib.nullcontext():
-            left_alone = plot_settings.write_beside(results, plot_name, panes)
+            kept = plot_settings.write_beside(results, plot_name, panes)
     except (NetlistError, OSError) as error:
-        left_alone = f"the plot settings could not be written ({error})"
-    if left_alone is None:
+        return f"the plot settings could not be written ({error})"
+    if kept is None:
         report["plot_settings"] = str(target)
-    return left_alone
+        return None
+    if kept.saved is not None:
+        report["saved_panes"] = [list(pane.traces) for pane in kept.saved]
+    return kept.reason
 
 
 def _show_alone(
@@ -1262,10 +1271,10 @@ def _show_from_sheet(
     except OSError as error:
         report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
         return
-    report.update(
-        shown_in_window(shown),
-        note=_TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}.",
-    )
+    note = _TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}."
+    if "saved_panes" in report:
+        note += f" {_REPLACE_NOTE}"
+    report.update(shown_in_window(shown), note=note)
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
 
@@ -1347,6 +1356,15 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                     "plot_settings": {
                         "type": ["string", "null"],
                         "description": "The .plt written beside it; null when none was.",
+                    },
+                    "saved_panes": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "string"}},
+                        "description": (
+                            "The traces per pane, top first, of a .plt saved from "
+                            "LTspice that was left as it is: what the window draws "
+                            "in place of panes. Empty when it holds none for this run."
+                        ),
                     },
                     "panes": {
                         "type": "array",
