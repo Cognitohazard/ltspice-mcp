@@ -18,7 +18,7 @@ ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit LTsp
 /plugin install ltspice-mcp
 ```
 
-**Claude Desktop:** build the extension in [`packaging/mcpb/`](packaging/mcpb/)
+**Claude Desktop:** build the extension in [`packaging/mcpb/`](https://github.com/cognitohazard/ltspice-mcp/tree/master/packaging/mcpb)
 and drag the `.mcpb` file onto Claude Desktop. It asks which folder your
 circuits are in.
 
@@ -41,7 +41,7 @@ This needs Python 3.11 or newer. In Claude Code you can skip the JSON with
 
 **You also need a simulator** on the same machine: LTspice or ngspice, found
 automatically on Windows, Linux and macOS. On WSL, set the LTspice path
-yourself ([WSL](docs/USAGE.md#wsl)). Editing `.asc` schematics needs LTspice,
+yourself ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)). Editing `.asc` schematics needs LTspice,
 because it uses LTspice's symbol libraries. Reading and checking netlists
 works without a simulator. The plugin and the extension need
 [`uv`](https://docs.astral.sh/uv/).
@@ -55,7 +55,7 @@ your project's `CLAUDE.md` or your client's equivalent:
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
-[When the shell is fine](docs/USAGE.md#when-the-shell-is-fine) covers the
+[When the shell is fine](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#when-the-shell-is-fine) covers the
 exceptions, if you prefer a softer rule.
 
 ## What you can ask
@@ -98,7 +98,7 @@ window has unsaved changes, the assistant asks you to save first instead of
 overwriting them. The assistant can also see which schematic you have open,
 open a schematic or a simulation result in LTspice for you, and look things
 up in LTspice's own documentation. See [Working with LTspice
-open](docs/USAGE.md#working-with-ltspice-open) for details.
+open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open) for details.
 
 **LTspice's own MCP server.** LTspice 26.1 and later ships its own MCP server,
 which registers as `ltspice`. You can install both. LTspice's server drives
@@ -107,7 +107,7 @@ files: checked schematic edits, sweeps and Monte Carlo as background jobs,
 measurements as numbers, and ngspice support. The features above don't need
 LTspice's server. If you registered this server as `ltspice`, rename it to
 `spice`. See [Alongside LTspice's own MCP
-server](docs/USAGE.md#alongside-ltspices-own-mcp-server) for a setting worth
+server](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#alongside-ltspices-own-mcp-server) for a setting worth
 changing on LTspice's side.
 
 ## What it does
@@ -167,7 +167,7 @@ The assistant learns how to use them from the server itself:
 ## Configuration
 
 None is needed. To change a setting, copy
-[`ltspice-mcp.example.toml`](ltspice-mcp.example.toml) to `ltspice-mcp.toml`
+[`ltspice-mcp.example.toml`](https://github.com/cognitohazard/ltspice-mcp/blob/master/ltspice-mcp.example.toml) to `ltspice-mcp.toml`
 in your working directory; every option is described there and can also be
 set with an `LTSPICE_MCP_` environment variable. The server keeps job records
 and results in `.ltspice-mcp/` in the working directory; add it to
@@ -178,9 +178,9 @@ folder sandbox. Approve it in your client as you would a shell command, and
 set `[tools] run_code = false` if anyone else can reach the server.
 
 **Schematic and plot images** for the assistant to look at need an optional
-extra and the Cairo library: see [PNG rendering](docs/USAGE.md#png-rendering).
+extra and the Cairo library: see [PNG rendering](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#png-rendering).
 
-[docs/USAGE.md](docs/USAGE.md) covers the common settings, WSL, which files
+[docs/USAGE.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md) covers the common settings, WSL, which files
 the server creates, and running it on another machine.
 
 ## Python API
@@ -228,8 +228,8 @@ with Api(working_dir="circuits") as api:
 ```
 
 `api.reference()` lists the operations and `api.guide()` returns the guide.
-See [Python API](docs/USAGE.md#python-api) for how it differs from the tools,
-and [docs/design/python_api.md](docs/design/python_api.md) for the full
+See [Python API](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#python-api) for how it differs from the tools,
+and [docs/design/python_api.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/design/python_api.md) for the full
 contract.
 
 ## Why it is shaped this way
@@ -256,7 +256,7 @@ publishes to PyPI.
 
 ## Contributing
 
-The architecture is in [docs/DESIGN.md](docs/DESIGN.md), the tool and Python API contracts in [docs/design/](docs/design/), and the test practice in [docs/TESTING.md](docs/TESTING.md). Vendored components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The project is not taking outside contributions at this stage; bug reports with a reproduction are welcome as issues.
+The architecture is in [docs/DESIGN.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/DESIGN.md), the tool and Python API contracts in [docs/design/](https://github.com/cognitohazard/ltspice-mcp/tree/master/docs/design), and the test practice in [docs/TESTING.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/TESTING.md). Vendored components are listed in [THIRD_PARTY_NOTICES.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/THIRD_PARTY_NOTICES.md). The project is not taking outside contributions at this stage; bug reports with a reproduction are welcome as issues.
 
 ## License
 
