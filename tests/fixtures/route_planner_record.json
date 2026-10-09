@@ -1170,485 +1170,6 @@
     }
    ]
   },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses Q# bounding box (#,#)-(#,#)": {
-   "from": "X2.a",
-   "junctions": [],
-   "segments": [
-    [
-     416,
-     192,
-     416,
-     856
-    ],
-    [
-     416,
-     856,
-     144,
-     856
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "M1.S",
-   "warnings": [
-    "Long wire run (936 units): consider placing components closer or adding a local net label",
-    "Wire at x=416 crosses Q1 bounding box (400,480)-(464,576)"
-   ],
-   "waypoints": [
-    {
-     "x": 416,
-     "y": 856
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses Q# bounding box (#,#)-(#,#) | Wire at y=# crosses Q# bounding box (#,#)-(#,#)": {
-   "from": "X2.b",
-   "junctions": [],
-   "segments": [
-    [
-     448,
-     144,
-     448,
-     544
-    ],
-    [
-     448,
-     544,
-     64,
-     544
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "X4.c",
-   "warnings": [
-    "Long wire run (784 units): consider placing components closer or adding a local net label",
-    "Wire at x=448 crosses Q1 bounding box (400,480)-(464,576)",
-    "Wire at y=544 crosses Q1 bounding box (400,480)-(464,576)"
-   ],
-   "waypoints": [
-    {
-     "x": 448,
-     "y": 544
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses Q# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "X2.b",
-   "junctions": [],
-   "segments": [
-    [
-     448,
-     144,
-     448,
-     760
-    ],
-    [
-     448,
-     760,
-     144,
-     760
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "M1.D",
-   "warnings": [
-    "Long wire run (920 units): consider placing components closer or adding a local net label",
-    "Wire at x=448 crosses Q1 bounding box (400,480)-(464,576)",
-    "Wire at y=760 crosses R1 bounding box (384,712)-(416,808)"
-   ],
-   "waypoints": [
-    {
-     "x": 448,
-     "y": 760
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "net:f",
-   "junctions": [],
-   "segments": [
-    [
-     1008,
-     96,
-     1008,
-     192
-    ],
-    [
-     1008,
-     192,
-     400,
-     192
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc",
-   "to": "R3.2",
-   "warnings": [
-    "Long wire run (704 units): consider placing components closer or adding a local net label",
-    "Wire at x=1008 crosses R5 bounding box (992,96)-(1024,160)"
-   ],
-   "waypoints": [
-    {
-     "x": 1008,
-     "y": 192
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses U# bounding box (#,#)-(#,#) | Wire at y=# crosses U# bounding box (#,#)-(#,#)": {
-   "from": "R1.2",
-   "junctions": [],
-   "segments": [
-    [
-     96,
-     192,
-     96,
-     432
-    ],
-    [
-     96,
-     432,
-     336,
-     432
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/instance_names.asc",
-   "to": "X2.d",
-   "warnings": [
-    "Long wire run (480 units): consider placing components closer or adding a local net label",
-    "Wire at x=96 crosses U1 bounding box (16,416)-(160,560)",
-    "Wire at y=432 crosses U1 bounding box (16,416)-(160,560)"
-   ],
-   "waypoints": [
-    {
-     "x": 96,
-     "y": 432
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses X# bounding box (#,#)-(#,#)": {
-   "from": "X1.b",
-   "junctions": [],
-   "segments": [
-    [
-     144,
-     144,
-     96,
-     144
-    ],
-    [
-     96,
-     144,
-     96,
-     840
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "M1.G",
-   "warnings": [
-    "Long wire run (744 units): consider placing components closer or adding a local net label",
-    "Wire at x=96 crosses X4 bounding box (16,416)-(160,560)"
-   ],
-   "waypoints": [
-    {
-     "x": 96,
-     "y": 144
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses X# bounding box (#,#)-(#,#) | Wire at y=# crosses X# bounding box (#,#)-(#,#)": {
-   "from": "X1.b",
-   "junctions": [],
-   "segments": [
-    [
-     144,
-     144,
-     144,
-     432
-    ],
-    [
-     144,
-     432,
-     720,
-     432
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "D1.A",
-   "warnings": [
-    "Long wire run (864 units): consider placing components closer or adding a local net label",
-    "Wire at x=144 crosses X4 bounding box (16,416)-(160,560)",
-    "Wire at y=432 crosses X4 bounding box (16,416)-(160,560)"
-   ],
-   "waypoints": [
-    {
-     "x": 144,
-     "y": 432
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses Q# bounding box (#,#)-(#,#)": {
-   "from": "X4.c",
-   "junctions": [],
-   "segments": [
-    [
-     64,
-     544,
-     624,
-     544
-    ],
-    [
-     624,
-     544,
-     624,
-     480
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "Q2.C",
-   "warnings": [
-    "Long wire run (624 units): consider placing components closer or adding a local net label",
-    "Wire at y=544 crosses Q1 bounding box (400,480)-(464,576)"
-   ],
-   "waypoints": [
-    {
-     "x": 624,
-     "y": 544
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses Q# bounding box (#,#)-(#,#) | Wire at y=# crosses Q# bounding box (#,#)-(#,#)": {
-   "from": "X3.c",
-   "junctions": [],
-   "segments": [
-    [
-     668,
-     224,
-     668,
-     544
-    ],
-    [
-     668,
-     544,
-     64,
-     544
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "X4.c",
-   "warnings": [
-    "Long wire run (924 units): consider placing components closer or adding a local net label",
-    "Wire at y=544 crosses Q1 bounding box (400,480)-(464,576)",
-    "Wire at y=544 crosses Q2 bounding box (560,480)-(624,576)"
-   ],
-   "waypoints": [
-    {
-     "x": 668,
-     "y": 544
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "X3.c",
-   "junctions": [],
-   "segments": [
-    [
-     668,
-     224,
-     668,
-     760
-    ],
-    [
-     668,
-     760,
-     144,
-     760
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "M1.D",
-   "warnings": [
-    "Long wire run (1060 units): consider placing components closer or adding a local net label",
-    "Wire at y=760 crosses R1 bounding box (384,712)-(416,808)"
-   ],
-   "waypoints": [
-    {
-     "x": 668,
-     "y": 760
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses RM# bounding box (#,#)-(#,#)": {
-   "from": "RM90.2",
-   "junctions": [],
-   "segments": [
-    [
-     768,
-     720,
-     832,
-     720
-    ],
-    [
-     832,
-     720,
-     1536,
-     720
-    ],
-    [
-     1536,
-     720,
-     1472,
-     720
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/orientation_res.asc",
-   "to": "RM270.2",
-   "warnings": [
-    "Long wire run (832 units): consider placing components closer or adding a local net label",
-    "Wire at y=720 crosses RM180 bounding box (1104,672)-(1136,768)"
-   ],
-   "waypoints": [
-    {
-     "x": 832,
-     "y": 720
-    },
-    {
-     "x": 1536,
-     "y": 720
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses RR# bounding box (#,#)-(#,#)": {
-   "from": "RR90.1",
-   "junctions": [],
-   "segments": [
-    [
-     768,
-     320,
-     832,
-     320
-    ],
-    [
-     832,
-     320,
-     1536,
-     320
-    ],
-    [
-     1536,
-     320,
-     1472,
-     320
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/orientation_res.asc",
-   "to": "RR270.1",
-   "warnings": [
-    "Long wire run (832 units): consider placing components closer or adding a local net label",
-    "Wire at y=320 crosses RR180 bounding box (1104,272)-(1136,368)"
-   ],
-   "waypoints": [
-    {
-     "x": 832,
-     "y": 320
-    },
-    {
-     "x": 1536,
-     "y": 320
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses U# bounding box (#,#)-(#,#) | Wire at x=# crosses U# bounding box (#,#)-(#,#)": {
-   "from": "X2.d",
-   "junctions": [],
-   "segments": [
-    [
-     336,
-     432,
-     96,
-     432
-    ],
-    [
-     96,
-     432,
-     96,
-     192
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/instance_names.asc",
-   "to": "R1.2",
-   "warnings": [
-    "Long wire run (480 units): consider placing components closer or adding a local net label",
-    "Wire at y=432 crosses U1 bounding box (16,416)-(160,560)",
-    "Wire at x=96 crosses U1 bounding box (16,416)-(160,560)"
-   ],
-   "waypoints": [
-    {
-     "x": 96,
-     "y": 432
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses X# bounding box (#,#)-(#,#) | Wire at x=# crosses X# bounding box (#,#)-(#,#)": {
-   "from": "X1.a",
-   "junctions": [],
-   "segments": [
-    [
-     112,
-     192,
-     400,
-     192
-    ],
-    [
-     400,
-     192,
-     400,
-     528
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "Q1.B",
-   "warnings": [
-    "Long wire run (624 units): consider placing components closer or adding a local net label",
-    "Wire at y=192 crosses X2 bounding box (320,96)-(464,240)",
-    "Wire at x=400 crosses X2 bounding box (320,96)-(464,240)"
-   ],
-   "waypoints": [
-    {
-     "x": 400,
-     "y": 192
-    }
-   ]
-  },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses X# bounding box (#,#)-(#,#) | Wire at x=# crosses X# bounding box (#,#)-(#,#) | Wire at x=# crosses X# bounding box (#,#)-(#,#)": {
-   "from": "X2.c",
-   "junctions": [],
-   "segments": [
-    [
-     368,
-     224,
-     96,
-     224
-    ],
-    [
-     96,
-     224,
-     96,
-     840
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/export/attributes.asc",
-   "to": "M1.G",
-   "warnings": [
-    "Long wire run (888 units): consider placing components closer or adding a local net label",
-    "Wire at y=224 crosses X1 bounding box (16,96)-(160,240)",
-    "Wire at x=96 crosses X1 bounding box (16,96)-(160,240)",
-    "Wire at x=96 crosses X4 bounding box (16,416)-(160,560)"
-   ],
-   "waypoints": [
-    {
-     "x": 96,
-     "y": 224
-    }
-   ]
-  },
   "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": {
    "from": "C1.1",
    "junctions": [],
@@ -1734,48 +1255,6 @@
     }
    ]
   },
-  "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | Wire at y=# crosses R# bounding box (#,#)-(#,#) | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "V1.+",
-   "junctions": [],
-   "segments": [
-    [
-     -48,
-     96,
-     16,
-     96
-    ],
-    [
-     16,
-     96,
-     16,
-     160
-    ],
-    [
-     16,
-     160,
-     -48,
-     160
-    ]
-   ],
-   "sheet": "fixtures/ltspice_bridge_recorded/inputs/text_off_grid.asc",
-   "to": "V1.-",
-   "warnings": [
-    "The route crosses the wire (32,128)->(-48,128) at (16,128) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.",
-    "Wire at y=96 crosses R1 bounding box (0,80)-(32,176)",
-    "Wire at x=16 crosses R1 bounding box (0,80)-(32,176)",
-    "Wire at y=160 crosses R1 bounding box (0,80)-(32,176)"
-   ],
-   "waypoints": [
-    {
-     "x": 16,
-     "y": 96
-    },
-    {
-     "x": 16,
-     "y": 160
-    }
-   ]
-  },
   "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": {
    "from": "R1.2",
    "junctions": [
@@ -1849,7 +1328,7 @@
     }
    ]
   },
-  "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
+  "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": {
    "from": "net:b",
    "junctions": [
     {
@@ -1877,9 +1356,7 @@
    "to": "R1.2",
    "warnings": [
     "The route passes over R3.1 at (192,176), already wired to this net; LTspice joins it there.",
-    "The route crosses the wire (96,96)->(288,96) at (192,96) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.",
-    "Wire at x=192 crosses R3 bounding box (176,176)-(208,272)",
-    "Wire at y=192 crosses R3 bounding box (176,176)-(208,272)"
+    "The route crosses the wire (96,96)->(288,96) at (192,96) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead."
    ],
    "waypoints": [
     {
@@ -1920,51 +1397,7 @@
    ],
    "waypoints": []
   },
-  "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | Wire at x=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "R10.1",
-   "junctions": [
-    {
-     "pin": "R4.1",
-     "via": "pin",
-     "x": 704,
-     "y": 96
-    },
-    {
-     "pin": "R4.2",
-     "via": "pin",
-     "x": 704,
-     "y": 96
-    }
-   ],
-   "segments": [
-    [
-     704,
-     400,
-     704,
-     96
-    ],
-    [
-     704,
-     96,
-     800,
-     96
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc",
-   "to": "net:w",
-   "warnings": [
-    "The route passes over R4.1 at (704,96), already wired to this net; LTspice joins it there.",
-    "The route passes over R4.2 at (704,96), already wired to this net; LTspice joins it there.",
-    "Wire at x=704 crosses R4 bounding box (688,96)-(720,160)"
-   ],
-   "waypoints": [
-    {
-     "x": 704,
-     "y": 96
-    }
-   ]
-  },
-  "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
+  "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": {
    "from": "net:b",
    "junctions": [
     {
@@ -1998,9 +1431,7 @@
    "to": "R1.2",
    "warnings": [
     "The route passes over R3.1 at (192,176), already wired to this net; LTspice joins it there.",
-    "The route touches the net label 'c' at (192,96), already on net 'a', 'b', 'c'; LTspice joins them there.",
-    "Wire at x=192 crosses R3 bounding box (176,176)-(208,272)",
-    "Wire at y=192 crosses R3 bounding box (176,176)-(208,272)"
+    "The route touches the net label 'c' at (192,96), already on net 'a', 'b', 'c'; LTspice joins them there."
    ],
    "waypoints": [
     {
@@ -2706,72 +2137,6 @@
      "y": 192
     }
    ]
-  },
-  "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "net:a",
-   "junctions": [],
-   "segments": [
-    [
-     96,
-     96,
-     96,
-     192
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/pin_on_pin.asc",
-   "to": "R2.1",
-   "warnings": [
-    "Wire at x=96 crosses R1 bounding box (80,96)-(112,192)"
-   ],
-   "waypoints": []
-  },
-  "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "net:a",
-   "junctions": [],
-   "segments": [
-    [
-     96,
-     96,
-     96,
-     176
-    ],
-    [
-     96,
-     176,
-     192,
-     176
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc",
-   "to": "R3.1",
-   "warnings": [
-    "Wire at x=96 crosses R1 bounding box (80,96)-(112,192)",
-    "Wire at y=176 crosses R1 bounding box (80,96)-(112,192)"
-   ],
-   "waypoints": [
-    {
-     "x": 96,
-     "y": 176
-    }
-   ]
-  },
-  "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": {
-   "from": "R1.2",
-   "junctions": [],
-   "segments": [
-    [
-     96,
-     192,
-     288,
-     192
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc",
-   "to": "R2.2",
-   "warnings": [
-    "Wire at y=192 crosses R3 bounding box (176,176)-(208,272)"
-   ],
-   "waypoints": []
   }
  },
  "sheets": {
@@ -2897,7 +2262,7 @@
   },
   "fixtures/ltspice_bridge_recorded/inputs/text_off_grid.asc": {
    "proposals": 76,
-   "sha256": "487a01578ddbf574f0a2a9ac076d86fa2acbf9d6721c3d0c8e080ade53c5a422",
+   "sha256": "7ca96941473459a74fc08544334ccdabb30d4d74706662049ca90365b5550c6a",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 4,
     "refused: Multiple '\u2026' labels found at: (#,#), (#,#). Connect to a component pin (PIN) instead, or place the label at a specific pin with the add_net_label op of edit_schematic (net='\u2026', pin='\u2026').": 12,
@@ -2911,8 +2276,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component V# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 8,
     "routed": 13,
-    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 4,
-    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | Wire at y=# crosses R# bounding box (#,#)-(#,#) | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 2
+    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 6
    }
   },
   "fixtures/ltspice_bridge_recorded/ltspice26/sheets/micro_sign.asc": {
@@ -3007,7 +2371,7 @@
   },
   "fixtures/ltspice_bridge_recorded/ltspice26/sheets/text_off_grid.asc": {
    "proposals": 76,
-   "sha256": "487a01578ddbf574f0a2a9ac076d86fa2acbf9d6721c3d0c8e080ade53c5a422",
+   "sha256": "7ca96941473459a74fc08544334ccdabb30d4d74706662049ca90365b5550c6a",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 4,
     "refused: Multiple '\u2026' labels found at: (#,#), (#,#). Connect to a component pin (PIN) instead, or place the label at a specific pin with the add_net_label op of edit_schematic (net='\u2026', pin='\u2026').": 12,
@@ -3021,8 +2385,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component V# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 8,
     "routed": 13,
-    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 4,
-    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | Wire at y=# crosses R# bounding box (#,#)-(#,#) | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 2
+    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 6
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
@@ -3088,7 +2451,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc": {
    "proposals": 174,
-   "sha256": "2a29268ff2a8411c45a4a5ebfa72c04a5a8f73351eeec7384ba0a798d9a1f1f5",
+   "sha256": "ac35cef2488def0cc8302fb96948d96c56a531f1d64e6e88bb769f539d3eab84",
    "shapes": {
     "refused: (#,#) is where wires on separate nets cross ((#,#)->(#,#); (#,#)->(#,#)); LTspice leaves a plain crossing unjoined. A wire ending there would join them all; end the route on a point of just the wire you mean.": 6,
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
@@ -3110,12 +2473,11 @@
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 net:NAME is on net ['\u2026'] and PIN is on net ['\u2026']. Connecting them would short the two named nets. To join them on purpose, give both the same name: remove one side'\u2026's name; no wire is needed.": 6,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 20,
+    "routed": 26,
     "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 10,
     "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 2,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 2,
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_end.asc": {
@@ -3186,7 +2548,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc": {
    "proposals": 192,
-   "sha256": "2cc9afe0d95a6880d5920c7f601215b7b8334b0a22f4b9802f09af3c615aa632",
+   "sha256": "f0f6cc0a23534fa02889eda1bbd0c1c436d2e77fa04acc547cd73bd5d8241d03",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3202,13 +2564,11 @@
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 9,
     "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 2,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 8,
-    "routed": 35,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 2,
+    "routed": 42,
+    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 2,
     "routed: The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 10,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 9,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/label_on_vertical_wire_interior.asc": {
@@ -3272,7 +2632,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/pin_on_pin.asc": {
    "proposals": 68,
-   "sha256": "e94bdc00020774802bcbff4cb823c9259244c5302579bc7d90b9afb6233eedb2",
+   "sha256": "540d2e37716ce0fda67a559e3c732f8276a27d15b0c0fdd4bf58a4c440fa18d7",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to PIN: both endpoints resolve to the same coordinate (#,#).": 2,
@@ -3283,8 +2643,7 @@
     "refused: Refused to connect PIN to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect PIN to net:NAME:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 2,
     "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 4,
-    "routed": 34,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed": 40
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/pin_on_wire_interior.asc": {
@@ -3314,7 +2673,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc": {
    "proposals": 544,
-   "sha256": "3559d47e5b46891b5c9258dae9ecf234b945a059c4560007be2ea46c076fef91",
+   "sha256": "596596158ef6306622f4b7a699e5c23aa81bfac1bc714df9682ad2e03c6d67fb",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 67,
     "refused: Cannot connect PIN to PIN: both endpoints resolve to the same coordinate (#,#).": 10,
@@ -3349,14 +2708,11 @@
     "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 2,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 net:NAME is on net ['\u2026'] and PIN is on net ['\u2026']. Connecting them would short the two named nets. To join them on purpose, give both the same name: remove one side'\u2026's name; no wire is needed.": 4,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026'] to the merged net). Reroute to avoid the labelled wire.": 5,
-    "routed": 82,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 46,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses R# bounding box (#,#)-(#,#)": 4,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": 5,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | Wire at x=# crosses R# bounding box (#,#)-(#,#)": 1,
+    "routed": 86,
+    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 50,
+    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": 6,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | Long wire run (# units): consider placing components closer or adding a local net label": 15,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#)": 4
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | Long wire run (# units): consider placing components closer or adding a local net label": 15
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
@@ -3550,7 +2906,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/wire_end_on_vertical_wire_interior.asc": {
    "proposals": 168,
-   "sha256": "2caf26fa1c2fa35e2b8258cfd5aa06f878e19e949cd3423417df11e02fbc20cd",
+   "sha256": "0bcdda402e91b583ec60a3bc737cdadc15192c9bd04b7d87f26e09755c6441e5",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 24,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3565,15 +2921,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 2,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
-    "routed": 35,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 5,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 9
+    "routed": 45,
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 5
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/wire_end_on_wire_interior.asc": {
    "proposals": 156,
-   "sha256": "607a08f7fc733081446e2f61a620db0ada1d45de88cc721a2240c9ad5f7afb38",
+   "sha256": "9bd45c18c06083455b7ac88191d41618ab6855309abe9bcccbd9b06de151663b",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3588,17 +2942,15 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
-    "routed": 24,
+    "routed": 31,
     "routed: The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 7,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 7,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/wire_end_on_wire_interior_reversed.asc": {
    "proposals": 156,
-   "sha256": "e10f53aeaf856b6b8ae0acf6c789782a6b267cfab8237701364196a398cb78ae",
+   "sha256": "ba888533a8699ab8359c6dc29090092ffed804116d9d9fa0120945e0f052bd89",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3613,17 +2965,15 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
-    "routed": 24,
+    "routed": 31,
     "routed: The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 7,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 7,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/ltspice_recorded/inputs/export/attributes.asc": {
    "proposals": 576,
-   "sha256": "76b2f6aabf60fc3263f62eebe5e03c46c57612dc032fc262c0bd6f968de76c18",
+   "sha256": "0a0c9749f472607ed31d32c4dcf27bbb2164951af4f439c4b1f76a983907de51",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 54,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 146,
@@ -3637,17 +2987,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 15,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component X# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 9,
     "routed": 91,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 63,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses Q# bounding box (#,#)-(#,#)": 4,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses Q# bounding box (#,#)-(#,#) | Wire at y=# crosses Q# bounding box (#,#)-(#,#)": 1,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses Q# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses X# bounding box (#,#)-(#,#)": 2,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses X# bounding box (#,#)-(#,#) | Wire at y=# crosses X# bounding box (#,#)-(#,#)": 2,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses Q# bounding box (#,#)-(#,#)": 1,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses Q# bounding box (#,#)-(#,#) | Wire at y=# crosses Q# bounding box (#,#)-(#,#)": 5,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 5,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses X# bounding box (#,#)-(#,#) | Wire at x=# crosses X# bounding box (#,#)-(#,#)": 7,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses X# bounding box (#,#)-(#,#) | Wire at x=# crosses X# bounding box (#,#)-(#,#) | Wire at x=# crosses X# bounding box (#,#)-(#,#)": 1
+    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 92
    }
   },
   "fixtures/ltspice_recorded/inputs/export/block_symbol.asc": {
@@ -3713,7 +3053,7 @@
   },
   "fixtures/ltspice_recorded/inputs/export/instance_names.asc": {
    "proposals": 513,
-   "sha256": "34e5f8b702e8a5e93cf1122ed22ef00c737f7a03e3daa5ec7c31a1b488bbd09a",
+   "sha256": "8562b826644ae9804730c237162a23604ec29a3caa8e75ee06791d40c328fcc3",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 54,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 113,
@@ -3727,9 +3067,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component r# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 22,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component x# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "routed": 115,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 40,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at x=# crosses U# bounding box (#,#)-(#,#) | Wire at y=# crosses U# bounding box (#,#)-(#,#)": 1,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses U# bounding box (#,#)-(#,#) | Wire at x=# crosses U# bounding box (#,#)-(#,#)": 1
+    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 42
    }
   },
   "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
@@ -3848,7 +3186,7 @@
   },
   "fixtures/ltspice_recorded/inputs/export/orientation_res.asc": {
    "proposals": 573,
-   "sha256": "b889ae582a791cab77438f95de8781057a4bdedebfe9f99a5be568b4c361800c",
+   "sha256": "d8eda31f6805a52a2280fe5b938c1aeb7fe9a5bdc42768d954ab2bc6e50318d1",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 64,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 84,
@@ -3883,14 +3221,12 @@
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component RM# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 1,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component RR# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 2,
     "routed": 51,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 52,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses RM# bounding box (#,#)-(#,#)": 3,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label | Wire at y=# crosses RR# bounding box (#,#)-(#,#)": 3
+    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 58
    }
   },
   "fixtures/ltspice_recorded/inputs/plot/rc_ac.asc": {
    "proposals": 162,
-   "sha256": "cde7466d8d21f041e5a90de6e09b5d398470bf9cd7468402a07035791f3fe79d",
+   "sha256": "471bff253416b16997d7092f42c6cf25c50dac2a0fffd6c08276c992f9c7710c",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Multiple '\u2026' labels found at: (#,#), (#,#). Connect to a component pin (PIN) instead, or place the label at a specific pin with the add_net_label op of edit_schematic (net='\u2026', pin='\u2026').": 54,
@@ -3900,13 +3236,12 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component C# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 8,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component V# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 10,
-    "routed": 32,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 8
+    "routed": 40
    }
   },
   "fixtures/ltspice_recorded/inputs/plot/rc_tran.asc": {
    "proposals": 162,
-   "sha256": "cde7466d8d21f041e5a90de6e09b5d398470bf9cd7468402a07035791f3fe79d",
+   "sha256": "471bff253416b16997d7092f42c6cf25c50dac2a0fffd6c08276c992f9c7710c",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Multiple '\u2026' labels found at: (#,#), (#,#). Connect to a component pin (PIN) instead, or place the label at a specific pin with the add_net_label op of edit_schematic (net='\u2026', pin='\u2026').": 54,
@@ -3916,8 +3251,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component C# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 8,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component V# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 10,
-    "routed": 32,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 8
+    "routed": 40
    }
   },
   "fixtures/ltspice_recorded/inputs/save/built.asc": {
@@ -4223,7 +3557,7 @@
   },
   "fixtures/t_junctions/crossing_wires.asc": {
    "proposals": 174,
-   "sha256": "2a29268ff2a8411c45a4a5ebfa72c04a5a8f73351eeec7384ba0a798d9a1f1f5",
+   "sha256": "ac35cef2488def0cc8302fb96948d96c56a531f1d64e6e88bb769f539d3eab84",
    "shapes": {
     "refused: (#,#) is where wires on separate nets cross ((#,#)->(#,#); (#,#)->(#,#)); LTspice leaves a plain crossing unjoined. A wire ending there would join them all; end the route on a point of just the wire you mean.": 6,
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
@@ -4245,17 +3579,16 @@
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 net:NAME is on net ['\u2026'] and PIN is on net ['\u2026']. Connecting them would short the two named nets. To join them on purpose, give both the same name: remove one side'\u2026's name; no wire is needed.": 6,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 20,
+    "routed": 26,
     "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 10,
     "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 2,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 2,
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/t_junctions/label_at_crossing.asc": {
    "proposals": 192,
-   "sha256": "2cc9afe0d95a6880d5920c7f601215b7b8334b0a22f4b9802f09af3c615aa632",
+   "sha256": "f0f6cc0a23534fa02889eda1bbd0c1c436d2e77fa04acc547cd73bd5d8241d03",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -4271,13 +3604,11 @@
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 9,
     "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 2,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 8,
-    "routed": 35,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 2,
+    "routed": 42,
+    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 2,
     "routed: The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 10,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 9,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there. | The route touches the net label '\u2026' at (#,#), already on net '\u2026', '\u2026', '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/t_junctions/label_on_vertical_wire_interior.asc": {
@@ -4344,7 +3675,7 @@
   },
   "fixtures/t_junctions/wire_end_on_vertical_wire_interior.asc": {
    "proposals": 168,
-   "sha256": "2caf26fa1c2fa35e2b8258cfd5aa06f878e19e949cd3423417df11e02fbc20cd",
+   "sha256": "0bcdda402e91b583ec60a3bc737cdadc15192c9bd04b7d87f26e09755c6441e5",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 24,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -4359,15 +3690,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 2,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
-    "routed": 35,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 5,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 9
+    "routed": 45,
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 5
    }
   },
   "fixtures/t_junctions/wire_end_on_wire_interior.asc": {
    "proposals": 156,
-   "sha256": "607a08f7fc733081446e2f61a620db0ada1d45de88cc721a2240c9ad5f7afb38",
+   "sha256": "9bd45c18c06083455b7ac88191d41618ab6855309abe9bcccbd9b06de151663b",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -4382,17 +3711,15 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
-    "routed": 24,
+    "routed": 31,
     "routed: The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 7,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 7,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2
    }
   },
   "fixtures/t_junctions/wire_end_on_wire_interior_reversed.asc": {
    "proposals": 156,
-   "sha256": "e10f53aeaf856b6b8ae0acf6c789782a6b267cfab8237701364196a398cb78ae",
+   "sha256": "ba888533a8699ab8359c6dc29090092ffed804116d9d9fa0120945e0f052bd89",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -4407,12 +3734,10 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
-    "routed": 24,
+    "routed": 31,
     "routed: The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 7,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 7,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2,
-    "routed: Wire at x=# crosses R# bounding box (#,#)-(#,#) | Wire at y=# crosses R# bounding box (#,#)-(#,#)": 1,
-    "routed: Wire at y=# crosses R# bounding box (#,#)-(#,#)": 6
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 2
    }
   }
  }

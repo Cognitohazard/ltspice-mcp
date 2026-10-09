@@ -1513,12 +1513,10 @@ class TestRemoveComponentNoFalseOrphans:
 
 @pytest.mark.asyncio
 class TestAddComponentOpEntry:
-    """The op runner's own entry for add_component: the placed pins, the
-    bounding box, and the overlap advisory."""
+    """The op runner's own entry for add_component: the placed pins and the
+    bounding box. That it lies over another part is the finished sheet's to say."""
 
-    async def test_add_component_result_includes_placed_geometry_and_overlap_warnings(
-        self, asc_state: SessionState
-    ):
+    async def test_add_component_result_includes_placed_geometry(self, asc_state: SessionState):
         blank_sheet_file(asc_state, "batch_geometry")
         view = batch_view(
             asc_state,
@@ -1533,7 +1531,12 @@ class TestAddComponentOpEntry:
         # the 32-wide body and both pin leads.
         assert [(p["x"], p["y"]) for p in added["pins"]] == [(100, 52), (100, 148)]
         assert added["bounding_box"] == {"x": 84, "y": 52, "width": 32, "height": 96}
-        assert added["warnings"] == ["Overlaps R1 bounding box"]
+        assert "warnings" not in added
+        assert [
+            row["message"]
+            for row in view["validation_warnings"]
+            if row["kind"] == "symbol_overlap"
+        ] == ["R1 and R2: bounding boxes share a 32x96 region at (84,52)"]
 
 
 @pytest.mark.asyncio
@@ -1928,8 +1931,8 @@ class TestAddNetLabelOpValidation:
         assert results[5]["ok"] is True  # "c" names nothing else — a second name
         assert any("second name" in w for w in results[5]["warnings"])
 
-    async def test_floating_label_warning_via_batch(self, asc_state: SessionState):
-
+    async def test_a_label_on_nothing_is_the_sheets_to_say(self, asc_state: SessionState):
+        """The op places it and says nothing: it may be wired later in the batch."""
         blank_sheet_file(asc_state, "lbl_float")
         res = batch_view(
             asc_state,
@@ -1939,7 +1942,10 @@ class TestAddNetLabelOpValidation:
         )
         op = res["results"][0]
         assert op["ok"] is True
-        assert any("no wire" in w.lower() for w in op.get("warnings", []))
+        assert "warnings" not in op
+        assert [row["message"] for row in res["validation_warnings"]] == [
+            "Dangling label 'x' at (500,500)"
+        ]
 
     async def test_duplicate_label_warning_via_batch(self, asc_state: SessionState):
 
@@ -2004,7 +2010,7 @@ class TestMoveRemoveOpWarnings:
             stop_on_error=True,
         )
 
-    async def test_move_overlap_warning_via_op(self, asc_state: SessionState):
+    async def test_a_part_moved_onto_another_is_the_sheets_to_say(self, asc_state: SessionState):
         await self._build_pair(asc_state, "mv_overlap")
         res = batch_view(
             asc_state,
@@ -2014,7 +2020,10 @@ class TestMoveRemoveOpWarnings:
         )
         op = res["results"][0]
         assert op["ok"] is True
-        assert any("Overlaps" in w for w in op.get("warnings", []))
+        assert not [w for w in op.get("warnings", []) if "verlap" in w]
+        assert [
+            row["refs"] for row in res["validation_warnings"] if row["kind"] == "symbol_overlap"
+        ] == [["R1", "R2"]]
 
     async def test_move_orphan_warning_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "mv_orphan")
@@ -2137,8 +2146,11 @@ class TestTJunctionGroundTruth:
         asc = _copy_t_junction_sheet(stem, work_dir)
         (((x, y), name),) = [flag for flag in _flag_records(asc) if flag[1] != "0"]
         apply_one(asc_state, asc, {"op": "remove_net_label", "x": x, "y": y})
-        result = add_net_label(asc_state, asc, name, x=x, y=y)
-        assert result.get("warnings", []) == []
+        placed = batch_view(asc_state, asc, [{"op": "add_net_label", "net": name, "x": x, "y": y}])
+        assert "warnings" not in placed["results"][0]
+        assert "dangling_label" not in [
+            row["kind"] for row in placed.get("validation_warnings", [])
+        ]
         data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "R1.1"})
         assert data["labels"] == [name]
 
@@ -2146,8 +2158,14 @@ class TestTJunctionGroundTruth:
         self, asc_state: SessionState, work_dir: Path
     ):
         asc = _copy_t_junction_sheet("label_on_wire_interior", work_dir)
-        result = add_net_label(asc_state, asc, "stray", x=192, y=112)
-        assert any("floating label" in w for w in result["warnings"])
+        placed = batch_view(
+            asc_state, asc, [{"op": "add_net_label", "net": "stray", "x": 192, "y": 112}]
+        )
+        assert [
+            row["message"]
+            for row in placed["validation_warnings"]
+            if row["kind"] == "dangling_label"
+        ] == ["Dangling label 'stray' at (192,112)"]
 
     @pytest.mark.parametrize(
         ("stem", "at", "wire", "exported_pin"),

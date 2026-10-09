@@ -107,12 +107,6 @@ _RULES = (
         "advises",
         "The route is more than 400 units long.",
     ),
-    RouteRule(
-        "route_crosses_part",
-        "drawing",
-        "advises",
-        "A segment of the route crosses the box of a part it does not end on.",
-    ),
 )
 
 #: Every rule made of a proposed route, in the order ``judge`` makes them.
@@ -129,8 +123,7 @@ class Route:
     the end itself for a pin or a label and a point of the wire for an end on
     a wire's interior. ``end_names`` are the ends as they were asked for, for
     wording, and ``ends_by_coordinate`` says which were given as a coordinate
-    rather than as a pin or a net. ``end_parts`` are the parts the ends are
-    pins of.
+    rather than as a pin or a net.
     """
 
     points: tuple[Point, ...]
@@ -139,7 +132,6 @@ class Route:
     anchors: tuple[Point, Point]
     end_names: tuple[str, str]
     ends_by_coordinate: tuple[bool, bool]
-    end_parts: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -209,8 +201,9 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
     The rules that block are all made, so a refusal names everything wrong with
     the route at once, in the order: a diagonal segment; a pin passed over; a
     wire run along, an end's leg along its own wire, and other wiring touched.
-    The rules that measure an accepted route, its length and the parts it
-    crosses, are made only when none blocks.
+    The rule that measures an accepted route, its length, is made only when
+    none blocks. A route across a part is not judged here: it is the sheet
+    rule ``wire_through_symbol``'s, read off the sheet once the route is drawn.
     """
     said = Judgement()
     wires = list(view.wires)
@@ -290,37 +283,6 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
             )
         )
 
-    for sx1, sy1, sx2, sy2 in segments:
-        for part in view.parts:
-            if part.ref in route.end_parts or part.box is None:
-                continue
-            box = part.box
-            if sy1 == sy2:
-                wy = sy1
-                wx_min, wx_max = min(sx1, sx2), max(sx1, sx2)
-                if box.y1 < wy < box.y2 and wx_min < box.x2 and wx_max > box.x1:
-                    said.advisories.append(
-                        Finding(
-                            "route_crosses_part",
-                            f"Wire at y={wy} crosses {part.ref} bounding box "
-                            f"({box.x1},{box.y1})-({box.x2},{box.y2})",
-                            refs=(part.ref,),
-                            points=((sx1, sy1), (sx2, sy2)),
-                        )
-                    )
-            elif sx1 == sx2:
-                wx = sx1
-                wy_min, wy_max = min(sy1, sy2), max(sy1, sy2)
-                if box.x1 < wx < box.x2 and wy_min < box.y2 and wy_max > box.y1:
-                    said.advisories.append(
-                        Finding(
-                            "route_crosses_part",
-                            f"Wire at x={wx} crosses {part.ref} bounding box "
-                            f"({box.x1},{box.y1})-({box.x2},{box.y2})",
-                            refs=(part.ref,),
-                            points=((sx1, sy1), (sx2, sy2)),
-                        )
-                    )
     return said
 
 

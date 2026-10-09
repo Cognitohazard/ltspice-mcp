@@ -1079,6 +1079,18 @@ recording that showed it.
 
 ### Changed
 
+- An `edit_schematic` reply said three things twice: a route drawn through a
+  part, a part placed or moved over another, and a label put on nothing were
+  reported once by the op (`op 3 (wire_pins): Wire at y=252 crosses R4
+  bounding box ...`, `Overlaps R1 bounding box`, a floating-label note) and
+  once by the sheet's own finding. The op's sentence is gone; the finding in
+  `warnings` is the one report, and it is what `verify_circuit` says of the
+  same sheet. Two things follow. What is said is of the sheet the batch
+  leaves, so a label placed before the wire that reaches it, or an overlap a
+  later op in the batch undoes, is no longer mentioned. And a route through a
+  part is judged by what the part draws, the route's own end parts included,
+  where the op's advisory went by the box with pins and skipped the parts the
+  route ended on.
 - `edit_schematic` and `verify_circuit` now report one list of sheet findings.
   Each told a caller things the other did not: an edit never said that a part
   it placed overlapped another's box as a finding of the sheet, that a wire ran
