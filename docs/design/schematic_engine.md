@@ -530,6 +530,23 @@ Taken:
   pin drawn apart from the body, the box reaches out to it over the whole
   side, and an ordinary wire to a nearer pin on that side would be through
   it.
+- A wire out from a pin that lies inside its part's body is not through the
+  part. A pin can lie inside the box of what its part draws: in LTspice's own
+  library 297 symbols of 6,678 have one, most of them a frame drawn a unit
+  outside its column of pins, the rest a pin on the slanted side of a triangle
+  or a box made larger by something drawn apart. Every wire to such a pin has
+  a stretch inside the box, and on LTspice's 4,366 example sheets that was
+  1,343 of the 1,440 wires the rule reported. The stretch is the connection
+  when the wire ends on the pin and runs level or upright from it out of the
+  box by the nearer of the two edges on its line; by the farther edge it is
+  the wire running back across the body, which is what the rule is for. On
+  those sheets this separates every wire drawn out of a body from such a pin
+  from the 39 that end inside one, which stay reported with the 97 that
+  involve no such pin. The nearest edge of all four was tried and is worse:
+  it reports 14 of the wires people drew, each out by the nearer edge on its
+  own line from a pin deep in a large box. What is left over is the box
+  being coarser than what is drawn, and would take the drawing itself to
+  judge.
 - A part's box, for overlap, includes its pins. It is the box `inspect` and
   `add_component` already give a caller to plan with, so a finding is judged
   against the box the caller was shown. The choice is a small one: in the
