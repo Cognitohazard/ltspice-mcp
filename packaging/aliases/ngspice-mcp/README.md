@@ -16,7 +16,6 @@ and source live there: https://github.com/cognitohazard/ltspice-mcp
 
 ## Migration from 0.5
 
-Version 0.6.0 removed the `full` and `agentic` tool profiles; the server now
-exposes one set of 7 tools. If `[tools] profile` in the config names a removed
-profile, the server logs a warning and exposes those same 7 tools. To keep the
-old 49-tool set, pin the 0.5 series: `ltspice-mcp==0.5.*`.
+Version 0.6.0 replaced the `full` and `agentic` tool profiles with one set of
+8 tools. A `[tools] profile` setting left in an old config is ignored. To keep
+the old 49-tool set, pin the 0.5 series: `ltspice-mcp==0.5.*`.

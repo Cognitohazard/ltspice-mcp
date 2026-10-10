@@ -3,9 +3,10 @@
 Scope, architecture, and the design principles you'll encounter when
 using the server.
 
-For install + client setup see [README.md](../README.md). For the parser
-architecture see [docs/spice_lex.md](spice_lex.md). For current bugs and
-limitations, check the GitHub issue tracker.
+For install + client setup see [README.md](../README.md) and
+[USAGE.md](USAGE.md). For the parser architecture see
+[docs/spice_lex.md](spice_lex.md). For current bugs and limitations, check the
+GitHub issue tracker.
 
 ## Scope
 

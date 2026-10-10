@@ -32,7 +32,7 @@ needs a simulator.
 wheel ships. Without it, renders come back as SVG files and are never shown
 inline. `inspect(kind="capabilities")` reports `render.png`, and when it is
 false it names what is missing and how to install it on your platform. See
-[PNG rendering](../../README.md#png-rendering-optional) for the per-platform
+[PNG rendering](../../docs/USAGE.md#png-rendering) for the per-platform
 steps. The server reads its environment when Claude Desktop starts it, so
 restart Claude Desktop after installing Cairo.
 

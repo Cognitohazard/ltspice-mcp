@@ -87,7 +87,7 @@ def _validated_listing(value: object, source: str) -> str | None:
     if isinstance(value, str) and value in VALID_TOOL_LISTINGS:
         return value
     logger.warning(
-        "Unknown tool listing %r in %s, using 'full'; valid values are %s",
+        "Unknown tool listing %r in %s; ignoring it. Valid values are %s",
         value,
         source,
         ", ".join(sorted(VALID_TOOL_LISTINGS)),
