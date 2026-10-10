@@ -36,6 +36,9 @@ _DOC_COUNT_FILES: dict[str, dict[int, str]] = {
         9: "the tool count of another project in the comparison table",
         15: "the tool-selection threshold quoted from MCP guidance",
     },
+    # The alias packages' PyPI pages, published from these files on each release.
+    "packaging/aliases/circuit-mcp/README.md": {},
+    "packaging/aliases/ngspice-mcp/README.md": {},
 }
 
 _TOOL_COUNT = re.compile(r"\b(\d+)\s+(?:registered\s+)?tools\b")
