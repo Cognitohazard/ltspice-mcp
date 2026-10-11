@@ -2,10 +2,10 @@
  "examples": {
   "refused: (#,#) is where wires on separate nets cross ((#,#)->(#,#); (#,#)->(#,#)); LTspice leaves a plain crossing unjoined. A wire ending there would join them all; end the route on a point of just the wire you mean.": {
    "from": "R1.1",
-   "refused": "(192,96) is where wires on separate nets cross ((96,96)->(288,96); (192,48)->(192,176)); LTspice leaves a plain crossing unjoined. A wire ending there would join them all; end the route on a point of just the wire you mean.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc",
+   "refused": "(96,96) is where wires on separate nets cross ((192,96)->(0,96); (96,192)->(96,0)); LTspice leaves a plain crossing unjoined. A wire ending there would join them all; end the route on a point of just the wire you mean.",
+   "sheet": "fixtures/crossings/every_kind.asc",
    "to": {
-    "x": 192,
+    "x": 96,
     "y": 96
    },
    "waypoints": []
@@ -55,33 +55,33 @@
    ]
   },
   "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": {
-   "from": "R1.1",
-   "refused": "Cannot connect R1.1 to net:a: the requested route has zero length after deduplicating waypoints.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc",
-   "to": "net:a",
+   "from": "R1.2",
+   "refused": "Cannot connect R1.2 to net:0: the requested route has zero length after deduplicating waypoints.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:0",
    "waypoints": [
     {
-     "x": 0,
-     "y": 96
+     "x": 704,
+     "y": 192
     }
    ]
   },
   "refused: Cannot connect net:NAME to PIN: both endpoints resolve to the same coordinate (#,#).": {
-   "from": "net:a",
-   "refused": "Cannot connect net:a to R1.1: both endpoints resolve to the same coordinate (0,96).",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc",
-   "to": "R1.1",
+   "from": "net:0",
+   "refused": "Cannot connect net:0 to R1.2: both endpoints resolve to the same coordinate (704,192).",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R1.2",
    "waypoints": []
   },
   "refused: Cannot connect net:NAME to PIN: the requested route has zero length after deduplicating waypoints.": {
-   "from": "net:a",
-   "refused": "Cannot connect net:a to R1.1: the requested route has zero length after deduplicating waypoints.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc",
-   "to": "R1.1",
+   "from": "net:0",
+   "refused": "Cannot connect net:0 to R1.2: the requested route has zero length after deduplicating waypoints.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R1.2",
    "waypoints": [
     {
-     "x": 0,
-     "y": 96
+     "x": 704,
+     "y": 192
     }
    ]
   },
@@ -213,10 +213,10 @@
   },
   "refused: Refused to connect PIN to (#,#):\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
    "from": "R1.1",
-   "refused": "Refused to connect R1.1 to (336,96):\n  Wire passes through R2.1 at (288,96): will create unintended connection\n  Wire overlap at y=96 between x=288 and x=336: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_name_labels.asc",
+   "refused": "Refused to connect R1.1 to (832,96):\n  Wire passes through R2.1 at (800,96): will create unintended connection\n  Wire overlap at y=96 between x=800 and x=832: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
    "to": {
-    "x": 336,
+    "x": 832,
     "y": 96
    },
    "waypoints": []
@@ -292,12 +292,12 @@
    "waypoints": []
   },
   "refused: Refused to connect PIN to (#,#): this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": {
-   "from": "R3.2",
-   "refused": "Refused to connect R3.2 to (192,112): this is a same-instance wire \u2014 it ties two pins of the same component R3 (R3.1 and R3.2). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc",
+   "from": "R2.1",
+   "refused": "Refused to connect R2.1 to (800,400): this is a same-instance wire \u2014 it ties two pins of the same component R2 (R2.1 and R2.2). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).",
+   "sheet": "fixtures/crossings/every_kind.asc",
    "to": {
-    "x": 192,
-    "y": 112
+    "x": 800,
+    "y": 400
    },
    "waypoints": []
   },
@@ -599,6 +599,30 @@
    "to": "x3.b",
    "waypoints": []
   },
+  "refused: Refused to connect PIN to net:NAME:\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "R1.1",
+   "refused": "Refused to connect R1.1 to net:b:\n  Route touches the end of the wire (400,192)->(400,0) at (400,0), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:b",
+   "waypoints": [
+    {
+     "x": 704,
+     "y": 0
+    }
+   ]
+  },
+  "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at x=# between y=# and y=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "R2.2",
+   "refused": "Refused to connect R2.2 to net:d:\n  Wire overlap at x=800 between y=400 and y=400: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:d",
+   "waypoints": [
+    {
+     "x": 800,
+     "y": 608
+    }
+   ]
+  },
   "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at x=# between y=# and y=#: will create unintended junction\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
    "from": "V1.-",
    "refused": "Refused to connect V1.- to net:filtered:\n  Wire overlap at x=-48 between y=128 and y=144: will create unintended junction\n  Wire overlap at y=128 between x=-48 and x=32: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
@@ -612,14 +636,38 @@
    ]
   },
   "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
-   "from": "R3.1",
-   "refused": "Refused to connect R3.1 to net:a:\n  Wire overlap at y=96 between x=64 and x=96: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc",
+   "from": "R1.1",
+   "refused": "Refused to connect R1.1 to net:a:\n  Wire overlap at y=96 between x=304 and x=496: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
    "to": "net:a",
    "waypoints": [
     {
-     "x": 96,
+     "x": 704,
      "y": 96
+    }
+   ]
+  },
+  "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "R1.2",
+   "refused": "Refused to connect R1.2 to net:c:\n  Wire overlap at y=400 between x=304 and x=496: will create unintended junction\n  Route touches the end of the wire (496,496)->(496,400) at (496,400), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:c",
+   "waypoints": [
+    {
+     "x": 704,
+     "y": 400
+    }
+   ]
+  },
+  "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n  Route touches the wire (#,#)->(#,#) at waypoint (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. To join it on purpose, end a route there with {\"x\": #, \"y\": #} as from_pin or to_pin; otherwise move the waypoint off it.\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "R2.2",
+   "refused": "Refused to connect R2.2 to net:c:\n  Wire overlap at y=400 between x=304 and x=496: will create unintended junction\n  Route touches the end of the wire (496,496)->(496,400) at (496,400), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n  Route touches the wire (800,400)->(800,400) at waypoint (800,400), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. To join it on purpose, end a route there with {\"x\": 800, \"y\": 400} as from_pin or to_pin; otherwise move the waypoint off it.\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:c",
+   "waypoints": [
+    {
+     "x": 800,
+     "y": 400
     }
    ]
   },
@@ -643,6 +691,18 @@
    "waypoints": [
     {
      "x": 192,
+     "y": 96
+    }
+   ]
+  },
+  "refused: Refused to connect PIN to net:NAME:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "R2.1",
+   "refused": "Refused to connect R2.1 to net:a:\n  Wire passes through R1.1 at (704,96): will create unintended connection\n  Wire overlap at y=96 between x=304 and x=496: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:a",
+   "waypoints": [
+    {
+     "x": 800,
      "y": 96
     }
    ]
@@ -840,14 +900,14 @@
    ]
   },
   "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": {
-   "from": "R2.2",
-   "refused": "Refused to connect R2.2 to net:D[0]: this is a same-instance wire \u2014 it ties two pins of the same component R2 (R2.1 and R2.2). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc",
-   "to": "net:D[0]",
+   "from": "R1.2",
+   "refused": "Refused to connect R1.2 to net:a: this is a same-instance wire \u2014 it ties two pins of the same component R1 (R1.1 and R1.2). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:a",
    "waypoints": [
     {
-     "x": 288,
-     "y": 384
+     "x": 704,
+     "y": 96
     }
    ]
   },
@@ -925,11 +985,23 @@
    "to": "V1.+",
    "waypoints": []
   },
+  "refused: Refused to connect net:NAME to PIN:\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "net:b",
+   "refused": "Refused to connect net:b to R1.2:\n  Route touches the end of the wire (400,192)->(400,0) at (400,192), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R1.2",
+   "waypoints": [
+    {
+     "x": 96,
+     "y": 192
+    }
+   ]
+  },
   "refused: Refused to connect net:NAME to PIN:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
    "from": "net:a",
-   "refused": "Refused to connect net:a to R3.1:\n  Wire overlap at y=96 between x=64 and x=96: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc",
-   "to": "R3.1",
+   "refused": "Refused to connect net:a to R1.1:\n  Wire overlap at y=96 between x=304 and x=496: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R1.1",
    "waypoints": []
   },
   "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": {
@@ -943,6 +1015,25 @@
      "y": 480
     }
    ]
+  },
+  "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "net:b",
+   "refused": "Refused to connect net:b to R2.2:\n  Wire passes through R1.2 at (704,192): will create unintended connection\n  Route touches the end of the wire (400,192)->(400,0) at (400,192), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R2.2",
+   "waypoints": [
+    {
+     "x": 96,
+     "y": 192
+    }
+   ]
+  },
+  "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": {
+   "from": "net:a",
+   "refused": "Refused to connect net:a to R2.1:\n  Wire passes through R1.1 at (704,96): will create unintended connection\n  Wire overlap at y=96 between x=304 and x=496: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R2.1",
+   "waypoints": []
   },
   "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": {
    "from": "net:a",
@@ -1014,23 +1105,28 @@
    ]
   },
   "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026', '\u2026'] to the merged net). Reroute to avoid the labelled wire.": {
-   "from": "net:x704y224",
-   "refused": "Refused to connect net:x704y224 to RR0.2: Net-label conflict \u2014 the proposed route would merge named nets ['x704y224', 'x704y304', 'x704y336'] (a label on a mid-segment of the wire path adds ['x704y304', 'x704y336'] to the merged net). Reroute to avoid the labelled wire.",
-   "sheet": "fixtures/ltspice_recorded/inputs/export/orientation_res.asc",
-   "to": "RR0.2",
+   "from": "net:d",
+   "refused": "Refused to connect net:d to R1.1: Net-label conflict \u2014 the proposed route would merge named nets ['a', 'c', 'd'] (a label on a mid-segment of the wire path adds ['a', 'c'] to the merged net). Reroute to avoid the labelled wire.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R1.1",
    "waypoints": [
     {
-     "x": 704,
-     "y": 368
+     "x": 0,
+     "y": 96
     }
    ]
   },
   "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026'] to the merged net). Reroute to avoid the labelled wire.": {
-   "from": "net:f",
-   "refused": "Refused to connect net:f to R1.1: Net-label conflict \u2014 the proposed route would merge named nets ['f', 'w'] (a label on a mid-segment of the wire path adds ['w'] to the merged net). Reroute to avoid the labelled wire.",
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc",
-   "to": "R1.1",
-   "waypoints": []
+   "from": "net:a",
+   "refused": "Refused to connect net:a to R1.2: Net-label conflict \u2014 the proposed route would merge named nets ['a', 'b'] (a label on a mid-segment of the wire path adds ['b'] to the merged net). Reroute to avoid the labelled wire.",
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R1.2",
+   "waypoints": [
+    {
+     "x": 0,
+     "y": 192
+    }
+   ]
   },
   "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": {
    "from": "net:filtered",
@@ -1157,6 +1253,52 @@
     {
      "x": 224,
      "y": 160
+    }
+   ]
+  },
+  "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": {
+   "from": "R1.2",
+   "junctions": [
+    {
+     "via": "wire_end",
+     "wire": {
+      "from": {
+       "x": 192,
+       "y": 608
+      },
+      "to": {
+       "x": 0,
+       "y": 608
+      }
+     },
+     "x": 192,
+     "y": 608
+    }
+   ],
+   "segments": [
+    [
+     704,
+     192,
+     704,
+     608
+    ],
+    [
+     704,
+     608,
+     0,
+     608
+    ]
+   ],
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "net:d",
+   "warnings": [
+    "The route crosses the wire (96,656)->(96,560) at (96,608) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.",
+    "The route touches the end of the wire (192,608)->(0,608) at (192,608), already on net 'd'; LTspice joins them there."
+   ],
+   "waypoints": [
+    {
+     "x": 704,
+     "y": 608
     }
    ]
   },
@@ -2005,6 +2147,61 @@
      "y": 192
     }
    ]
+  },
+  "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on the net of PIN; LTspice joins them there.": {
+   "from": "R1.1",
+   "junctions": [
+    {
+     "via": "waypoint",
+     "wire": {
+      "from": {
+       "x": 880,
+       "y": 96
+      },
+      "to": {
+       "x": 800,
+       "y": 96
+      }
+     },
+     "x": 864,
+     "y": 96
+    }
+   ],
+   "segments": [
+    [
+     704,
+     96,
+     768,
+     96
+    ],
+    [
+     768,
+     96,
+     864,
+     96
+    ],
+    [
+     864,
+     96,
+     800,
+     96
+    ]
+   ],
+   "sheet": "fixtures/crossings/every_kind.asc",
+   "to": "R2.1",
+   "warnings": [
+    "The route touches the wire (880,96)->(800,96) at waypoint (864,96), already on the net of R2.1; LTspice joins them there."
+   ],
+   "waypoints": [
+    {
+     "x": 768,
+     "y": 96
+    },
+    {
+     "x": 864,
+     "y": 96
+    }
+   ]
   }
  },
  "sheets": {
@@ -2036,6 +2233,41 @@
     "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": 8,
     "routed: The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 1,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 3
+   }
+  },
+  "fixtures/crossings/every_kind.asc": {
+   "proposals": 168,
+   "sha256": "e2b88061d6bbe0232f27b0723a9fa40a0b71396b7e7a0f6429b4b91efa48f44b",
+   "shapes": {
+    "refused: (#,#) is where wires on separate nets cross ((#,#)->(#,#); (#,#)->(#,#)); LTspice leaves a plain crossing unjoined. A wire ending there would join them all; end the route on a point of just the wire you mean.": 40,
+    "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
+    "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
+    "refused: Cannot connect net:NAME to PIN: both endpoints resolve to the same coordinate (#,#).": 1,
+    "refused: Cannot connect net:NAME to PIN: the requested route has zero length after deduplicating waypoints.": 1,
+    "refused: Refused to connect PIN to (#,#):\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 20,
+    "refused: Refused to connect PIN to (#,#):\n  Wire overlap: the leg from (#,#) runs along the wire (#,#)->(#,#) it ends on; leave that wire at a right angle\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to (#,#):\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to (#,#): this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 1,
+    "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
+    "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 16,
+    "refused: Refused to connect PIN to net:NAME:\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": 2,
+    "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at x=# between y=# and y=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to net:NAME:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n  Route touches the wire (#,#)->(#,#) at waypoint (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. To join it on purpose, end a route there with {\"x\": #, \"y\": #} as from_pin or to_pin; otherwise move the waypoint off it.\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to net:NAME:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 10,
+    "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 15,
+    "refused: Refused to connect net:NAME to PIN:\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect net:NAME to PIN:\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": 2,
+    "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Route touches the end of the wire (#,#)->(#,#) at (#,#), on a wire no pin or label is on: LTspice joins wiring wherever it touches, so this would merge that net. Reroute around it.\n\nFix the route with different waypoints to avoid these issues.": 1,
+    "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire overlap at y=# between x=# and x=#: will create unintended junction\n\nFix the route with different waypoints to avoid these issues.": 2,
+    "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026', '\u2026'] to the merged net). Reroute to avoid the labelled wire.": 4,
+    "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026'] to the merged net). Reroute to avoid the labelled wire.": 8,
+    "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 3,
+    "routed": 16,
+    "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead. | The route touches the end of the wire (#,#)->(#,#) at (#,#), already on net '\u2026'; LTspice joins them there.": 1,
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on the net of PIN; LTspice joins them there.": 4
    }
   },
   "fixtures/ltspice_bridge_recorded/inputs/micro_sign.asc": {

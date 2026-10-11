@@ -23,11 +23,8 @@ is looked for beside its sheet and in the suite's stand-in library only.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -35,14 +32,13 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.schematic_ops import (
     GridPoint,
     _plan_connect_route,  # pyright: ignore[reportPrivateUsage]  # the planner behind wire_pins
     collect_component_geometry,
-    make_editor,
     wire_segments_of,
 )
+from tests._proposal_record import Asked, entry_of, open_staged, without_particulars, write_record
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 
 _RECORD = TESTS / "fixtures" / "route_planner_record.json"
@@ -129,18 +125,7 @@ def _shape(answer: dict[str, Any]) -> str:
         text = "refused: " + answer["refused"]
     else:
         text = "routed: " + " | ".join(answer["warnings"]) if answer["warnings"] else "routed"
-    text = re.sub(r"net:[^\s:,]+", "net:NAME", text)
-    text = re.sub(r"'[^']*'", "'…'", text)
-    text = re.sub(r"\b[\w+\-]+\.[\w+\-]+", "PIN", text)
-    return re.sub(r"-?\d+", "#", text)
-
-
-def _stage(sheet: Path, sandbox: Path) -> Path:
-    for symbol in sheet.parent.rglob("*.asy"):
-        target = sandbox / symbol.relative_to(sheet.parent)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(symbol, target)
-    return Path(shutil.copyfile(sheet, sandbox / sheet.name))
+    return without_particulars(text)
 
 
 def answers_of(
@@ -148,32 +133,25 @@ def answers_of(
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]] | None:
     """What the record holds of ``sheet`` and an example of each shape, or
     ``None`` for a sheet the editor cannot open."""
-    AscEditor.symbol_cache = {}
-    symbol_geometry._symbol_cache.clear()  # pyright: ignore[reportPrivateUsage]
-    try:
-        editor = make_editor(_stage(sheet, sandbox))
-    except Exception:
+    editor = open_staged(sheet, sandbox)
+    if editor is None:
         return None
-    assert isinstance(editor, AscEditor)
-    proposals = _proposals(editor)
-    answers = [_answer(editor, proposal) for proposal in proposals]
-    shapes: dict[str, int] = {}
-    examples: dict[str, dict[str, Any]] = {}
-    for (from_pin, to_pin, waypoints), answer in zip(proposals, answers, strict=True):
-        shape = _shape(answer)
-        shapes[shape] = shapes.get(shape, 0) + 1
-        examples.setdefault(
-            shape,
-            {
-                "from": from_pin if isinstance(from_pin, str) else from_pin.model_dump(),
-                "to": to_pin if isinstance(to_pin, str) else to_pin.model_dump(),
-                "waypoints": [point.model_dump() for point in waypoints],
-                **answer,
-            },
+    asked: list[Asked] = []
+    for proposal in _proposals(editor):
+        from_pin, to_pin, waypoints = proposal
+        answer = _answer(editor, proposal)
+        asked.append(
+            Asked(
+                {
+                    "from": from_pin if isinstance(from_pin, str) else from_pin.model_dump(),
+                    "to": to_pin if isinstance(to_pin, str) else to_pin.model_dump(),
+                    "waypoints": [point.model_dump() for point in waypoints],
+                },
+                answer,
+                _shape(answer),
+            )
         )
-    digest = hashlib.sha256(json.dumps(answers, sort_keys=True).encode("utf-8")).hexdigest()
-    entry = {"proposals": len(proposals), "sha256": digest, "shapes": dict(sorted(shapes.items()))}
-    return entry, examples
+    return entry_of(asked)
 
 
 @pytest.fixture(autouse=True)
@@ -202,12 +180,7 @@ def test_record_the_planners_answers(tmp_path: Path):
         sheets[suite_name(sheet)] = entry
         for shape, example in seen.items():
             examples.setdefault(shape, {"sheet": suite_name(sheet), **example})
-    record = {"sheets": sheets, "examples": dict(sorted(examples.items()))}
-    _RECORD.write_text(
-        json.dumps(record, indent=1, sort_keys=True, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    write_record(_RECORD, {"sheets": sheets, "examples": dict(sorted(examples.items()))})
 
 
 def test_the_record_asks_enough_to_hold_every_check():

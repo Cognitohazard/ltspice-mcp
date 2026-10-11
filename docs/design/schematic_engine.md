@@ -491,6 +491,15 @@ what must hold before the next one starts.
        work. The guide gives that spread. No measurement takes the
        advisory's place (section 8): the record lost it from 300 answers and
        nothing else changed.
+     - The label op's refusal and what placing or moving a part joins are
+       held by a record of their own before they are moved
+       (`tests/fixtures/label_and_move_record.json`): what `add_net_label`
+       answers to 5,700 proposals and `move_component` to 6,900 on the
+       sheets of the suite, each put through the op itself. A label's
+       recorded answer says what was at the point (how many nets met there
+       and how many carried a name), because the op words three different
+       joins alike. The suite had no crossing with fewer than two named
+       wires, so a sheet with each kind of crossing was added for it.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
