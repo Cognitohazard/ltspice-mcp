@@ -95,6 +95,8 @@ class Windows:
         monkeypatch.setattr(
             hidden_desktop, "post_command", lambda w, command: self.posted.append((w, command))
         )
+        self.closed: list[int] = []
+        monkeypatch.setattr(hidden_desktop, "post_close", self.closed.append)
 
     def frame(self, window: int, panes: dict[int, str]) -> None:
         self.classes[window] = "Afx:00007FF6:8"
@@ -110,6 +112,21 @@ def test_the_panes_are_the_titles_inside_the_frame(monkeypatch: pytest.MonkeyPat
     windows.frame(7, {71: "amp.asc", 72: "amp.raw", 73: "", 74: "amp.raw"})
     frame = LtspiceFrame(lambda _pid: [5, 7])
     assert frame.panes(PID) == ["amp.asc", "amp.raw"]
+
+
+@windows_only
+def test_closing_a_pane_asks_the_panes_own_window_and_no_other(monkeypatch: pytest.MonkeyPatch):
+    """A pane's title is on more than one window inside the frame; the one
+    asked to close is the pane itself, whose class begins as the frame's does."""
+    windows = Windows(monkeypatch)
+    windows.frame(7, {71: "amp.asc", 72: "amp.raw", 73: "AMP.RAW", 74: "other.raw"})
+    windows.classes.update({72: "Static", 73: "Afx:00007FF6:b", 74: "Afx:00007FF6:b"})
+    frame = LtspiceFrame(lambda _pid: [7])
+    frame.close_pane(PID, "amp.raw")
+    assert windows.closed == [73]
+    with pytest.raises(FrameError, match=r"has no pane titled gone\.raw"):
+        frame.close_pane(PID, "gone.raw")
+    assert windows.closed == [73]
 
 
 @windows_only
@@ -166,3 +183,15 @@ def test_the_stand_in_frame_opens_results_when_ltspice_was_recorded_opening_them
     assert ("placed.raw" in frame.panes(PID)) is facts[
         "results beside a sheet when it is opened are opened by its command"
     ]
+
+    frame.close_pane(PID, "placed.raw")
+    assert ("placed.raw" not in frame.panes(PID)) is facts[
+        "a results pane told to close is closed, and LTspice asks nothing"
+    ]
+    assert (placed.name in frame.panes(PID)) is facts["the sheet it was opened from stays open"]
+    frame.send(PID, VISIBLE_TRACES)
+    # Opened again, the recorded pane held the newer file: so it was open again.
+    held = facts[
+        "the precision of the results the pane held, and of those it holds once opened again"
+    ]
+    assert (frame.pane(PID, "placed.raw") is not None) is (held == ["single", "double"])

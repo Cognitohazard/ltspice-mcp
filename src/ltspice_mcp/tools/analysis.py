@@ -1047,7 +1047,7 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
             "Also open the run in the user's LTspice window (26.1+), started if "
             "none is open, with these traces drawn; writes a .plt beside the results file. A sheet's "
             "run is opened from the sheet, so a click on a net plots it: its "
-            "results replace those beside the sheet."
+            "results replace those beside the sheet, reopening their plot."
         ),
     )
     annotate: bool = Field(
@@ -1095,6 +1095,15 @@ _TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
 _BY_HAND_NOTE = (
     "The results are beside the sheet: View > Visible Traces on it in LTspice opens "
     "them, and a click on a net then plots it."
+)
+_REPLACE_NOTE = (
+    "saved_panes lists them as the set_plot_panes op of edit_schematic takes panes. To "
+    "draw others, replace them with that op on the sheet; the axis ranges saved with "
+    "them go too."
+)
+_REOPENED_NOTE = (
+    "LTspice had a plot of the sheet's results open, which was closed and opened again "
+    "to show these; traces added to it by hand were not kept."
 )
 
 
@@ -1152,19 +1161,27 @@ def _write_panes(
     """Write the plot settings that name ``panes`` beside ``results``.
 
     Returns None once written, with the file named in ``report``, and
-    otherwise why they were not, for the reply's note. A sheet's plot settings
-    are also the ``set_plot_panes`` op's to write, so they are written under
-    the lock an edit takes for them, held for this write alone.
+    otherwise what the reply's note says of it: why they were not. Where the
+    file there was saved from LTspice and is left as it is, ``report`` gets
+    the panes it holds (``saved_panes``), since those are what the window
+    draws, and for a sheet's the note names the edit that replaces them. A
+    sheet's plot settings are also the ``set_plot_panes`` op's to write, so
+    they are written under the lock an edit takes for them, held for this
+    write alone.
     """
     target = plot_settings.plot_settings_path(results)
     try:
         with file_lock(Store.circuit_lock(target)) if of_a_sheet else contextlib.nullcontext():
-            left_alone = plot_settings.write_beside(results, plot_name, panes)
+            kept = plot_settings.write_beside(results, plot_name, panes)
     except (NetlistError, OSError) as error:
-        left_alone = f"the plot settings could not be written ({error})"
-    if left_alone is None:
+        return f"the plot settings could not be written ({error})."
+    if kept is None:
         report["plot_settings"] = str(target)
-    return left_alone
+        return None
+    if kept.saved is None:
+        return f"{kept.reason}."
+    report["saved_panes"] = plot_settings.pane_specs(kept.saved)
+    return f"{kept.reason}. {_REPLACE_NOTE}" if of_a_sheet else f"{kept.reason}."
 
 
 def _show_alone(
@@ -1196,10 +1213,7 @@ def _show_alone(
                 "plot settings beside it name them."
             )
         return
-    report.update(
-        shown_in_window(shown),
-        note=_ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}.",
-    )
+    report.update(shown_in_window(shown), note=left_alone or _ALREADY_OPEN_NOTE)
 
 
 def _place_beside_sheet(sheet: Path, results: Path, log: Path | None) -> None:
@@ -1262,10 +1276,10 @@ def _show_from_sheet(
     except OSError as error:
         report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
         return
-    report.update(
-        shown_in_window(shown),
-        note=_TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}.",
-    )
+    if shown.reopened:
+        report["reopened"] = True
+    said = (_TIED_NOTE, left_alone, _REOPENED_NOTE if shown.reopened else None)
+    report.update(shown_in_window(shown), note=" ".join(filter(None, said)))
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
 
@@ -1329,6 +1343,13 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                 "properties": {
                     **LTSPICE_SHOWN_PROPERTIES,
                     "results": {"type": "string", "description": "The file opened."},
+                    "reopened": {
+                        "type": "boolean",
+                        "description": (
+                            "LTspice had a plot of the sheet's results open, which was "
+                            "closed and opened again; traces added by hand were not kept."
+                        ),
+                    },
                     "sheet": {
                         "type": "string",
                         "description": (
@@ -1347,6 +1368,24 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                     "plot_settings": {
                         "type": ["string", "null"],
                         "description": "The .plt written beside it; null when none was.",
+                    },
+                    "saved_panes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "traces": {"type": "array", "items": {"type": "string"}},
+                                "x_scale": {"type": "string"},
+                                "y_scale": {"type": "string"},
+                            },
+                            "required": ["traces"],
+                        },
+                        "description": (
+                            "The panes, top first, of a .plt saved from LTspice that "
+                            "was left as it is: what the window draws in place of "
+                            "panes, in the form set_plot_panes takes. Empty when it "
+                            "holds none for this run."
+                        ),
                     },
                     "panes": {
                         "type": "array",

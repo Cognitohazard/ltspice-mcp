@@ -42,6 +42,7 @@ from ltspice_mcp.lib.recipes import MeasurementsRecipe
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
+from tests._ltspice_recorded import declared_points, header_fields
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 
 
@@ -58,23 +59,9 @@ def complete_raws(build: str) -> list[str]:
     )
 
 
-def header_fields(build: str, case_id: str) -> dict[str, list[str]]:
-    """A raw's header as the build wrote it: field name to every value it has."""
-    fields: dict[str, list[str]] = {}
-    for line in raw_header_text(rec.recorded(build, f"{case_id}.raw").read_bytes()).splitlines():
-        name, separator, value = line.partition(":")
-        if separator and not line.startswith("\t"):
-            fields.setdefault(name, []).append(value.strip())
-    return fields
-
-
 def declared_names(build: str, case_id: str) -> list[str]:
     text = raw_header_text(rec.recorded(build, f"{case_id}.raw").read_bytes())
     return re.findall(r"(?m)^\t\d+\t([^\t\r\n]+)\t", text)
-
-
-def declared_points(build: str, case_id: str) -> int:
-    return int(header_fields(build, case_id)["No. Points"][0])
 
 
 ALL_COMPLETE = [(build, case_id) for build in rec.BUILDS for case_id in complete_raws(build)]

@@ -712,12 +712,18 @@ window is on: the frame's panes are titled with their files' names; results
 put beside a sheet that was already open are not opened by the command;
 results beside a sheet when it is opened are, with nothing asked on the way;
 and with them open the same command shows a dialog, whose title is recorded.
+It also records what lets the server close such a pane to show a newer run:
+a results pane goes on holding what it read when its file is replaced (the
+bridge says which results the pane in front holds, and the two files differ
+in precision); told to close, it closes and nothing is asked, with a trace
+added by hand or without, and no plot settings are saved; and opened again
+from the sheet it holds the file as it is now.
 The manifest notes the number the build's sheet menu gives the command's
 label. `tests/test_ltspice_frame.py` holds `FakeFrame`, the frame the handler
 tests run, to those facts. Looked at and not recorded: that the file is read
-when the command is given, so that results replaced since a run in that
-window, or since the sheet was opened, are the ones drawn (two captures, the
-replaced results being of another resistor value). What a run in the window
+when the command is given with no pane of it open, so that results replaced
+since a run in that window, or since the sheet was opened, are the ones drawn
+(two captures, the replaced results being of another resistor value). What a run in the window
 simulates is recorded: the recorder makes its run with the window holding one
 resistor value and the file another, and notes which the netlist beside the
 sheet carries, and that the sheet was not written.

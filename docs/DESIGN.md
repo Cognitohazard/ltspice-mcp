@@ -178,12 +178,19 @@ the steps, each recorded from a window:
   last looked are the ones shown, and no earlier run's are passed off as the
   job's.
 - With those results already open, the same command asks which traces to
-  show, and the file is not read again. So the frame is asked first whether
-  that pane is open, and then nothing is replaced and nothing sent.
+  show, and the file is not read again: the pane goes on holding the run it
+  read. So the frame is asked first whether that pane is open, and one that
+  is gets closed before anything is replaced. A results pane closes without a
+  question and saves nothing, with a trace added by hand or without, and
+  opened again from the sheet it holds the file as it is now. The reply says
+  that it was done (`reopened`), since traces added by hand go with the pane.
+  A person in a run, look, change loop asks to see each new run, and would
+  otherwise have to close the last plot by hand every time.
 
 This is the one place the server reaches a window other than through the
-bridge. It sends one command, to a sheet it has just put in front, and reads
-the titles of the frame's panes. It does not start a run in the window to get
+bridge. It sends one command, to a sheet it has just put in front, reads
+the titles of the frame's panes, and closes a results pane it is about to
+open again. It does not start a run in the window to get
 a tied plot: such a run is of the window's copy and not of the file, and
 leaves no record, the opposite of a job on each count the job system exists
 for.
@@ -497,10 +504,14 @@ so zoom / pan / hover does nothing for it.
   the server writes one naming the panels' traces, with the module that
   writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`), replacing
   the section of the run's analysis and keeping the others. That covers the
-  two analyses whose section is recorded, a transient and an AC run; any
-  other run opens with an empty plot and the reply says why. A settings file
-  a person saved from LTspice is left alone: writing its panes back never
-  gives its bytes, which is how it is told from one written here. With no
+  four analyses whose section is recorded: a transient, an AC run, a DC sweep
+  and a noise run. Any other run opens with an empty plot and the reply says
+  why. A settings file a person saved from LTspice is left alone: writing its
+  panes back never gives its bytes, which is how it is told from one written
+  here. The reply then lists the traces that file holds (`saved_panes`),
+  since those are what the window draws, and for a sheet's run names
+  `set_plot_panes` as the way to replace them: showing a run does not
+  overwrite a layout someone saved, and an edit asked for does. With no
   window open LTspice is started for this, unless `[schematic] start_ltspice`
   is off; the settings are written first either way, so the file opens with
   its traces when the person opens it by hand. It opens something in a
