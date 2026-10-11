@@ -1131,45 +1131,6 @@
     }
    ]
   },
-  "routed: Long wire run (# units): consider placing components closer or adding a local net label": {
-   "from": "R1.1",
-   "junctions": [],
-   "segments": [
-    [
-     288,
-     96,
-     352,
-     96
-    ],
-    [
-     352,
-     96,
-     352,
-     480
-    ],
-    [
-     352,
-     480,
-     288,
-     480
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc",
-   "to": "R2.2",
-   "warnings": [
-    "Long wire run (512 units): consider placing components closer or adding a local net label"
-   ],
-   "waypoints": [
-    {
-     "x": 352,
-     "y": 96
-    },
-    {
-     "x": 352,
-     "y": 480
-    }
-   ]
-  },
   "routed: The route crosses the wire (#,#)->(#,#) at (#,#) where neither ends; LTspice leaves a plain crossing unjoined, so the two stay separate nets. To join them, end the route on that wire instead.": {
    "from": "C1.1",
    "junctions": [],
@@ -1288,43 +1249,6 @@
     {
      "x": 288,
      "y": 384
-    }
-   ]
-  },
-  "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | Long wire run (# units): consider placing components closer or adding a local net label": {
-   "from": "R1.1",
-   "junctions": [
-    {
-     "pin": "R2.1",
-     "via": "pin",
-     "x": 288,
-     "y": 96
-    }
-   ],
-   "segments": [
-    [
-     96,
-     96,
-     480,
-     96
-    ],
-    [
-     480,
-     96,
-     480,
-     192
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/unlabelled_nets.asc",
-   "to": "R3.1",
-   "warnings": [
-    "The route passes over R2.1 at (288,96), already wired to this net; LTspice joins it there.",
-    "Long wire run (480 units): consider placing components closer or adding a local net label"
-   ],
-   "waypoints": [
-    {
-     "x": 480,
-     "y": 96
     }
    ]
   },
@@ -1820,62 +1744,6 @@
     {
      "x": 224,
      "y": 128
-    }
-   ]
-  },
-  "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | Long wire run (# units): consider placing components closer or adding a local net label": {
-   "from": "R3.1",
-   "junctions": [
-    {
-     "via": "waypoint",
-     "wire": {
-      "from": {
-       "x": 704,
-       "y": 96
-      },
-      "to": {
-       "x": 800,
-       "y": 96
-      }
-     },
-     "x": 768,
-     "y": 96
-    }
-   ],
-   "segments": [
-    [
-     400,
-     96,
-     464,
-     96
-    ],
-    [
-     464,
-     96,
-     768,
-     96
-    ],
-    [
-     768,
-     96,
-     704,
-     96
-    ]
-   ],
-   "sheet": "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc",
-   "to": "R4.1",
-   "warnings": [
-    "The route touches the wire (704,96)->(800,96) at waypoint (768,96), already on net 'w'; LTspice joins them there.",
-    "Long wire run (432 units): consider placing components closer or adding a local net label"
-   ],
-   "waypoints": [
-    {
-     "x": 464,
-     "y": 96
-    },
-    {
-     "x": 768,
-     "y": 96
     }
    ]
   },
@@ -2390,7 +2258,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
    "proposals": 198,
-   "sha256": "c448b8d7033f21493554acddd3541109cac2fc8b1a0c819b8df9fb721f99aff3",
+   "sha256": "1ec5bd3eb331d2ff7dfe70ee27d8e591e9dfc2525a0e9fa507ca430a407e3011",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Multiple '\u2026' labels found at: (#,#), (#,#), (#,#). Connect to a component pin (PIN) instead, or place the label at a specific pin with the add_net_label op of edit_schematic (net='\u2026', pin='\u2026').": 18,
@@ -2413,8 +2281,7 @@
     "refused: Refused to connect net:NAME:#] to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 3,
     "refused: Refused to connect net:NAME:#] to PIN: Net-label conflict \u2014 net:NAME:#] is on net ['\u2026'] and PIN is on net ['\u2026']. Connecting them would short the two named nets. To join them on purpose, give both the same name: remove one side'\u2026's name; no wire is needed.": 4,
     "refused: Refused to connect net:NAME:#] to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026'] to the merged net). Reroute to avoid the labelled wire.": 2,
-    "routed": 31,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 8,
+    "routed": 39,
     "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": 1
    }
   },
@@ -2514,7 +2381,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/floating_label.asc": {
    "proposals": 26,
-   "sha256": "8b243458acd0dc5fcb3ea2b208caad09f8d7eaafdaa4d327280afc88b4324fbf",
+   "sha256": "55ad0ee502047296acea862ffc77df3ac68ccf83e4b39eeb5b14f13a74274c18",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 2,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 2,
@@ -2526,8 +2393,7 @@
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 1,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 net:NAME is on net ['\u2026'] and PIN is on net ['\u2026']. Connecting them would short the two named nets. To join them on purpose, give both the same name: remove one side'\u2026's name; no wire is needed.": 2,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
-    "routed": 2,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 2
+    "routed": 4
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/label_and_ground.asc": {
@@ -2673,7 +2539,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc": {
    "proposals": 544,
-   "sha256": "596596158ef6306622f4b7a699e5c23aa81bfac1bc714df9682ad2e03c6d67fb",
+   "sha256": "ea02ca912a98fa2237ca9dc09ea3d624b1b021127a961a9d81f23230af26023c",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 67,
     "refused: Cannot connect PIN to PIN: both endpoints resolve to the same coordinate (#,#).": 10,
@@ -2708,11 +2574,9 @@
     "refused: Refused to connect net:NAME to PIN:\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 2,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 net:NAME is on net ['\u2026'] and PIN is on net ['\u2026']. Connecting them would short the two named nets. To join them on purpose, give both the same name: remove one side'\u2026's name; no wire is needed.": 4,
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026'] to the merged net). Reroute to avoid the labelled wire.": 5,
-    "routed": 86,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 50,
+    "routed": 136,
     "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": 6,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1,
-    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there. | Long wire run (# units): consider placing components closer or adding a local net label": 15
+    "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 16
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
@@ -2780,7 +2644,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/two_instance_wire.asc": {
    "proposals": 72,
-   "sha256": "2987944bc2a0411774a220eb85652855b782b1333146b4da841c984e8099c537",
+   "sha256": "a6bbc05f98b986bab5ba3b43117fec9384682ddcf8e7850e019210fc0ec66b4f",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 2,
@@ -2791,8 +2655,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 20,
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 12,
-    "routed": 14,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 2
+    "routed": 16
    }
   },
   "fixtures/ltspice_recorded/inputs/connectivity/two_labels_alpha_first.asc": {
@@ -2887,7 +2750,7 @@
   },
   "fixtures/ltspice_recorded/inputs/connectivity/unlabelled_nets.asc": {
    "proposals": 138,
-   "sha256": "790de9ba1349a9b0e572535b48a87e085b4879142a77e7c0a8b17f428f7cb417",
+   "sha256": "c2c13438847541ed073bcfee39dad967c05885b4b9d091bdf2324641d0e95ee2",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 18,
     "refused: Multiple '\u2026' labels found at: (#,#), (#,#). Connect to a component pin (PIN) instead, or place the label at a specific pin with the add_net_label op of edit_schematic (net='\u2026', pin='\u2026').": 18,
@@ -2897,10 +2760,8 @@
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 14,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n  Wire passes through PIN at (#,#): will create unintended connection\n\nFix the route with different waypoints to avoid these issues.": 2,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 36,
-    "routed": 18,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 2,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": 4,
-    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there. | Long wire run (# units): consider placing components closer or adding a local net label": 4,
+    "routed": 20,
+    "routed: The route passes over PIN at (#,#), already wired to this net; LTspice joins it there.": 8,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on the net of PIN, PIN; LTspice joins them there.": 10
    }
   },
@@ -2973,7 +2834,7 @@
   },
   "fixtures/ltspice_recorded/inputs/export/attributes.asc": {
    "proposals": 576,
-   "sha256": "0a0c9749f472607ed31d32c4dcf27bbb2164951af4f439c4b1f76a983907de51",
+   "sha256": "b1f55ca2814f6a9b99a91750b5fb2b6d7caaae929c33f336cd04d10d0e397b9d",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 54,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 146,
@@ -2986,13 +2847,12 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component Q# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 20,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 15,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component X# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 9,
-    "routed": 91,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 92
+    "routed": 183
    }
   },
   "fixtures/ltspice_recorded/inputs/export/block_symbol.asc": {
    "proposals": 432,
-   "sha256": "e545363a3b9a64fc5ea9c3ddb769c701586236e83cc98acfd2e6a9f1b7090985",
+   "sha256": "a9ff97de161cb91a97cbb45bce9a4ce2735ecab358f205e424724f488b04d637",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 36,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 72,
@@ -3001,8 +2861,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component U# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 12,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component X# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 12,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component x# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 12,
-    "routed": 152,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 16
+    "routed": 168
    }
   },
   "fixtures/ltspice_recorded/inputs/export/data_flags.asc": {
@@ -3053,7 +2912,7 @@
   },
   "fixtures/ltspice_recorded/inputs/export/instance_names.asc": {
    "proposals": 513,
-   "sha256": "8562b826644ae9804730c237162a23604ec29a3caa8e75ee06791d40c328fcc3",
+   "sha256": "c2174099e81af6725c31f55c540844ce0a952445404e2d42b2a6e970d4672d45",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 54,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 113,
@@ -3066,8 +2925,7 @@
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component X# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component r# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 22,
     "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component x# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 115,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 42
+    "routed": 157
    }
   },
   "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
@@ -3186,7 +3044,7 @@
   },
   "fixtures/ltspice_recorded/inputs/export/orientation_res.asc": {
    "proposals": 573,
-   "sha256": "d8eda31f6805a52a2280fe5b938c1aeb7fe9a5bdc42768d954ab2bc6e50318d1",
+   "sha256": "89605357b88e10c178640fcf15a16a5586607bd0f7b85f028f856caacfd10818",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 64,
     "refused: Refused to connect PIN to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 84,
@@ -3220,8 +3078,7 @@
     "refused: Refused to connect net:NAME to PIN: Net-label conflict \u2014 the proposed route would merge named nets ['\u2026', '\u2026'] (a label on a mid-segment of the wire path adds ['\u2026'] to the merged net). Reroute to avoid the labelled wire.": 17,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component RM# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 1,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component RR# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 2,
-    "routed": 51,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 58
+    "routed": 109
    }
   },
   "fixtures/ltspice_recorded/inputs/plot/rc_ac.asc": {
@@ -3256,7 +3113,7 @@
   },
   "fixtures/ltspice_recorded/inputs/save/built.asc": {
    "proposals": 80,
-   "sha256": "97d8b8589c06494ec5bc024e28eae563946838fcf6c65b043188137a7479b53d",
+   "sha256": "1bca0a4c11363730d6a41dc769a35320b86b24a3d30e9161cd8b6190cd2ddcd1",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3269,14 +3126,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
   "fixtures/ltspice_recorded/inputs/save/crlf.asc": {
    "proposals": 80,
-   "sha256": "97d8b8589c06494ec5bc024e28eae563946838fcf6c65b043188137a7479b53d",
+   "sha256": "1bca0a4c11363730d6a41dc769a35320b86b24a3d30e9161cd8b6190cd2ddcd1",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3289,14 +3145,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
   "fixtures/ltspice_recorded/inputs/save/shuffled.asc": {
    "proposals": 80,
-   "sha256": "ecd2385f68ff20858bd3105c26a7a24c7d1b4e2740a1dd12611101ac9b7d0346",
+   "sha256": "cb38689f4c959d92c6b3b9c9d8900691bf7e7999d4780fc4a6135f0b2eca0f92",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3309,8 +3164,7 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
@@ -3335,7 +3189,7 @@
   },
   "fixtures/ltspice_recorded/ltspice17/save/built.asc": {
    "proposals": 80,
-   "sha256": "90aa27f9a4d6e0e985a0c658cba38ede0d5ef11cc880003b81fe34a231812536",
+   "sha256": "e088b265a5141df0d00e1aefacca35ba554338e63eb92c4bb3497fec27d79083",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3348,14 +3202,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
   "fixtures/ltspice_recorded/ltspice17/save/crlf.asc": {
    "proposals": 80,
-   "sha256": "90aa27f9a4d6e0e985a0c658cba38ede0d5ef11cc880003b81fe34a231812536",
+   "sha256": "e088b265a5141df0d00e1aefacca35ba554338e63eb92c4bb3497fec27d79083",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3368,8 +3221,7 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
@@ -3417,7 +3269,7 @@
   },
   "fixtures/ltspice_recorded/ltspice17/save/shuffled.asc": {
    "proposals": 80,
-   "sha256": "6d728b5e45b0e677dfd4fc80be7103ff8846533e4125ca784c5ee740d31e2a78",
+   "sha256": "b562f77d31e249b32f3ff9fc4a5e3de616763a7c47da7b39d9fc5a682b02a26b",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3430,14 +3282,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
   "fixtures/ltspice_recorded/ltspice26/save/built.asc": {
    "proposals": 80,
-   "sha256": "90aa27f9a4d6e0e985a0c658cba38ede0d5ef11cc880003b81fe34a231812536",
+   "sha256": "e088b265a5141df0d00e1aefacca35ba554338e63eb92c4bb3497fec27d79083",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3450,14 +3301,13 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
   "fixtures/ltspice_recorded/ltspice26/save/crlf.asc": {
    "proposals": 80,
-   "sha256": "90aa27f9a4d6e0e985a0c658cba38ede0d5ef11cc880003b81fe34a231812536",
+   "sha256": "e088b265a5141df0d00e1aefacca35ba554338e63eb92c4bb3497fec27d79083",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3470,8 +3320,7 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },
@@ -3519,7 +3368,7 @@
   },
   "fixtures/ltspice_recorded/ltspice26/save/shuffled.asc": {
    "proposals": 80,
-   "sha256": "6d728b5e45b0e677dfd4fc80be7103ff8846533e4125ca784c5ee740d31e2a78",
+   "sha256": "b562f77d31e249b32f3ff9fc4a5e3de616763a7c47da7b39d9fc5a682b02a26b",
    "shapes": {
     "refused: (#,#) touches no wire and no component pin. A coordinate endpoint must land on existing wiring; to turn a corner at a free point, give it as a waypoint instead.": 8,
     "refused: Cannot connect PIN to net:NAME: the requested route has zero length after deduplicating waypoints.": 1,
@@ -3532,8 +3381,7 @@
     "refused: Refused to connect PIN to net:NAME: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
     "refused: Refused to connect net:NAME to PIN:\n  Diagonal wire (#,#)->(#,#): not orthogonal\n\nFix the route with different waypoints to avoid these issues.": 4,
     "refused: Refused to connect net:NAME to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 6,
-    "routed": 19,
-    "routed: Long wire run (# units): consider placing components closer or adding a local net label": 1,
+    "routed": 20,
     "routed: The route touches the wire (#,#)->(#,#) at waypoint (#,#), already on net '\u2026'; LTspice joins them there.": 1
    }
   },

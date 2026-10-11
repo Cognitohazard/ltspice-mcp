@@ -101,11 +101,10 @@ class TestARouteThatMayBeDrawn:
         view, nets = sheet(parts=(resistor("R1", 200, 100),))
         assert rules(judge(view, nets, route((0, 100), (400, 100)))) == ([], [])
 
-    def test_a_long_one_is_said_with_its_length(self) -> None:
+    def test_how_long_it_is_is_not_its_to_say(self) -> None:
+        """The caller gave the points, and no length is a fault."""
         view, nets = sheet()
-        found = judge(view, nets, route((0, 0), (0, 300), (200, 300)))
-        assert rules(found) == ([], ["route_long"])
-        assert found.advisories[0].facts == {"length": 500}
+        assert rules(judge(view, nets, route((0, 0), (0, 3000), (2000, 3000)))) == ([], [])
 
 
 class TestARouteThatIsRefused:
@@ -183,11 +182,6 @@ class TestARouteThatIsRefused:
         found = judge(view, nets, route((200, 0), (200, 200), anchors=((0, 100), (200, 200))))
         assert rules(found) == ([], ["route_touches_own_net"])
         assert found.junctions == [{"x": 200, "y": 100, "via": "label", "label": "SIG"}]
-
-    def test_a_refused_route_is_not_measured(self) -> None:
-        view, nets = sheet(parts=(resistor("R1", 200, 600),))
-        found = judge(view, nets, route((0, 0), (1000, 1000)))
-        assert rules(found) == (["route_diagonal"], [])
 
     def test_every_finding_is_of_a_rule_that_does_what_was_done_with_it(self) -> None:
         view, nets = sheet(

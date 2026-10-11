@@ -182,9 +182,14 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   is refused rather than silently merging it; `inspect(kind="net")` at a point
   on a wire traces that wire (`snapped_to_wire`).
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires,
-  pin collisions, and wire junction overlaps. Non-blocking warnings (a long
-  run, a wire crossed) should still be addressed. A route drawn through a part
+  pin collisions, and wire junction overlaps. Its warnings (a wire crossed, a
+  junction made on the way) should still be read. A route drawn through a part
   is not the op's to say: it is among the sheet findings below.
+- **Keep wires short; nothing reports a wire's length.** In LTspice's own
+  example schematics half the wire segments are 32 units or less, nine in ten
+  are 192 or less, and about one in thirty-five is over 400. A long run is not
+  a fault, and nearly a third of those sheets have one. Where it only carries
+  a name across the sheet, a net label at each end reads better.
 - **Read the `wiring` profile `edit_schematic` returns.** It reports
   `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only`
   high with `wire_segments` near zero means you tagged pins with net-labels

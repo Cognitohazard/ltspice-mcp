@@ -2424,18 +2424,27 @@ class TestWirePinsTJunction:
     async def test_route_warnings_reach_the_edit_response(
         self, asc_state: SessionState, work_dir: Path
     ):
-        # The planner's advisories (here a long run) used to stop at the op.
+        # The planner's advisories (here a wire crossed) used to stop at the op.
         envelope = await build_sheet(
             asc_state,
-            "long_run",
+            "crossed",
             [
                 {"op": "add_component", "reference": "R1", "symbol": "res", "x": 0, "y": 100},
                 {"op": "add_component", "reference": "R2", "symbol": "res", "x": 640, "y": 100},
+                {"op": "add_component", "reference": "R3", "symbol": "res", "x": 320, "y": -100},
+                {"op": "add_component", "reference": "R4", "symbol": "res", "x": 320, "y": 300},
+                {"op": "wire_pins", "from_pin": "R3.2", "to_pin": "R4.1"},
                 {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"},
             ],
         )
         assert envelope["outcome"] == "complete"
-        assert any("op 2 (wire_pins): Long wire run" in w for w in envelope["warnings"])
+        assert [w for w in envelope["warnings"] if w.startswith("op ")] == [
+            "op 5 (wire_pins): The route crosses the wire (320,-52)->(320,252) at (320,52) "
+            "where neither ends; LTspice leaves a plain crossing unjoined, so the two stay "
+            "separate nets. To join them, end the route on that wire instead."
+        ]
+        # 640 units long, and nothing is said of that.
+        assert not [w for w in envelope["warnings"] if "ong" in w]
 
 
 async def _build_name_wired_rc(name: str, state: SessionState, work_dir: Path) -> str:

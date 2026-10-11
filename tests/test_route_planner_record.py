@@ -234,7 +234,6 @@ def test_the_record_asks_enough_to_hold_every_check():
         "already wired to this net",
         "crosses the wire",
         "The route touches",
-        "Long wire run",
     ):
         seen = sum(count for shape, count in shapes.items() if said in shape)
         assert seen >= 3, f"{said!r} is in {seen} recorded answers"
