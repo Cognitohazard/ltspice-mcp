@@ -211,6 +211,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,
   and no ground flag is shared or reached by a long wire. Once several ground
   labels exist, the `wire_pins` op with `net:0` is ambiguous and errors.
+- **A label or ground flag on a crossing joins the two wires.** Put it on a
+  point of the one wire you mean. `add_net_label` refuses it where the two
+  wires are on nets that each have a name, and otherwise says the join.
 - **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins
   ties them together — the netlist merges same-name labels into one net
   (correct, not a short), and no routing is needed. Wire nearby pins with the

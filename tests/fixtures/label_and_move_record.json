@@ -17,14 +17,6 @@
     "x": 240,
     "y": 256
    },
-   "placed [a new name; 2 at the point, 0 named]": {
-    "net": "a_name_no_sheet_has",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "there": "a new name; 2 at the point, 0 named",
-    "warnings": [],
-    "x": 400,
-    "y": 96
-   },
    "placed [ground; 0 at the point, 0 named]": {
     "net": "0",
     "sheet": "fixtures/Draft1.asc",
@@ -49,30 +41,6 @@
     "x": 208,
     "y": 128
    },
-   "placed [ground; 2 at the point, 0 named]": {
-    "net": "0",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "there": "ground; 2 at the point, 0 named",
-    "warnings": [],
-    "x": 400,
-    "y": 96
-   },
-   "placed [ground; 2 at the point, 1 named]": {
-    "net": "0",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "there": "ground; 2 at the point, 1 named",
-    "warnings": [],
-    "x": 96,
-    "y": 400
-   },
-   "placed [ground; 2 at the point, 2 named]": {
-    "net": "0",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "there": "ground; 2 at the point, 2 named",
-    "warnings": [],
-    "x": 96,
-    "y": 96
-   },
    "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": {
     "net": "filtered",
     "sheet": "fixtures/Draft1.asc",
@@ -93,16 +61,6 @@
     "x": 240,
     "y": 256
    },
-   "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 2 at the point, 0 named]": {
-    "net": "a",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "there": "a name already elsewhere; 2 at the point, 0 named",
-    "warnings": [
-     "'a' already labels a net at (0,96); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='a') is ambiguous with duplicate labels \u2014 connect to a component pin (Ref.Pin) instead."
-    ],
-    "x": 400,
-    "y": 96
-   },
    "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": {
     "net": "filtered",
     "sheet": "fixtures/Draft1.asc",
@@ -113,12 +71,24 @@
     "x": 208,
     "y": 128
    },
-   "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 2 at the point, 1 named]": {
+   "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. | (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a name already elsewhere; 2 at the point, 0 named]": {
+    "net": "a",
+    "sheet": "fixtures/crossings/every_kind.asc",
+    "there": "a name already elsewhere; 2 at the point, 0 named",
+    "warnings": [
+     "'a' already labels a net at (0,96); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='a') is ambiguous with duplicate labels \u2014 connect to a component pin (Ref.Pin) instead.",
+     "(400,96) is where 2 wires cross that were separate nets; a label on a crossing joins them."
+    ],
+    "x": 400,
+    "y": 96
+   },
+   "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. | (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a name already here; 2 at the point, 1 named]": {
     "net": "c",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a name already here; 2 at the point, 1 named",
     "warnings": [
-     "'c' already labels a net at (0,400); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='c') is ambiguous with duplicate labels \u2014 connect to a component pin (Ref.Pin) instead."
+     "'c' already labels a net at (0,400); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='c') is ambiguous with duplicate labels \u2014 connect to a component pin (Ref.Pin) instead.",
+     "(96,400) is where 2 wires cross that were separate nets; a label on a crossing joins them."
     ],
     "x": 96,
     "y": 400
@@ -153,15 +123,54 @@
     "x": 208,
     "y": 128
    },
-   "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 2 at the point, 1 named]": {
+   "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. | (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a new name; 2 at the point, 1 named]": {
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a new name; 2 at the point, 1 named",
     "warnings": [
-     "(96,400) is on the net already labelled ['c']; 'a_name_no_sheet_has' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it."
+     "(96,400) is on the net already labelled ['c']; 'a_name_no_sheet_has' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it.",
+     "(96,400) is where 2 wires cross that were separate nets; a label on a crossing joins them."
     ],
     "x": 96,
     "y": 400
+   },
+   "placed: (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a new name; 2 at the point, 0 named]": {
+    "net": "a_name_no_sheet_has",
+    "sheet": "fixtures/crossings/every_kind.asc",
+    "there": "a new name; 2 at the point, 0 named",
+    "warnings": [
+     "(400,96) is where 2 wires cross that were separate nets; a label on a crossing joins them."
+    ],
+    "x": 400,
+    "y": 96
+   },
+   "placed: (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [ground; 2 at the point, 0 named]": {
+    "net": "0",
+    "sheet": "fixtures/crossings/every_kind.asc",
+    "there": "ground; 2 at the point, 0 named",
+    "warnings": [
+     "(400,96) is where 2 wires cross that were separate nets; a label on a crossing joins them."
+    ],
+    "x": 400,
+    "y": 96
+   },
+   "placed: (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [ground; 2 at the point, 1 named]": {
+    "net": "0",
+    "sheet": "fixtures/crossings/every_kind.asc",
+    "there": "ground; 2 at the point, 1 named",
+    "warnings": [
+     "(96,400) is where 2 wires cross that were separate nets; a label on a crossing joins them."
+    ],
+    "x": 96,
+    "y": 400
+   },
+   "refused: Refused to add ground at (#,#): wires of nets that each carry a name cross there (['\u2026']; ['\u2026']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for. [ground; 2 at the point, 2 named]": {
+    "net": "0",
+    "refused": "Refused to add ground at (96,96): wires of nets that each carry a name cross there (['a']; ['b']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for.",
+    "sheet": "fixtures/crossings/every_kind.asc",
+    "there": "ground; 2 at the point, 2 named",
+    "x": 96,
+    "y": 96
    },
    "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": {
     "net": "b",
@@ -325,24 +334,24 @@
   "fixtures/crossings/every_kind.asc": {
    "labels": {
     "proposals": 264,
-    "sha256": "c7f7f94cc044bd0350d510abcaa78cab8fbdd1132d240aee59d6ffa373be95da",
+    "sha256": "feb1b3c6b8df7e827cdc11bc2332319a28c6b04d00e74bd925efcf12245fe1ae",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 30,
-     "placed [a new name; 2 at the point, 0 named]": 2,
      "placed [ground; 0 at the point, 0 named]": 1,
      "placed [ground; 1 at the point, 0 named]": 30,
      "placed [ground; 1 at the point, 1 named]": 8,
-     "placed [ground; 2 at the point, 0 named]": 2,
-     "placed [ground; 2 at the point, 1 named]": 2,
-     "placed [ground; 2 at the point, 2 named]": 1,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 4,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 120,
-     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 2 at the point, 0 named]": 8,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 8,
-     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 2 at the point, 1 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. | (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a name already elsewhere; 2 at the point, 0 named]": 8,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. | (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a name already here; 2 at the point, 1 named]": 2,
      "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8,
-     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 2 at the point, 1 named]": 2,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. | (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a new name; 2 at the point, 1 named]": 2,
+     "placed: (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [a new name; 2 at the point, 0 named]": 2,
+     "placed: (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [ground; 2 at the point, 0 named]": 2,
+     "placed: (#,#) is where # wires cross that were separate nets; a label on a crossing joins them. [ground; 2 at the point, 1 named]": 2,
+     "refused: Refused to add ground at (#,#): wires of nets that each carry a name cross there (['\u2026']; ['\u2026']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for. [ground; 2 at the point, 2 named]": 1,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 24,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 2 at the point, 1 named]": 6,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 2 at the point, 2 named]": 2,
@@ -600,18 +609,18 @@
   "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc": {
    "labels": {
     "proposals": 64,
-    "sha256": "88cf36339935bfa4509600e1373216802ef939d4c6006bd471d8685ac0815d3a",
+    "sha256": "79493f8abc62eb22aa8c2d4b8dc2229a06d661998a95913756f84fc5337474b5",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 6,
      "placed [ground; 0 at the point, 0 named]": 1,
      "placed [ground; 1 at the point, 0 named]": 6,
      "placed [ground; 1 at the point, 1 named]": 8,
-     "placed [ground; 2 at the point, 2 named]": 1,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 12,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 8,
      "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8,
+     "refused: Refused to add ground at (#,#): wires of nets that each carry a name cross there (['\u2026']; ['\u2026']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for. [ground; 2 at the point, 2 named]": 1,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 8,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 2 at the point, 2 named]": 2,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 2 at the point, 2 named]": 1
@@ -2086,18 +2095,18 @@
   "fixtures/t_junctions/crossing_wires.asc": {
    "labels": {
     "proposals": 64,
-    "sha256": "88cf36339935bfa4509600e1373216802ef939d4c6006bd471d8685ac0815d3a",
+    "sha256": "79493f8abc62eb22aa8c2d4b8dc2229a06d661998a95913756f84fc5337474b5",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 6,
      "placed [ground; 0 at the point, 0 named]": 1,
      "placed [ground; 1 at the point, 0 named]": 6,
      "placed [ground; 1 at the point, 1 named]": 8,
-     "placed [ground; 2 at the point, 2 named]": 1,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 12,
      "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 8,
      "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8,
+     "refused: Refused to add ground at (#,#): wires of nets that each carry a name cross there (['\u2026']; ['\u2026']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for. [ground; 2 at the point, 2 named]": 1,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 8,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 2 at the point, 2 named]": 2,
      "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 2 at the point, 2 named]": 1

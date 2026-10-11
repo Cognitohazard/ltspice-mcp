@@ -1378,15 +1378,16 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:
     """Validate placing net label ``net`` at ``(x, y)``.
 
-    Raises ``NetlistError`` if a non-ground label would join two nets that each
-    carry a name (a short at netlist time) — a structural error, refused
-    outright. That happens when the network here is named and ``net`` already
-    names a different one, or when the label lands where two named networks
-    cross and joins both. Returns advisory warnings (duplicate name, a second
-    name for an already-named net) as plain facts for the caller to surface.
-    A label that touches nothing is not said here: placing labels before
-    wiring them is a legitimate order of work, and one still on nothing when
-    the batch is done is the finished sheet's ``dangling_label``.
+    Raises ``NetlistError`` if the label would join two nets that each carry a
+    name (a short at netlist time) — a structural error, refused outright. That
+    happens when the network here is named and ``net`` already names a
+    different one, or when the label, ground included, lands where two named
+    networks cross and joins both. Returns advisory warnings (duplicate name,
+    a second name for an already-named net, two nets joined at a crossing) as
+    plain facts for the caller to surface. A label that touches nothing is not
+    said here: placing labels before wiring them is a legitimate order of work,
+    and one still on nothing when the batch is done is the finished sheet's
+    ``dangling_label``.
     """
     warnings: list[str] = []
     part = net_partition(editor)
@@ -1394,6 +1395,22 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     # net, and one at a crossing joins both (see connectivity.partition for the
     # export record).
     through = wires_through((x, y), wire_segments_of(editor))
+    joined = _label_join(part, through, net, (x, y))
+    if len(joined.named) > 1:
+        listed = "; ".join(f"{sorted(names)}" for names in joined.named)
+        if net == "0":
+            raise NetlistError(
+                f"Refused to add ground at ({x},{y}): wires of nets that each carry a "
+                f"name cross there ({listed}). A ground flag on a crossing joins the "
+                "wires, shorting those nets together and to ground. Put the flag on a "
+                "point of the one wire it is meant for."
+            )
+        raise NetlistError(
+            f"Refused to add net '{net}' at ({x},{y}): the label would join nets "
+            f"that each carry a name ({listed}), shorting them together. To join "
+            "them on purpose, give both the same name: remove one side's labels "
+            "with remove_net_label and label it with the other's name."
+        )
     if net != "0":
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
         # same-name labels into one net, which is a valid (often simpler) way to
@@ -1409,22 +1426,30 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                     "connect to a component pin (Ref.Pin) instead."
                 )
                 break
-        joined = _label_join(part, through, net, (x, y))
-        if len(joined) > 1:
-            listed = "; ".join(f"{sorted(names)}" for names in joined)
-            raise NetlistError(
-                f"Refused to add net '{net}' at ({x},{y}): the label would join nets "
-                f"that each carry a name ({listed}), shorting them together. To join "
-                "them on purpose, give both the same name: remove one side's labels "
-                "with remove_net_label and label it with the other's name."
-            )
-        if joined and net not in joined[0]:
+        if joined.named and net not in joined.named[0]:
             warnings.append(
-                f"({x},{y}) is on the net already labelled {sorted(joined[0])}; '{net}' "
+                f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
                 "becomes a second name for it. LTspice netlists the node under one name, "
                 "so a directive or probe that uses another may not find it."
             )
+    # Said, not refused, where at most one of them has a name: a label put on
+    # a crossing is taken as meant, as a pin put there is.
+    if joined.wired > 1:
+        warnings.append(
+            f"({x},{y}) is where {joined.wired} wires cross that were separate nets; a "
+            "label on a crossing joins them."
+        )
     return warnings
+
+
+class _LabelJoin(NamedTuple):
+    """What a label placed on a point would make one node."""
+
+    #: The nets among them that carry a name, each as its names, ground excluded.
+    named: list[frozenset[str]]
+    #: How many separate nets the wires through the point were: more than one
+    #: where wires cross and nothing joined them.
+    wired: int
 
 
 def _label_join(
@@ -1432,23 +1457,30 @@ def _label_join(
     through: Sequence[tuple[int, int, int, int]],
     net: str,
     at: tuple[int, int],
-) -> list[frozenset[str]]:
-    """The named nets a label ``net`` placed at ``at`` would make one node.
+) -> _LabelJoin:
+    """What a label ``net`` placed at ``at`` would make one node.
 
     Read off the sheet's partition without the label: the label joins every
     wire it touches (``through``, both wires at a crossing), whatever already
     sits at ``at`` (a pin, a label, a wire end), and, by name, every net
-    already called ``net``. Each joined net comes back as its set of names,
-    ground excluded; two or more is a short.
+    already called ``net``. Two or more of them carrying a name is a short.
+
+    Ground joins what meets at its point and nothing by name. Nets that each
+    carry a ground flag are one node already, and are read as one here; a net
+    with a name may be given a ground whatever else is grounded, since that is
+    what the flag was asked for.
     """
     node_of = label_folded_nets(part)
     names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
     for coord, texts in part.label_texts.items():
         names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
+    wired = {node_of(seg[:2]) for seg in through}
     # A point the sheet does not have reads as its own unnamed node.
-    nodes = {node_of(at), *(node_of(seg[:2]) for seg in through)}
-    nodes.update(node_of(coord) for coord, texts in part.label_texts.items() if net in texts)
-    return [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
+    nodes = {node_of(at), *wired}
+    if net != "0":
+        nodes.update(node_of(coord) for coord, texts in part.label_texts.items() if net in texts)
+    named = [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
+    return _LabelJoin(named, len(wired))
 
 
 class _ConnectPlan(NamedTuple):

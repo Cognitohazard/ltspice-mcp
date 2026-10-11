@@ -403,6 +403,69 @@ class TestAPinPlacedOnACrossing:
 
 
 @pytest.mark.asyncio
+class TestALabelPlacedOnACrossing:
+    """A label on a point where two wires cross joins them (the
+    ``label_at_crossing`` recording), ground like any other. Between two named
+    nets that is a short and is refused; otherwise the label is placed and the
+    join said, as a pin put there is."""
+
+    _crossing = TestAPinPlacedOnACrossing._crossing  # pyright: ignore[reportPrivateUsage]
+
+    async def test_ground_there_between_two_named_nets_is_refused(self, asc_state: SessionState):
+        sheet = self._crossing(asc_state, "ground-cross", "VDD", "VSS")
+        before = sheet.read_bytes()
+        with pytest.raises(NetlistError, match=r"Refused to add ground at \(200,100\)") as refusal:
+            add_net_label(asc_state, sheet, "0", x=200, y=100)
+        said = str(refusal.value)
+        assert "['VDD']" in said and "['VSS']" in said
+        assert "shorting those nets together and to ground" in said
+        assert sheet.read_bytes() == before
+
+    async def test_ground_on_one_named_wire_is_placed_whatever_else_is_grounded(
+        self, asc_state: SessionState
+    ):
+        """A named net may be grounded, and a second one after it: each was
+        asked for, and nets that each carry a ground are one node for that."""
+        sheet = self._crossing(asc_state, "ground-each", "VDD", "VSS")
+        first = add_net_label(asc_state, sheet, "0", x=400, y=100)
+        second = add_net_label(asc_state, sheet, "0", x=200, y=200)
+        assert "warnings" not in first and "warnings" not in second
+
+    @pytest.mark.parametrize("net", ["0", "OUT"])
+    async def test_where_at_most_one_of_the_two_has_a_name_it_is_placed_and_said(
+        self, asc_state: SessionState, net: str
+    ):
+        sheet = self._crossing(asc_state, f"label-cross-{net}")
+        placed = add_net_label(asc_state, sheet, net, x=200, y=100)
+        assert placed["warnings"] == [
+            "(200,100) is where 2 wires cross that were separate nets; a label on a "
+            "crossing joins them."
+        ]
+        # And it is so: the two wires are one net now.
+        from ltspice_mcp.lib.schematic_ops import trace_nets
+
+        nets = trace_nets(load_editor(asc_state, sheet))
+        assert nets[(200, 0)] == nets[(400, 100)] == frozenset({net})
+
+    async def test_a_second_name_and_the_join_are_both_said(self, asc_state: SessionState):
+        sheet = self._crossing(asc_state, "label-cross-second", "VDD")
+        placed = add_net_label(asc_state, sheet, "OUT", x=200, y=100)
+        assert len(placed["warnings"]) == 2
+        assert "becomes a second name for it" in placed["warnings"][0]
+        assert placed["warnings"][1].startswith("(200,100) is where 2 wires cross")
+
+    async def test_a_label_on_one_wire_or_where_one_net_crosses_itself_says_nothing_of_it(
+        self, asc_state: SessionState
+    ):
+        sheet = self._crossing(asc_state, "label-cross-none")
+        assert "warnings" not in add_net_label(asc_state, sheet, "A", x=100, y=100)
+        # The two wires are tied at their ends, so the crossing is of one net.
+        looped = self._crossing(asc_state, "label-cross-loop")
+        looped.write_bytes(looped.read_bytes() + b"WIRE 400 100 400 200\nWIRE 400 200 200 200\n")
+        assert "warnings" not in add_net_label(asc_state, looped, "A", x=200, y=100)
+
+
+@pytest.mark.asyncio
 class TestWirePins:
     async def test_diagonal_rejected(self, asc_state: SessionState, asc_file: Path):
         # First add a unique net label, then try a diagonal route to it from a
