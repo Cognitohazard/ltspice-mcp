@@ -50,6 +50,15 @@ tool-surface changes.
   took on that net and its name. Such a crossing is now a contact like any
   other, refused onto another net and reported as a junction on the route's
   own.
+- `add_net_label` placed a ground flag where wires of two named nets cross
+  and said nothing. A label on a crossing joins the two wires (the
+  `label_at_crossing` recording), so the flag shorted the two nets together
+  and to ground; a named label or a pin on the same point was already
+  refused, and ground had been left out of that check. It is refused now,
+  naming the point and the two nets. A label of any name on a crossing where
+  at most one wire has a name is still placed, and the op now says that it
+  joined two nets, as it does for a pin placed there. Grounding a net that
+  has a name is unchanged, however many named nets are grounded.
 - `verify_circuit` and `edit_schematic` reported a wire as passing through a
   part's body whenever it ended on a pin of that part lying inside what the
   part draws, which is every wire to such a pin. About one symbol in twenty of

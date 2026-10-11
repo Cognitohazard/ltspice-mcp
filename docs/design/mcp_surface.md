@@ -1267,6 +1267,14 @@ because that is a short at netlist time. A new name on a net that is already
 named joins nothing; it is placed with a warning that the node now has two
 names. `wire_pins`' refusal to join two named nets names the remedy that op
 accepts: relabel one side with the other's name.
+A label on a point where two wires cross joins them, ground like any other.
+Ground used to be left out of the refusal altogether, so a ground flag on a
+crossing of two named nets shorted them, and to ground, without a word; it is
+refused now, as a named label and a pin there are. Where at most one of the
+two wires has a name the label is placed and the join is said, as it is for a
+pin: a join no argument asked for does not pass silently. Grounding a net
+that has a name is not such a join. It is what the flag was asked for, and a
+second named net may be grounded after the first.
 `inspect(kind: "net")` at a point on a wire's interior traces that wire's net
 and names the wire under `snapped_to_wire`; a point where two nets' wires
 cross is refused as ambiguous rather than resolved to either.

@@ -22,7 +22,8 @@ The record is ``fixtures/label_and_move_record.json``, in the form
 ``tests/_proposal_record.py`` describes. The shape of a label's answer ends
 with what was there, which the sentence alone does not say: whether the name
 was already on the sheet, and how many nets met at the point and how many of
-those carried a name. To make the record again, run this file with
+those carried a name. No label is placed where two nets met without a word
+of it. To make the record again, run this file with
 ``LTSPICE_MCP_RECORD_LABELS_AND_MOVES=1``. Like the other records it is the
 same on every machine.
 """
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, cast
@@ -65,6 +67,9 @@ _FRESH = "a_name_no_sheet_has"
 #: has every n-th taken, which keeps the largest sheets from being most of the run.
 _MOST_AT_RARE_POINTS = 300
 _MOST_ELSEWHERE = 300
+
+#: A label placed where two or more nets met with nothing said of it.
+_SILENT_JOIN = re.compile(r"^placed \[.*; [2-9] at the point")
 
 Point = tuple[int, int]
 Wire = tuple[int, int, int, int]
@@ -297,19 +302,19 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
         ("labels", ("refused: Refused to add net", "[a name already elsewhere; 1 at the point")),
         ("labels", ("refused: Refused to add net", "[a new name; 2 at the point, 2 named]")),
         ("labels", ("refused: Refused to add net", "[a name already here; 2 at the point")),
+        ("labels", ("refused: Refused to add ground", "[ground; 2 at the point, 2 named]")),
         # What it says of a label it places.
         ("labels", ("already labels a net at",)),
         ("labels", ("becomes a second name for it", "1 at the point, 1 named]")),
-        ("labels", ("becomes a second name for it", "2 at the point, 1 named]")),
-        # What it places without a word: on nothing, on one net, and where two
-        # nets cross, which the label joins.
+        ("labels", ("becomes a second name for it", "is where # wires cross", "1 named]")),
+        # Two nets joined at a crossing, where at most one of them has a name.
+        ("labels", ("placed: (#,#) is where # wires cross", "[a new name; 2 at the point")),
+        ("labels", ("placed: (#,#) is where # wires cross", "[ground; 2 at the point, 0")),
+        ("labels", ("placed: (#,#) is where # wires cross", "[ground; 2 at the point, 1")),
+        # What it places without a word: on nothing and on one net.
         ("labels", ("placed [a new name; 0 at the point, 0 named]",)),
         ("labels", ("placed [a new name; 1 at the point, 0 named]",)),
-        ("labels", ("placed [a new name; 2 at the point, 0 named]",)),
         ("labels", ("placed [ground; 1 at the point, 1 named]",)),
-        ("labels", ("placed [ground; 2 at the point, 0 named]",)),
-        ("labels", ("placed [ground; 2 at the point, 1 named]",)),
-        ("labels", ("placed [ground; 2 at the point, 2 named]",)),
         (
             "moves",
             ("refused: Refused to move", "where wires of nets that each carry a name cross"),
@@ -323,6 +328,7 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
 def test_the_record_asks_enough_to_hold_every_answer(op: str, said: tuple[str, ...]):
     """Each refusal and each advisory the two ops have is in it more than once,
     and so is each place where an op says nothing."""
+    assert not [shape for shape in _shapes(_recorded(), "labels") if _SILENT_JOIN.search(shape)]
     shapes = _shapes(_recorded(), op)
     seen = sum(count for shape, count in shapes.items() if all(part in shape for part in said))
     assert seen >= 2, f"{said!r} is in {seen} recorded answers"

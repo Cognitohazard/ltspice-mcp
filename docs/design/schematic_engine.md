@@ -500,6 +500,17 @@ what must hold before the next one starts.
        and how many carried a name), because the op words three different
        joins alike. The suite had no crossing with fewer than two named
        wires, so a sheet with each kind of crossing was added for it.
+     - The record showed a join made without a word, and it is closed: a
+       label put where two nets cross. Ground was left out of the label
+       op's refusal altogether, so a ground flag on a crossing of two named
+       nets shorted them; and a label of any name on a crossing with at
+       most one named wire joined the two and said nothing, where a pin
+       there has its join said. Ground is refused between two named nets
+       now, and the join is said otherwise. Ground still joins nothing by
+       name: a net with a name may be grounded whatever else is, that being
+       what the flag was asked for. The record changed for the answers at a
+       point where two nets met and for no other, and holds that no label
+       is placed at such a point in silence.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
