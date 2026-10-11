@@ -1590,7 +1590,57 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/plot/div_dc.asc": {
+   "labels": {
+    "proposals": 52,
+    "sha256": "c28bb66c528b25d8cc5782822e8323ffd5f1186d5384ce93e7b623dbd4b1a52c",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 8,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 8,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 16,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 69,
+    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "shapes": {
+     "moved": 69
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/plot/rc_ac.asc": {
+   "labels": {
+    "proposals": 52,
+    "sha256": "5b7af9cd7188f4bdefc9db988a76b3e5babe76750367c82acfc6fff582e87f65",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 8,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 8,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 16,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 69,
+    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "shapes": {
+     "moved": 69
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/plot/rc_noise.asc": {
    "labels": {
     "proposals": 52,
     "sha256": "5b7af9cd7188f4bdefc9db988a76b3e5babe76750367c82acfc6fff582e87f65",
