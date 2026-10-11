@@ -19,8 +19,8 @@ ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit LTsp
 ```
 
 **Claude Desktop:** build the extension in [`packaging/mcpb/`](https://github.com/cognitohazard/ltspice-mcp/tree/master/packaging/mcpb)
-and drag the `.mcpb` file onto Claude Desktop. It asks which folder your
-circuits are in.
+and drag the `.mcpb` file onto Claude Desktop. It offers an optional sandbox
+folder; left blank, there is no sandbox.
 
 **Any other MCP client** ([Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp), …): install the server and add it to the client's MCP config.
 
@@ -173,9 +173,11 @@ set with an `LTSPICE_MCP_` environment variable. The server keeps job records
 and results in `.ltspice-mcp/` in the working directory; add it to
 `.gitignore`.
 
-**`run_code` runs Python with the server's own permissions,** not inside the
-folder sandbox. Approve it in your client as you would a shell command, and
-set `[tools] run_code = false` if anyone else can reach the server.
+**There is no folder sandbox unless you set one.** `[security] allowed_paths`
+confines the tools to the folders it lists. `run_code` runs Python with the
+server's own permissions, which that setting does not confine: approve it in
+your client as you would a shell command, and set `[tools] run_code = false`
+if anyone else can reach the server.
 
 **Schematic and plot images** for the assistant to look at need an optional
 extra and the Cairo library: see [PNG rendering](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#png-rendering).

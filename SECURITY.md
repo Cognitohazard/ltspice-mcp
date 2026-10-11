@@ -32,15 +32,18 @@ publishing a release and advisory.
 MCP client (Claude Desktop, Claude Code, etc.) **and as an importable Python
 library** (`ltspice_mcp.api`) inside a trusted local process. It is not
 hardened as a public, multi-tenant network service. The library runs with the
-importing process's own privileges, and the same `allowed_paths` sandbox
-applies to both the server and the library. Relevant considerations:
+importing process's own privileges, and the `allowed_paths` sandbox, when one
+is set, applies to both the server and the library. Relevant considerations:
 
-- **Filesystem access** — tool calls can read and write files under the
-  configured `[security] allowed_paths`. Paths outside that sandbox are
-  rejected via `PathSecurityError`. The server uses stdio only; exposing it
-  over a network (for example, by wrapping that transport in a network proxy)
-  without restricting `allowed_paths` is out of scope for the default threat
-  model.
+- **Filesystem access** — there is no sandbox unless `[security]
+  allowed_paths` (or `LTSPICE_MCP_ALLOWED_PATHS`) is set: tool calls can then
+  read and write any file the server process can. With it set, tool calls can
+  read and write files only under those directories, and a path outside them
+  is rejected via `PathSecurityError`. The trusted client's own permission
+  controls are what govern which tool calls run. The server uses stdio only;
+  exposing it over a network (for example, by wrapping that transport in a
+  network proxy) without setting `allowed_paths` and `[tools] run_code =
+  false` is out of scope for the default threat model.
 - **Simulator subprocesses** — tools spawn LTspice, ngspice, qspice, or xyce
   as child processes and read their output. A maliciously crafted netlist
   can therefore do anything the simulator binary can do on your machine.
@@ -48,17 +51,18 @@ applies to both the server and the library. Relevant considerations:
   treat any untrusted executable input.
 - **`run_code` runs Python with the server's own authority** — on by default,
   this tool executes a snippet in a worker process that holds the engine, with
-  the server process's file and process rights rather than the `allowed_paths`
-  sandbox. It is meant for the local single-client case: permission it in the
+  the server process's file and process rights, which the `allowed_paths`
+  sandbox does not confine. It is meant for the local single-client case:
+  permission it in the
   client the way you would a shell, and set `[tools] run_code = false` when
   the server is reachable by more than one trusted client, for example
   through a proxy in front of it.
-- **Job-addressed result reads bypass the sandbox by design** — when
+- **Job-addressed result reads are not checked against a sandbox** — when
   `analyze_results` or a job tool reads a `.raw` or `.log` for a `job_id`, the
   path comes from the server's own job record rather than from the caller, so
   it is not re-checked against `allowed_paths`. Those files are artifacts this
   server produced. A result addressed by path instead (`raw_path`, `log_file`)
-  goes through the normal `allowed_paths` check.
+  goes through the `allowed_paths` check when a sandbox is set.
 - **Simulation artifacts can sit outside `allowed_paths`** — normally staged
   decks, `.raw` and `.log` files live under the working directory's
   `.ltspice-mcp/runs/`; on WSL with LTspice they are written to a
@@ -70,16 +74,17 @@ applies to both the server and the library. Relevant considerations:
   shared, and everything in it is readable by anything running as that user.
   An artifact's provenance comes from the job record that names it, never
   from its presence in that folder.
-- **Deck staging trust roots** — before a run, the deck and every file its
+- **Deck staging** — before a run, the deck and every file its
   `.include`/`.lib` directives reach are copied into a staging directory and
-  hashed. A reference is staged only if it resolves inside
-  `[security] allowed_paths` or inside the detected simulator's own shipped
-  library directory (LTspice's netlister appends a `.lib` into its install for
-  any schematic with a MOSFET on it). Anything else is refused and the run does
-  not start. `allow_live_includes=true` overrides that refusal: the file is
-  then read in place at run time, and the response records that its content is
-  not covered by the deck's snapshot hash. Include recursion is bounded at 8
-  levels by default. A schematic runs as the netlist LTspice exports from it,
+  hashed. With no sandbox, every file that exists is staged. With a sandbox, a
+  reference is staged only if it resolves inside `[security] allowed_paths` or
+  inside the detected simulator's own shipped library directory (LTspice's
+  netlister appends a `.lib` into its install for any schematic with a MOSFET
+  on it); anything else is refused and the run does not start.
+  `allow_live_includes=true` overrides a refusal: the file is then read in
+  place at run time, and the response records that its content is not covered
+  by the deck's snapshot hash. Include recursion is bounded at 8 levels by
+  default. A schematic runs as the netlist LTspice exports from it,
   which the server keeps in its store; that export is admitted because the
   schematic is, and its relative references resolve from the schematic's own
   folder, so the store itself need not be inside `allowed_paths`.
@@ -97,10 +102,9 @@ applies to both the server and the library. Relevant considerations:
   cannot render the chart in-chat, the tool writes an HTML file and, with
   `open` (default `true`), spawns a detached local process to display it in a
   browser or app window. Pass `open=false` to write the file only.
-- **The Claude Desktop extension defaults to your Documents folder** — the
-  `.mcpb` folder picker sets `allowed_paths`, and its default is
-  `${HOME}/Documents`. Point it at your circuits directory for a narrower
-  sandbox.
+- **The Claude Desktop extension sets a sandbox only when asked** — its
+  optional folder picker sets `allowed_paths`; left empty, the extension runs
+  with no sandbox.
 - **Dependency supply chain** — runtime dependencies are pinned in
   `uv.lock`. The `publish.yml` workflow builds and publishes to PyPI from
   version tags only, via PyPI Trusted Publishing (OIDC).

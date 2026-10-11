@@ -1060,7 +1060,7 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
     out_dir: str | None = Field(
         default=None,
         description=(
-            "Directory for the HTML (under an allowed path; created if needed). "
+            "Directory for the HTML (created if needed). "
             "Default: the server's store, '.ltspice-mcp/plots/' in the working "
             "directory unless LTSPICE_MCP_STORE_DIR moves it."
         ),

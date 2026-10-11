@@ -1,6 +1,6 @@
-"""Path security utilities with sandboxing."""
+"""Resolving the paths callers name, and the optional sandbox they must lie in."""
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -10,16 +10,16 @@ from ltspice_mcp.errors import PathSecurityError
 #: Directory a relative path is taken from, when a host declares one.
 #:
 #: Unset (the MCP server, and any caller that does not opt in), a relative path
-#: is resolved the way it always was: against the first allowed directory, and
-#: through ``Path.resolve()`` for anything relative in that list — which is the
+#: is taken from the first allowed directory when there is a sandbox, else from
+#: the ``relative_to`` the caller passes (the session's working directory), and
+#: through ``Path.resolve()`` for anything relative in either, which is the
 #: process working directory. The in-process ``Api`` sets it to its
 #: ``working_dir`` for the duration of each call, because that interface lets the
-#: caller name a working directory that is not their cwd; without this, the
-#: contract's own documented idiom (``Api(working_dir=D)`` plus a bare
-#: ``"opamp2.asc"``) looked in the wrong place and reported a path the caller
-#: never wrote. A context variable rather than an argument: every relative path
-#: on every op has to be rebased, so the rule belongs at the one chokepoint they
-#: all pass through, where no new path field can be added without inheriting it.
+#: caller name a working directory that is not their cwd: ``Api(working_dir=D)``
+#: plus a bare ``"opamp2.asc"`` names ``D/opamp2.asc``. A context variable rather
+#: than an argument: every relative path on every op has to be rebased, so the
+#: rule belongs at the one chokepoint they all pass through, where no new path
+#: field can be added without inheriting it.
 _relative_base: ContextVar[Path | None] = ContextVar("relative_path_base", default=None)
 
 
@@ -37,11 +37,24 @@ def _anchor(path: Path, base: Path | None) -> Path:
     return path if base is None or path.is_absolute() else base / path
 
 
-def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
-    """Resolve a user-provided path within security sandbox.
+def with_roots(allowed_dirs: Sequence[Path] | None, extra: Iterable[Path]) -> list[Path] | None:
+    """``allowed_dirs`` and ``extra`` together. ``None``, no sandbox, stays
+    ``None``: a directory added to a sandbox must never create one."""
+    return None if allowed_dirs is None else [*allowed_dirs, *extra]
 
-    The path is judged by where it lands, never by how it is spelled:
-    1. Rejects an embedded NUL byte
+
+def resolve_safe_path(
+    user_path: str,
+    allowed_dirs: Sequence[Path] | None,
+    *,
+    relative_to: Path | None = None,
+) -> Path:
+    """Resolve a user-provided path, and refuse it outside ``allowed_dirs``.
+
+    ``allowed_dirs`` is the sandbox: ``None`` when there is none, and then the
+    path is resolved and returned wherever it lands. With a sandbox the path is
+    judged by where it lands, never by how it is spelled:
+    1. Rejects an embedded NUL byte (with or without a sandbox)
     2. Resolves symlinks and ``..`` segments
     3. Checks that the resolved path is within an allowed directory
 
@@ -54,16 +67,18 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
 
     Args:
         user_path: Path string from user (relative or absolute)
-        allowed_dirs: List of allowed base directories (sandbox)
+        allowed_dirs: The allowed base directories, or None for no sandbox
+        relative_to: Where a relative path is taken from when no host base is
+            declared and there is no sandbox (the session's working directory)
 
     Returns:
-        Resolved absolute path within sandbox
+        The resolved absolute path
 
     Raises:
-        PathSecurityError: If the path cannot be resolved or resolves outside
-                          the allowed directories
+        PathSecurityError: If the path cannot be resolved, or there is a
+                          sandbox and the path resolves outside it
     """
-    if not allowed_dirs:
+    if allowed_dirs is not None and not allowed_dirs:
         raise PathSecurityError("No allowed directories configured")
 
     # Refused up front: on Windows with Python 3.13, resolve() returns a path
@@ -74,11 +89,13 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
     path = Path(user_path)
 
     # Resolve relative paths against the host's declared base when there is one,
-    # else against the first allowed_dir (working directory). Absolute paths are
-    # used as-is.
+    # else against the first allowed_dir, else against ``relative_to``. Absolute
+    # paths are used as-is.
     base = _relative_base.get()
     if not path.is_absolute():
-        path = (allowed_dirs[0] if base is None else base) / path
+        anchor = base if base is not None else allowed_dirs[0] if allowed_dirs else relative_to
+        if anchor is not None:
+            path = anchor / path
 
     # Resolve symlinks and normalize (strict=False allows non-existent files).
     # ValueError covers an embedded NUL byte ("embedded null byte"), which
@@ -88,6 +105,8 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
         resolved = path.resolve(strict=False)
     except (OSError, RuntimeError, ValueError) as e:
         raise PathSecurityError(f"Failed to resolve path {user_path}: {e}") from e
+    if allowed_dirs is None:
+        return resolved
 
     # Check if resolved path is within any allowed directory. A relative entry
     # in that list (``allowed_paths = ["."]`` in a config file, say) is anchored

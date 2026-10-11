@@ -1,8 +1,8 @@
 # LTspice-MCP Desktop Extension (.mcpb)
 
 This extension installs the server in **Claude Desktop** (macOS/Windows). On
-install, Claude Desktop shows a native folder picker for your circuits
-directory; there is no JSON config to edit.
+install, Claude Desktop asks for two optional settings, a sandbox folder and
+the simulator path; there is no JSON config to edit.
 
 ## What it does and does not bundle
 
@@ -50,8 +50,9 @@ npx @anthropic-ai/mcpb pack . ltspice-mcp.mcpb      # zip this directory into th
 ## Install and test
 
 1. Drag `ltspice-mcp.mcpb` onto Claude Desktop (Settings → Extensions).
-2. When prompted, pick your circuits directory; leave the simulator path blank
-   to auto-detect.
+2. When prompted, leave the sandbox folder blank for no sandbox, or pick the
+   folder the tools should be kept inside; leave the simulator path blank to
+   auto-detect.
 3. In a chat, confirm the `ltspice` tools appear and run a trivial request
    (e.g. "validate this netlist": a two-resistor divider).
 

@@ -24,7 +24,7 @@ from ltspice_mcp.api import (
     ApiSessionError,
     ApiValidationError,
 )
-from ltspice_mcp.config import ServerConfig, default_allowed_paths
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.state import SessionState
 from tests.conftest import LIVENESS_S, wait_until
@@ -165,7 +165,7 @@ def test_api_explicit_config_path_uses_real_shared_bootstrap(
         assert api._state.config.config_path == config_path
         assert api._state.config.default_timeout == 17
         assert api._state.working_dir == working_dir
-        assert api._state.config.allowed_paths == default_allowed_paths(working_dir)
+        assert api._state.config.allowed_paths is None
     finally:
         api.close()
 
