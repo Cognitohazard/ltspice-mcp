@@ -127,7 +127,8 @@ _RULES = (
         "wire_through_symbol",
         "drawing",
         "part",
-        "A wire passing through what a part draws.",
+        "A wire passing through what a part draws, other than out from a pin of "
+        "the part that lies inside it.",
         check="layout",
     ),
     Rule(
@@ -494,12 +495,51 @@ def _through(a: Point, b: Point, box: BBox) -> bool:
     return box.strictly_contains(x1 + tm * dx, y1 + tm * dy)
 
 
+def _way_out_from_own_pin(a: Point, b: Point, part: Part, box: BBox) -> bool:
+    """True if wire ``a``-``b`` is the way out of ``box`` from a pin of ``part`` inside it.
+
+    A pin can lie inside the box of what its part draws: a frame drawn a unit
+    outside its column of pins, a pin on the slanted side of a triangle, a box
+    made larger by something drawn apart. Any wire to such a pin has a stretch
+    inside the box, and that stretch is the connection, not a wire through the
+    part, when the wire ends on the pin and runs level or upright from it out
+    of the box by the nearer of the two edges on its line. Out by the farther
+    edge is the wire running back across the body. A wire that ends inside the
+    box has not left it, and a diagonal one has no line of its own to judge by;
+    both stay reported.
+
+    Which edge counts is from LTspice's own example sheets, where this
+    separates every wire drawn out of a body from such a pin, some 1,300 of
+    them, from the wires that end inside one.
+    """
+    own = {(x, y) for _name, x, y in part.pins}
+    for (ex, ey), (ox, oy) in ((a, b), (b, a)):
+        if (ex, ey) not in own or not box.strictly_contains(ex, ey):
+            continue
+        if box.strictly_contains(ox, oy):
+            continue
+        if oy == ey:
+            ahead, behind = ex - box.x1, box.x2 - ex
+            if ox > ex:
+                ahead, behind = behind, ahead
+        elif ox == ex:
+            ahead, behind = ey - box.y1, box.y2 - ey
+            if oy > ey:
+                ahead, behind = behind, ahead
+        else:
+            continue
+        if ahead <= behind:
+            return True
+    return False
+
+
 @_finds("wire_through_symbol")
 def _wires_through_symbols(ix: _Index) -> list[Finding]:
-    # A wire attached to one of the part's own pins is NOT exempt: leaving a pin
-    # and running straight back across the body is the very error this looks
-    # for. Landing on a pin at the edge and heading outward clips to no length,
-    # so the ordinary connection still does not register.
+    # A wire attached to one of the part's own pins is NOT exempt for that:
+    # leaving a pin and running straight back across the body is the very error
+    # this looks for. Landing on a pin at the edge and heading outward clips to
+    # no length, so the ordinary connection does not register, and the way out
+    # from a pin that lies inside the body is told apart from a wire across it.
     return [
         Finding(
             "wire_through_symbol",
@@ -509,7 +549,7 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
         )
         for a, b in ix.wires
         for _index, part, box in ix.drawn
-        if _through(a, b, box)
+        if _through(a, b, box) and not _way_out_from_own_pin(a, b, part, box)
     ]
 
 

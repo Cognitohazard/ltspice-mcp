@@ -35,13 +35,13 @@ import importlib
 import math
 import re
 import traceback
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Container, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import CodeType
-from typing import Any, Literal, NamedTuple, cast
+from typing import Any, Literal, NamedTuple
 from weakref import WeakKeyDictionary
 
 from pydantic import Field
@@ -77,6 +77,8 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
+    GROUND,
+    NamedNets,
     NetPartition,
     build_on_wire_predicate,
     label_folded_nets,
@@ -86,7 +88,6 @@ from ltspice_mcp.lib.connectivity import (
 from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
-from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
@@ -572,13 +573,6 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
         editor.set_component_parameters(reference, **params)
 
 
-def _bboxes_overlap(a: dict, b: dict) -> bool:
-    """AABB overlap test between two bounding boxes with {x, y, width, height}."""
-    return BBox.from_origin_size(a["x"], a["y"], a["width"], a["height"]).overlaps(
-        BBox.from_origin_size(b["x"], b["y"], b["width"], b["height"])
-    )
-
-
 # Each editor's symbols, resolved once per request: get_asc_editor hands every
 # editor out on a fresh memo, so a symbol redrawn between requests is read
 # again, while the many geometry passes one request makes over a sheet cost one
@@ -630,19 +624,6 @@ def collect_component_geometry(editor: AscEditor) -> list[dict]:
         if geo is not None:
             result.append({"ref": ref, **geo["bounding_box"], "pins": geo["pins"]})
     return result
-
-
-def _overlap_warnings(editor: AscEditor, reference: str, bbox: dict[str, int]) -> list[str]:
-    """Warn for each other component whose bounding box overlaps ``bbox``.
-
-    Shared by add_component placement and move_component reposition — both flag
-    where a just-placed or just-moved part lands on top of another.
-    """
-    return [
-        f"Overlaps {existing['ref']} bounding box"
-        for existing in collect_component_geometry(editor)
-        if existing["ref"] != reference and _bboxes_overlap(bbox, existing)
-    ]
 
 
 def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, int]]:
@@ -1253,21 +1234,16 @@ def _pins_on_crossings(
     ]
     if not on_wires:
         return []
-    part = net_partition(editor, without=reference)
-    node_of = label_folded_nets(part)
-    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in part.label_texts.items():
-        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
+    nets = NamedNets(net_partition(editor, without=reference))
     said: list[str] = []
     for pin, through in on_wires:
         at = (pin["x"], pin["y"])
-        nodes = sorted({node_of(seg[:2]) for seg in through})
-        if len(nodes) < 2:
+        joined = nets.joined_at(seg[:2] for seg in through)
+        if joined.wired < 2:
             continue
         pin_name = f"{reference}.{pin['name']}"
-        named = [sorted(names_by_node[node]) for node in nodes if names_by_node[node]]
-        if len(named) > 1:
-            listed = "; ".join(str(names) for names in named)
+        if len(joined.named) > 1:
+            listed = "; ".join(str(sorted(names)) for names in joined.named)
             raise NetlistError(
                 f"Refused to {doing}: {pin_name} would land at ({at[0]},{at[1]}), where "
                 f"wires of nets that each carry a name cross ({listed}). A pin on a "
@@ -1275,7 +1251,7 @@ def _pins_on_crossings(
                 "where the pin is on the one wire it is meant for."
             )
         said.append(
-            f"{pin_name} at ({at[0]},{at[1]}) is on a point where {len(nodes)} wires cross "
+            f"{pin_name} at ({at[0]},{at[1]}) is on a point where {joined.wired} wires cross "
             "that were separate nets; a pin on a crossing joins them."
         )
     return said
@@ -1284,39 +1260,25 @@ def _pins_on_crossings(
 def _move_component_warnings(
     editor: AscEditor,
     reference: str,
-    rot_name: str,
-    x: int,
-    y: int,
     old_pin_coords: set[tuple[int, int]],
     other_pins: set[tuple[int, int]],
 ) -> list[str]:
-    """Bounding-box-overlap + orphaned-wire warnings for a just-moved component.
+    """The wires a just-moved component left behind at its old pins.
 
     ``old_pin_coords`` and ``other_pins`` must be captured BEFORE the move;
-    call this AFTER ``set_component_position``.
+    call this AFTER ``set_component_position``. Where the part now overlaps
+    another is not said here: the finished sheet's own rule says it.
     """
-    warnings: list[str] = []
-    new_pin_coords = _component_pin_coords(editor, reference)
-
-    comp = editor.components[reference]
-    moved_bb: dict[str, int] | None = None
-    if comp.symbol:
-        moved_sym = symbol_info_for(editor, comp.symbol)
-        if moved_sym is not None:
-            moved_bb = compute_placed_geometry(moved_sym, x, y, rot_name)["bounding_box"]
-    if moved_bb is not None:
-        warnings.extend(_overlap_warnings(editor, reference, moved_bb))
-
     # Pins that the move abandoned (no longer this component's, not a neighbour's)
     # but that still have a wire ending on them are orphaned by the move.
-    abandoned_pins = old_pin_coords - new_pin_coords - other_pins
+    abandoned_pins = old_pin_coords - _component_pin_coords(editor, reference) - other_pins
     orphaned = _orphaned_wire_coords(editor, abandoned_pins) if abandoned_pins else []
-    if orphaned:
-        warnings.append(
-            f"wires left at old pin coordinates with no connection: {', '.join(orphaned)}. "
-            "Re-route or delete these wires."
-        )
-    return warnings
+    if not orphaned:
+        return []
+    return [
+        f"wires left at old pin coordinates with no connection: {', '.join(orphaned)}. "
+        "Re-route or delete these wires."
+    ]
 
 
 def _placed_component_data(
@@ -1328,18 +1290,15 @@ def _placed_component_data(
     rotation: str,
     symbol_info: SymbolInfo,
 ) -> dict[str, object]:
-    """Return the placed symbol geometry and any component-overlap warnings."""
+    """Return the placed symbol's geometry: its pins and its bounding box."""
     geometry = compute_placed_geometry(symbol_info, x, y, rotation)
-    bounding_box = geometry["bounding_box"]
-    warnings = _overlap_warnings(editor, reference, bounding_box)
     return {
         "reference": reference,
         "symbol": symbol,
         "position": {"x": x, "y": y},
         "rotation": rotation,
         "pins": geometry["pins"],
-        "bounding_box": bounding_box,
-        "warnings": warnings,
+        "bounding_box": geometry["bounding_box"],
     }
 
 
@@ -1416,22 +1375,42 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:
     """Validate placing net label ``net`` at ``(x, y)``.
 
-    Raises ``NetlistError`` if a non-ground label would join two nets that each
-    carry a name (a short at netlist time) — a structural error, refused
-    outright. That happens when the network here is named and ``net`` already
-    names a different one, or when the label lands where two named networks
-    cross and joins both. Returns advisory warnings (duplicate name, a second
-    name for an already-named net, floating placement) as plain facts for the
-    caller to surface; placing labels before wiring them is a legitimate
-    workflow, so those are warnings, not refusals.
+    Raises ``NetlistError`` if the label would join two nets that each carry a
+    name (a short at netlist time) — a structural error, refused outright. That
+    happens when the network here is named and ``net`` already names a
+    different one, or when the label, ground included, lands where two named
+    networks cross and joins both. Returns advisory warnings (duplicate name,
+    a second name for an already-named net, two nets joined at a crossing) as
+    plain facts for the caller to surface. A label that touches nothing is not
+    said here: placing labels before wiring them is a legitimate order of work,
+    and one still on nothing when the batch is done is the finished sheet's
+    ``dangling_label``.
     """
     warnings: list[str] = []
-    part = net_partition(editor)
     # A FLAG anywhere along a wire, its interior included, joins that wire's
     # net, and one at a crossing joins both (see connectivity.partition for the
-    # export record).
+    # export record). It is one node with whatever sits on its point, and with
+    # every net already of its name; ground is no name (NamedNets.joined_at).
     through = wires_through((x, y), wire_segments_of(editor))
-    if net != "0":
+    joined = NamedNets(net_partition(editor)).joined_at(
+        (seg[:2] for seg in through), at=(x, y), name=None if net == GROUND else net
+    )
+    if len(joined.named) > 1:
+        listed = "; ".join(f"{sorted(names)}" for names in joined.named)
+        if net == GROUND:
+            raise NetlistError(
+                f"Refused to add ground at ({x},{y}): wires of nets that each carry a "
+                f"name cross there ({listed}). A ground flag on a crossing joins the "
+                "wires, shorting those nets together and to ground. Put the flag on a "
+                "point of the one wire it is meant for."
+            )
+        raise NetlistError(
+            f"Refused to add net '{net}' at ({x},{y}): the label would join nets "
+            f"that each carry a name ({listed}), shorting them together. To join "
+            "them on purpose, give both the same name: remove one side's labels "
+            "with remove_net_label and label it with the other's name."
+        )
+    if net != GROUND:
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
         # same-name labels into one net, which is a valid (often simpler) way to
         # tie distant nets. The only downstream cost is that wire_pins(net=...) can't
@@ -1446,53 +1425,20 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                     "connect to a component pin (Ref.Pin) instead."
                 )
                 break
-        joined = _label_join(part, through, net, (x, y))
-        if len(joined) > 1:
-            listed = "; ".join(f"{sorted(names)}" for names in joined)
-            raise NetlistError(
-                f"Refused to add net '{net}' at ({x},{y}): the label would join nets "
-                f"that each carry a name ({listed}), shorting them together. To join "
-                "them on purpose, give both the same name: remove one side's labels "
-                "with remove_net_label and label it with the other's name."
-            )
-        if joined and net not in joined[0]:
+        if joined.named and net not in joined.named[0]:
             warnings.append(
-                f"({x},{y}) is on the net already labelled {sorted(joined[0])}; '{net}' "
+                f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
                 "becomes a second name for it. LTspice netlists the node under one name, "
                 "so a directive or probe that uses another may not find it."
             )
-    # Floating label: a FLAG touching no wire and no component pin names
-    # nothing at netlist time.
-    if not through and (x, y) not in part.pin_owners:
+    # Said, not refused, where at most one of them has a name: a label put on
+    # a crossing is taken as meant, as a pin put there is.
+    if joined.wired > 1:
         warnings.append(
-            f"({x},{y}) touches no wire and no component pin — LTspice will ignore "
-            "this floating label until you wire it up."
+            f"({x},{y}) is where {joined.wired} wires cross that were separate nets; a "
+            "label on a crossing joins them."
         )
     return warnings
-
-
-def _label_join(
-    part: NetPartition,
-    through: Sequence[tuple[int, int, int, int]],
-    net: str,
-    at: tuple[int, int],
-) -> list[frozenset[str]]:
-    """The named nets a label ``net`` placed at ``at`` would make one node.
-
-    Read off the sheet's partition without the label: the label joins every
-    wire it touches (``through``, both wires at a crossing), whatever already
-    sits at ``at`` (a pin, a label, a wire end), and, by name, every net
-    already called ``net``. Each joined net comes back as its set of names,
-    ground excluded; two or more is a short.
-    """
-    node_of = label_folded_nets(part)
-    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in part.label_texts.items():
-        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
-    # A point the sheet does not have reads as its own unnamed node.
-    nodes = {node_of(at), *(node_of(seg[:2]) for seg in through)}
-    nodes.update(node_of(coord) for coord, texts in part.label_texts.items() if net in texts)
-    return [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
 
 
 class _ConnectPlan(NamedTuple):
@@ -1642,12 +1588,6 @@ def _plan_connect_route(
             "the requested route has zero length after deduplicating waypoints."
         )
 
-    skip_refs = {
-        ref.rsplit(".", 1)[0]
-        for ref in (from_pin, to_pin)
-        if isinstance(ref, str) and "." in ref and not ref.startswith("net:")
-    }
-
     # Net-label conflict — checked first because it's a "wrong intent"
     # error: rejecting it gives the user a clearer signal than a route
     # geometry complaint. An end given as ``net:NAME`` is on the net of that
@@ -1715,13 +1655,13 @@ def _plan_connect_route(
         )
 
     # Everything else said of a route is routing.judge's, which reads the sheet
-    # as plain data: the parts with their boxes and pins, the wires, and the
-    # partition worked out above.
+    # as plain data: the parts with their pins, the wires, and the partition
+    # worked out above. A route across a part is not judged at all here: the
+    # finished sheet's own rule says it.
     view = SheetView(
         parts=tuple(
             Part(
                 ref=part["ref"],
-                box=BBox.from_origin_size(part["x"], part["y"], part["width"], part["height"]),
                 pins=tuple((pin["name"], pin["x"], pin["y"]) for pin in part["pins"]),
             )
             for part in component_geo
@@ -1735,7 +1675,6 @@ def _plan_connect_route(
         anchors=(from_anchor, to_anchor),
         end_names=(from_name, to_name),
         ends_by_coordinate=(not isinstance(from_pin, str), not isinstance(to_pin, str)),
-        end_parts=frozenset(skip_refs),
     )
     judged = judge(view, part_before, route)
     if judged.refusals:
@@ -2154,7 +2093,7 @@ def apply_op_inplace(
             symbol_info,
         )
         if joined:
-            placed["warnings"] = [*cast("list[str]", placed["warnings"]), *joined]
+            placed["warnings"] = joined
         return {"op": "add_component", **placed}
 
     if isinstance(op, OpSetComponentValue):
@@ -2229,10 +2168,7 @@ def apply_op_inplace(
             else []
         )
         editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
-        # Same bbox-overlap + orphaned-wire warnings as the standalone handler.
-        mv_warnings = _move_component_warnings(
-            editor, op.reference, new_rot.name, op.x, op.y, old_pins, other_pins
-        )
+        mv_warnings = _move_component_warnings(editor, op.reference, old_pins, other_pins)
         mv_warnings.extend(joined)
         mv_result: dict[str, object] = {"op": "move_component", "reference": op.reference}
         if mv_warnings:

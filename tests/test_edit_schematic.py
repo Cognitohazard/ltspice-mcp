@@ -1065,6 +1065,78 @@ async def test_an_edit_reports_what_it_drew_badly(asc_state):
     assert data["preexisting"]["findings"] == 1
 
 
+# R1 and R3 with R4 standing between their top pins, level with them.
+_ACROSS_R4_OPS: list[dict] = [
+    _CROWDED_OPS[0],
+    _CROWDED_OPS[2],
+    {"op": "add_component", "reference": "R4", "symbol": "res", "x": 300, "y": 252},
+    {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R3.1"},
+]
+_THROUGH_R4 = "Wire (100,252)->(500,252) passes through R4's body"
+
+
+async def test_a_fact_of_the_finished_sheet_is_said_once(asc_state):
+    """A part placed over another, a route drawn through a part and a label put
+    on nothing are the finished sheet's to say. The op that did it adds no
+    sentence of its own, so a reply does not say one thing twice."""
+    data = await _build_blank(
+        asc_state,
+        "said-once",
+        [
+            *_ACROSS_R4_OPS,
+            _CROWDED_OPS[1],
+            {"op": "add_net_label", "net": "loose", "x": 900, "y": 900},
+        ],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert [w for w in data["warnings"] if not w.startswith("Floating pin")] == [
+        "Dangling label 'loose' at (900,900)",
+        _OVERLAP,
+        _THROUGH_R4,
+    ]
+
+
+async def test_a_label_wired_later_in_the_batch_is_never_called_loose(asc_state):
+    """A label may be placed before the wire that reaches it. What is said is of
+    the sheet the batch leaves, not of a moment inside it."""
+    data = await _build_blank(
+        asc_state,
+        "label-first",
+        [
+            {"op": "add_net_label", "net": "out", "x": 300, "y": 252},
+            _CROWDED_OPS[0],
+            {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "net:out"},
+        ],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert data["warnings"] == ["Floating pin: R1.2 at (100,348)"]
+    assert data["rules_run"]["dangling_label"] == 0
+
+
+async def test_a_route_already_drawn_through_a_part_is_not_the_batchs(asc_state):
+    """Asked for again, a route that is there draws nothing. The wire through
+    R4 was there before and is about no part or point the batch named, so it
+    is counted with what the sheet already had and not said again."""
+    built = await _build_blank(asc_state, "drawn-already", _ACROSS_R4_OPS)
+    assert _THROUGH_R4 in built["warnings"]
+
+    data = await apply_ops(
+        asc_state,
+        "drawn-already.asc",
+        [_ACROSS_R4_OPS[3]],
+        return_views=["preexisting"],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    (drawn,) = data["results"]
+    assert drawn["already_present"] == [{"from": {"x": 100, "y": 252}, "to": {"x": 500, "y": 252}}]
+    assert _THROUGH_R4 not in data["warnings"]
+    assert [w for w in data["warnings"] if w.startswith("op ")] == []
+    assert _THROUGH_R4 in [row["message"] for row in data["views"]["preexisting"]["items"]]
+
+
 async def test_a_finding_is_the_batchs_by_any_part_it_names(asc_state):
     """The overlap of R1 and R2 predates the edit and names R2 second."""
     sheet = await _crowded_sheet(asc_state, "crowded-named")

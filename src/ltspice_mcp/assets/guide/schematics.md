@@ -184,8 +184,14 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   is refused rather than silently merging it; `inspect(kind="net")` at a point
   on a wire traces that wire (`snapped_to_wire`).
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires,
-  pin collisions, and wire junction overlaps. Non-blocking warnings (long runs,
-  bbox crossings) should still be addressed.
+  pin collisions, and wire junction overlaps. Read its warnings too (a crossed
+  wire, a junction made along the route). It does not report a route through
+  a part; that appears in the sheet findings below.
+- **Keep wires short; nothing reports wire length.** In LTspice's own example
+  schematics 50% of wire segments are 32 units or shorter, 90% are 192 or
+  shorter, and about 3% exceed 400. A long wire is not an error, but if it
+  only carries a signal across the sheet, a net label at each end is easier
+  to read.
 - **Read the `wiring` profile `edit_schematic` returns.** It reports
   `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only`
   high with `wire_segments` near zero means you tagged pins with net-labels
@@ -207,6 +213,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,
   and no ground flag is shared or reached by a long wire. Once several ground
   labels exist, the `wire_pins` op with `net:0` is ambiguous and errors.
+- **A label or ground flag at a crossing joins the two wires.** Place it on
+  the one wire you mean. `add_net_label` refuses it when both wires are on
+  named nets, and otherwise warns that it joined two nets.
 - **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins
   ties them together — the netlist merges same-name labels into one net
   (correct, not a short), and no routing is needed. Wire nearby pins with the
