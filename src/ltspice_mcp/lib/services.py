@@ -36,7 +36,6 @@ from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
 from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import (
     detect_sim_type,
     get_step_count,
@@ -358,13 +357,13 @@ def resolve_analysis_source(
     """
     if raw_file:
         return source_for_raw_path(
-            resolve_safe_path(str(raw_file), state.allowed_paths()),
+            state.resolve_path(str(raw_file)),
             state,
             plot_index=plot_index,
             dialect=dialect,
         )
     if log_file:
-        log = resolve_safe_path(str(log_file), state.allowed_paths())
+        log = state.resolve_path(str(log_file))
         return AnalysisSource(
             raw=None,
             log=log,

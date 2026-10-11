@@ -3120,8 +3120,8 @@ def _assemble(
     hints: list[str] = []
     if any(case.get("code") == PathSecurityError.code for case in a.missing):
         hints.append(
-            "The sandbox refused a source path; its coverage.missing_cases row's "
-            "hint names the config line that widens the sandbox."
+            "A source path was refused; its coverage.missing_cases row's "
+            "hint says why and what to change."
         )
     if next_value is not None:
         reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"

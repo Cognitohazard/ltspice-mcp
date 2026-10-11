@@ -528,7 +528,7 @@ so zoom / pan / hover does nothing for it.
   writes. These are LTspice's own companions of a sheet, written because the
   caller asked for the run to be shown there; nothing is written beside a
   sheet until a window is found that can show it, or beside a sheet outside
-  the sandbox.
+  the sandbox when one is set.
 - **Static PNG (the vision tier) — opt-in, on `plot_waveform`.** A config
   default `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
   parameter that overrides it: an operator can attach a plot to every
@@ -880,9 +880,9 @@ End-to-end smoke test for a fresh install:
 7. Pull a custom library in with a `.lib` / `.include` directive and use one
    of its models in a new circuit
 
-If a step fails, check `simulator.path` in TOML and confirm
-`ltspice-mcp.toml`'s `[security] allowed_paths` includes your working
-directory. The planned doctor tool (see Roadmap) will automate these
+If a step fails, check `simulator.path` in TOML and, when
+`ltspice-mcp.toml` sets `[security] allowed_paths`, confirm it includes your
+working directory. The planned doctor tool (see Roadmap) will automate these
 checks.
 
 For how the project tests, see `docs/TESTING.md`. It also describes the

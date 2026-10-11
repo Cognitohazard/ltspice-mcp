@@ -17,7 +17,6 @@ from mcp import types
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, guide, services
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.plot_html import (
     WIDGET_MIME_TYPE,
     WIDGET_RESOURCE_URI,
@@ -253,7 +252,10 @@ def _read_config(
     cfg = state.config
     data = {
         "working_dir": str(cfg.working_dir),
-        "allowed_paths": [str(p) for p in state.allowed_paths()],
+        # None when there is no sandbox.
+        "allowed_paths": (
+            None if (sandbox := state.allowed_paths()) is None else [str(p) for p in sandbox]
+        ),
         "simulator": cfg.simulator,
         "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
         "detected_simulators": list(state.available_simulators.keys()),
@@ -308,7 +310,7 @@ def _read_netlist_content(
     reads show for the same file).
     """
     filename = params["filename"]
-    resolved = resolve_safe_path(filename, state.allowed_paths())
+    resolved = state.resolve_path(filename)
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
         allowed = ", ".join(sorted(CIRCUIT_EXTENSIONS))
         raise ValueError(
