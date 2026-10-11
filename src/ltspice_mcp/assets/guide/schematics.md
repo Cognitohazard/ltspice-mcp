@@ -254,7 +254,8 @@ them; `panes: []` removes them.
 
 `plot_waveform(in_ltspice=true)` writes these panes itself for the traces it
 plots, unless the `.plt` there was saved from LTspice: that one is the user's
-and is left as it is. The reply's `ltspice` block then lists the traces the
-window draws instead under `saved_panes`. When the user wants others, or more,
-set them with this op: pass the saved traces along with the new ones to keep
-both. The axis ranges they saved with them are not kept.
+and is left as it is. The reply's `ltspice` block then lists the panes the
+window draws instead under `saved_panes`, in the form this op takes. When the
+user wants others, or more, set them with this op: pass `saved_panes` with your
+own panes added to keep both. The axis ranges they saved with them are not
+kept.

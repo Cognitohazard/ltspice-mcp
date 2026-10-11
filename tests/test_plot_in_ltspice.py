@@ -197,10 +197,10 @@ async def test_settings_saved_from_ltspice_are_left_as_they_are(
     # panes the saved file holds, which is none when it was saved from a run
     # of another kind.
     section = read_plot_settings(saved).section(TRAN)
-    held = [list(pane.traces) for pane in section.panes] if section is not None else []
+    held = plot_settings.pane_specs(section.panes if section is not None else ())
     assert data["ltspice"]["saved_panes"] == held
     if case_id == "plot/one_trace":
-        assert held == [["V(out)"]]
+        assert held == [{"traces": ["V(out)"], "x_scale": "linear", "y_scale": "linear"}]
     # There is no sheet here, so no edit that could replace them is named.
     assert "set_plot_panes" not in data["ltspice"]["note"]
 
@@ -692,14 +692,17 @@ async def test_a_sheets_saved_traces_are_named_with_the_edit_that_replaces_them(
     shown = data["ltspice"]
     assert shown["shown"] is True
     assert shown["panes"] == [["V(out)"]]
-    assert shown["saved_panes"] == [["V(in)-V(out)", "V(out)*I(R1)"]]
+    # In the form the edit takes its panes, so they can be passed to it with others.
+    assert shown["saved_panes"] == [
+        {"traces": ["V(in)-V(out)", "V(out)*I(R1)"], "x_scale": "linear", "y_scale": "linear"}
+    ]
     assert shown["plot_settings"] is None
     assert shown["note"] == (
         "The plot is tied to the sheet: a click on a net there plots it. amp.plt was "
         "saved from LTspice and is left as it is, so the window shows the traces saved "
-        "in it. saved_panes lists them. To draw others, replace them with the "
-        "set_plot_panes op of edit_schematic on the sheet; the axis ranges saved with "
-        "them go too."
+        "in it. saved_panes lists them as the set_plot_panes op of edit_schematic takes "
+        "panes. To draw others, replace them with that op on the sheet; the axis ranges "
+        "saved with them go too."
     )
     assert read(sheet.with_suffix(".plt")) == saved
 
