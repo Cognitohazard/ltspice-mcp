@@ -47,9 +47,11 @@ job that ran an `.asc`. The run's results are put beside the sheet under its
 name, replacing the ones there, and opened from the sheet, which is what makes
 LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, and
 a click on a net there plots it. Results beside a sheet of the same name,
-which is what a run in LTspice leaves, open the same way by `raw_file`. Two
-replies ask something of the user. LTspice already has that plot open, and
-goes on showing what it read: they close it there, and you ask again. Or
+which is what a run in LTspice leaves, open the same way by `raw_file`. A plot
+of the sheet's results that LTspice already has open is closed and opened
+again, since an open plot goes on showing the run it read: the block says
+`reopened: true`, and traces the user added to that plot by hand are gone, so
+say so if they had been working in it. One reply asks something of the user.
 LTspice had the sheet open before it had any results, and looks for them only
 as it opens a sheet: they close the sheet there, and you ask again, since the
 results are beside it now. A run of a netlist has no sheet to tie to and opens
@@ -240,11 +242,20 @@ waveform window reads when the sheet is run there:
 `I(R1)`. Panes are listed top to bottom. A trace is an expression as typed into
 LTspice's Add Traces dialog, written without spaces (`V(in)-V(out)`): LTspice
 reads a trace in the file only up to its first space, so the op refuses one.
-The run ranges every axis to its data; `x_scale` and `y_scale` set a pane's log
-or dB scales and default to LTspice's own (linear for `tran`, log frequency and
-dB magnitude for `ac`). The op replaces that analysis's panes, leaves the
-file's other analyses alone and does not change the sheet. New panes keep the
+`analysis` is `tran`, `ac`, `dc` (a DC sweep) or `noise`. The run ranges every
+axis to its data; `x_scale` and `y_scale` set a pane's log or dB scales and
+default to LTspice's own (linear for `tran` and `dc`, log frequency and dB
+magnitude for `ac`, log frequency for `noise`). The op replaces that analysis's
+panes, leaves the file's other analyses alone and does not change the sheet. New panes keep the
 waveform grid the replaced ones all had; a pane in a new file has none, even
 for a person whose LTspice draws one on panes it makes. Its `results` entry
 names the file and the `replaced_panes`, which passed back as `panes` restore
 them; `panes: []` removes them.
+
+`plot_waveform(in_ltspice=true)` writes these panes itself for the traces it
+plots, unless the `.plt` there was saved from LTspice: that one is the user's
+and is left as it is. The reply's `ltspice` block then lists the panes the
+window draws instead under `saved_panes`, in the form this op takes. When the
+user wants others, or more, set them with this op: pass `saved_panes` with your
+own panes added to keep both. The axis ranges they saved with them are not
+kept.

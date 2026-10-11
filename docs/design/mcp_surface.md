@@ -1265,8 +1265,8 @@ beside the sheet, under the sheet's name. A sheet handed to a person should
 open with the traces that show what it does, and the file is a simulator
 format with an encoding of its own, so it is written by tested shared code
 (`lib/plot_settings.py`) rather than by each agent. `panes` is top to bottom,
-each `{traces, x_scale?, y_scale?}`; `analysis` is `tran` or `ac`, the
-sections recorded. The op replaces that analysis's section and keeps the
+each `{traces, x_scale?, y_scale?}`; `analysis` is `tran`, `ac`, `dc` (a DC
+sweep) or `noise`, the sections recorded. The op replaces that analysis's section and keeps the
 file's others as they were, as LTspice itself does when it saves one; `[]`
 removes the section, and the file with its last one. Its `results` entry names
 the file (`plot_settings`) and the panes the section held (`replaced_panes`),

@@ -10,8 +10,10 @@ are named below):
 
 - The file is a list of sections, one per analysis, each headed by the plot
   name the analysis gives its raw file (``[Transient Analysis]``,
-  ``[AC Analysis]``) and holding that analysis's panes. A build saving one
-  section keeps the others as they were (``plot/read_two_sections``).
+  ``[AC Analysis]``, ``[DC transfer characteristic]`` for a DC sweep,
+  ``[Noise Spectral Density - (V/Hz½ or A/Hz½)]`` for a noise run) and holding
+  that analysis's panes. A build saving one section keeps the others as they
+  were (``plot/read_two_sections``).
 - A section lists its panes bottom first: the pane LTspice 26 adds below
   another is written before it (``plot/pane_below``), and the one either
   build adds above is written after it (``plot/pane_added``). Everything this
@@ -24,10 +26,16 @@ are named below):
   refused rather than written.
 - A pane's ``Log`` line is the scale of its X axis, its left Y axis and its
   right Y axis: 0 linear, 1 logarithmic, 2 decibels. A pane a build makes
-  itself has 0 0 0 in a transient section (``plot/one_trace``) and 1 2 0 in an
-  AC one (``plot/ac``); both builds keep the line they read
-  (``plot/read_log_y``, ``plot/read_ac``). A pane written here always carries
-  it, with the build's own default unless the caller names a scale.
+  itself has 0 0 0 in a transient section (``plot/one_trace``) and in a DC
+  sweep's (``plot/dc``), 1 2 0 in an AC one (``plot/ac``) and 1 0 0 in a
+  noise run's (``plot/noise``); both builds keep the line they read
+  (``plot/read_log_y``, ``plot/read_ac``, ``plot/read_dc``,
+  ``plot/read_noise``). A pane written here always carries it, with the
+  build's own default unless the caller names a scale.
+- LTspice 26 writes a noise run's trace in lower case, ``v(onoise)``, whether
+  it made the pane itself or read one written as ``V(onoise)``
+  (``plot/noise``, ``plot/read_noise``); XVII keeps the case it was given.
+  Both show the trace.
 - The axis ranges (``X:``, ``Y[0]:`` ...) are not written: a run of the sheet
   ranges every axis to its data (``plot/read_two_panes``).
 - A pane a build makes while its waveform grid setting (``grid`` in either
@@ -60,7 +68,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
 
-PlotAnalysis = Literal["tran", "ac"]
+PlotAnalysis = Literal["tran", "ac", "dc", "noise"]
 XScale = Literal["linear", "log"]
 YScale = Literal["linear", "log", "db"]
 
@@ -68,13 +76,18 @@ YScale = Literal["linear", "log", "db"]
 SECTION_NAMES: dict[PlotAnalysis, str] = {
     "tran": "Transient Analysis",
     "ac": "AC Analysis",
+    "dc": "DC transfer characteristic",
+    "noise": "Noise Spectral Density - (V/Hz½ or A/Hz½)",
 }
 
 #: The ``Log`` line a build writes for a pane it made itself (``plot/one_trace``,
-#: ``plot/ac``): what a pane gets when the caller names no scale.
+#: ``plot/ac``, ``plot/dc``, ``plot/noise``): what a pane gets when the caller
+#: names no scale.
 DEFAULT_SCALES: dict[PlotAnalysis, tuple[int, int, int]] = {
     "tran": (0, 0, 0),
     "ac": (1, 2, 0),
+    "dc": (0, 0, 0),
+    "noise": (1, 0, 0),
 }
 
 _X_SCALES: dict[XScale, int] = {"linear": 0, "log": 1}
@@ -290,6 +303,15 @@ def scale_names(scales: tuple[int, int, int] | None) -> dict[str, str]:
     return {key: name for key, name in names.items() if name is not None}
 
 
+def pane_specs(panes: Sequence[PlotPane]) -> list[dict[str, object]]:
+    """``panes`` as the ``set_plot_panes`` op takes them: each its traces and named scales.
+
+    What a reply hands a caller in this form can be passed back to the op as
+    its ``panes``.
+    """
+    return [{"traces": list(pane.traces), **scale_names(pane.scales)} for pane in panes]
+
+
 def _render_body(panes: Sequence[PlotPane]) -> str:
     """The text between a section's braces for ``panes`` (top first), as LTspice lays it out."""
     lines = [f"   Npanes: {len(panes)}"]
@@ -369,16 +391,11 @@ def write_plot_settings(settings: PlotSettings) -> bytes:
     return encode_plot_settings(render_plot_settings(settings))
 
 
-def holds_only_panes(data: bytes) -> bool:
-    """Whether a ``.plt`` is one written here from panes, and not one a build saved.
-
-    A build's own save carries each pane's axis ranges and its own trace ids,
-    in its own encoding (``plot/one_trace``), so its bytes are never what
-    writing its panes back gives.
-    """
+def _written_from_panes(settings: PlotSettings, data: bytes) -> bool:
+    """Whether writing the panes of ``settings`` back gives ``data``, the bytes it was read from."""
     try:
         rebuilt = PlotSettings()
-        for section in read_plot_settings(data).sections:
+        for section in settings.sections:
             analysis = analysis_of(section.name)
             if analysis is None:
                 return False
@@ -388,7 +405,36 @@ def holds_only_panes(data: bytes) -> bool:
     return write_plot_settings(rebuilt) == data
 
 
-def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) -> str | None:
+def holds_only_panes(data: bytes) -> bool:
+    """Whether a ``.plt`` is one written here from panes, and not one a build saved.
+
+    A build's own save carries each pane's axis ranges and its own trace ids,
+    in its own encoding (``plot/one_trace``), so its bytes are never what
+    writing its panes back gives.
+    """
+    try:
+        settings = read_plot_settings(data)
+    except NetlistError:
+        return False
+    return _written_from_panes(settings, data)
+
+
+@dataclass(frozen=True)
+class Kept:
+    """Why ``write_beside`` wrote nothing.
+
+    ``reason`` reads as a clause of a sentence. ``saved`` is what the file that
+    was left alone holds for the analysis, top first, which is what the window
+    draws in place of the panes asked for: empty when it has none for that
+    analysis. It is None where no such file was read: the analysis has no
+    recorded section, or what is there is not a plot settings file.
+    """
+
+    reason: str
+    saved: tuple[PlotPane, ...] | None = None
+
+
+def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) -> Kept | None:
     """Write the panes a results file opens with into the ``.plt`` beside it.
 
     ``plot_name`` is the plot name the results file carries and ``panes`` the
@@ -396,33 +442,35 @@ def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) 
     analysis, and the grid of the panes they replace (``inherit_grid``). The
     analysis's section is replaced and the file's others are
     kept, as for a sheet's. Returns None once written, and otherwise why
-    nothing was: the analysis's section is not recorded, or the file there
-    was saved by a build, which is a person's and is left alone. Raises
-    ``NetlistError`` for a trace the file cannot carry and ``OSError`` when it
-    cannot be written.
+    nothing was (``Kept``): the analysis's section is not recorded, or the
+    file there was saved by a build, which is a person's and is left alone.
+    Raises ``NetlistError`` for a trace the file cannot carry and ``OSError``
+    when it cannot be written.
     """
     analysis = analysis_of(plot_name)
     if analysis is None:
-        return (
+        return Kept(
             f"no traces are drawn, because how LTspice reads the plot settings of a "
             f"{plot_name} plot is not recorded"
         )
     target = plot_settings_path(results)
     existing = target.read_bytes() if target.is_file() else b""
-    if not holds_only_panes(existing):
-        return (
-            f"{target.name} was saved from LTspice and is left as it is, so the "
-            "window shows the traces saved in it"
-        )
+    left_alone = Kept(
+        f"{target.name} was saved from LTspice and is left as it is, so the "
+        "window shows the traces saved in it"
+    )
+    try:
+        settings = read_plot_settings(existing)
+    except NetlistError:
+        return left_alone
+    section = settings.section(SECTION_NAMES[analysis])
+    if not _written_from_panes(settings, existing):
+        return replace(left_alone, saved=section.panes if section is not None else ())
     scales = DEFAULT_SCALES[analysis]
-    settings = read_plot_settings(existing)
     drawn = with_panes(
         settings,
         analysis,
-        inherit_grid(
-            settings.section(SECTION_NAMES[analysis]),
-            [PlotPane(tuple(names), scales) for names in panes],
-        ),
+        inherit_grid(section, [PlotPane(tuple(names), scales) for names in panes]),
     )
     atomic_write_bytes(target, write_plot_settings(drawn), durable=False)
     return None

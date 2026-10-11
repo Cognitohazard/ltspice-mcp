@@ -10,11 +10,13 @@ writer produces today.
 from __future__ import annotations
 
 import codecs
+import re
 from typing import get_args
 
 import pytest
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib import guide
 from ltspice_mcp.lib.plot_settings import (
     DEFAULT_SCALES,
     SECTION_NAMES,
@@ -35,6 +37,7 @@ from ltspice_mcp.lib.plot_settings import (
     with_panes,
     write_plot_settings,
 )
+from ltspice_mcp.lib.schematic_ops import PlotPaneSpec
 from tests.ltspice_recorder import INPUTS
 
 
@@ -76,6 +79,8 @@ SERVER_WRITTEN: dict[str, list[tuple[PlotAnalysis, list[PlotPane]]]] = {
     ],
     "plot/grid.plt": [("tran", [pane("V(out)", grid=1), pane("V(in)", "I(R1)", grid=1)])],
     "plot/ac_grid.plt": [("ac", [pane("V(out)", analysis="ac", grid=1)])],
+    "plot/dc.plt": [("dc", [pane("V(out)", analysis="dc")])],
+    "plot/noise.plt": [("noise", [pane("V(onoise)", analysis="noise")])],
 }
 
 
@@ -131,10 +136,39 @@ class TestWhatTheWriterWrites:
         assert (INPUTS / "plot/two_panes_utf8.plt").read_bytes() == text.encode("utf-8")
 
 
+class TestEveryAnalysisIsSaidTheSameEverywhere:
+    """An analysis is named in a type, two tables, two argument descriptions
+    and the guide. These hold the rest to the tables, which the recordings
+    hold to LTspice."""
+
+    def test_the_type_and_both_tables_name_the_same_analyses(self):
+        assert set(get_args(PlotAnalysis)) == set(SECTION_NAMES) == set(DEFAULT_SCALES)
+
+    @pytest.mark.parametrize(("field", "axis"), [("x_scale", 0), ("y_scale", 1)])
+    def test_an_arguments_description_states_the_default_of_each_analysis(
+        self, field: str, axis: int
+    ):
+        described = PlotPaneSpec.model_fields[field].description or ""
+        stated = re.search(r"Default: (\w+) for ([\w ,]+), else linear\.", described)
+        assert stated is not None, described
+        named = set(re.split(r", | and ", stated[2]))
+        not_linear = {name: scales for name, scales in DEFAULT_SCALES.items() if scales[axis]}
+        assert named == set(not_linear)
+        assert {scale_names(scales)[field] for scales in not_linear.values()} == {stated[1]}
+
+    def test_the_guide_names_every_analysis(self):
+        text = guide.read("schematics")
+        sentence = text[text.index("`analysis` is") :].split(". ", 1)[0]
+        assert set(re.findall(r"`(\w+)`", sentence)) == {"analysis", *get_args(PlotAnalysis)}
+
+
 class TestScales:
     def test_a_pane_gets_the_analysis_default_unless_a_scale_is_named(self):
         assert scales_of("tran", None, None) == DEFAULT_SCALES["tran"] == (0, 0, 0)
         assert scales_of("ac", None, None) == DEFAULT_SCALES["ac"] == (1, 2, 0)
+        assert scales_of("dc", None, None) == DEFAULT_SCALES["dc"] == (0, 0, 0)
+        assert scales_of("noise", None, None) == DEFAULT_SCALES["noise"] == (1, 0, 0)
+        assert scales_of("noise", None, "log") == (1, 1, 0)
         assert scales_of("tran", None, "log") == (0, 1, 0)
         assert scales_of("ac", "linear", "linear") == (0, 0, 0)
 
