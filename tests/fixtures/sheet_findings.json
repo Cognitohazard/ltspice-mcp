@@ -494,6 +494,596 @@
    }
   ]
  },
+ "fixtures/crossings/every_kind.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (704,96)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 704,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (800,192)",
+     "pin": "2",
+     "ref": "R2",
+     "x": 800,
+     "y": 192
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (192,96) meets no pin, net label, or other wire",
+     "x": 192,
+     "y": 96
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,192) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 192
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (192,400) meets no pin, net label, or other wire",
+     "x": 192,
+     "y": 400
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,496) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 496
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,304) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 304
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (496,96) meets no pin, net label, or other wire",
+     "x": 496,
+     "y": 96
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (304,96) meets no pin, net label, or other wire",
+     "x": 304,
+     "y": 96
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (400,192) meets no pin, net label, or other wire",
+     "x": 400,
+     "y": 192
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (400,0) meets no pin, net label, or other wire",
+     "x": 400,
+     "y": 0
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (304,400) meets no pin, net label, or other wire",
+     "x": 304,
+     "y": 400
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (400,304) meets no pin, net label, or other wire",
+     "x": 400,
+     "y": 304
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (192,608) meets no pin, net label, or other wire",
+     "x": 192,
+     "y": 608
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,656) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 656
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,560) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 560
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (192,704) meets no pin, net label, or other wire",
+     "x": 192,
+     "y": 704
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,704) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 704
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,752) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 752
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (96,672) meets no pin, net label, or other wire",
+     "x": 96,
+     "y": 672
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (880,96) meets no pin, net label, or other wire",
+     "x": 880,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 4,
+    "pins_wired": 1,
+    "wire_segments": 16
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 704,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       704,
+       96
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (704,96)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 800,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       192
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (800,192)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "Wire end at (192,96) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(192,96)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire end at (96,192) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,192)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 192,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       400
+      ]
+     ],
+     "detail": "Wire end at (192,400) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(192,400)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 496
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       496
+      ]
+     ],
+     "detail": "Wire end at (96,496) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,496)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 304
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       304
+      ]
+     ],
+     "detail": "Wire end at (96,304) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,304)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 496,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       496,
+       96
+      ]
+     ],
+     "detail": "Wire end at (496,96) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(496,96)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 304,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       304,
+       96
+      ]
+     ],
+     "detail": "Wire end at (304,96) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(304,96)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 400,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       192
+      ]
+     ],
+     "detail": "Wire end at (400,192) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(400,192)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 400,
+     "y": 0
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       0
+      ]
+     ],
+     "detail": "Wire end at (400,0) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(400,0)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 304,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       304,
+       400
+      ]
+     ],
+     "detail": "Wire end at (304,400) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(304,400)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 400,
+     "y": 304
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       304
+      ]
+     ],
+     "detail": "Wire end at (400,304) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(400,304)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 192,
+     "y": 608
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       608
+      ]
+     ],
+     "detail": "Wire end at (192,608) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(192,608)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 656
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       656
+      ]
+     ],
+     "detail": "Wire end at (96,656) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,656)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 560
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       560
+      ]
+     ],
+     "detail": "Wire end at (96,560) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,560)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 192,
+     "y": 704
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       704
+      ]
+     ],
+     "detail": "Wire end at (192,704) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(192,704)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 0,
+     "y": 704
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       704
+      ]
+     ],
+     "detail": "Wire end at (0,704) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,704)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 752
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       752
+      ]
+     ],
+     "detail": "Wire end at (96,752) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,752)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 672
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       672
+      ]
+     ],
+     "detail": "Wire end at (96,672) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(96,672)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 880,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       880,
+       96
+      ]
+     ],
+     "detail": "Wire end at (880,96) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(880,96)"
+   }
+  ]
+ },
  "fixtures/ltspice_bridge_recorded/inputs/micro_sign.asc": {
   "dropped_wire": [],
   "edit": {
