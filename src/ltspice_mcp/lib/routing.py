@@ -101,12 +101,6 @@ _RULES = (
         "advises",
         "The route touches wiring or a label already on its net, and joins it there.",
     ),
-    RouteRule(
-        "route_long",
-        "drawing",
-        "advises",
-        "The route is more than 400 units long.",
-    ),
 )
 
 #: Every rule made of a proposed route, in the order ``judge`` makes them.
@@ -139,8 +133,7 @@ class Judgement:
     """What the rules find of a route.
 
     ``refusals`` are the findings of rules that block it; with any, the route
-    is not to be drawn, and the rules that only measure an accepted route have
-    not been made. ``advisories`` are the findings of rules that advise.
+    is not to be drawn. ``advisories`` are the findings of rules that advise.
     ``junctions`` are the points other than its two ends where the route joins
     wiring already on its net, and each end that lands on a wire's interior.
     """
@@ -201,9 +194,10 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
     The rules that block are all made, so a refusal names everything wrong with
     the route at once, in the order: a diagonal segment; a pin passed over; a
     wire run along, an end's leg along its own wire, and other wiring touched.
-    The rule that measures an accepted route, its length, is made only when
-    none blocks. A route across a part is not judged here: it is the sheet
-    rule ``wire_through_symbol``'s, read off the sheet once the route is drawn.
+    Two things are not judged here. A route across a part is the sheet rule
+    ``wire_through_symbol``'s, read off the sheet once the route is drawn. And
+    how long a route is, is the caller's to weigh: the caller gave its points,
+    and no length is a fault.
     """
     said = Judgement()
     wires = list(view.wires)
@@ -269,20 +263,6 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
             )
 
     _wiring_met(said, wires, segments, ends, route, partition, net_of, pin_coords)
-    if said.refusals:
-        return said
-
-    total_length = sum(abs(sx2 - sx1) + abs(sy2 - sy1) for sx1, sy1, sx2, sy2 in segments)
-    if total_length > 400:
-        said.advisories.append(
-            Finding(
-                "route_long",
-                f"Long wire run ({total_length} units): consider placing components closer "
-                "or adding a local net label",
-                facts={"length": total_length},
-            )
-        )
-
     return said
 
 

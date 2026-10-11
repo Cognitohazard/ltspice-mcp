@@ -1245,8 +1245,12 @@ silently. A route crossing a wire where neither ends is drawn with a warning
 naming the wire: LTspice leaves the crossing unjoined, so the nets stay apart,
 and the only cost is a reader taking it for a junction. It was refused until
 the LTspice export showed it joined nothing. The planner's own advisories
-(a long run, a wire crossed) reach the response's `warnings` too; they used
-to stop at the op.
+(a wire crossed, a junction made on the way) reach the response's `warnings`
+too; they used to stop at the op. It says nothing of how long a route is. It
+used to advise on any run over 400 units, a length the server picked: the
+caller gave the route's points, no length is a fault, and LTspice's own
+example sheets have a wire that long on nearly one sheet in three. The guide
+gives the measured spread instead.
 
 An op does not repeat what the finished sheet says of itself. A route drawn
 through a part, a part placed or moved over another and a label put on nothing

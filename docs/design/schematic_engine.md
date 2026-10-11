@@ -483,7 +483,14 @@ what must hold before the next one starts.
        is already drawn through a part is counted with what was there
        before, the batch having drawn nothing. Before the sheet rule became
        the one voice it was made right about a part's own pins (section 7).
-       The advisory for a long run is not yet gone.
+       *The second is done:* the planner says nothing of a route's length.
+       On LTspice's 4,366 example sheets half the 183,408 wire segments are
+       32 units or less, nine in ten 192 or less, and 2.8 in a hundred over
+       400, with at least one that long on 29 sheets in a hundred, so the
+       advisory would have been given on nearly a third of LTspice's own
+       work. The guide gives that spread. No measurement takes the
+       advisory's place (section 8): the record lost it from 300 answers and
+       nothing else changed.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
@@ -669,6 +676,10 @@ a maintainer need to know about it; what it does stays a function.
   number of the server's own is a bare magnitude, the weakest ground the
   project's rule on result trust allows; the guide says what limits are
   usual, and each layout practice there names the rule that measures it.
+  A route's length is the one measure left unreported on purpose. The
+  caller gave the route's points and can add them up, and a length said of
+  every route is a line a route on every build, for a number that is no
+  fault at any size. A limit a caller sets would be the place for it.
 - **What an edit is told.** As now: a finding that is new, any change to it
   making it new, or one that names a part or a point the batch named, by
   any of the parts and points the finding names. An edit can change a

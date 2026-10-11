@@ -1079,6 +1079,11 @@ recording that showed it.
 
 ### Changed
 
+- `wire_pins` no longer advises on a route over 400 units ("Long wire run
+  ..."). The length was one the server picked, no length is a fault, and
+  LTspice's own example sheets have a wire that long on nearly one sheet in
+  three. The guide's wiring section gives the measured spread of wire
+  lengths on those sheets and when a net label at each end reads better.
 - An `edit_schematic` reply said three things twice: a route drawn through a
   part, a part placed or moved over another, and a label put on nothing were
   reported once by the op (`op 3 (wire_pins): Wire at y=252 crosses R4
