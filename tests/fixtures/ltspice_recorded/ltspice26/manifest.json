@@ -4203,6 +4203,35 @@
         ".raw"
       ]
     },
+    "plot/dc": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/dc.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/div_dc.asc": "e66482492e868c6dcf96f4a4ef87eca0458f98e4e9846263036071382fcf9b9c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/dc.plt": {
+          "bytes": 239,
+          "sha256": "8352e9af1ba19c642896934f1d4c310b9f666297053eab56e0cc5f4c30d6848d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/math": {
       "behaviour": "plot-settings",
       "command": [
@@ -4257,6 +4286,36 @@
       "settings": {
         "grid": "on"
       },
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/noise": {
+      "behaviour": "plot-settings",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/noise.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_noise.asc": "e9e489b6db694379e782a000352293187c42f5181fe877af4bc0c81a8ab2efd0"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/noise.plt": {
+          "bytes": 284,
+          "sha256": "fb7e2e0c98bb170562b792d8264bf0f56108427e4055fe20337b85ee03bfb6b3"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
       "stopped": true,
       "written": [
         ".log",
@@ -4388,6 +4447,36 @@
         ".raw"
       ]
     },
+    "plot/read_dc": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_dc.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/dc.plt": "018238de2cd58a58bc0c1574d67c4d654138fdf0e31dbb5979dfe29ed8ed8912",
+        "plot/div_dc.asc": "e66482492e868c6dcf96f4a4ef87eca0458f98e4e9846263036071382fcf9b9c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_dc.plt": {
+          "bytes": 236,
+          "sha256": "b645b1cf0cb6094377e208ba914facb7e9e5add7fc5b3fa7d171cfbb95b59afd"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/read_grid": {
       "behaviour": "plot-settings-read",
       "command": [
@@ -4469,6 +4558,37 @@
         "plot/read_math.plt": {
           "bytes": 309,
           "sha256": "877a773b8f9652c514e0706d3939f36b4134a6c444882a7af4f4e0f890abb992"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_noise": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "<dir>/read_noise.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/noise.plt": "9272a95f5208a479985fbdccc9f6b9e2a1af1720e822b0a4c01d2de9abe7b49c",
+        "plot/rc_noise.asc": "e9e489b6db694379e782a000352293187c42f5181fe877af4bc0c81a8ab2efd0"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_noise.plt": {
+          "bytes": 281,
+          "sha256": "9d54a454ff37a5a0d59103838489f30b1bb1c0e25a9a44b8a00ba043704ba87b"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

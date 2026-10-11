@@ -756,8 +756,8 @@ recording that showed it.
   cap on how many of one rule a reply lists.
 - `edit_schematic` has a twelfth op, `set_plot_panes`, which writes the
   waveform panes LTspice opens for a sheet into the `.plt` beside it: the
-  traces of each pane, top to bottom, for the `tran` or `ac` analysis, with
-  optional log or dB scales. It replaces that analysis's panes, keeps the
+  traces of each pane, top to bottom, for the `tran`, `ac`, `dc` (a DC sweep)
+  or `noise` analysis, with optional log or dB scales. It replaces that analysis's panes, keeps the
   file's other analyses, and reports the panes it replaced so they can be put
   back. The file is written in the same transaction as the sheet, under a
   file lock of its own. What LTspice writes and reads was recorded on LTspice
@@ -816,10 +816,12 @@ recording that showed it.
   `.MEAS`, the waveform viewer), in sections paged at their headings. They are
   read from the install and not packaged.
 - `plot_waveform(in_ltspice=true)` opens the run in the LTspice window that is
-  already running. For a transient or AC run the plotted traces are drawn: it
-  writes the plot settings file LTspice loads beside the results, in the form
-  `set_plot_panes` writes one, and keeps the file's other analyses. Settings a
-  person saved from LTspice are left alone.
+  already running. For a transient, an AC run, a DC sweep or a noise run the
+  plotted traces are drawn: it writes the plot settings file LTspice loads
+  beside the results, in the form `set_plot_panes` writes one, and keeps the
+  file's other analyses. Settings a person saved from LTspice are left alone;
+  the reply lists the traces they hold (`saved_panes`) and, for a sheet's run,
+  names `set_plot_panes` as the way to replace them.
 - `verify_circuit(in_ltspice=true)` opens the checked sheet or netlist in the
   LTspice window that is already running and puts it in front. A sheet the
   window already had open is shown as the window holds it, and the reply says
@@ -838,11 +840,13 @@ recording that showed it.
   run made in LTspice. The run's results and log are put beside the sheet
   under its name, replacing the ones there, and the sheet's own Visible Traces
   command opens them: no second simulation. The reply's `ltspice` block names
-  the `sheet`. Nothing is written when no window is open, when the sheet is
-  outside the sandbox, or when LTspice already has that plot open (it would go
-  on showing what it read); a sheet LTspice had open before it had any
-  results has to be closed there once, and the reply says so. A run of a
-  netlist opens on its own, as before.
+  the `sheet`. Nothing is written when no window is open or when the sheet
+  is outside the sandbox. A plot of the sheet's results that LTspice already
+  has open would go on showing the run it read, so it is closed and opened
+  again with the new one (`reopened: true`); traces added to it by hand are
+  not kept. A sheet LTspice had open before it had any results has to be
+  closed there once, and the reply says so. A run of a netlist opens on its
+  own, as before.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 

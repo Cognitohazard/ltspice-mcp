@@ -751,7 +751,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # waveform panes LTspice opens for the sheet, written to the .plt beside
     # it. Most of it is the pane model's structure (a trace list and two scale
     # enums); the descriptions are a line each. Measured 13,070.
-    "edit_schematic": 13080,
+    # Raised by about 15 characters for two more analyses on set_plot_panes, a
+    # DC sweep and a noise run: a run of either had no way to open in LTspice
+    # with its traces drawn. Measured 13,085.
+    "edit_schematic": 13090,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
@@ -793,7 +796,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # has to be told before it asks. Measured 4,408.
     # About 20 more for the same reason as on verify_circuit: in_ltspice says
     # that LTspice is started if none is open. Measured 4,429.
-    "plot_waveform": 4430,
+    # About 20 more for three words on the same argument: a plot of the
+    # sheet's results that is open is reopened, which closes a pane the user
+    # may have added traces to. Measured 4,451.
+    "plot_waveform": 4455,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
