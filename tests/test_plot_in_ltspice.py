@@ -86,6 +86,15 @@ def one_window(state: SessionState, world: Path) -> None:
     put_windows(state, world, [a_window()])
 
 
+def holding(sheet: Path, **entry: Any) -> dict[str, Any]:
+    """A window that has ``sheet`` open, holding it as the file reads."""
+    return a_window({str(sheet): as_ltspice_reads(sheet)}, **entry)
+
+
+#: What stands beside a sheet as its results before a newer run is shown.
+EARLIER = b"the results of an earlier run"
+
+
 async def plot(state: SessionState, **arguments: Any) -> dict[str, Any]:
     result = await handle_plot_waveform(PlotWaveformInput(**arguments), state)
     assert result.structured_content is not None
@@ -384,7 +393,7 @@ async def test_a_sheets_run_is_opened_from_the_sheet(
 ):
     sheet = a_sheet(work_dir)
     raw = a_job_of(state_no_sim, sheet, work_dir)
-    write(sheet.with_suffix(".raw"), b"the results of an earlier run")
+    write(sheet.with_suffix(".raw"), EARLIER)
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
@@ -442,18 +451,12 @@ async def test_a_plot_already_open_is_closed_and_opened_again_with_the_newer_res
     without a question, so it is closed, and the newer results opened."""
     sheet = a_sheet(work_dir)
     raw = a_job_of(state_no_sim, sheet, work_dir)
-    write(sheet.with_suffix(".raw"), b"the results of an earlier run")
+    write(sheet.with_suffix(".raw"), EARLIER)
     world = tmp_path / "world.json"
     put_windows(
         state_no_sim,
         world,
-        [
-            a_window(
-                {str(sheet): as_ltspice_reads(sheet)},
-                panes=["amp.raw"],
-                with_results=[str(sheet)],
-            )
-        ],
+        [holding(sheet, panes=["amp.raw"], with_results=[str(sheet)])],
     )
 
     data = await plot_the_job(state_no_sim)
@@ -494,12 +497,12 @@ async def test_a_plot_that_will_not_close_leaves_the_results_beside_the_sheet_al
     monkeypatch.setattr(ltspice_window, "_OPENED_S", 0.3)  # timing: the wait under test
     sheet = a_sheet(work_dir)
     a_job_of(state_no_sim, sheet, work_dir)
-    write(sheet.with_suffix(".raw"), b"the results of an earlier run")
+    write(sheet.with_suffix(".raw"), EARLIER)
     world = tmp_path / "world.json"
     put_windows(
         state_no_sim,
         world,
-        [a_window({str(sheet): as_ltspice_reads(sheet)}, panes=["amp.raw"])],
+        [holding(sheet, panes=["amp.raw"])],
         frame_keeps_panes=True,
     )
 
@@ -512,7 +515,7 @@ async def test_a_plot_that_will_not_close_leaves_the_results_beside_the_sheet_al
         "showing the results it read; close that plot there and ask again"
     )
     assert "note" not in shown and "sheet" not in shown
-    assert read(sheet.with_suffix(".raw")) == b"the results of an earlier run"
+    assert read(sheet.with_suffix(".raw")) == EARLIER
     assert not exists(sheet.with_suffix(".plt"))
     window = read_world(world)["windows"][0]
     assert window["closed"] == ["amp.raw"]
@@ -564,7 +567,7 @@ async def test_a_sheet_that_was_open_before_it_had_results_has_to_be_opened_agai
     sheet = a_sheet(work_dir)
     raw = a_job_of(state_no_sim, sheet, work_dir)
     world = tmp_path / "world.json"
-    put_windows(state_no_sim, world, [a_window({str(sheet): as_ltspice_reads(sheet)})])
+    put_windows(state_no_sim, world, [holding(sheet)])
 
     data = await plot_the_job(state_no_sim)
 
@@ -589,12 +592,12 @@ async def test_a_sheet_ltspice_knows_has_results_is_shown_them_where_it_stands(
     there: the file is replaced and the command opens what it holds now."""
     sheet = a_sheet(work_dir)
     raw = a_job_of(state_no_sim, sheet, work_dir)
-    write(sheet.with_suffix(".raw"), b"the results of an earlier run")
+    write(sheet.with_suffix(".raw"), EARLIER)
     world = tmp_path / "world.json"
     put_windows(
         state_no_sim,
         world,
-        [a_window({str(sheet): as_ltspice_reads(sheet)}, with_results=[str(sheet)])],
+        [holding(sheet, with_results=[str(sheet)])],
     )
 
     data = await plot_the_job(state_no_sim)

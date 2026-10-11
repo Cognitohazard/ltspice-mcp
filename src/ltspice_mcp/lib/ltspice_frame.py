@@ -40,8 +40,8 @@ VISIBLE_TRACES = "Visible Traces"
 # A top-level menu only the schematic editor's menu bar has, which tells its
 # menu from the waveform viewer's and the symbol editor's.
 _SHEET_MENU = "Hierarchy"
-# The window class of a document's pane begins like the frame's own.
-_PANE_CLASS = "Afx:"
+# How the window class of the frame, and of each document's pane in it, begins.
+_DOCUMENT_CLASS = "Afx:"
 
 
 class FrameError(BridgeError):
@@ -54,9 +54,9 @@ class FrameError(BridgeError):
 
 def is_frame(window: int) -> bool:
     """Whether a top-level window is an LTspice frame, by its class and title."""
-    return hidden_desktop.window_class(window).startswith("Afx:") and hidden_desktop.window_text(
-        window
-    ).startswith("LTspice")
+    return hidden_desktop.window_class(window).startswith(
+        _DOCUMENT_CLASS
+    ) and hidden_desktop.window_text(window).startswith("LTspice")
 
 
 #: The schematic editor's commands by executable, read again when the file changes.
@@ -126,6 +126,23 @@ class LtspiceFrame:
         except OSError as error:
             raise FrameError(f"LTspice's window did not take {label!r}: {error}") from error
 
+    def pane(self, pid: int, title: str) -> int | None:
+        """The window of the pane titled ``title`` in ``pid``'s frame, or None.
+
+        A pane's title is its file's name, whatever its case, and is on more
+        than one window inside the frame: the pane is the one whose class
+        begins as the frame's does.
+        """
+        wanted = title.casefold()
+        for child in hidden_desktop.child_windows(self._frame(pid)):
+            if hidden_desktop.window_text(
+                child
+            ).casefold() == wanted and hidden_desktop.window_class(child).startswith(
+                _DOCUMENT_CLASS
+            ):
+                return child
+        return None
+
     def close_pane(self, pid: int, title: str) -> None:
         """Ask ``pid``'s frame to close its pane titled ``title``; returns before it has.
 
@@ -134,14 +151,10 @@ class LtspiceFrame:
         this is not for one. Raises ``FrameError`` when the frame has no such
         pane or the window does not take the request.
         """
-        wanted = title.casefold()
-        for child in hidden_desktop.child_windows(self._frame(pid)):
-            if hidden_desktop.window_text(
-                child
-            ).casefold() == wanted and hidden_desktop.window_class(child).startswith(_PANE_CLASS):
-                try:
-                    hidden_desktop.post_close(child)
-                except OSError as error:
-                    raise FrameError(f"LTspice's window did not close {title}: {error}") from error
-                return
-        raise FrameError(f"LTspice process {pid} has no pane titled {title}")
+        pane = self.pane(pid, title)
+        if pane is None:
+            raise FrameError(f"LTspice process {pid} has no pane titled {title}")
+        try:
+            hidden_desktop.post_close(pane)
+        except OSError as error:
+            raise FrameError(f"LTspice's window did not close {title}: {error}") from error
