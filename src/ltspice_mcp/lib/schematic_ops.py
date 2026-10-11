@@ -96,9 +96,9 @@ from ltspice_mcp.lib.plot_settings import (
     XScale,
     YScale,
     inherit_grid,
+    pane_specs,
     plot_settings_path,
     read_plot_settings,
-    scale_names,
     scales_of,
     with_panes,
     write_plot_settings,
@@ -2094,10 +2094,7 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     ]
     before = plot.settings.section(SECTION_NAMES[op.analysis])
     plot.settings = with_panes(plot.settings, op.analysis, inherit_grid(before, panes))
-    replaced = [
-        {"traces": list(pane.traces), **scale_names(pane.scales)}
-        for pane in (before.panes if before is not None else ())
-    ]
+    replaced = pane_specs(before.panes if before is not None else ())
     return {"op": op.op, "plot_settings": str(plot.path), "replaced_panes": replaced}
 
 
