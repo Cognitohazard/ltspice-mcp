@@ -28960,6 +28960,492 @@
   },
   "verify": []
  },
+ "fixtures/ltspice_recorded/inputs/plot/div_dc.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (0,-32)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 0,
+     "y": -32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (0,32)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 0,
+     "y": 32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (96,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 96,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (96,48)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 96,
+     "y": 48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.1 at (192,-48)",
+     "pin": "1",
+     "ref": "R2",
+     "x": 192,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (192,48)",
+     "pin": "2",
+     "ref": "R2",
+     "x": 192,
+     "y": 48
+    },
+    {
+     "kind": "dangling_label",
+     "label": "in",
+     "message": "Dangling label 'in' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "in",
+     "message": "Dangling label 'in' at (112,16)",
+     "x": 112,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "out",
+     "message": "Dangling label 'out' at (112,96)",
+     "x": 112,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "out",
+     "message": "Dangling label 'out' at (208,16)",
+     "x": 208,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (208,96)",
+     "x": 208,
+     "y": 96
+    },
+    {
+     "kind": "label_over_component",
+     "label": "in",
+     "message": "Label 'in' at (0,16) is inside V1's bounding box",
+     "ref": "V1",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 0,
+       "y": 16
+      },
+      {
+       "x": 112,
+       "y": 16
+      }
+     ],
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 112,
+       "y": 96
+      },
+      {
+       "x": 208,
+       "y": 16
+      }
+     ],
+     "x": 112,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 96,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 96,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 192,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R2.1 at (192,-48)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 192,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (192,48)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'in' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 112,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'in' at (112,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(112,16)"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 112,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       96
+      ]
+     ],
+     "detail": "Dangling label 'out' at (112,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(112,96)"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 208,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'out' at (208,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,16)"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Label 'in' at (0,16) is inside V1's bounding box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "label_over_component",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   },
+   {
+    "at": {
+     "file": "div_dc.asc",
+     "x": 112,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       96
+      ],
+      [
+       208,
+       16
+      ]
+     ],
+     "detail": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/plot/rc_ac.asc": {
   "dropped_wire": [],
   "edit": {
@@ -29421,6 +29907,492 @@
    {
     "at": {
      "file": "rc_ac.asc",
+     "x": 112,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       96
+      ],
+      [
+       208,
+       32
+      ]
+     ],
+     "detail": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/plot/rc_noise.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (0,-32)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 0,
+     "y": -32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (0,32)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 0,
+     "y": 32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (96,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 96,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (96,48)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 96,
+     "y": 48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.1 at (192,0)",
+     "pin": "1",
+     "ref": "C1",
+     "x": 192,
+     "y": 0
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: C1.2 at (192,64)",
+     "pin": "2",
+     "ref": "C1",
+     "x": 192,
+     "y": 64
+    },
+    {
+     "kind": "dangling_label",
+     "label": "in",
+     "message": "Dangling label 'in' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "in",
+     "message": "Dangling label 'in' at (112,16)",
+     "x": 112,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "out",
+     "message": "Dangling label 'out' at (112,96)",
+     "x": 112,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "out",
+     "message": "Dangling label 'out' at (208,32)",
+     "x": 208,
+     "y": 32
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (208,96)",
+     "x": 208,
+     "y": 96
+    },
+    {
+     "kind": "label_over_component",
+     "label": "in",
+     "message": "Label 'in' at (0,16) is inside V1's bounding box",
+     "ref": "V1",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 0,
+       "y": 16
+      },
+      {
+       "x": 112,
+       "y": 16
+      }
+     ],
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 112,
+       "y": 96
+      },
+      {
+       "x": 208,
+       "y": 32
+      }
+     ],
+     "x": 112,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 96,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 96,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 192,
+     "y": 0
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       0
+      ]
+     ],
+     "detail": "Floating pin: C1.1 at (192,0)",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 192,
+     "y": 64
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       64
+      ]
+     ],
+     "detail": "Floating pin: C1.2 at (192,64)",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "C1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'in' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 112,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'in' at (112,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(112,16)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 112,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       96
+      ]
+     ],
+     "detail": "Dangling label 'out' at (112,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(112,96)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 208,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       32
+      ]
+     ],
+     "detail": "Dangling label 'out' at (208,32)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,32)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Label 'in' at (0,16) is inside V1's bounding box",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "label_over_component",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
      "x": 112,
      "y": 96
     },
