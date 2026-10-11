@@ -136,6 +136,11 @@ class FakeFrame(LtspiceFrame):
             entry.setdefault("panes", []).append(results)
         self._world.write_text(json.dumps(world), encoding="utf-8")
 
+    def pane(self, pid: int, title: str) -> int | None:
+        """Its place among the frame's panes, counted from one, standing for its window."""
+        titles = [each.casefold() for each in self.panes(pid)]
+        return titles.index(title.casefold()) + 1 if title.casefold() in titles else None
+
     def close_pane(self, pid: int, title: str) -> None:
         world = read_world(self._world)
         entry = self._entry(world, pid)

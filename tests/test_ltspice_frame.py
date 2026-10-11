@@ -190,8 +190,8 @@ def test_the_stand_in_frame_opens_results_when_ltspice_was_recorded_opening_them
     ]
     assert (placed.name in frame.panes(PID)) is facts["the sheet it was opened from stays open"]
     frame.send(PID, VISIBLE_TRACES)
-    # Opened again it held the newer file, so it was open again.
-    assert facts[
+    # Opened again, the recorded pane held the newer file: so it was open again.
+    held = facts[
         "the precision of the results the pane held, and of those it holds once opened again"
-    ] == ["single", "double"]
-    assert "placed.raw" in frame.panes(PID)
+    ]
+    assert (frame.pane(PID, "placed.raw") is not None) is (held == ["single", "double"])

@@ -499,8 +499,25 @@ class OpenWindows:
         The pane is known by its title, the results file's name. Raises
         ``BridgeError`` when the window's frame cannot be asked.
         """
-        wanted = results_beside(sheet).name.casefold()
-        return any(title.casefold() == wanted for title in self._frame.panes(pid))
+        return self._frame.pane(pid, results_beside(sheet).name) is not None
+
+    def _close_results_pane(self, pid: int, sheet: Path) -> bool:
+        """Close the pane of the results beside ``sheet``; False when none is open.
+
+        Raises ``BridgeError`` when it is open and does not close.
+        """
+        if not self.results_pane_open(pid, sheet):
+            return False
+        results = results_beside(sheet).name
+        self._frame.close_pane(pid, results)
+        # A pane closes in a moment, so this looks often.
+        if not _within(_OPENED_S, 0.02, lambda: not self.results_pane_open(pid, sheet)):
+            raise BridgeError(
+                f"LTspice has {results} open and did not close it within {_OPENED_S:g} s, "
+                "so it goes on showing the results it read; close that plot there and "
+                "ask again"
+            )
+        return True
 
     def results_from_sheet(self, sheet: Path, place: Callable[[], None]) -> Shown:
         """Open the results beside ``sheet`` from the sheet, tied to it. Blocks.
@@ -538,16 +555,7 @@ class OpenWindows:
         with self._session() as session:
             window, spelled = self._holder(session, sheet)
             held = None if spelled is None else session.design_text(spelled)
-        reopened = self.results_pane_open(window.pid, sheet)
-        if reopened:
-            self._frame.close_pane(window.pid, results)
-            closed = _within(_OPENED_S, 0.1, lambda: not self.results_pane_open(window.pid, sheet))
-            if not closed:
-                raise BridgeError(
-                    f"LTspice has {results} open and did not close it within {_OPENED_S:g} s, "
-                    "so it goes on showing the results it read; close that plot there and "
-                    "ask again"
-                )
+        reopened = self._close_results_pane(window.pid, sheet)
         place()
         with self._session() as session:
             session.attach(window.pid)
