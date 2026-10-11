@@ -97,9 +97,9 @@ from ltspice_mcp.lib.plot_settings import (
     XScale,
     YScale,
     inherit_grid,
+    pane_specs,
     plot_settings_path,
     read_plot_settings,
-    scale_names,
     scales_of,
     with_panes,
     write_plot_settings,
@@ -1904,10 +1904,10 @@ class PlotPaneSpec(StrictModel):
         description="Expressions as typed in Add Traces, no spaces: 'V(out)', 'V(in)-V(out)'.",
     )
     x_scale: XScale | None = Field(
-        default=None, description="Default: linear for tran, log for ac."
+        default=None, description="Default: log for ac and noise, else linear."
     )
     y_scale: YScale | None = Field(
-        default=None, description="Left Y axis. Default: linear for tran, db for ac."
+        default=None, description="Left Y axis. Default: db for ac, else linear."
     )
 
 
@@ -2033,10 +2033,7 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     ]
     before = plot.settings.section(SECTION_NAMES[op.analysis])
     plot.settings = with_panes(plot.settings, op.analysis, inherit_grid(before, panes))
-    replaced = [
-        {"traces": list(pane.traces), **scale_names(pane.scales)}
-        for pane in (before.panes if before is not None else ())
-    ]
+    replaced = pane_specs(before.panes if before is not None else ())
     return {"op": op.op, "plot_settings": str(plot.path), "replaced_panes": replaced}
 
 

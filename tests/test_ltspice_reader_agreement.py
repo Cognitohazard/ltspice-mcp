@@ -39,6 +39,7 @@ from ltspice_mcp.errors import NoAxisError
 from ltspice_mcp.lib.raw_header import RawHeaderError
 from tests import _ltspice_recorded as rec
 from tests import ltspice_recorder
+from tests._ltspice_recorded import declared_points, header_fields
 from tests.ltspice_bridge_recorder import (
     FIXTURES,
     load_manifest,
@@ -47,7 +48,6 @@ from tests.ltspice_bridge_recorder import (
     recorded_builds,
     sha256_bytes,
 )
-from tests.test_recorded_ltspice_results import declared_points, header_fields
 
 #: (the build whose reader was asked, the build that wrote the file, the file).
 Subject = tuple[str, str, str]

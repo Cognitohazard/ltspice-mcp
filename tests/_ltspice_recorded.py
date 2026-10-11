@@ -35,6 +35,7 @@ from tests.ltspice_recorder import (
     discover_builds,
     load_cases,
     load_manifest,
+    raw_header_text,
     recorded_builds,
     unavailable_reason,
 )
@@ -59,6 +60,21 @@ def generation(build: str) -> str:
 def recorded(build: str, name: str) -> Path:
     """One recorded file: ``recorded("ltspice26", "raw/tran.log")``."""
     return FIXTURES / build / name
+
+
+def header_fields(build: str, case_id: str) -> dict[str, list[str]]:
+    """A recorded raw's header as the build wrote it: field name to every value it has."""
+    fields: dict[str, list[str]] = {}
+    for line in raw_header_text(recorded(build, f"{case_id}.raw").read_bytes()).splitlines():
+        name, separator, value = line.partition(":")
+        if separator and not line.startswith("\t"):
+            fields.setdefault(name, []).append(value.strip())
+    return fields
+
+
+def declared_points(build: str, case_id: str) -> int:
+    """How many points a recorded raw's header says it holds."""
+    return int(header_fields(build, case_id)["No. Points"][0])
 
 
 def has(build: str, name: str) -> bool:

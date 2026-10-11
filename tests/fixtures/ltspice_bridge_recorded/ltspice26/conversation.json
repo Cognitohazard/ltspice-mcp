@@ -412,6 +412,63 @@
   "observed": "Select Visible Waveforms"
  },
  {
+  "note": "put the results in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\placed.raw"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "a results pane goes on holding what it read when its file is replaced",
+  "observed": true
+ },
+ {
+  "note": "a results pane told to close is closed, and LTspice asks nothing",
+  "observed": true
+ },
+ {
+  "note": "the sheet it was opened from stays open",
+  "observed": true
+ },
+ {
+  "note": "put the sheet in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\placed.asc"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "put the results in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\placed.raw"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "the precision of the results the pane held, and of those it holds once opened again",
+  "observed": [
+   "single",
+   "double"
+  ]
+ },
+ {
+  "note": "with a trace added by hand it closes the same, and saves no plot settings",
+  "observed": [
+   true,
+   true,
+   false
+  ]
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},

@@ -922,14 +922,7 @@ class _Windows:
         return None
 
     def dialog(self, title: str) -> int | None:
-        return next(
-            (
-                w
-                for w in self.top_level()
-                if window_class(w) == "#32770" and window_text(w) == title
-            ),
-            None,
-        )
+        return _dialog(self.top_level(), title)
 
 
 class _CaseStop(Exception):
@@ -1056,11 +1049,13 @@ def drive_plot(
                 user.PostMessageW(child, _WM_COMMAND, commands[value], 0)
                 waits.settle(doing)
                 continue
-            user.PostMessageW(child, _WM_COMMAND, commands[_ADD_TRACE], 0)
-            dialog = waits.until(lambda: windows.dialog(_ADD_TRACES), doing)
-            _type_expression(dialog, value)
-            user.PostMessageW(dialog, _WM_COMMAND, _IDOK, 0)
-            waits.until(functools.partial(_closed, dialog), doing)
+            add_trace_by_hand(
+                child,
+                windows.top_level,
+                build.exe,
+                value,
+                functools.partial(waits.until, doing=doing),
+            )
             waits.settle(doing)
         waits.saved(plt, child, commands[_SAVE_PLOT], "save its plot settings")
     except _CaseStop as stop:
@@ -1109,6 +1104,35 @@ def drive_save(
         sheet.unlink(missing_ok=True)
         return stop.ended
     return _Ended(stopped=True, exit_code=None)
+
+
+def _dialog(top_level: Sequence[int], title: str) -> int | None:
+    """The dialog titled ``title`` among a process's top-level windows."""
+    return next(
+        (w for w in top_level if window_class(w) == "#32770" and window_text(w) == title), None
+    )
+
+
+def add_trace_by_hand(
+    pane: int,
+    top_level: Callable[[], Sequence[int]],
+    exe: Path,
+    expression: str,
+    until: Callable[[Callable[[], Any]], Any],
+) -> None:
+    """Add a trace to a waveform pane as a person does: its Add Trace command,
+    the expression typed into the dialog that opens, and OK.
+
+    ``top_level`` lists the top-level windows of the pane's process. ``until``
+    waits for what a function returns to be true and hands that back; what is
+    said of a wait that runs out, and what else ends one, is the caller's.
+    """
+    user = _user32()
+    user.PostMessageW(pane, _WM_COMMAND, waveform_commands(exe)[_ADD_TRACE], 0)
+    dialog = until(lambda: _dialog(top_level(), _ADD_TRACES))
+    _type_expression(dialog, expression)
+    user.PostMessageW(dialog, _WM_COMMAND, _IDOK, 0)
+    until(functools.partial(_closed, dialog))
 
 
 def _type_expression(dialog: int, expression: str) -> None:

@@ -4189,6 +4189,35 @@
         ".raw"
       ]
     },
+    "plot/dc": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/dc.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/div_dc.asc": "e66482492e868c6dcf96f4a4ef87eca0458f98e4e9846263036071382fcf9b9c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/dc.plt": {
+          "bytes": 478,
+          "sha256": "c231c6295e16fa3268f5a644a5eb94f8f306ed2d0123cef285c6b91f37cf1b06"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/math": {
       "behaviour": "plot-settings",
       "command": [
@@ -4248,6 +4277,35 @@
         ".log",
         ".net",
         ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/noise": {
+      "behaviour": "plot-settings",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/noise.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/rc_noise.asc": "e9e489b6db694379e782a000352293187c42f5181fe877af4bc0c81a8ab2efd0"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/noise.plt": {
+          "bytes": 570,
+          "sha256": "ef57da9aa8cdcaafe203e5f31d4b2a195a3f0fc34c279127822e7fa9a7c2226c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
         ".plt",
         ".raw"
       ]
@@ -4372,6 +4430,36 @@
         ".raw"
       ]
     },
+    "plot/read_dc": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_dc.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/dc.plt": "018238de2cd58a58bc0c1574d67c4d654138fdf0e31dbb5979dfe29ed8ed8912",
+        "plot/div_dc.asc": "e66482492e868c6dcf96f4a4ef87eca0458f98e4e9846263036071382fcf9b9c"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_dc.plt": {
+          "bytes": 472,
+          "sha256": "10f1b1d13e74322838389b7403bd8361698d6d14761ff23b574437bbbacf08a3"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
+        ".plt",
+        ".raw"
+      ]
+    },
     "plot/read_grid": {
       "behaviour": "plot-settings-read",
       "command": [
@@ -4461,6 +4549,36 @@
         ".log",
         ".net",
         ".op.raw",
+        ".plt",
+        ".raw"
+      ]
+    },
+    "plot/read_noise": {
+      "behaviour": "plot-settings-read",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "<dir>/read_noise.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "plot/noise.plt": "9272a95f5208a479985fbdccc9f6b9e2a1af1720e822b0a4c01d2de9abe7b49c",
+        "plot/rc_noise.asc": "e9e489b6db694379e782a000352293187c42f5181fe877af4bc0c81a8ab2efd0"
+      },
+      "kind": "plot",
+      "outputs": {
+        "plot/read_noise.plt": {
+          "bytes": 564,
+          "sha256": "4b32a92b4f3f56abe4b4c529def09e8f6989cd6cdcf38409085367fbe174b769"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": true,
+      "written": [
+        ".log",
+        ".net",
         ".plt",
         ".raw"
       ]
