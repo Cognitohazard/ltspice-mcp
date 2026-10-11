@@ -1097,8 +1097,9 @@ _BY_HAND_NOTE = (
     "them, and a click on a net then plots it."
 )
 _REPLACE_NOTE = (
-    "saved_panes lists them. To draw others, replace them with the set_plot_panes op "
-    "of edit_schematic on the sheet; the axis ranges saved with them go too."
+    "saved_panes lists them as the set_plot_panes op of edit_schematic takes panes. To "
+    "draw others, replace them with that op on the sheet; the axis ranges saved with "
+    "them go too."
 )
 
 
@@ -1156,24 +1157,27 @@ def _write_panes(
     """Write the plot settings that name ``panes`` beside ``results``.
 
     Returns None once written, with the file named in ``report``, and
-    otherwise why they were not, for the reply's note. Where the file there
-    was saved from LTspice and is left as it is, ``report`` gets the traces it
-    holds (``saved_panes``), since those are what the window draws. A sheet's
-    plot settings are also the ``set_plot_panes`` op's to write, so they are
-    written under the lock an edit takes for them, held for this write alone.
+    otherwise what the reply's note says of it: why they were not. Where the
+    file there was saved from LTspice and is left as it is, ``report`` gets
+    the panes it holds (``saved_panes``), since those are what the window
+    draws, and for a sheet's the note names the edit that replaces them. A
+    sheet's plot settings are also the ``set_plot_panes`` op's to write, so
+    they are written under the lock an edit takes for them, held for this
+    write alone.
     """
     target = plot_settings.plot_settings_path(results)
     try:
         with file_lock(Store.circuit_lock(target)) if of_a_sheet else contextlib.nullcontext():
             kept = plot_settings.write_beside(results, plot_name, panes)
     except (NetlistError, OSError) as error:
-        return f"the plot settings could not be written ({error})"
+        return f"the plot settings could not be written ({error})."
     if kept is None:
         report["plot_settings"] = str(target)
         return None
-    if kept.saved is not None:
-        report["saved_panes"] = [list(pane.traces) for pane in kept.saved]
-    return kept.reason
+    if kept.saved is None:
+        return f"{kept.reason}."
+    report["saved_panes"] = plot_settings.pane_specs(kept.saved)
+    return f"{kept.reason}. {_REPLACE_NOTE}" if of_a_sheet else f"{kept.reason}."
 
 
 def _show_alone(
@@ -1205,10 +1209,7 @@ def _show_alone(
                 "plot settings beside it name them."
             )
         return
-    report.update(
-        shown_in_window(shown),
-        note=_ALREADY_OPEN_NOTE if left_alone is None else f"{left_alone}.",
-    )
+    report.update(shown_in_window(shown), note=left_alone or _ALREADY_OPEN_NOTE)
 
 
 def _place_beside_sheet(sheet: Path, results: Path, log: Path | None) -> None:
@@ -1271,10 +1272,7 @@ def _show_from_sheet(
     except OSError as error:
         report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
         return
-    note = _TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}."
-    if "saved_panes" in report:
-        note += f" {_REPLACE_NOTE}"
-    report.update(shown_in_window(shown), note=note)
+    report.update(shown_in_window(shown), note=" ".join(filter(None, (_TIED_NOTE, left_alone))))
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
 
@@ -1359,11 +1357,20 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                     },
                     "saved_panes": {
                         "type": "array",
-                        "items": {"type": "array", "items": {"type": "string"}},
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "traces": {"type": "array", "items": {"type": "string"}},
+                                "x_scale": {"type": "string"},
+                                "y_scale": {"type": "string"},
+                            },
+                            "required": ["traces"],
+                        },
                         "description": (
-                            "The traces per pane, top first, of a .plt saved from "
-                            "LTspice that was left as it is: what the window draws "
-                            "in place of panes. Empty when it holds none for this run."
+                            "The panes, top first, of a .plt saved from LTspice that "
+                            "was left as it is: what the window draws in place of "
+                            "panes, in the form set_plot_panes takes. Empty when it "
+                            "holds none for this run."
                         ),
                     },
                     "panes": {
