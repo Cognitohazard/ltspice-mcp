@@ -29,8 +29,8 @@ from ltspice_mcp.lib.plot_settings import (
     read_plot_settings,
 )
 from tests import _ltspice_recorded as rec
+from tests._ltspice_recorded import header_fields
 from tests.ltspice_recorder import INPUTS
-from tests.test_recorded_ltspice_results import header_fields
 
 WRITTEN = rec.cases_of("plot-settings")
 READ = rec.cases_of("plot-settings-read")

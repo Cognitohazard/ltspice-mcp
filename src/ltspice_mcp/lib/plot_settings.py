@@ -303,6 +303,15 @@ def scale_names(scales: tuple[int, int, int] | None) -> dict[str, str]:
     return {key: name for key, name in names.items() if name is not None}
 
 
+def pane_specs(panes: Sequence[PlotPane]) -> list[dict[str, object]]:
+    """``panes`` as the ``set_plot_panes`` op takes them: each its traces and named scales.
+
+    What a reply hands a caller in this form can be passed back to the op as
+    its ``panes``.
+    """
+    return [{"traces": list(pane.traces), **scale_names(pane.scales)} for pane in panes]
+
+
 def _render_body(panes: Sequence[PlotPane]) -> str:
     """The text between a section's braces for ``panes`` (top first), as LTspice lays it out."""
     lines = [f"   Npanes: {len(panes)}"]
@@ -382,16 +391,11 @@ def write_plot_settings(settings: PlotSettings) -> bytes:
     return encode_plot_settings(render_plot_settings(settings))
 
 
-def holds_only_panes(data: bytes) -> bool:
-    """Whether a ``.plt`` is one written here from panes, and not one a build saved.
-
-    A build's own save carries each pane's axis ranges and its own trace ids,
-    in its own encoding (``plot/one_trace``), so its bytes are never what
-    writing its panes back gives.
-    """
+def _written_from_panes(settings: PlotSettings, data: bytes) -> bool:
+    """Whether writing the panes of ``settings`` back gives ``data``, the bytes it was read from."""
     try:
         rebuilt = PlotSettings()
-        for section in read_plot_settings(data).sections:
+        for section in settings.sections:
             analysis = analysis_of(section.name)
             if analysis is None:
                 return False
@@ -401,14 +405,29 @@ def holds_only_panes(data: bytes) -> bool:
     return write_plot_settings(rebuilt) == data
 
 
+def holds_only_panes(data: bytes) -> bool:
+    """Whether a ``.plt`` is one written here from panes, and not one a build saved.
+
+    A build's own save carries each pane's axis ranges and its own trace ids,
+    in its own encoding (``plot/one_trace``), so its bytes are never what
+    writing its panes back gives.
+    """
+    try:
+        settings = read_plot_settings(data)
+    except NetlistError:
+        return False
+    return _written_from_panes(settings, data)
+
+
 @dataclass(frozen=True)
 class Kept:
     """Why ``write_beside`` wrote nothing.
 
-    ``reason`` reads as a clause of a sentence. ``saved`` is set when a build
-    saved the file that is there: the panes it holds for the analysis, top
-    first, which are what the window draws in place of the ones asked for. It
-    is empty when the file has none for that analysis.
+    ``reason`` reads as a clause of a sentence. ``saved`` is what the file that
+    was left alone holds for the analysis, top first, which is what the window
+    draws in place of the panes asked for: empty when it has none for that
+    analysis. It is None where no such file was read: the analysis has no
+    recorded section, or what is there is not a plot settings file.
     """
 
     reason: str
@@ -436,28 +455,22 @@ def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) 
         )
     target = plot_settings_path(results)
     existing = target.read_bytes() if target.is_file() else b""
-    if not holds_only_panes(existing):
-        try:
-            section = read_plot_settings(existing).section(SECTION_NAMES[analysis])
-        except NetlistError:
-            # Not a file this module reads, so there is nothing to say of its panes.
-            saved = None
-        else:
-            saved = section.panes if section is not None else ()
-        return Kept(
-            f"{target.name} was saved from LTspice and is left as it is, so the "
-            "window shows the traces saved in it",
-            saved=saved,
-        )
+    left_alone = Kept(
+        f"{target.name} was saved from LTspice and is left as it is, so the "
+        "window shows the traces saved in it"
+    )
+    try:
+        settings = read_plot_settings(existing)
+    except NetlistError:
+        return left_alone
+    section = settings.section(SECTION_NAMES[analysis])
+    if not _written_from_panes(settings, existing):
+        return replace(left_alone, saved=section.panes if section is not None else ())
     scales = DEFAULT_SCALES[analysis]
-    settings = read_plot_settings(existing)
     drawn = with_panes(
         settings,
         analysis,
-        inherit_grid(
-            settings.section(SECTION_NAMES[analysis]),
-            [PlotPane(tuple(names), scales) for names in panes],
-        ),
+        inherit_grid(section, [PlotPane(tuple(names), scales) for names in panes]),
     )
     atomic_write_bytes(target, write_plot_settings(drawn), durable=False)
     return None
