@@ -35,7 +35,7 @@ import importlib
 import math
 import re
 import traceback
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Container, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -77,6 +77,8 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
+    GROUND,
+    NamedNets,
     NetPartition,
     build_on_wire_predicate,
     label_folded_nets,
@@ -1232,21 +1234,16 @@ def _pins_on_crossings(
     ]
     if not on_wires:
         return []
-    part = net_partition(editor, without=reference)
-    node_of = label_folded_nets(part)
-    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in part.label_texts.items():
-        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
+    nets = NamedNets(net_partition(editor, without=reference))
     said: list[str] = []
     for pin, through in on_wires:
         at = (pin["x"], pin["y"])
-        nodes = sorted({node_of(seg[:2]) for seg in through})
-        if len(nodes) < 2:
+        joined = nets.joined_at(seg[:2] for seg in through)
+        if joined.wired < 2:
             continue
         pin_name = f"{reference}.{pin['name']}"
-        named = [sorted(names_by_node[node]) for node in nodes if names_by_node[node]]
-        if len(named) > 1:
-            listed = "; ".join(str(names) for names in named)
+        if len(joined.named) > 1:
+            listed = "; ".join(str(sorted(names)) for names in joined.named)
             raise NetlistError(
                 f"Refused to {doing}: {pin_name} would land at ({at[0]},{at[1]}), where "
                 f"wires of nets that each carry a name cross ({listed}). A pin on a "
@@ -1254,7 +1251,7 @@ def _pins_on_crossings(
                 "where the pin is on the one wire it is meant for."
             )
         said.append(
-            f"{pin_name} at ({at[0]},{at[1]}) is on a point where {len(nodes)} wires cross "
+            f"{pin_name} at ({at[0]},{at[1]}) is on a point where {joined.wired} wires cross "
             "that were separate nets; a pin on a crossing joins them."
         )
     return said
@@ -1390,15 +1387,17 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     ``dangling_label``.
     """
     warnings: list[str] = []
-    part = net_partition(editor)
     # A FLAG anywhere along a wire, its interior included, joins that wire's
     # net, and one at a crossing joins both (see connectivity.partition for the
-    # export record).
+    # export record). It is one node with whatever sits on its point, and with
+    # every net already of its name; ground is no name (NamedNets.joined_at).
     through = wires_through((x, y), wire_segments_of(editor))
-    joined = _label_join(part, through, net, (x, y))
+    joined = NamedNets(net_partition(editor)).joined_at(
+        (seg[:2] for seg in through), at=(x, y), name=None if net == GROUND else net
+    )
     if len(joined.named) > 1:
         listed = "; ".join(f"{sorted(names)}" for names in joined.named)
-        if net == "0":
+        if net == GROUND:
             raise NetlistError(
                 f"Refused to add ground at ({x},{y}): wires of nets that each carry a "
                 f"name cross there ({listed}). A ground flag on a crossing joins the "
@@ -1411,7 +1410,7 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
             "them on purpose, give both the same name: remove one side's labels "
             "with remove_net_label and label it with the other's name."
         )
-    if net != "0":
+    if net != GROUND:
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
         # same-name labels into one net, which is a valid (often simpler) way to
         # tie distant nets. The only downstream cost is that wire_pins(net=...) can't
@@ -1440,47 +1439,6 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
             "label on a crossing joins them."
         )
     return warnings
-
-
-class _LabelJoin(NamedTuple):
-    """What a label placed on a point would make one node."""
-
-    #: The nets among them that carry a name, each as its names, ground excluded.
-    named: list[frozenset[str]]
-    #: How many separate nets the wires through the point were: more than one
-    #: where wires cross and nothing joined them.
-    wired: int
-
-
-def _label_join(
-    part: NetPartition,
-    through: Sequence[tuple[int, int, int, int]],
-    net: str,
-    at: tuple[int, int],
-) -> _LabelJoin:
-    """What a label ``net`` placed at ``at`` would make one node.
-
-    Read off the sheet's partition without the label: the label joins every
-    wire it touches (``through``, both wires at a crossing), whatever already
-    sits at ``at`` (a pin, a label, a wire end), and, by name, every net
-    already called ``net``. Two or more of them carrying a name is a short.
-
-    Ground joins what meets at its point and nothing by name. Nets that each
-    carry a ground flag are one node already, and are read as one here; a net
-    with a name may be given a ground whatever else is grounded, since that is
-    what the flag was asked for.
-    """
-    node_of = label_folded_nets(part)
-    names_by_node: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in part.label_texts.items():
-        names_by_node[node_of(coord)].update(named_labels(frozenset(texts)))
-    wired = {node_of(seg[:2]) for seg in through}
-    # A point the sheet does not have reads as its own unnamed node.
-    nodes = {node_of(at), *wired}
-    if net != "0":
-        nodes.update(node_of(coord) for coord, texts in part.label_texts.items() if net in texts)
-    named = [frozenset(names_by_node[n]) for n in sorted(nodes) if names_by_node[n]]
-    return _LabelJoin(named, len(wired))
 
 
 class _ConnectPlan(NamedTuple):

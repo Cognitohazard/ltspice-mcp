@@ -17,6 +17,7 @@ import pytest
 
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.connectivity import (
+    NamedNets,
     NetPartition,
     Point,
     Segment,
@@ -261,6 +262,78 @@ class TestNames:
         assert net_of((16, 0)) == net_of((112, 0))
         assert net_of((16, 0)) != net_of((200, 0))
         assert net_members(part, net_of, net_of((16, 0))) == {(0, 0), (16, 0), (96, 0), (112, 0)}
+
+
+def crossing(across: str = "", down: str = "", *more: tuple[Point, str]) -> NamedNets:
+    """A wire across and a wire down that cross at (200,100) and are not joined,
+    each with the label given for it, and any further labels."""
+    labels = [(at, name) for at, name in (((0, 100), across), ((200, 0), down)) if name]
+    return NamedNets(
+        partition([], [*labels, *more], [((0, 100), (400, 100)), ((200, 0), (200, 200))])
+    )
+
+
+#: A point of each of the two wires that cross.
+BOTH = [(0, 100), (200, 0)]
+
+
+class TestWhatAPointWouldJoin:
+    """Asked of a sheet as it is, before the pin or the label is on it."""
+
+    def test_on_one_wire_it_joins_that_net(self) -> None:
+        said = crossing("vdd", "vss").joined_at([(0, 100)])
+        assert (said.named, said.wired) == ((frozenset({"vdd"}),), 1)
+
+    def test_on_a_crossing_it_joins_both_wires(self) -> None:
+        said = crossing("vdd", "vss").joined_at(BOTH)
+        assert said.wired == 2
+        assert set(said.named) == {frozenset({"vdd"}), frozenset({"vss"})}
+
+    def test_two_wires_with_no_name_between_them_are_two_nets_and_no_names(self) -> None:
+        assert crossing().joined_at(BOTH) == ((), 2)
+        assert crossing("vdd").joined_at(BOTH) == ((frozenset({"vdd"}),), 2)
+
+    def test_wires_already_one_net_are_one(self) -> None:
+        looped = NamedNets(
+            partition(
+                [],
+                [((0, 100), "vdd")],
+                [
+                    ((0, 100), (400, 100)),
+                    ((200, 0), (200, 200)),
+                    ((400, 100), (400, 200)),
+                    ((400, 200), (200, 200)),
+                ],
+            )
+        )
+        assert looped.joined_at(BOTH) == ((frozenset({"vdd"}),), 1)
+
+    def test_a_name_it_carries_joins_every_net_already_of_that_name(self) -> None:
+        nets = crossing("vdd", "vss", ((900, 900), "out"))
+        assert nets.joined_at([(0, 100)]).named == (frozenset({"vdd"}),)
+        by_name = nets.joined_at([(0, 100)], name="out")
+        assert set(by_name.named) == {frozenset({"vdd"}), frozenset({"out"})}
+        assert by_name.wired == 1
+        # Its own name again joins nothing more, and a new name nothing at all.
+        assert nets.joined_at([(0, 100)], name="vdd").named == (frozenset({"vdd"}),)
+        assert nets.joined_at([(0, 100)], name="fresh").named == (frozenset({"vdd"}),)
+
+    def test_what_sits_on_the_place_is_joined_only_when_the_place_is_given(self) -> None:
+        """A label lands on what is there; a part's pin is not asked that way."""
+        nets = NamedNets(partition([((50, 50), ("R1", "A"))], [((50, 50), "out")], []))
+        assert nets.joined_at([]) == ((), 0)
+        assert nets.joined_at([], at=(50, 50)) == ((frozenset({"out"}),), 0)
+        assert nets.joined_at([], at=(700, 700)) == ((), 0)
+
+    def test_ground_is_no_name(self) -> None:
+        """Two named nets that each carry a ground are one net, of both names,
+        and a third net crossing it is the only other."""
+        nets = crossing("vdd", "vss", ((400, 100), "0"), ((900, 900), "com"), ((900, 900), "0"))
+        (grounded,) = nets.joined_at([(0, 100)]).named
+        assert grounded == frozenset({"vdd", "com"})
+        assert set(nets.joined_at(BOTH).named) == {grounded, frozenset({"vss"})}
+        only_ground = NamedNets(partition([], [((0, 0), "0")], [((0, 0), (64, 0))]))
+        assert only_ground.joined_at([(0, 0)]) == ((), 1)
 
 
 R1 = [((0, 0), ("R1", "A")), ((0, 96), ("R1", "B"))]

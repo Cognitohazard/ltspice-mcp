@@ -511,6 +511,18 @@ what must hold before the next one starts.
        what the flag was asked for. The record changed for the answers at a
        point where two nets met and for no other, and holds that no label
        is placed at such a point in silence.
+     - What the label op and the pin check work out is now one function of
+       plain data, `connectivity.NamedNets.joined_at`: the named nets a pin
+       or a label put on a point would make one node, and how many nets the
+       wires through the point were. The two ops collect the sheet from the
+       editor, ask it, and word the answer; the pin check still works the
+       sheet's nets out only for a pin that sits on more than one wire. Both
+       records are unchanged by it. The answers have no rule ids and no
+       registry yet, on purpose: a net given a second name and two named
+       nets joined are one fact of a transition (section 8), the route
+       planner holds the same fact in its own two checks, and the three
+       become one rule when an op is a function of the sheet (step 6), where
+       the nets before and after are both at hand.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
