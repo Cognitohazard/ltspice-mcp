@@ -740,6 +740,10 @@ recording that showed it.
   2 to 50 ms depending on the memory they held. The read's scratch directory
   was removed next, which a process still exiting can hold open. A tree is
   now confirmed gone only once each of its processes has exited.
+- An unknown `[tools] listing` (or `LTSPICE_MCP_TOOL_LISTING`) value was
+  logged as falling back to `full`, though the value was ignored and the
+  listing already in effect, `compact` by default, was kept. The warning now
+  says the value is ignored.
 
 ### Added
 
