@@ -1111,6 +1111,38 @@ def drive_save(
     return _Ended(stopped=True, exit_code=None)
 
 
+def add_trace_by_hand(
+    pane: int,
+    top_level: Callable[[], list[int]],
+    exe: Path,
+    expression: str,
+    until: Callable[[Callable[[], Any], str], Any],
+) -> None:
+    """Add a trace to a waveform pane as a person does: its Add Trace command,
+    the expression typed into the dialog that opens, and OK.
+
+    ``top_level`` lists the top-level windows of the pane's process, and
+    ``until`` waits for what a function returns to be true, as a recorder's own
+    waits do.
+    """
+    user = _user32()
+    user.PostMessageW(pane, _WM_COMMAND, waveform_commands(exe)[_ADD_TRACE], 0)
+    dialog = until(
+        lambda: next(
+            (
+                w
+                for w in top_level()
+                if window_class(w) == "#32770" and window_text(w) == _ADD_TRACES
+            ),
+            None,
+        ),
+        f"opening the {_ADD_TRACES} dialog",
+    )
+    _type_expression(dialog, expression)
+    user.PostMessageW(dialog, _WM_COMMAND, _IDOK, 0)
+    until(functools.partial(_closed, dialog), f"closing the {_ADD_TRACES} dialog")
+
+
 def _type_expression(dialog: int, expression: str) -> None:
     """Put ``expression`` in the Add Traces dialog's expression field.
 

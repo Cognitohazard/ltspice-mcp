@@ -118,6 +118,7 @@ class _ProcessInformation(ctypes.Structure):
 
 _NEEDS_WINDOWS = "A desktop of its own for a program needs Windows"
 _WM_COMMAND = 0x0111
+_WM_CLOSE = 0x0010
 
 
 @cache
@@ -289,6 +290,17 @@ def post_command(window: int, command: int) -> None:
     Windows refuses the message.
     """
     if not _user().PostMessageW(window, _WM_COMMAND, command, 0):
+        raise _last_error()
+
+
+def post_close(window: int) -> None:
+    """Ask ``window`` to close, as its close box would.
+
+    Posted, not sent, for the reasons ``post_command`` gives: what the window
+    does about it, a question to its user included, is its own affair. Raises
+    ``OSError`` when Windows refuses the message.
+    """
+    if not _user().PostMessageW(window, _WM_CLOSE, 0, 0):
         raise _last_error()
 
 

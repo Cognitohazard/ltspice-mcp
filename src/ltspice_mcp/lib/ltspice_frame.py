@@ -4,10 +4,13 @@ The bridge lists the sheets and netlists a window has open and never its
 results files, and it opens a results file only on its own, where LTspice does
 not tie the plot to a sheet: a click on a net then plots nothing. A person gets
 a tied plot by choosing Visible Traces on the sheet, which opens the results
-beside it. So the frame is asked two things directly:
+beside it. And LTspice reads a results file once: a pane that is open goes on
+showing what it read, whatever the file holds since. So the frame is asked
+three things directly:
 
 - which documents have a pane in it, results files included (``panes``);
-- to carry out a command of its own menu, as choosing it would (``send``).
+- to carry out a command of its own menu, as choosing it would (``send``);
+- to close one of its panes, as that pane's close box would (``close_pane``).
 
 A command is named by the label the menu shows. Its number is the build's own,
 so it is read from the menus of the executable the process runs
@@ -37,6 +40,8 @@ VISIBLE_TRACES = "Visible Traces"
 # A top-level menu only the schematic editor's menu bar has, which tells its
 # menu from the waveform viewer's and the symbol editor's.
 _SHEET_MENU = "Hierarchy"
+# The window class of a document's pane begins like the frame's own.
+_PANE_CLASS = "Afx:"
 
 
 class FrameError(BridgeError):
@@ -120,3 +125,23 @@ class LtspiceFrame:
             hidden_desktop.post_command(frame, command)
         except OSError as error:
             raise FrameError(f"LTspice's window did not take {label!r}: {error}") from error
+
+    def close_pane(self, pid: int, title: str) -> None:
+        """Ask ``pid``'s frame to close its pane titled ``title``; returns before it has.
+
+        For a results pane, which closes without a question and saves nothing
+        (recorded). A sheet with changes nobody saved would ask its user, so
+        this is not for one. Raises ``FrameError`` when the frame has no such
+        pane or the window does not take the request.
+        """
+        wanted = title.casefold()
+        for child in hidden_desktop.child_windows(self._frame(pid)):
+            if hidden_desktop.window_text(
+                child
+            ).casefold() == wanted and hidden_desktop.window_class(child).startswith(_PANE_CLASS):
+                try:
+                    hidden_desktop.post_close(child)
+                except OSError as error:
+                    raise FrameError(f"LTspice's window did not close {title}: {error}") from error
+                return
+        raise FrameError(f"LTspice process {pid} has no pane titled {title}")
