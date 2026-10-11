@@ -7,8 +7,10 @@ never reads the file again, that a run in the window is of the window's copy,
 and that a bridge told where LTspice is not cannot start one.
 ``lib/ltspice_frame.py`` encodes what the window's own frame does when it is
 asked directly: that its panes are titled with their files' names, that a
-sheet's Visible Traces command opens the results put beside the sheet, and
-that with those results open the same command asks which traces to show. And
+sheet's Visible Traces command opens the results put beside the sheet, that
+with those results open the same command asks which traces to show, that a
+results pane goes on holding what it read when its file is replaced, and that
+it closes without a question, a trace added by hand or not. And
 ``OpenWindows`` relies on an LTspice it starts with no document being offered
 to the bridge as a window, with nothing open in it. Each of those is recorded
 here from an installed build, under
@@ -57,15 +59,22 @@ from typing import Any
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.guide import split_front_matter
-from ltspice_mcp.lib.hidden_desktop import HiddenDesktop, post_command, window_class, window_text
+from ltspice_mcp.lib.hidden_desktop import (
+    HiddenDesktop,
+    child_windows,
+    post_command,
+    window_class,
+    window_text,
+)
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
-from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame, menu_command
+from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame, is_frame, menu_command
 from tests import ltspice_recorder
 from tests.ltspice_recorder import (
     MANIFEST,
     NEUTRAL_DIR,
     Build,
     RecorderError,
+    add_trace_by_hand,
     assert_private,
     discover_builds,
     neutral_settings,
@@ -282,17 +291,21 @@ def _frame_facts(
     recording: _Recording,
     session: BridgeSession,
     desktop: HiddenDesktop,
+    build: Build,
     pid: int,
     open_sheet: Path,
     results: Path,
+    newer: Path,
 ) -> None:
-    """What the window's frame shows, and when a sheet's Visible Traces
-    command opens the results beside the sheet.
+    """What the window's frame shows, when a sheet's Visible Traces command
+    opens the results beside the sheet, and what a results pane does when its
+    file is replaced and when it is closed.
 
     ``results`` are a run's, copied beside a sheet under the sheet's name,
     which is how a job's results come to stand there: once beside
     ``open_sheet``, which the window opened with none, and once beside a sheet
-    it has yet to open.
+    it has yet to open. ``newer`` are another run's, in double precision where
+    ``results`` are in single, which is how the two are told apart.
     """
     frame = LtspiceFrame(desktop.windows)
 
@@ -340,6 +353,54 @@ def _frame_facts(
     )
     post_command(asked, _IDCANCEL)
     _until(lambda: not dialogs(), "closing the dialog")
+
+    plot = placed.with_suffix(".raw")
+
+    def held() -> list[str]:
+        """What the results pane in front holds: how many points, in which precision."""
+        info = session.call("get_raw_info")
+        return [str(info["n_points"]), str(info["precision"])]
+
+    def reopened() -> None:
+        recording.call(session, "put the sheet in front", "bring_to_front", path=str(placed))
+        frame.send(pid, VISIBLE_TRACES)
+        _until(lambda: plot.name in frame.panes(pid), "opening the results again")
+        recording.call(session, "put the results in front", "bring_to_front", path=str(plot))
+
+    recording.call(session, "put the results in front", "bring_to_front", path=str(plot))
+    read_first = held()
+    shutil.copyfile(newer, plot)
+    recording.fact(
+        "a results pane goes on holding what it read when its file is replaced",
+        held() == read_first,
+    )
+    frame.close_pane(pid, plot.name)
+    _until(lambda: plot.name not in frame.panes(pid) or dialogs(), "closing the results pane")
+    recording.fact(
+        "a results pane told to close is closed, and LTspice asks nothing",
+        plot.name not in frame.panes(pid) and not dialogs(),
+    )
+    recording.fact("the sheet it was opened from stays open", placed.name in frame.panes(pid))
+    reopened()
+    recording.fact(
+        "the precision of the results the pane held, and of those it holds once opened again",
+        [read_first[1], held()[1]],
+    )
+
+    top = next(window for window in desktop.windows(pid) if is_frame(window))
+    pane = next(
+        child
+        for child in child_windows(top)
+        if window_text(child).casefold() == plot.name.casefold()
+        and window_class(child).startswith("Afx:")
+    )
+    add_trace_by_hand(pane, lambda: desktop.windows(pid), build.exe, "V(out)", _until)
+    frame.close_pane(pid, plot.name)
+    _until(lambda: plot.name not in frame.panes(pid) or dialogs(), "closing the results pane")
+    recording.fact(
+        "with a trace added by hand it closes the same, and saves no plot settings",
+        [plot.name not in frame.panes(pid), not dialogs(), plot.with_suffix(".plt").exists()],
+    )
 
 
 def reader_subjects() -> dict[str, list[str]]:
@@ -554,7 +615,16 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     "get_raw_info",
                     path=str(work / "absent.raw"),
                 )
-                _frame_facts(recording, session, desktop, window.pid, first, results)
+                _frame_facts(
+                    recording,
+                    session,
+                    desktop,
+                    build,
+                    window.pid,
+                    first,
+                    results,
+                    newer=ltspice_recorder.FIXTURES / build.label / "raw" / "tran_double.raw",
+                )
                 reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()

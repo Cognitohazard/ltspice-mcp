@@ -103,7 +103,10 @@ class FakeFrame(LtspiceFrame):
     was recorded doing: the sheets under ``with_results``, which the stand-in
     bridge adds a sheet to when it opens one that has results beside it. A
     world with ``frame_ignores`` is a window that does nothing with a command,
-    and one with ``frame_has_no_command`` a build whose menu lacks it.
+    and one with ``frame_has_no_command`` a build whose menu lacks it. A pane
+    told to close goes from ``panes`` and is noted under ``closed``, as a
+    results pane was recorded closing; in a world with ``frame_keeps_panes`` it
+    stays.
     """
 
     def __init__(self, world: Path) -> None:
@@ -131,6 +134,16 @@ class FakeFrame(LtspiceFrame):
         if label == VISIBLE_TRACES and known and not world.get("frame_ignores"):
             results = _name(in_front).rsplit(".", 1)[0] + ".raw"
             entry.setdefault("panes", []).append(results)
+        self._world.write_text(json.dumps(world), encoding="utf-8")
+
+    def close_pane(self, pid: int, title: str) -> None:
+        world = read_world(self._world)
+        entry = self._entry(world, pid)
+        if title not in entry.get("panes", []):
+            raise FrameError(f"LTspice process {pid} has no pane titled {title}")
+        entry.setdefault("closed", []).append(title)
+        if not world.get("frame_keeps_panes"):
+            entry["panes"] = [pane for pane in entry["panes"] if pane != title]
         self._world.write_text(json.dumps(world), encoding="utf-8")
 
 

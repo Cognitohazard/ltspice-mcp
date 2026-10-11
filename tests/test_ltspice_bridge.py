@@ -131,6 +131,18 @@ class TestRecording:
             "with those results open the same command asks which traces to show": (
                 "Select Visible Waveforms"
             ),
+            # What makes it safe to close a results pane to show a newer run.
+            "a results pane goes on holding what it read when its file is replaced": True,
+            "a results pane told to close is closed, and LTspice asks nothing": True,
+            "the sheet it was opened from stays open": True,
+            "the precision of the results the pane held, and of those it holds "
+            "once opened again": ["single", "double"],
+            # Closed, no dialog, and no .plt beside the sheet.
+            "with a trace added by hand it closes the same, and saves no plot settings": [
+                True,
+                True,
+                False,
+            ],
             "no LTspice was started in its place": True,
         }
 

@@ -1047,7 +1047,7 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
             "Also open the run in the user's LTspice window (26.1+), started if "
             "none is open, with these traces drawn; writes a .plt beside the results file. A sheet's "
             "run is opened from the sheet, so a click on a net plots it: its "
-            "results replace those beside the sheet."
+            "results replace those beside the sheet, reopening their plot."
         ),
     )
     annotate: bool = Field(
@@ -1099,6 +1099,10 @@ _BY_HAND_NOTE = (
 _REPLACE_NOTE = (
     "saved_panes lists them. To draw others, replace them with the set_plot_panes op "
     "of edit_schematic on the sheet; the axis ranges saved with them go too."
+)
+_REOPENED_NOTE = (
+    "LTspice had a plot of the sheet's results open, which was closed and opened again "
+    "to show these; traces added to it by hand were not kept."
 )
 
 
@@ -1274,6 +1278,9 @@ def _show_from_sheet(
     note = _TIED_NOTE if left_alone is None else f"{_TIED_NOTE} {left_alone}."
     if "saved_panes" in report:
         note += f" {_REPLACE_NOTE}"
+    if shown.reopened:
+        report["reopened"] = True
+        note += f" {_REOPENED_NOTE}"
     report.update(shown_in_window(shown), note=note)
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
@@ -1338,6 +1345,13 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                 "properties": {
                     **LTSPICE_SHOWN_PROPERTIES,
                     "results": {"type": "string", "description": "The file opened."},
+                    "reopened": {
+                        "type": "boolean",
+                        "description": (
+                            "LTspice had a plot of the sheet's results open, which was "
+                            "closed and opened again; traces added by hand were not kept."
+                        ),
+                    },
                     "sheet": {
                         "type": "string",
                         "description": (

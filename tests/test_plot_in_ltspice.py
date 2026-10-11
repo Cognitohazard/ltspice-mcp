@@ -434,29 +434,89 @@ async def test_results_beside_the_sheet_of_their_name_are_opened_from_it(
     assert read_world(world)["windows"][0]["commands"] == ["Visible Traces"]
 
 
-async def test_results_the_window_already_has_open_are_left_alone(
+async def test_a_plot_already_open_is_closed_and_opened_again_with_the_newer_results(
     state_no_sim: SessionState, work_dir: Path, tmp_path: Path
 ):
-    """LTspice does not read a results file again, and with them open its
-    command asks which traces to show: nothing is replaced and nothing sent."""
+    """LTspice does not read a results file again while its pane is open, and
+    with the pane open its command asks which traces to show. The pane closes
+    without a question, so it is closed, and the newer results opened."""
+    sheet = a_sheet(work_dir)
+    raw = a_job_of(state_no_sim, sheet, work_dir)
+    write(sheet.with_suffix(".raw"), b"the results of an earlier run")
+    world = tmp_path / "world.json"
+    put_windows(
+        state_no_sim,
+        world,
+        [
+            a_window(
+                {str(sheet): as_ltspice_reads(sheet)},
+                panes=["amp.raw"],
+                with_results=[str(sheet)],
+            )
+        ],
+    )
+
+    data = await plot_the_job(state_no_sim)
+
+    shown = data["ltspice"]
+    assert shown["shown"] is True
+    assert shown["reopened"] is True
+    assert shown["note"] == (
+        "The plot is tied to the sheet: a click on a net there plots it. LTspice had a "
+        "plot of the sheet's results open, which was closed and opened again to show "
+        "these; traces added to it by hand were not kept."
+    )
+    assert read(sheet.with_suffix(".raw")) == read(raw)
+    window = read_world(world)["windows"][0]
+    assert window["closed"] == ["amp.raw"]
+    assert window["commands"] == ["Visible Traces"]
+    assert window["panes"] == ["amp.raw"]
+
+
+async def test_a_plot_that_was_not_open_is_not_said_to_be_opened_again(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    sheet = a_sheet(work_dir)
+    a_job_of(state_no_sim, sheet, work_dir)
+    world = tmp_path / "world.json"
+    one_window(state_no_sim, world)
+
+    shown = (await plot_the_job(state_no_sim))["ltspice"]
+
+    assert shown["shown"] is True
+    assert "reopened" not in shown
+    assert "closed" not in read_world(world)["windows"][0]
+
+
+async def test_a_plot_that_will_not_close_leaves_the_results_beside_the_sheet_alone(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(ltspice_window, "_OPENED_S", 0.3)  # timing: the wait under test
     sheet = a_sheet(work_dir)
     a_job_of(state_no_sim, sheet, work_dir)
     write(sheet.with_suffix(".raw"), b"the results of an earlier run")
     world = tmp_path / "world.json"
-    put_windows(state_no_sim, world, [a_window(panes=["amp.raw"])])
+    put_windows(
+        state_no_sim,
+        world,
+        [a_window({str(sheet): as_ltspice_reads(sheet)}, panes=["amp.raw"])],
+        frame_keeps_panes=True,
+    )
 
     data = await plot_the_job(state_no_sim)
 
     shown = data["ltspice"]
     assert shown["shown"] is False
     assert shown["reason"] == (
-        "LTspice already has amp.raw open, and goes on showing the results it read; "
-        "close that plot there and ask again"
+        "LTspice has amp.raw open and did not close it within 0.3 s, so it goes on "
+        "showing the results it read; close that plot there and ask again"
     )
     assert "note" not in shown and "sheet" not in shown
     assert read(sheet.with_suffix(".raw")) == b"the results of an earlier run"
     assert not exists(sheet.with_suffix(".plt"))
-    assert "commands" not in read_world(world)["windows"][0]
+    window = read_world(world)["windows"][0]
+    assert window["closed"] == ["amp.raw"]
+    assert "commands" not in window
     # The chart and its numbers are made all the same.
     assert was_written(data["path"])
 

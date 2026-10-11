@@ -47,9 +47,11 @@ job that ran an `.asc`. The run's results are put beside the sheet under its
 name, replacing the ones there, and opened from the sheet, which is what makes
 LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, and
 a click on a net there plots it. Results beside a sheet of the same name,
-which is what a run in LTspice leaves, open the same way by `raw_file`. Two
-replies ask something of the user. LTspice already has that plot open, and
-goes on showing what it read: they close it there, and you ask again. Or
+which is what a run in LTspice leaves, open the same way by `raw_file`. A plot
+of the sheet's results that LTspice already has open is closed and opened
+again, since an open plot goes on showing the run it read: the block says
+`reopened: true`, and traces the user added to that plot by hand are gone, so
+say so if they had been working in it. One reply asks something of the user.
 LTspice had the sheet open before it had any results, and looks for them only
 as it opens a sheet: they close the sheet there, and you ask again, since the
 results are beside it now. A run of a netlist has no sheet to tie to and opens

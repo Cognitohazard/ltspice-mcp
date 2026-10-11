@@ -836,11 +836,13 @@ recording that showed it.
   run made in LTspice. The run's results and log are put beside the sheet
   under its name, replacing the ones there, and the sheet's own Visible Traces
   command opens them: no second simulation. The reply's `ltspice` block names
-  the `sheet`. Nothing is written when no window is open, when the sheet is
-  outside the sandbox, or when LTspice already has that plot open (it would go
-  on showing what it read); a sheet LTspice had open before it had any
-  results has to be closed there once, and the reply says so. A run of a
-  netlist opens on its own, as before.
+  the `sheet`. Nothing is written when no window is open or when the sheet
+  is outside the sandbox. A plot of the sheet's results that LTspice already
+  has open would go on showing the run it read, so it is closed and opened
+  again with the new one (`reopened: true`); traces added to it by hand are
+  not kept. A sheet LTspice had open before it had any results has to be
+  closed there once, and the reply says so. A run of a netlist opens on its
+  own, as before.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 

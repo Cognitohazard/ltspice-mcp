@@ -1043,16 +1043,16 @@ class TestSheetOpenInAWindow:
 
         assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, pid, sheet)
 
-        # Asked again with the plot open, nothing is replaced and nothing sent:
-        # LTspice would go on showing what it read, and ask which traces to show.
+        # Asked again with the plot open: LTspice would go on showing what it
+        # read, and ask which traces to show, so the plot is closed and opened again.
         again = await handle_plot_waveform(
             PlotWaveformInput(job_id=receipt["job_id"], signals=["V(filtered)"], in_ltspice=True),
             ltspice_state,
         )
         assert again.structured_content is not None
-        refused = again.structured_content["ltspice"]
-        assert refused["shown"] is False
-        assert "already has amp.raw open" in refused["reason"]
+        once_more = again.structured_content["ltspice"]
+        assert (once_more["shown"], once_more.get("reopened")) == (True, True), once_more
+        assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, pid, sheet)
 
     async def test_with_no_window_open_ltspice_is_started_and_shows_the_sheet(
         self, ltspice_state: SessionState, work_dir: Path

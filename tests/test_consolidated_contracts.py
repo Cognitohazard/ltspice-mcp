@@ -796,7 +796,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # has to be told before it asks. Measured 4,408.
     # About 20 more for the same reason as on verify_circuit: in_ltspice says
     # that LTspice is started if none is open. Measured 4,429.
-    "plot_waveform": 4430,
+    # About 20 more for three words on the same argument: a plot of the
+    # sheet's results that is open is reopened, which closes a pane the user
+    # may have added traces to. Measured 4,451.
+    "plot_waveform": 4455,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
