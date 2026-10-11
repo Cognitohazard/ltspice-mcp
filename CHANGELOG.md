@@ -50,25 +50,21 @@ tool-surface changes.
   took on that net and its name. Such a crossing is now a contact like any
   other, refused onto another net and reported as a junction on the route's
   own.
-- `add_net_label` placed a ground flag where wires of two named nets cross
-  and said nothing. A label on a crossing joins the two wires (the
+- `add_net_label` placed a ground flag at a crossing of two named nets
+  without a warning. A label at a crossing joins both wires (the
   `label_at_crossing` recording), so the flag shorted the two nets together
-  and to ground; a named label or a pin on the same point was already
-  refused, and ground had been left out of that check. It is refused now,
-  naming the point and the two nets. A label of any name on a crossing where
-  at most one wire has a name is still placed, and the op now says that it
-  joined two nets, as it does for a pin placed there. Grounding a net that
-  has a name is unchanged, however many named nets are grounded.
+  and to ground. A named label or a pin at the same point was already
+  refused; ground skipped that check. It is now refused, and the error names
+  the point and the two nets. A label at a crossing where at most one wire is
+  named is still placed, now with a warning that it joins two nets. Grounding
+  a net that has a name is unchanged.
 - `verify_circuit` and `edit_schematic` reported a wire as passing through a
-  part's body whenever it ended on a pin of that part lying inside what the
-  part draws, which is every wire to such a pin. About one symbol in twenty of
-  LTspice's own library has one (a frame drawn a unit outside its column of
-  pins, a pin on the slanted side of a triangle), and on its 4,366 example
-  sheets this made 1,343 of the 1,440 wires reported, on 323 sheets. A wire
-  that ends on such a pin and runs straight out of the body by the nearer
-  edge on its line is now the connection it is. One that runs back across
-  the body, or ends inside it, is still reported; 136 are left on 62 of those
-  sheets.
+  part's body whenever it ended on a pin inside the part's body box. About 4%
+  of LTspice's stock symbols have such a pin (a frame drawn one unit outside
+  its pin column, a pin on the slanted side of a triangle). A wire that ends
+  on such a pin and exits the box through the nearer edge along its own axis
+  is no longer reported; one that crosses the body or ends inside it still
+  is. On LTspice's 4,366 example sheets, findings drop from 1,440 to 136.
 - `add_component` and `move_component` could short two named nets and say
   nothing. A pin on the point where two wires cross joins them (the
   `pin_at_crossing` recording), and a part placed or moved so that a pin
@@ -1092,23 +1088,21 @@ recording that showed it.
 
 ### Changed
 
-- `wire_pins` no longer advises on a route over 400 units ("Long wire run
-  ..."). The length was one the server picked, no length is a fault, and
-  LTspice's own example sheets have a wire that long on nearly one sheet in
-  three. The guide's wiring section gives the measured spread of wire
-  lengths on those sheets and when a net label at each end reads better.
-- An `edit_schematic` reply said three things twice: a route drawn through a
-  part, a part placed or moved over another, and a label put on nothing were
-  reported once by the op (`op 3 (wire_pins): Wire at y=252 crosses R4
+- `wire_pins` no longer warns about routes over 400 units ("Long wire run
+  ..."). The threshold was arbitrary: 29% of LTspice's own example sheets have
+  a wire that long. The guide's wiring section now gives the measured
+  distribution of wire lengths.
+- `edit_schematic` no longer reports three conditions twice. A route through
+  a part, a part overlapping another, and a label touching nothing were each
+  reported as an op warning (`op 3 (wire_pins): Wire at y=252 crosses R4
   bounding box ...`, `Overlaps R1 bounding box`, a floating-label note) and
-  once by the sheet's own finding. The op's sentence is gone; the finding in
-  `warnings` is the one report, and it is what `verify_circuit` says of the
-  same sheet. Two things follow. What is said is of the sheet the batch
-  leaves, so a label placed before the wire that reaches it, or an overlap a
-  later op in the batch undoes, is no longer mentioned. And a route through a
-  part is judged by what the part draws, the route's own end parts included,
-  where the op's advisory went by the box with pins and skipped the parts the
-  route ended on.
+  again as a sheet finding. The op warnings are removed; the sheet findings in
+  `warnings` remain, and match what `verify_circuit` reports. Two
+  consequences. Findings describe the sheet after the whole batch, so a label
+  that a later op wires up, or an overlap a later op removes, is no longer
+  reported. And a route through a part is judged by the part's body box,
+  including the parts the route ends on; the op warning used the box with
+  pins and skipped those parts.
 - `edit_schematic` and `verify_circuit` now report one list of sheet findings.
   Each told a caller things the other did not: an edit never said that a part
   it placed overlapped another's box as a finding of the sheet, that a wire ran
