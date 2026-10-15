@@ -12,10 +12,11 @@ from spicelib import AscEditor
 from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_ops import collect_component_geometry, make_editor
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, parse_symbol
+from ltspice_mcp.lib.schematic_scene import build_scene, parse_symbol
 from ltspice_mcp.lib.schematic_scene import sheet_view as scene_view
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolArc, read_symbol
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests._schematic_fixtures import SUITE_SYMBOLS, suite_name
 
 NMOS = (

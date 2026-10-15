@@ -1343,9 +1343,16 @@ def _symbol_findings(found: list[Finding], path: Path) -> list[dict[str, Any]]:
     the remedy is the symbol's.
     """
     users: dict[str, list[str]] = {}
+    unreadable: dict[str, str] = {}
     for one in found:
         if one.rule == "unresolved_symbol":
             users.setdefault(one.facts["symbol"], []).append(one.refs[0])
+            if "unreadable" in one.facts:
+                unreadable[one.facts["symbol"]] = one.facts["unreadable"]
+    not_found = (
+        "drawn as a placeholder box; searched the schematic directory, "
+        "the configured symbol paths, and the stock library"
+    )
     return [
         _finding(
             rule_id="unresolved_symbol",
@@ -1356,8 +1363,10 @@ def _symbol_findings(found: list[Finding], path: Path) -> list[dict[str, Any]]:
                 "symbol": symbol,
                 "instances": parts,
                 "detail": (
-                    "drawn as a placeholder box; searched the schematic directory, "
-                    "the configured symbol paths, and the stock library"
+                    f"drawn as a placeholder box; the symbol file has a pin line that "
+                    f"does not read: {unreadable[symbol]!r}"
+                    if symbol in unreadable
+                    else not_found
                 ),
             },
         )

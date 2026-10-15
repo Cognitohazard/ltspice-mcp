@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ltspice_mcp.lib.asc_document import AscDocument, Symbol, parse_asc
+from ltspice_mcp.lib.asc_document import AscDocument, Symbol, parse_asc, parse_asc_text
 from ltspice_mcp.lib.connectivity import NetPartition, partition
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
@@ -160,6 +160,11 @@ def sheet_of(document: AscDocument, resolver: SymbolResolver) -> Sheet:
             parts.append(_placed(record, line, resolver.load(record.symbol)))
         line += len(record.source or ())
     return Sheet(document, tuple(parts))
+
+
+def read_sheet_text(text: str, resolver: SymbolResolver) -> Sheet:
+    """The sheet whose ``.asc`` text, already decoded, is ``text``."""
+    return sheet_of(parse_asc_text(text), resolver)
 
 
 def read_sheet(data: bytes, resolver: SymbolResolver) -> Sheet:
