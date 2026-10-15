@@ -629,8 +629,25 @@ async def test_results_of_that_name_open_on_their_own_do_not_pass_for_the_sheets
     window = read_world(world)["windows"][0]
     assert window["closed"] == [str(sheet)]
     assert window["panes"] == [str(sheet.with_suffix(".raw")), str(other)]
-    # With results beside it, it could have known of them: it was asked where it stood first.
-    assert window["commands"] == ["Visible Traces", "Visible Traces"]
+    # Its menu says it knows of none, so it is not sent the command until it is reopened.
+    assert window["commands"] == ["Visible Traces"]
+
+
+@pytest.mark.usefixtures("quick_to_tell")
+async def test_where_the_menu_cannot_be_read_the_command_is_tried_first(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """Without the menu to say whether the sheet knows of results, it is sent
+    the command where it stands, and opened again when nothing comes of it."""
+    sheet = a_sheet(work_dir)
+    a_job_of(state_no_sim, sheet, work_dir)
+    world = tmp_path / "world.json"
+    put_windows(state_no_sim, world, [holding(sheet)], menu_unread=True)
+
+    shown = (await plot_the_job(state_no_sim))["ltspice"]
+
+    assert (shown["tied"], shown["sheet_reopened"]) == (True, True)
+    assert read_world(world)["windows"][0]["commands"] == ["Visible Traces", "Visible Traces"]
 
 
 async def test_a_plot_that_was_not_open_is_not_said_to_be_opened_again(
