@@ -90,6 +90,7 @@ from tests.ltspice_recorder import (
     RecorderError,
     add_trace_by_hand,
     assert_private,
+    click_all_over,
     discover_builds,
     drawn_traces,
     neutral_settings,
@@ -667,6 +668,103 @@ def _sheet_close_facts(
     _close_all(frame, pid, sheet.name)
 
 
+def _tie_and_menu_facts(
+    recording: _Recording,
+    session: BridgeSession,
+    desktop: HiddenDesktop,
+    build: Build,
+    pid: int,
+    work: Path,
+    results: Path,
+) -> None:
+    """Which plots are tied to their sheet, and what the sheet menu's Visible
+    Traces item says of a sheet's results.
+
+    A plot is tied when a click on its sheet plots what it lands on: the
+    sheet is clicked all over, and the traces the plot draws read before and
+    after. Each sheet is a copy of one input with ``results``, a run of it,
+    beside it, named for the state it is in.
+    """
+    frame = LtspiceFrame(desktop.windows)
+    sheets = {name: work / f"tie_{name}.asc" for name in ("none", "late", "known", "alone")}
+
+    def with_results(sheet: Path) -> None:
+        plot = sheet.with_suffix(".raw")
+        shutil.copyfile(results, plot)
+        # One trace the clicks will not have drawn, whatever they land on first.
+        plot_settings.plot_settings_path(plot).unlink(missing_ok=True)
+        transient = plot_settings.SECTION_NAMES["tran"]
+        if plot_settings.write_beside(plot, transient, [["I(R1)"]]) is not None:
+            raise RecorderError("the plot settings were not written")
+
+    def enabled(sheet: Path) -> bool | None:
+        session.bring_to_front(str(sheet))
+        return frame.command_enabled(pid, VISIBLE_TRACES)
+
+    def follows_clicks(sheet: Path) -> bool:
+        """Whether the plot of the results beside ``sheet`` changes when the sheet is clicked."""
+        plot = sheet.with_suffix(".raw")
+        until = functools.partial(_until, doing="saving plot settings")
+
+        def drawn() -> list[list[str]]:
+            session.bring_to_front(str(plot))
+            pane = _until(lambda: frame.pane(pid, plot.name), "finding the plot")
+            return drawn_traces(pane, build.exe, plot, until)
+
+        before = drawn()
+        session.bring_to_front(str(sheet))
+        pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet")
+        (view,) = child_windows(pane)[:1]
+        click_all_over(view)
+        return drawn() != before
+
+    for sheet in sheets.values():
+        shutil.copyfile(INPUTS / f"{EDITED}.asc", sheet)
+    with_results(sheets["known"])
+    for sheet in sheets.values():
+        session.open_design(str(sheet))
+    with_results(sheets["late"])
+    with_results(sheets["alone"])
+    states = [enabled(sheets[name]) for name in ("none", "late", "known")]
+    session.bring_to_front(str(sheets["known"]))
+    frame.send(pid, VISIBLE_TRACES)
+    _until(lambda: frame.pane(pid, sheets["known"].with_suffix(".raw").name), "opening the plot")
+    recording.fact(
+        "Visible Traces is enabled for a sheet with no results, one with results put "
+        "beside it after it was opened, one with results beside it when it was opened, "
+        "and that one with its plot open",
+        [*states, enabled(sheets["known"])],
+    )
+    recording.fact(
+        "a plot opened by its sheet's Visible Traces plots what a click on the sheet lands on",
+        follows_clicks(sheets["known"]),
+    )
+
+    session.show_results(str(sheets["alone"].with_suffix(".raw")))
+    recording.fact(
+        "a plot of results opened by their own path does, for a sheet that knows of none",
+        follows_clicks(sheets["alone"]),
+    )
+    for each in ("late", "known"):
+        for pane in frame.panes_titled(pid, sheets[each].with_suffix(".raw").name):
+            frame.close(pane)
+    _until(
+        lambda: not frame.panes_titled(pid, sheets["known"].with_suffix(".raw").name),
+        "closing the plot opened by the command",
+    )
+    asked_about = [
+        Path(str(session.call("get_raw_info", path=str(sheets[each])).get("path"))).name
+        for each in ("late", "known")
+    ]
+    recording.fact(
+        "asked about a sheet by its path, the bridge opens the results beside it", asked_about
+    )
+    recording.fact(
+        "that plot does, for a sheet that knows of none and for one that knows of its results",
+        [follows_clicks(sheets["late"]), follows_clicks(sheets["known"])],
+    )
+
+
 def reader_subjects() -> dict[str, list[str]]:
     """The results files LTspice's reader is asked about, by the build that wrote them.
 
@@ -893,6 +991,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     recording, session, desktop, build, window.pid, first, results
                 )
                 _sheet_close_facts(recording, session, desktop, scrub, window.pid, work, results)
+                _tie_and_menu_facts(recording, session, desktop, build, window.pid, work, results)
                 reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()

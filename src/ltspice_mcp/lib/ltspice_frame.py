@@ -15,7 +15,10 @@ sheet's results once, as it opens the sheet. So the frame is asked directly:
 - what LTspice asks before it closes a sheet with changes nobody saved, and
   to answer that without saving (``save_question``, ``answer``);
 - whether it takes a person's input, which it does not while LTspice has a
-  box up that must be answered first (``takes_input``).
+  box up that must be answered first (``takes_input``);
+- whether a command of its menu is enabled for the document in front, which
+  for Visible Traces says whether a sheet knows of results
+  (``command_enabled``).
 
 A pane is known by its title, its file's name, which two files in different
 folders share. Windows lists the panes from the front, so the first pane of a
@@ -144,6 +147,15 @@ class LtspiceFrame:
         command or the window does not take it.
         """
         frame = self._frame(pid)
+        command = self._command(pid, label)
+        try:
+            hidden_desktop.post_command(frame, command)
+        except OSError as error:
+            raise FrameError(f"LTspice's window did not take {label!r}: {error}") from error
+
+    @staticmethod
+    def _command(pid: int, label: str) -> int:
+        """The number of the sheet command ``label`` in the build process ``pid`` runs."""
         try:
             executable = Path(psutil.Process(pid).exe())
             command = menu_command(executable, label)
@@ -153,10 +165,20 @@ class LtspiceFrame:
             ) from error
         if command is None:
             raise FrameError(f"this LTspice build's sheet menu has no {label!r} command")
+        return command
+
+    def command_enabled(self, pid: int, label: str) -> bool | None:
+        """Whether the sheet command ``label`` is enabled for the document in
+        front of ``pid``'s frame, as its menu would show it.
+
+        None where the menu cannot be read. Visible Traces is turned off for a
+        sheet that knows of no results, which is one LTspice opened with none
+        beside it, whatever was put there since (recorded).
+        """
         try:
-            hidden_desktop.post_command(frame, command)
-        except OSError as error:
-            raise FrameError(f"LTspice's window did not take {label!r}: {error}") from error
+            return hidden_desktop.menu_item_enabled(self._frame(pid), self._command(pid, label))
+        except OSError:
+            return None
 
     def panes_titled(self, pid: int, title: str) -> list[int]:
         """The window of each pane titled ``title`` in ``pid``'s frame, the one in front first.
