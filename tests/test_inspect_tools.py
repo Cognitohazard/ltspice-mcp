@@ -1294,3 +1294,61 @@ async def test_symbol_reports_what_an_instance_netlists_with(
         "Description": "Schmitt trigger buffer",
     }
     assert data["description"] == "Schmitt trigger buffer"
+
+
+class TestAReadDuringAnEdit:
+    """An edit changes the schematic editor it holds before it commits, and
+    awaits its findings and its commit on the way. A read of the sheet in that
+    window reads the file, not the edit in progress."""
+
+    @staticmethod
+    async def _while_an_edit_waits(
+        state: SessionState, sheet: Path, monkeypatch: pytest.MonkeyPatch, query: dict
+    ) -> dict:
+        import threading
+
+        from ltspice_mcp.tools import schematic_edit
+        from tests._asc_ops import apply_ops, inspect_one
+        from tests.conftest import LIVENESS_S
+
+        reached, release = threading.Event(), threading.Event()
+        original = schematic_edit._findings_before_and_after  # pyright: ignore[reportPrivateUsage]
+
+        def held(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+            reached.set()
+            assert release.wait(LIVENESS_S)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(schematic_edit, "_findings_before_and_after", held)
+
+        async def edit() -> dict:
+            ops = [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"}]
+            return await apply_ops(state, sheet, ops)
+
+        async def read() -> dict:
+            try:
+                assert await asyncio.to_thread(reached.wait, LIVENESS_S)
+                return await inspect_one(state, query)
+            finally:
+                release.set()
+
+        edited, read_back = await asyncio.gather(edit(), read())
+        assert edited["commit_state"] == "committed"
+        return read_back
+
+    async def test_a_net_trace_shows_the_file(
+        self, asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests._asc_ops import build_sheet
+
+        add = {"op": "add_component", "symbol": "res", "y": 100}
+        await build_sheet(
+            asc_state,
+            "mid_edit",
+            [{**add, "reference": "R1", "x": 100}, {**add, "reference": "R2", "x": 300}],
+        )
+        sheet = work_dir / "mid_edit.asc"
+        traced = await self._while_an_edit_waits(
+            asc_state, sheet, monkeypatch, {"kind": "net", "path": str(sheet), "at": "R1.1"}
+        )
+        assert [pin["reference"] for pin in traced["pins"]] == ["R1"]

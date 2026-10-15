@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from pathlib import Path
 
 import pytest
 from spicelib import AscEditor
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.schematic_ops import make_editor, net_partition, placed_geometry
 from ltspice_mcp.lib.schematic_scene import build_scene, editor_symbol_resolver
@@ -146,3 +148,39 @@ class TestAPart:
         assert read.wires == ((0, 0, 96, 0),)
         assert read.labels == ((0, 0, "in"),)
         assert read.partition().label_texts == {(0, 0): {"in"}}
+
+
+class TestAPinByName:
+    def _read(self, tmp_path: Path, body: str) -> Sheet:
+        write_file(tmp_path / "box2.asy", BOX2_ASY)
+        text = "Version 4\nSHEET 1 880 680\n" + body
+        return read_sheet(text.encode("ascii"), SymbolResolver(local_dir=tmp_path))
+
+    def test_by_name_then_by_spice_order(self, tmp_path: Path) -> None:
+        read = self._read(tmp_path, "SYMBOL box2 96 0 R0\nSYMATTR InstName U1\n")
+        assert read.pin_at("U1.a") == (96, 8)
+        assert read.pin_at("U1.2") == (128, 8)
+
+    def test_of_a_reference_two_parts_share_is_refused_naming_both(self, tmp_path: Path) -> None:
+        twice = (
+            "SYMBOL box2 96 0 R0\nSYMATTR InstName U1\nSYMBOL box2 300 0 R0\nSYMATTR InstName U1\n"
+        )
+        read = self._read(tmp_path, twice)
+        assert len(read.parts_named("U1")) == 2
+        with pytest.raises(
+            NetlistError, match=r"'U1' names 2 parts, placed at \(96,0\), \(300,0\)"
+        ):
+            read.pin_at("U1.A")
+
+    @pytest.mark.parametrize(
+        ("spec", "said"),
+        [
+            ("U9.A", "Component 'U9' not found. Available: U1"),
+            ("U1.C", "Pin 'C' not found on U1 (box2). Available: A (1), B (2)"),
+            ("U1", "Invalid pin reference 'U1'"),
+        ],
+    )
+    def test_that_is_not_there_is_refused(self, tmp_path: Path, spec: str, said: str) -> None:
+        read = self._read(tmp_path, "SYMBOL box2 96 0 R0\nSYMATTR InstName U1\n")
+        with pytest.raises(NetlistError, match=re.escape(said)):
+            read.pin_at(spec)
