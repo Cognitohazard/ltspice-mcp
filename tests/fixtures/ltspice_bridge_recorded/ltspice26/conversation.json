@@ -683,6 +683,37 @@
   "observed": true
  },
  {
+  "note": "Visible Traces is enabled for a sheet with no results, one with results put beside it after it was opened, one with results beside it when it was opened, and that one with its plot open",
+  "observed": [
+   false,
+   false,
+   true,
+   true
+  ]
+ },
+ {
+  "note": "a plot opened by its sheet's Visible Traces plots what a click on the sheet lands on",
+  "observed": true
+ },
+ {
+  "note": "a plot of results opened by their own path does, for a sheet that knows of none",
+  "observed": false
+ },
+ {
+  "note": "asked about a sheet by its path, the bridge opens the results beside it",
+  "observed": [
+   "tie_late.raw",
+   "tie_known.raw"
+  ]
+ },
+ {
+  "note": "that plot does, for a sheet that knows of none and for one that knows of its results",
+  "observed": [
+   false,
+   false
+  ]
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},

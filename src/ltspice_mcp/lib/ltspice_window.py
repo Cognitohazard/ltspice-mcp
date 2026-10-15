@@ -90,9 +90,10 @@ _OPENED_S = 5.0
 """How long LTspice is given to show the results it was asked to open. Opening
 a results file is quick; this is a cap on a window that did nothing."""
 _LOOKED_S = 2.0
-"""How long a sheet that was already open is given to open its results. One
-that knows of them does it in a fraction of a second however large they are,
-and one that knows of none never does: this is how long it takes to tell."""
+"""How long a sheet that was already open is given to open its results where
+its menu cannot say whether it knows of any. One that knows of them does it
+in a fraction of a second however large they are, and one that knows of none
+never does: this is how long it takes to tell."""
 _CLOSED_S = 2.0
 """How long LTspice is given to close a pane it was told to close, or to ask
 about it. Either takes a moment; this is a cap on a window that did neither."""
@@ -589,8 +590,9 @@ class OpenWindows:
         LTspice looks for a sheet's results as it opens the sheet, and
         afterwards knows of none but those of a run it made there. So a sheet
         no window has open is opened only once ``place`` has been called. One
-        that was open before it had any does nothing with the command, and is
-        closed and opened again, which ``sheet_reopened`` says: its place in
+        that was open before it had any knows of none, which its menu shows
+        by turning the command off (recorded), and is closed and opened
+        again, which ``sheet_reopened`` says: its place in
         the window and its undo history go with it, and nothing else, because
         it is closed only where the window holds what the file does
         (``_close_sheet``). Where it holds anything else, the results are
@@ -610,15 +612,20 @@ class OpenWindows:
             window, spelled = self._holder(session, sheet)
             held = None if spelled is None else session.design_text(spelled)
             reopened = self._close_results(session, window.pid, results)
-        # A sheet open with no results beside it knows of none: LTspice looks
-        # for them only as it opens a sheet, and a run made there leaves them.
-        may_know = results.exists()
         place()
-        if held is None or may_know:
-            if self._open_from_sheet(window.pid, sheet, _OPENED_S if held is None else _LOOKED_S):
-                return Shown(window, held, reopened=reopened, tied=True)
-            if held is None:
-                raise BridgeError(f"LTspice did not open {results.name} within {_OPENED_S:g} s")
+        if held is None:
+            if self._open_from_sheet(window.pid, sheet, _OPENED_S):
+                return Shown(window, reopened=reopened, tied=True)
+            raise BridgeError(f"LTspice did not open {results.name} within {_OPENED_S:g} s")
+        with self._session() as session:
+            session.attach(window.pid)
+            self._sheet_in_front(session, sheet)
+        # Where the menu cannot say, the command is tried and given a while.
+        knows = self._frame.command_enabled(window.pid, VISIBLE_TRACES)
+        if knows is not False and self._visible_traces(
+            window.pid, sheet, _OPENED_S if knows else _LOOKED_S
+        ):
+            return Shown(window, held, reopened=reopened, tied=True)
         with self._session() as session:
             session.attach(window.pid)
             unsaved = self._close_sheet(session, window.pid, sheet, held)

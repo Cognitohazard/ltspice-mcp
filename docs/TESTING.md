@@ -698,18 +698,19 @@ window takes no input while the box is up, that the bridge still answers, that
 Cancel leaves the sheet open as it was, and that No closes it without writing
 the file.
 
-A second is when LTspice ties a plot to a sheet, so that clicking a net plots
-it. The same grid of clicks was posted to the sheet's view in each window and
-the window captured. Results opened on their own were never tied: through the
-bridge by the results file's name or by the sheet's, with the panes tiled or
-the sheet covering the results, with the results or the sheet opened first,
-and for a run made in a window as for a batch run once that LTspice had been
-closed. Results opened from the sheet always were: by a run made in that
-window, and by the sheet's own Visible Traces command, for a window run's
-results in a later session and for a batch run's alike. The first round of
-this looked only at the bridge's ways of opening a file and concluded that
-only a run in the window ties a plot; a person pressing the toolbar button
-showed otherwise.
+Whether LTspice ties a plot to a sheet, so that clicking a net plots it, is
+recorded the same way: the recorder posts a grid of clicks over the sheet's
+view and reads the plot's traces before and after (`plot-tied-to-sheet`). A
+plot opened by the sheet's Visible Traces command changes; one the bridge
+opens, by the results file's path or by the sheet's, does not. That a run
+made in the window ties its plot was first seen by capturing the window and
+is not in the recording. The first round of this looked only at the bridge's
+ways of opening a file and concluded that only a run in the window ties a
+plot; a person pressing the toolbar button showed otherwise.
+
+The recording also keeps the state of the sheet menu's Visible Traces item:
+LTspice turns it off for a sheet that knows of no results, which is how the
+server tells a sheet to reopen from one to send the command to.
 
 What that command does is recorded, since `plot_waveform(in_ltspice=true)`
 sends it for a run of a sheet (`lib/ltspice_frame.py`). The bridge recorder
