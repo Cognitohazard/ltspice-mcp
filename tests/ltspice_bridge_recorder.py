@@ -10,7 +10,12 @@ asked directly: that its panes are titled with their files' names, that a
 sheet's Visible Traces command opens the results put beside the sheet, that
 with those results open the same command asks which traces to show, that a
 results pane goes on holding what it read when its file is replaced, and that
-it closes without a question, a trace added by hand or not. And
+it closes without a question, a trace added by hand or not. The same holds of
+results opened on their own and the plot settings beside them, and of two
+panes of one title the first found is the one in front. A sheet nobody
+changed closes without a question too, and opened again finds the results put
+beside it meanwhile; one the window was handed is asked about first, in a box
+that can be answered while the bridge still reads the sheet. And
 ``OpenWindows`` relies on an LTspice it starts with no document being offered
 to the bridge as a window, with nothing open in it. Each of those is recorded
 here from an installed build, under
@@ -58,11 +63,25 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib import plot_settings
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.guide import split_front_matter
-from ltspice_mcp.lib.hidden_desktop import HiddenDesktop, post_command, window_class, window_text
+from ltspice_mcp.lib.hidden_desktop import (
+    DIALOG_CLASS,
+    HiddenDesktop,
+    child_windows,
+    post_command,
+    window_class,
+    window_text,
+)
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
-from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame, menu_command
+from ltspice_mcp.lib.ltspice_frame import (
+    VISIBLE_TRACES,
+    LtspiceFrame,
+    SaveQuestion,
+    menu_command,
+)
+from ltspice_mcp.lib.ltspice_window import file_difference
 from tests import ltspice_recorder
 from tests.ltspice_recorder import (
     MANIFEST,
@@ -72,6 +91,7 @@ from tests.ltspice_recorder import (
     add_trace_by_hand,
     assert_private,
     discover_builds,
+    drawn_traces,
     neutral_settings,
     private_strings,
     sha256_bytes,
@@ -230,7 +250,6 @@ def _run_in_window(session: BridgeSession, recording: _Recording, sheet: Path) -
     return results
 
 
-_DIALOG_CLASS = "#32770"
 _IDCANCEL = 2
 
 
@@ -282,10 +301,22 @@ def _started_with_no_document(
     _until(lambda: started.pid not in windows(), "being gone from the bridge's list")
 
 
+def _close_and_wait(frame: LtspiceFrame, pane: int, doing: str) -> None:
+    frame.close(pane)
+    _until(lambda: not frame.is_open(pane), doing)
+
+
+def _close_all(frame: LtspiceFrame, pid: int, title: str) -> None:
+    """Close every pane titled ``title`` and wait for them all to go."""
+    for pane in frame.panes_titled(pid, title):
+        frame.close(pane)
+    _until(lambda: not frame.panes_titled(pid, title), f"closing every pane titled {title}")
+
+
 def _dialogs(desktop: HiddenDesktop, pid: int) -> list[int]:
     """The dialogs ``pid`` has up that ask something: a waveform viewer keeps
     untitled ones of its own, for its cursors."""
-    return [w for w in desktop.windows(pid) if window_class(w) == _DIALOG_CLASS and window_text(w)]
+    return [w for w in desktop.windows(pid) if window_class(w) == DIALOG_CLASS and window_text(w)]
 
 
 def _frame_facts(
@@ -375,12 +406,13 @@ def _results_pane_facts(
 
     def closes() -> list[bool]:
         """Tell the pane to close: whether it has gone, and whether nothing was asked."""
-        frame.close_pane(pid, plot.name)
+        pane = frame.pane(pid, plot.name)
+        assert pane is not None
+        frame.close(pane)
         _until(
-            lambda: frame.pane(pid, plot.name) is None or _dialogs(desktop, pid),
-            "closing the results pane",
+            lambda: not frame.is_open(pane) or _dialogs(desktop, pid), "closing the results pane"
         )
-        return [frame.pane(pid, plot.name) is None, not _dialogs(desktop, pid)]
+        return [not frame.is_open(pane), not _dialogs(desktop, pid)]
 
     recording.call(session, "put the results in front", "bring_to_front", path=str(plot))
     read_first = held()
@@ -413,6 +445,226 @@ def _results_pane_facts(
         "with a trace added by hand it closes the same, and saves no plot settings",
         [*closes(), plot.with_suffix(".plt").exists()],
     )
+
+
+def _results_alone_facts(
+    recording: _Recording,
+    session: BridgeSession,
+    desktop: HiddenDesktop,
+    build: Build,
+    pid: int,
+    open_sheet: Path,
+    results: Path,
+) -> None:
+    """What results opened on their own do: when they read the plot settings
+    beside them, and which of two panes of one title is found first.
+
+    ``results`` are a run's, copied twice under one name into two folders,
+    which is how the results of two runs of one deck stand. ``open_sheet`` is
+    a sheet the window has open with no plot of its own.
+    """
+    frame = LtspiceFrame(desktop.windows)
+    one, other = (open_sheet.parent / "runs" / run / "run.raw" for run in ("one", "other"))
+    for copy in (one, other):
+        copy.parent.mkdir(parents=True)
+        shutil.copyfile(results, copy)
+    settings = plot_settings.plot_settings_path(one)
+    transient = plot_settings.SECTION_NAMES["tran"]
+
+    def name(trace: str) -> None:
+        """Write plot settings naming ``trace`` beside the results, as the server does."""
+        settings.unlink(missing_ok=True)
+        if plot_settings.write_beside(one, transient, [[trace]]) is not None:
+            raise RecorderError("the plot settings were not written")
+
+    def drawn() -> list[list[str]]:
+        pane = _until(lambda: frame.pane(pid, one.name), "finding the results pane")
+        return drawn_traces(
+            pane, build.exe, one, functools.partial(_until, doing="saving plot settings")
+        )
+
+    def in_front() -> str:
+        """The folder of the results the window has in front."""
+        return Path(session.results_in_front() or "").parent.name
+
+    recording.call(session, "put a sheet in front", "bring_to_front", path=str(open_sheet))
+    recording.call(
+        session, "put results that are not open in front", "bring_to_front", path=str(one)
+    )
+    recording.call(session, "the results in front, with a sheet in front", "get_raw_info")
+    name("I(R1)")
+    recording.call(session, "open results on their own", "get_raw_info", path=str(one))
+    recording.call(session, "put them in front", "bring_to_front", path=str(one))
+    recording.call(session, "the results in front", "get_raw_info")
+    recording.fact(
+        "results opened on their own draw the traces the plot settings beside them name", drawn()
+    )
+    name("V(out)")
+    session.show_results(str(one))
+    recording.fact("asked for again while open, they draw what they drew", drawn())
+    pane = frame.pane(pid, one.name)
+    assert pane is not None
+    _close_and_wait(frame, pane, "closing results opened on their own")
+    recording.fact("closed, they are not in front any more", in_front() != one.parent.name)
+    session.show_results(str(one))
+    recording.fact("closed and opened again, they draw what the settings name now", drawn())
+
+    session.call("get_raw_info", path=str(other))
+    _until(lambda: len(frame.panes_titled(pid, one.name)) == 2, "opening a second run's results")
+    found: list[tuple[str, int | None]] = []
+    for run in (one, other, one):
+        session.bring_to_front(str(run))
+        _until(lambda: in_front() == run.parent.name, "putting results in front")  # noqa: B023
+        found.append((in_front(), frame.pane(pid, one.name)))
+    recording.fact(
+        "the results put in front, of two of one name", [folder for folder, _pane in found]
+    )
+    recording.fact(
+        "of two results panes of one title, the first found is the one in front",
+        found[0][1] == found[2][1] != found[1][1],
+    )
+    in_front_now = frame.pane(pid, one.name)
+    assert in_front_now is not None
+    _close_and_wait(frame, in_front_now, "closing the results in front")
+    session.bring_to_front(str(one))
+    recording.fact("with that one closed, the results left open are the other run's", in_front())
+    _close_all(frame, pid, one.name)
+
+
+def _box_words(desktop: HiddenDesktop, pid: int) -> list[list[str]]:
+    """What each box ``pid`` has up says, and the buttons it offers."""
+    return [
+        [window_text(part) for part in child_windows(box) if window_text(part)]
+        for box in _dialogs(desktop, pid)
+    ]
+
+
+def _sheet_close_facts(
+    recording: _Recording,
+    session: BridgeSession,
+    desktop: HiddenDesktop,
+    scrub: _Scrub,
+    pid: int,
+    work: Path,
+    results: Path,
+) -> None:
+    """What a sheet told to close does: one nobody changed, and one the window was handed.
+
+    The sheet is opened with no results beside it, and ``results``, a run's,
+    are put there afterwards, which is how a sheet comes to know of none.
+    """
+    frame = LtspiceFrame(desktop.windows)
+    sheet = work / "closing.asc"
+    shutil.copyfile(INPUTS / f"{EDITED}.asc", sheet)
+    on_disk = sheet.read_bytes()
+    plot = sheet.with_suffix(".raw")
+
+    def in_front() -> int:
+        session.bring_to_front(str(sheet))
+        return _until(lambda: frame.pane(pid, sheet.name), "finding the sheet's pane")
+
+    def told_to_close() -> int:
+        """Tell the sheet to close, and wait for it to have gone or LTspice to ask."""
+        pane = in_front()
+        frame.close(pane)
+        _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+        return pane
+
+    def asked() -> SaveQuestion:
+        question = frame.save_question(pid)
+        if question is None:
+            raise RecorderError(f"LTspice closed {sheet.name} and asked nothing")
+        return question
+
+    def opened_from_the_sheet() -> bool:
+        in_front()
+        frame.send(pid, VISIBLE_TRACES)
+        _until(lambda: frame.pane(pid, plot.name), "opening the results from the sheet")
+        return True
+
+    recording.call(
+        session, "open a sheet with no results beside it", "open_design", path=str(sheet)
+    )
+    shutil.copyfile(results, plot)
+    recording.fact("the frame takes input while LTspice asks nothing", frame.takes_input(pid))
+    pane = told_to_close()
+    recording.fact(
+        "a sheet nobody changed, told to close, is closed, and LTspice asks nothing",
+        [not frame.is_open(pane), frame.save_question(pid) is None],
+    )
+    session.open_design(str(sheet))
+    recording.fact(
+        "opened again, it opens the results put beside it while it was open",
+        opened_from_the_sheet(),
+    )
+    pane = told_to_close()
+    _until(lambda: frame.pane(pid, plot.name) is None, "closing the plot with its sheet")
+    recording.fact(
+        "the plot opened from a sheet closes with it",
+        [not frame.is_open(pane), frame.pane(pid, plot.name) is None],
+    )
+
+    session.open_design(str(sheet))
+    held = session.design_text(str(sheet))
+    changed = held.replace("SYMATTR Value 1k", "SYMATTR Value 2k")
+    recording.call(
+        session,
+        "hand the window a changed sheet",
+        "set_design_content",
+        path=str(sheet),
+        text=changed,
+    )
+    recording.call(
+        session, "hand it back what it held", "set_design_content", path=str(sheet), text=held
+    )
+    recording.fact(
+        "it then reads as its file does",
+        file_difference(on_disk, session.design_text(str(sheet))) is None,
+    )
+    pane = told_to_close()
+    question = asked()
+    recording.fact(
+        "a sheet the window was handed is asked about before it closes, in these words",
+        [[scrub.text(words) for words in box] for box in _box_words(desktop, pid)],
+    )
+    recording.fact("the document the question names is the sheet", Path(question.path) == sheet)
+    recording.fact("the frame takes input while LTspice asks that", frame.takes_input(pid))
+    recording.call(
+        session, "the window's copy, while LTspice asks", "get_design_content", path=str(sheet)
+    )
+    frame.answer(question, discard=False)
+    _until(lambda: not frame.is_open(question.box), "taking Cancel for an answer")
+    recording.fact(
+        "answered Cancel, the sheet stays open, holds what it held, and the frame takes input",
+        [frame.is_open(pane), session.design_text(str(sheet)) == held, frame.takes_input(pid)],
+    )
+    pane = told_to_close()
+    question = asked()
+    frame.answer(question, discard=True)
+    _until(lambda: not frame.is_open(pane), "taking No for an answer")
+    recording.fact(
+        "answered No, the sheet closes and its file is as it was",
+        [not frame.is_open(question.box), sheet.read_bytes() == on_disk],
+    )
+
+    elsewhere = work / "elsewhere" / sheet.name
+    elsewhere.parent.mkdir()
+    shutil.copyfile(sheet, elsewhere)
+    session.open_design(str(sheet))
+    session.open_design(str(elsewhere))
+    found: list[int | None] = []
+    for each in (sheet, elsewhere, sheet):
+        session.bring_to_front(str(each))
+        _until(
+            lambda: Path(session.active_design() or "") == each,  # noqa: B023
+            "putting a sheet in front",
+        )
+        found.append(frame.pane(pid, sheet.name))
+    recording.fact(
+        "of two sheets of one title, the first pane found is the one in front",
+        found[0] == found[2] != found[1],
+    )
+    _close_all(frame, pid, sheet.name)
 
 
 def reader_subjects() -> dict[str, list[str]]:
@@ -637,6 +889,10 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                     placed,
                     newer=ltspice_recorder.FIXTURES / build.label / "raw" / "tran_double.raw",
                 )
+                _results_alone_facts(
+                    recording, session, desktop, build, window.pid, first, results
+                )
+                _sheet_close_facts(recording, session, desktop, scrub, window.pid, work, results)
                 reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()

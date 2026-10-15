@@ -4,13 +4,23 @@ The bridge lists the sheets and netlists a window has open and never its
 results files, and it opens a results file only on its own, where LTspice does
 not tie the plot to a sheet: a click on a net then plots nothing. A person gets
 a tied plot by choosing Visible Traces on the sheet, which opens the results
-beside it. And LTspice reads a results file once: a pane that is open goes on
-showing what it read, whatever the file holds since. So the frame is asked
-three things directly:
+beside it. LTspice reads a results file once: a pane that is open goes on
+showing what it read, whatever the file holds since. And it looks for a
+sheet's results once, as it opens the sheet. So the frame is asked directly:
 
 - which documents have a pane in it, results files included (``panes``);
 - to carry out a command of its own menu, as choosing it would (``send``);
-- to close one of its panes, as that pane's close box would (``close_pane``).
+- to close one of its panes, as that pane's close box would (``close``), and
+  whether it has (``is_open``);
+- what LTspice asks before it closes a sheet with changes nobody saved, and
+  to answer that without saving (``save_question``, ``answer``);
+- whether it takes a person's input, which it does not while LTspice has a
+  box up that must be answered first (``takes_input``).
+
+A pane is known by its title, its file's name, which two files in different
+folders share. Windows lists the panes from the front, so the first pane of a
+title is the one in front of the others of that title (``pane``); the caller
+puts the file it means in front first, which the bridge does by path.
 
 A command is named by the label the menu shows. Its number is the build's own,
 so it is read from the menus of the executable the process runs
@@ -27,6 +37,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
@@ -42,6 +53,15 @@ VISIBLE_TRACES = "Visible Traces"
 _SHEET_MENU = "Hierarchy"
 # How the window class of the frame, and of each document's pane in it, begins.
 _DOCUMENT_CLASS = "Afx:"
+# The window class of the words in a box a program puts up.
+_WORDS_CLASS = "Static"
+# What LTspice asks before it closes a document holding changes nobody saved,
+# on either side of that document's path.
+_SAVE_QUESTION = ("Save changes to ", "?")
+# The two answers to it that leave the file as it is: close without saving, and
+# do not close.
+_NO = 7
+_CANCEL = 2
 
 
 class FrameError(BridgeError):
@@ -50,6 +70,18 @@ class FrameError(BridgeError):
     A ``BridgeError``, as every failure to reach an LTspice window is: a
     caller that reports one reports this.
     """
+
+
+@dataclass(frozen=True)
+class SaveQuestion:
+    """LTspice asking whether to save a document it was told to close.
+
+    ``box`` is the window it asks in and ``path`` the document it names, as
+    LTspice spells it. Nobody can change a document while LTspice asks.
+    """
+
+    box: int
+    path: str
 
 
 def is_frame(window: int) -> bool:
@@ -126,35 +158,75 @@ class LtspiceFrame:
         except OSError as error:
             raise FrameError(f"LTspice's window did not take {label!r}: {error}") from error
 
-    def pane(self, pid: int, title: str) -> int | None:
-        """The window of the pane titled ``title`` in ``pid``'s frame, or None.
+    def panes_titled(self, pid: int, title: str) -> list[int]:
+        """The window of each pane titled ``title`` in ``pid``'s frame, the one in front first.
 
         A pane's title is its file's name, whatever its case, and is on more
         than one window inside the frame: the pane is the one whose class
         begins as the frame's does.
         """
         wanted = title.casefold()
-        for child in hidden_desktop.child_windows(self._frame(pid)):
-            if hidden_desktop.window_text(
-                child
-            ).casefold() == wanted and hidden_desktop.window_class(child).startswith(
-                _DOCUMENT_CLASS
-            ):
-                return child
-        return None
+        return [
+            child
+            for child in hidden_desktop.child_windows(self._frame(pid))
+            if hidden_desktop.window_text(child).casefold() == wanted
+            and hidden_desktop.window_class(child).startswith(_DOCUMENT_CLASS)
+        ]
 
-    def close_pane(self, pid: int, title: str) -> None:
-        """Ask ``pid``'s frame to close its pane titled ``title``; returns before it has.
+    def pane(self, pid: int, title: str) -> int | None:
+        """The pane titled ``title`` that is in front of the others so titled, or None."""
+        return next(iter(self.panes_titled(pid, title)), None)
 
-        For a results pane, which closes without a question and saves nothing
-        (recorded). A sheet with changes nobody saved would ask its user, so
-        this is not for one. Raises ``FrameError`` when the frame has no such
-        pane or the window does not take the request.
+    def close(self, pane: int) -> None:
+        """Ask a pane to close; returns before it has.
+
+        A results pane closes without a question and saves nothing. A sheet
+        closes the same unless LTspice counts it changed, and then LTspice
+        asks first (``save_question``); all three are recorded. Raises
+        ``FrameError`` when the window does not take the request.
         """
-        pane = self.pane(pid, title)
-        if pane is None:
-            raise FrameError(f"LTspice process {pid} has no pane titled {title}")
         try:
             hidden_desktop.post_close(pane)
         except OSError as error:
-            raise FrameError(f"LTspice's window did not close {title}: {error}") from error
+            raise FrameError(
+                f"LTspice's window did not take the request to close: {error}"
+            ) from error
+
+    def is_open(self, window: int) -> bool:
+        """Whether a pane, or a box LTspice asked in, is still there."""
+        return hidden_desktop.window_exists(window)
+
+    def takes_input(self, pid: int) -> bool:
+        """Whether a person could use ``pid``'s frame now.
+
+        False while LTspice has a box up that must be answered first. A pane
+        closed from outside then would go from under whatever the box is about.
+        """
+        return hidden_desktop.takes_input(self._frame(pid))
+
+    def save_question(self, pid: int) -> SaveQuestion | None:
+        """The question LTspice process ``pid`` is asking about saving a document, or None."""
+        before, after = _SAVE_QUESTION
+        for window in self._top_level(pid):
+            if hidden_desktop.window_class(window) != hidden_desktop.DIALOG_CLASS:
+                continue
+            for child in hidden_desktop.child_windows(window):
+                words = hidden_desktop.window_text(child)
+                if (
+                    hidden_desktop.window_class(child) == _WORDS_CLASS
+                    and words.startswith(before)
+                    and words.endswith(after)
+                ):
+                    return SaveQuestion(window, words[len(before) : -len(after)])
+        return None
+
+    def answer(self, question: SaveQuestion, *, discard: bool) -> None:
+        """Answer ``question`` without saving: No with ``discard``, which closes
+        the document as its file has it, and otherwise Cancel, which leaves it
+        open as it is. Returns before LTspice has acted on it. Raises
+        ``FrameError`` when the box does not take the answer.
+        """
+        try:
+            hidden_desktop.post_command(question.box, _NO if discard else _CANCEL)
+        except OSError as error:
+            raise FrameError(f"LTspice's question did not take an answer: {error}") from error
