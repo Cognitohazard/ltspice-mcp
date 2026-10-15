@@ -325,7 +325,7 @@ class TestSymbolResolution:
         proto = r.load("box2")
         assert proto is not None
         # Local body has a rectangle; the project alt has a circle.
-        assert len(proto.rects) == 1 and len(proto.circles) == 0
+        assert len(proto.file.rects) == 1 and len(proto.file.circles) == 0
 
     def test_two_dirs_share_name_precedence_follows_order(self, tmp_path: Path) -> None:
         a = tmp_path / "a"
@@ -339,13 +339,13 @@ class TestSymbolResolution:
         asy = _write(tmp_path / "box2.asy", BOX2_ASY)
         r = SymbolResolver(local_dir=tmp_path)
         first = r.load("box2")
-        assert first is not None and len(first.rects) == 1
+        assert first is not None and len(first.file.rects) == 1
         # Rewrite the same path with different content (and different size, so
         # the content stamp changes even on a coarse-mtime filesystem).
         _write(asy, BOX2_ALT_ASY)
         second = r.load("box2")
         assert second is not None
-        assert len(second.rects) == 0 and len(second.circles) == 1
+        assert len(second.file.rects) == 0 and len(second.file.circles) == 1
 
     def test_caches_within_instance_and_not_across(self, tmp_path: Path) -> None:
         # A second load of the same symbol on one resolver returns the cached

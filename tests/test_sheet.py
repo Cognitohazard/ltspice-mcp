@@ -1,0 +1,148 @@
+"""A sheet as a value: held to the scene and to the schematic editor on every sheet of the suite."""
+
+from __future__ import annotations
+
+from collections import Counter
+from pathlib import Path
+
+import pytest
+from spicelib import AscEditor
+
+from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib.schematic_ops import make_editor, net_partition, placed_geometry
+from ltspice_mcp.lib.schematic_scene import build_scene, editor_symbol_resolver
+from ltspice_mcp.lib.sheet import Sheet, read_sheet
+from ltspice_mcp.lib.symbol_library import SymbolResolver
+from tests._proposal_record import stage
+from tests._schematic_fixtures import BOX2_ASY, SUITE_SHEETS, suite_name, write_file
+
+
+@pytest.fixture(autouse=True)
+def _only_the_suites_own_symbols(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No LTspice library the machine has is searched; spicelib's cache is put back after."""
+    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
+    monkeypatch.setattr(AscEditor, "symbol_cache", {})
+    monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
+
+
+def _staged(sheet: Path, tmp_path: Path) -> tuple[Path, Sheet]:
+    staged = stage(sheet, tmp_path)
+    return staged, read_sheet(staged.read_bytes(), editor_symbol_resolver(staged))
+
+
+@pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=suite_name)
+def test_it_places_what_the_scene_places(sheet: Path, tmp_path: Path) -> None:
+    staged, read = _staged(sheet, tmp_path)
+    scene = build_scene(staged, editor_symbol_resolver(staged))
+    assert len(read.parts) == len(scene.symbols)
+    for part, drawn in zip(read.parts, scene.symbols, strict=True):
+        assert (part.reference, part.symbol_name, part.at, part.rotation) == (
+            drawn.reference,
+            drawn.symbol,
+            (drawn.x, drawn.y),
+            drawn.rotation,
+        )
+        assert part.usable == (not drawn.missing)
+        if part.usable:
+            assert [(p.x, p.y, p.name) for p in part.pins] == [
+                (p.x, p.y, p.name) for p in drawn.pins
+            ]
+            assert (part.box, part.body) == (drawn.box, drawn.body)
+    assert read.wires == tuple((w.x1, w.y1, w.x2, w.y2) for w in scene.wires)
+    assert read.labels == tuple((f.x, f.y, f.text) for f in scene.flags)
+
+
+@pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=suite_name)
+def test_it_places_what_the_editor_places(sheet: Path, tmp_path: Path) -> None:
+    staged, read = _staged(sheet, tmp_path)
+    try:
+        editor = make_editor(staged)
+    except Exception:
+        pytest.skip("the editor cannot open this sheet")
+    assert isinstance(editor, AscEditor)
+    named = Counter(part.reference for part in read.parts)
+    once = [part for part in read.parts if part.reference and named[part.reference] == 1]
+    for part in once:
+        geometry = placed_geometry(editor, part.reference)
+        assert (geometry is not None) == part.usable, part.reference
+        if geometry is None or part.box is None:
+            continue
+        assert [
+            {"name": p.name, "order": p.order, "x": p.x, "y": p.y, "dir": p.direction}
+            for p in part.pins
+        ] == geometry["pins"]
+        assert part.box.to_origin_size_dict() == geometry["bounding_box"]
+    if len(once) == len(read.parts):
+        # With no reference repeated or missing, the nets are the editor's too.
+        mine, theirs = read.partition(), net_partition(editor)
+        assert {frozenset(m) for m in mine.members.values()} == {
+            frozenset(m) for m in theirs.members.values()
+        }
+        assert {c: sorted(o) for c, o in mine.pin_owners.items()} == {
+            c: sorted(o) for c, o in theirs.pin_owners.items()
+        }
+        assert mine.label_texts == theirs.label_texts
+
+
+_SHEET = """Version 4
+SHEET 1 880 680
+WIRE 0 0 96 0
+SYMBOL box2 96 0 R0
+SYMATTR InstName U1
+SYMATTR Value one
+SYMATTR Value two
+FLAG 0 0 in
+SYMBOL nowhere 300 300 R0
+SYMATTR InstName U2
+SYMBOL broken 500 500 R0
+SYMATTR InstName U3
+"""
+
+_BROKEN_ASY = """Version 4
+SymbolType CELL
+RECTANGLE Normal 0 0 32 16
+PIN 0 8 NONE 0
+PINATTR PinName A
+PIN 32
+"""
+
+
+class TestAPart:
+    def _read(self, tmp_path: Path) -> Sheet:
+        write_file(tmp_path / "box2.asy", BOX2_ASY)
+        write_file(tmp_path / "broken.asy", _BROKEN_ASY)
+        return read_sheet(_SHEET.encode("ascii"), SymbolResolver(local_dir=tmp_path))
+
+    def test_it_is_placed_with_its_pins_in_order_and_where_they_point(
+        self, tmp_path: Path
+    ) -> None:
+        (u1,) = self._read(tmp_path).parts_named("U1")
+        assert [(p.name, p.order, p.x, p.y, p.direction) for p in u1.pins] == [
+            ("A", 1, 96, 8, "left"),
+            ("B", 2, 128, 8, "right"),
+        ]
+        assert u1.line == 4
+
+    def test_a_repeated_attribute_reads_as_its_last(self, tmp_path: Path) -> None:
+        (u1,) = self._read(tmp_path).parts_named("U1")
+        assert u1.attribute("Value") == "two"
+        assert u1.attribute("SpiceLine") is None
+
+    def test_one_whose_symbol_is_not_found_has_no_pins(self, tmp_path: Path) -> None:
+        (u2,) = self._read(tmp_path).parts_named("U2")
+        assert (u2.symbol, u2.usable, u2.pins, u2.box) == (None, False, (), None)
+
+    def test_one_whose_symbol_has_a_pin_line_that_does_not_read_is_unusable(
+        self, tmp_path: Path
+    ) -> None:
+        """As it is to the schematic editor: a pin left out is a terminal no wire
+        could be checked against."""
+        (u3,) = self._read(tmp_path).parts_named("U3")
+        assert u3.symbol is not None
+        assert (u3.unreadable, u3.usable, u3.pins, u3.box) == ("PIN 32", False, (), None)
+
+    def test_the_sheet_keeps_its_wires_and_labels(self, tmp_path: Path) -> None:
+        read = self._read(tmp_path)
+        assert read.wires == ((0, 0, 96, 0),)
+        assert read.labels == ((0, 0, "in"),)
+        assert read.partition().label_texts == {(0, 0): {"in"}}
