@@ -173,7 +173,9 @@ the steps, each recorded from a window:
 - It looks for a sheet's results as it opens the sheet, and afterwards knows
   of none but those of a run made there. So a sheet no window has open is
   opened only after the results are in place, and one that was already open
-  with none is closed and reopened (`sheet_reopened`). This is done only when
+  with none is closed and reopened (`sheet_reopened`). LTspice turns the
+  sheet's Visible Traces item off while the sheet knows of no results, which
+  is how the server tells the two apart without trying. This is done only when
   the window's copy matches the file, so no unsaved work is lost. LTspice asks
   whether to save any sheet the bridge has written to, which includes every
   sheet the server edited while it was open, even when the copy matches the
