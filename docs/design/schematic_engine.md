@@ -566,6 +566,17 @@ what must hold before the next one starts.
 
    The build benchmark is not a gate for this step, since no op changes. It
    is built on its own and lands before step 6.
+
+   *Done.* The scene of every suite sheet and of 8,150 LTspice example sheets
+   from both builds is the same as before the scene's parser was removed. In
+   the inspect snapshot (`tests/fixtures/inspect_sheet_record.json`) the
+   answers changed only as listed: the 9 suite sheets spicelib cannot open
+   now answer both queries (50 net starts and 9 listings), and 15 component
+   rows on 10 sheets lose spicelib's `_WINDOW n` attributes. A line the
+   sheet's records do not read is named in both replies. A test holds an
+   edit at its await and shows that both queries read the file. Two readers
+   of a sheet are left: `asc_document` and spicelib's editor on the edit path,
+   which step 6 replaces.
 6. **Ops on the sheet**, in two parts, and the step most likely to go wrong.
    First the ops that move records (parts, wires, labels): each becomes
    sheet -> (sheet, facts), the batch is a fold, and the transaction keeps
