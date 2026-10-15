@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ltspice_mcp.lib.asc_document import AscDocument, Symbol, parse_asc, parse_asc_text
+from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Symbol, parse_asc, parse_asc_text
 from ltspice_mcp.lib.connectivity import NetPartition, partition
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
@@ -23,6 +24,14 @@ from ltspice_mcp.lib.symbol_geometry import (
 from ltspice_mcp.lib.symbol_library import FoundSymbol, SymbolResolver
 
 Point = tuple[int, int]
+
+# The records a sheet holds that nothing draws or connects through: the header,
+# a port's direction (its label is the FLAG before it) and a data label's
+# expression (recorded as export/data_flags: the export is the circuit without
+# them). Any other keyword that does not read is reported, a bus tap among
+# them: LTspice draws one, though it connects nothing in the netlist
+# (export/bus_tap).
+NOTHING_TO_READ = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
 
 
 @dataclass(frozen=True)
@@ -103,9 +112,86 @@ class Sheet:
         """Each net label and ground flag as ``(x, y, name)``."""
         return tuple((f.x, f.y, f.name) for f in self.document.flags)
 
+    def unread_lines(self) -> dict[str, list[int]]:
+        """Each keyword of a line the records do not read, with the 1-based lines it is on.
+
+        A line no record type reads, and a line under a part that does not read
+        as a window or an attribute. ``NOTHING_TO_READ`` and blank lines are left
+        out. What reads the sheet does not see what such a line holds, so it
+        reports it.
+        """
+        unread: dict[str, list[int]] = {}
+        line = 1
+        for record in self.document.records:
+            lines = record.source or ()
+            if isinstance(record, Opaque):
+                if record.keyword and record.keyword not in NOTHING_TO_READ:
+                    unread.setdefault(record.keyword, []).append(line)
+            elif isinstance(record, Symbol) and record.unread:
+                pending = list(record.unread)
+                for offset, text in enumerate(lines[1:], 1):
+                    if pending and text.rstrip("\r\n") == pending[0]:
+                        keyword = pending.pop(0).split(None, 1)[0]
+                        unread.setdefault(keyword, []).append(line + offset)
+            line += len(lines)
+        return unread
+
     def parts_named(self, reference: str) -> tuple[SheetPart, ...]:
         """Every part with instance name ``reference``; more than one when the sheet repeats it."""
         return tuple(part for part in self.parts if part.reference == reference)
+
+    def pin_at(self, spec: str) -> Point:
+        """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is.
+
+        The part after the last dot is matched against the pin names first,
+        case-insensitively, and only then read as a 1-based SpiceOrder, as
+        ``schematic_ops.resolve_pin`` reads it. Raises ``NetlistError`` when the
+        part or the pin is not there, when the part's symbol is unusable, and
+        when two parts share the reference, naming where each is.
+        """
+        if "." not in spec:
+            raise NetlistError(
+                f"Invalid pin reference '{spec}'. Use 'Reference.Pin', the pin by "
+                "name or 1-based SpiceOrder (e.g., 'M1.D', 'X1.2'), or 'net:name' "
+                "(e.g., 'net:VDD')."
+            )
+        reference, pin_name = spec.rsplit(".", 1)
+        named: list[SheetPart] = list(self.parts_named(reference))
+        if not named:
+            available = sorted({part.reference for part in self.parts if part.reference})
+            raise NetlistError(
+                f"Component '{reference}' not found. Available: {', '.join(available)}"
+            )
+        if len(named) > 1:
+            places = ", ".join(f"({part.at[0]},{part.at[1]})" for part in named)
+            raise NetlistError(
+                f"'{reference}' names {len(named)} parts, placed at {places}, so a pin of "
+                f"'{reference}' could be on either. Give the pin's coordinate instead."
+            )
+        part = named[0]
+        if part.symbol is None:
+            raise NetlistError(
+                f"Cannot resolve pins for '{reference}': symbol '{part.symbol_name}' not found."
+            )
+        if part.unreadable:
+            raise NetlistError(
+                f"Cannot resolve pins for '{reference}': symbol '{part.symbol_name}' has a "
+                f"pin line that does not read ({part.unreadable!r})."
+            )
+        for pin in part.pins:
+            if pin.name.upper() == pin_name.upper():
+                return pin.x, pin.y
+        # A pin with no SpiceOrder line reads as order 0, which is no ordinal.
+        ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
+        if ordinal:
+            for pin in part.pins:
+                if pin.order == ordinal:
+                    return pin.x, pin.y
+        available = [f"{p.name} ({p.order})" if p.order else p.name for p in part.pins]
+        raise NetlistError(
+            f"Pin '{pin_name}' not found on {reference} ({part.symbol_name}). Available: "
+            f"{', '.join(available)} (pin name, with its SpiceOrder in parentheses)."
+        )
 
     def partition(self) -> NetPartition:
         """The sheet's nets, grouped by ``connectivity.partition``."""

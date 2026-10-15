@@ -31,7 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from ltspice_mcp.lib.asc_document import Opaque, Symbol, Window
+from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.connectivity import point_on_segment
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text, refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
@@ -629,15 +629,6 @@ def default_stock_paths() -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-# The records an LTspice sheet holds that the drawing has nothing to take from:
-# the header, a port's direction (its label is the FLAG before it) and a data
-# label's expression (recorded as export/data_flags: the export is the circuit
-# without them). Any other keyword it does not read is reported, a bus tap
-# among them: LTspice draws one and this drawing does not, though it connects
-# nothing in the netlist (export/bus_tap).
-_UNDRAWN_KEYWORDS = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
-
-
 # ---------------------------------------------------------------------------
 # Placement: symbol-local geometry → absolute scene primitives
 # ---------------------------------------------------------------------------
@@ -915,30 +906,6 @@ def scene_of_text(
     return scene_of_sheet(read_sheet_text(text, resolver), source, source_sha256, byte_order_mark)
 
 
-def _unread_lines(sheet: Sheet) -> dict[str, list[int]]:
-    """Each keyword of a line the drawing does not read, with the lines it is on.
-
-    A line no record type reads, and a line under a part that does not read as
-    a window or an attribute. The records with nothing to draw are left out
-    (``_UNDRAWN_KEYWORDS``), and so are blank lines.
-    """
-    unread: dict[str, list[int]] = {}
-    line = 1
-    for record in sheet.document.records:
-        lines = record.source or ()
-        if isinstance(record, Opaque):
-            if record.keyword and record.keyword not in _UNDRAWN_KEYWORDS:
-                unread.setdefault(record.keyword, []).append(line)
-        elif isinstance(record, Symbol) and record.unread:
-            pending = list(record.unread)
-            for offset, text in enumerate(lines[1:], 1):
-                if pending and text.rstrip("\r\n") == pending[0]:
-                    keyword = pending.pop(0).split(None, 1)[0]
-                    unread.setdefault(keyword, []).append(line + offset)
-        line += len(lines)
-    return unread
-
-
 def scene_of_sheet(
     sheet: Sheet,
     source: Path,
@@ -947,7 +914,7 @@ def scene_of_sheet(
 ) -> Scene:
     """The fully-placed :class:`Scene` of ``sheet``, which is or will be at ``source``."""
     scene = Scene(source=source, source_sha256=source_sha256, byte_order_mark=byte_order_mark)
-    for keyword, lines in _unread_lines(sheet).items():
+    for keyword, lines in sheet.unread_lines().items():
         scene.diagnostics.append(_unread_note(keyword, lines))
 
     for part in sheet.parts:

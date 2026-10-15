@@ -2358,11 +2358,18 @@ class TestRecordTheEditorCannotRead:
                 state_no_sim,
             )
         ).structured_content["results"]
-        assert [item["ok"] for item in results] == [False, False]
-        for item in results:
-            assert item["error"]["code"] != "internal_error"
-            assert "line 5" in item["error"]["message"]
-            assert "BUSTAP" in item["error"]["message"]
+        components, net = results
+        assert components["ok"] is False
+        assert components["error"]["code"] != "internal_error"
+        assert "line 5" in components["error"]["message"]
+        assert "BUSTAP" in components["error"]["message"]
+        # The trace reads the sheet itself, and names the record it does not follow.
+        assert net["ok"] is True
+        assert net["data"]["labels"] == ["D[0:3]", "OUT"]
+        assert net["data"]["warnings"] == [
+            "line 5: a BUSTAP record, which this trace does not read; anything it "
+            "connects is not followed"
+        ]
 
     async def test_a_record_in_a_sheet_the_target_loads_names_that_sheet(
         self, asc_state, work_dir

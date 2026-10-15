@@ -13083,19 +13083,75 @@
   "nets": [
    {
     "at": "R1.1",
-    "error": "error"
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    }
   ]
  },
@@ -13445,75 +13501,291 @@
   "nets": [
    {
     "at": "M1.D",
-    "error": "error"
+    "coordinates_sha256": "c7b7f5fced56410d",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "D",
+      "reference": "M1",
+      "x": 0,
+      "y": 0
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "M1.G",
-    "error": "error"
+    "coordinates_sha256": "fbb1b2e91f7b1023",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "G",
+      "reference": "M1",
+      "x": -48,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "M1.S",
-    "error": "error"
+    "coordinates_sha256": "e31e2e1c69f6d168",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "S",
+      "reference": "M1",
+      "x": 0,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "Q1.C",
-    "error": "error"
+    "coordinates_sha256": "dc4fd84b88ed255f",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "C",
+      "reference": "Q1",
+      "x": 384,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "Q1.B",
-    "error": "error"
+    "coordinates_sha256": "c9be06d6c4cded41",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "B",
+      "reference": "Q1",
+      "x": 320,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "Q1.E",
-    "error": "error"
+    "coordinates_sha256": "71417d7b18f84bd2",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "E",
+      "reference": "Q1",
+      "x": 384,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "D1.A",
-    "error": "error"
+    "coordinates_sha256": "816316e00d18c502",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "A",
+      "reference": "D1",
+      "x": 960,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "D1.K",
-    "error": "error"
+    "coordinates_sha256": "92737878555baeef",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "K",
+      "reference": "D1",
+      "x": 960,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "R1.1",
-    "error": "error"
+    "coordinates_sha256": "ad95ee9061c15b36",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 1120,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "coordinates_sha256": "309843116473a90e",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 1120,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "C1.1",
-    "error": "error"
+    "coordinates_sha256": "69cf1281680c5693",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "C1",
+      "x": 1280,
+      "y": 64
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "C1.2",
-    "error": "error"
+    "coordinates_sha256": "70d7dec7189c44b0",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "C1",
+      "x": 1280,
+      "y": 128
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "L1.1",
-    "error": "error"
+    "coordinates_sha256": "aa1dd3e394d29be1",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "L1",
+      "x": 1440,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "L1.2",
-    "error": "error"
+    "coordinates_sha256": "b5740cdb910409d5",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "L1",
+      "x": 1440,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "V1.+",
-    "error": "error"
+    "coordinates_sha256": "3efbdee52cbcd933",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 1600,
+      "y": 64
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "V1.-",
-    "error": "error"
+    "coordinates_sha256": "ead84608418824aa",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "-",
+      "reference": "V1",
+      "x": 1600,
+      "y": 128
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "I1.In",
-    "error": "error"
+    "coordinates_sha256": "36192eaed06bc295",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "In",
+      "reference": "I1",
+      "x": 1760,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "I1.Out",
-    "error": "error"
+    "coordinates_sha256": "2bdec4135b1174a6",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "Out",
+      "reference": "I1",
+      "x": 1760,
+      "y": 176
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    }
   ]
  },
@@ -13524,60 +13796,338 @@
   "nets": [
    {
     "at": "R1.1",
-    "error": "error"
+    "coordinates_sha256": "7f2050dab73aa2a0",
+    "is_shorted": false,
+    "labels": [
+     "D[0:3]"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 544,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 2,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "coordinates_sha256": "943d5ad07ef6742c",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 544,
+      "y": 192
+     },
+     {
+      "pin": "2",
+      "reference": "R2",
+      "x": 256,
+      "y": 288
+     },
+     {
+      "pin": "2",
+      "reference": "R3",
+      "x": 400,
+      "y": 288
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "R2.1",
-    "error": "error"
+    "coordinates_sha256": "8eddc3016cfd291e",
+    "is_shorted": false,
+    "labels": [
+     "D0"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R2",
+      "x": 256,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "R2.2",
-    "error": "error"
+    "coordinates_sha256": "943d5ad07ef6742c",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 544,
+      "y": 192
+     },
+     {
+      "pin": "2",
+      "reference": "R2",
+      "x": 256,
+      "y": 288
+     },
+     {
+      "pin": "2",
+      "reference": "R3",
+      "x": 400,
+      "y": 288
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "R3.1",
-    "error": "error"
+    "coordinates_sha256": "3c1cc5a59dbfedff",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R3",
+      "x": 400,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 2,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "R3.2",
-    "error": "error"
+    "coordinates_sha256": "943d5ad07ef6742c",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 544,
+      "y": 192
+     },
+     {
+      "pin": "2",
+      "reference": "R2",
+      "x": 256,
+      "y": 288
+     },
+     {
+      "pin": "2",
+      "reference": "R3",
+      "x": 400,
+      "y": 288
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "net:D[0:3]",
-    "error": "error"
+    "coordinates_sha256": "7f2050dab73aa2a0",
+    "is_shorted": false,
+    "labels": [
+     "D[0:3]"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 544,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 2,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "net:D0",
-    "error": "error"
+    "coordinates_sha256": "8eddc3016cfd291e",
+    "is_shorted": false,
+    "labels": [
+     "D0"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R2",
+      "x": 256,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "943d5ad07ef6742c",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 544,
+      "y": 192
+     },
+     {
+      "pin": "2",
+      "reference": "R2",
+      "x": 256,
+      "y": 288
+     },
+     {
+      "pin": "2",
+      "reference": "R3",
+      "x": 400,
+      "y": 288
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": [
      320,
      96
     ],
-    "error": "error"
+    "coordinates_sha256": "7f2050dab73aa2a0",
+    "is_shorted": false,
+    "labels": [
+     "D[0:3]"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 544,
+      "y": 96
+     }
+    ],
+    "snapped_to_wire": {
+     "from": {
+      "x": 96,
+      "y": 96
+     },
+     "to": {
+      "x": 544,
+      "y": 96
+     }
+    },
+    "total_coordinates": 2,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": [
      256,
      152
     ],
-    "error": "error"
+    "coordinates_sha256": "8eddc3016cfd291e",
+    "is_shorted": false,
+    "labels": [
+     "D0"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R2",
+      "x": 256,
+      "y": 192
+     }
+    ],
+    "snapped_to_wire": {
+     "from": {
+      "x": 256,
+      "y": 112
+     },
+     "to": {
+      "x": 256,
+      "y": 192
+     }
+    },
+    "total_coordinates": 3,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    },
    {
     "at": [
      400,
      152
     ],
-    "error": "error"
+    "coordinates_sha256": "3c1cc5a59dbfedff",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R3",
+      "x": 400,
+      "y": 192
+     }
+    ],
+    "snapped_to_wire": {
+     "from": {
+      "x": 400,
+      "y": 112
+     },
+     "to": {
+      "x": 400,
+      "y": 192
+     }
+    },
+    "total_coordinates": 2,
+    "total_pins": 1,
+    "warnings": [
+     "2 BUSTAP records, the first at line 11, which this trace does not read; anything they connect is not followed"
+    ]
    }
   ]
  },
@@ -15054,19 +15604,75 @@
   "nets": [
    {
     "at": "R1.1",
-    "error": "error"
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
    }
   ]
  },
@@ -21315,19 +21921,87 @@
   "nets": [
    {
     "at": "R1.1",
-    "error": "error"
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "line 5: a NOSUCHRECORD record, which this trace does not read; anything it connects is not followed"
+    ]
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "line 5: a NOSUCHRECORD record, which this trace does not read; anything it connects is not followed"
+    ]
    },
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "line 5: a NOSUCHRECORD record, which this trace does not read; anything it connects is not followed"
+    ]
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "line 5: a NOSUCHRECORD record, which this trace does not read; anything it connects is not followed"
+    ]
    }
   ]
  },
@@ -23177,11 +23851,25 @@
   "nets": [
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "12d504465f60d827",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    }
   ]
  },
@@ -23192,11 +23880,25 @@
   "nets": [
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "12d504465f60d827",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    }
   ]
  },
@@ -23207,11 +23909,25 @@
   "nets": [
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "12d504465f60d827",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    }
   ]
  },
@@ -23335,11 +24051,25 @@
   "nets": [
    {
     "at": "net:a",
-    "error": "error"
+    "coordinates_sha256": "687f611324b7c5b2",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    },
    {
     "at": "net:0",
-    "error": "error"
+    "coordinates_sha256": "f39027c02757d165",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [],
+    "total_coordinates": 1,
+    "total_pins": 0
    }
   ]
  },

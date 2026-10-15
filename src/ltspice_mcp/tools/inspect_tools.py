@@ -158,15 +158,13 @@ from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     named_labels,
-    net_partition,
     netlist_card_value,
     placed_geometry,
     require_asc,
-    resolve_pin,
-    wire_segments_of,
     wires_of_one_net,
 )
-from ltspice_mcp.lib.schematic_scene import default_stock_paths
+from ltspice_mcp.lib.schematic_scene import default_stock_paths, editor_symbol_resolver
+from ltspice_mcp.lib.sheet import Sheet, read_sheet
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -229,6 +227,29 @@ class TraceNetInput(ToolInput):
     )
 
 
+def _not_followed(keyword: str, lines: list[int]) -> str:
+    """A trace's note of the lines of one keyword its sheet does not read."""
+    if len(lines) == 1:
+        return (
+            f"line {lines[0]}: a {keyword} record, which this trace does not read; "
+            "anything it connects is not followed"
+        )
+    return (
+        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which this trace "
+        "does not read; anything they connect is not followed"
+    )
+
+
+def read_sheet_file(path: Path) -> Sheet:
+    """The sheet at ``path``, read from the file.
+
+    Its symbols are found where the schematic editor's pin geometry finds them
+    (``editor_symbol_resolver``), so a reader shows the pins an edit of the
+    same sheet would resolve. Blocking: call it off the event loop.
+    """
+    return read_sheet(path.read_bytes(), editor_symbol_resolver(path))
+
+
 @declare_output_schema(
     {
         "type": "object",
@@ -280,21 +301,22 @@ class TraceNetInput(ToolInput):
     }
 )
 async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.CallToolResult:
-    """Trace every pin/label/wire vertex on the net at a pin, label, or (x,y)."""
+    """Trace every pin/label/wire vertex on the net at a pin, label, or (x,y).
+
+    The sheet is read from the file, never from the editor an edit in progress
+    may be changing, so a trace shows what the file holds.
+    """
     asc_path = safe_path(args.path, state)
     require_asc(asc_path)
-    editor = get_asc_editor(asc_path, state)
+    sheet = await asyncio.to_thread(read_sheet_file, asc_path)
 
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
-        # normal case on label-wired schematics (one FLAG per pin).
-        # resolve_pin refuses ambiguous net labels, but trace_net's own
-        # name-merge step below absorbs duplicates, so just seed from any
+        # normal case on label-wired schematics (one FLAG per pin). The trace's
+        # own name-merge step below absorbs duplicates, so seed from any
         # matching label coordinate (lowest, for determinism).
         net_name = args.pin[4:]
-        matches = sorted(
-            (int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels if lbl.text == net_name
-        )
+        matches = sorted((x, y) for x, y, name in sheet.labels if name == net_name)
         if not matches:
             raise NetlistError(
                 f"Net label '{net_name}' not found in schematic. Add it with the "
@@ -303,13 +325,14 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             )
         x, y = matches[0]
     elif args.pin is not None:
-        x, y = resolve_pin(args.pin, editor)
+        x, y = sheet.pin_at(args.pin)
     elif args.x is not None and args.y is not None:
         x, y = args.x, args.y
     else:
         raise NetlistError("inspect(kind='net') needs either 'pin' or both 'x' and 'y'.")
 
-    part = net_partition(editor)
+    part = sheet.partition()
+    wires = list(sheet.wires)
     start = (x, y)
 
     # The physical partition connects by wire only; LTspice also makes FLAGs
@@ -323,9 +346,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         # No pin, label or wire end sits here. A point on a wire's interior is
         # still on that wire's net, since LTspice joins anything placed there,
         # so trace from the wire's end and say so.
-        through = wires_of_one_net(
-            start, wire_segments_of(editor), net_of, "Trace from an end of the wire you mean."
-        )
+        through = wires_of_one_net(start, wires, net_of, "Trace from an end of the wire you mean.")
         if not through:
             raise NetlistError(
                 f"Nothing found at ({x},{y}): no component pin, net label or wire "
@@ -353,11 +374,10 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     # LTspice will actually netlist. Surface each dropped segment on this net as
     # a fact (not a verdict) — the model decides whether the tie was intended.
     net_segments = [
-        s
-        for s in wire_segments_of(editor)
-        if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
+        s for s in wires if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
     ]
-    warnings = [
+    warnings = [_not_followed(keyword, lines) for keyword, lines in sheet.unread_lines().items()]
+    warnings += [
         f"{d['ref']}.{d['pins'][0]} and {d['ref']}.{d['pins'][1]} are joined by a "
         f"wire between two pins of the same component; LTspice drops that wire from "
         f"the netlist, so this connection may not exist in simulation. Reroute the "
@@ -1477,8 +1497,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
             "page": _page_meta(page, "members"),
         }
 
-    # .asc: geometric trace via trace_net internals. The cached AscEditor is
-    # touched only on the event loop, so this runs inline (never offloaded).
+    # .asc: a geometric trace of the sheet as the file holds it.
     digest = await _asc_digest(path)
     trace_input = _trace_input_for(q.path, q.at)
     trace = await handle_trace_net(trace_input, state)
