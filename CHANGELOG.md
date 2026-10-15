@@ -1111,7 +1111,9 @@ recording that showed it.
   that ends a part, a part with no rotation, a `TEXT` with no `!` or `;`, a
   malformed `WIRE` or `FLAG`, and a `WINDOW` under a part that does not parse.
   A symbol with a pin line that does not parse is drawn as a placeholder, as
-  the editor already treated it, and the finding names that line.
+  the editor already treated it, and the finding names that line; a symbol
+  file that is found but cannot be read is named as such, where it was
+  reported as not found in any library.
 - `wire_pins` no longer warns about routes over 400 units ("Long wire run
   ..."). The threshold was arbitrary: 29% of LTspice's own example sheets have
   a wire that long. The guide's wiring section now gives the measured

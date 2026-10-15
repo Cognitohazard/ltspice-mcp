@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.geometry import BBox
@@ -157,7 +158,7 @@ class SymbolFile:
         element class LTspice netlists the part as."""
         return self.attr("Prefix")
 
-    @property
+    @cached_property
     def body(self) -> BBox | None:
         """The smallest box around what the symbol draws, its pins apart;
         ``None`` for a symbol that draws nothing. An arc counts as what is
@@ -168,7 +169,7 @@ class SymbolFile:
             points += [(x1, y1), (x2, y2)]
         return BBox.from_points(points)
 
-    @property
+    @cached_property
     def bbox(self) -> BBox:
         """The smallest box around the body and the pins; empty at the origin for
         a symbol that has neither."""

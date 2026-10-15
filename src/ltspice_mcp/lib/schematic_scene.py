@@ -15,12 +15,8 @@ order, plus a content bounding box for cropping and a list of human-readable
 diagnostics (e.g. an unresolved symbol). :mod:`schematic_renderer` turns a
 ``Scene`` into SVG; nothing here emits markup.
 
-Why a render-oriented ``.asy`` parse instead of reusing
-``symbol_geometry.parse_asy_file``: that function keeps only pins and a bounding
-box and discards the drawing primitives and text — everything a renderer needs.
-So :func:`proto_of` keeps the whole reading of a symbol file
-(lines/rects/circles/arcs/pins/windows), which ``symbol_library.SymbolResolver``
-reads once, while still reusing ``PinInfo`` and the rotation transform.
+A part's pins and boxes are the ones the sheet placed; its drawing is the
+symbol file's lines, rectangles, circles and arcs, placed the same way.
 """
 
 from __future__ import annotations
@@ -33,20 +29,22 @@ from pathlib import Path
 
 from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.connectivity import point_on_segment
-from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text, refused_sheet_mark
+from ltspice_mcp.lib.encoding import refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
-from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_text
-from ltspice_mcp.lib.sheet_findings import Part, SheetView
-from ltspice_mcp.lib.symbol_file import (
-    PinInfo,
-    SymbolArc,
-    read_symbol,
+from ltspice_mcp.lib.sheet import (
+    Sheet,
+    SheetPart,
+    read_sheet,
+    read_sheet_text,
 )
+from ltspice_mcp.lib.sheet_findings import Part, SheetView
+from ltspice_mcp.lib.symbol_file import SymbolArc
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
-    library_roots,
+    place_box,
+    place_point,
 )
-from ltspice_mcp.lib.symbol_library import FoundSymbol, SymbolResolver
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 
 # Attribute-window numbers we render as text next to a symbol. LTspice assigns
 # window 0 to the instance name and window 3 to the value; the rest (SpiceLine,
@@ -405,33 +403,6 @@ Graphic = DrawLine | DrawRect | DrawEllipse | DrawPolyline
 
 
 # ---------------------------------------------------------------------------
-# Symbol prototype (parsed .asy body, symbol-local coordinates)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SymbolProto:
-    """Parsed ``.asy`` symbol body in symbol-local coordinates."""
-
-    name: str
-    path: Path
-    lines: tuple[DrawLine, ...]
-    rects: tuple[DrawRect, ...]
-    circles: tuple[DrawEllipse, ...]
-    arcs: tuple[SymbolArc, ...]
-    pins: tuple[PinInfo, ...]
-    windows: tuple[Window, ...]
-    bbox: BBox
-    body: BBox | None
-
-    def window(self, number: int) -> Window | None:
-        for w in self.windows:
-            if w.number == number:
-                return w
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Scene (absolute coordinates, ready to render)
 # ---------------------------------------------------------------------------
 
@@ -445,9 +416,9 @@ class PlacedSymbol:
     rotation: str
     resolved_path: Path | None
     missing: bool
-    #: The first pin line of a found symbol that does not read, which makes the
-    #: symbol unusable; the part is then drawn as a placeholder.
-    unreadable: str = ""
+    #: Why a symbol that was found cannot be used (``FoundSymbol.problem``); the
+    #: part is then drawn as a placeholder. Empty for a symbol not found.
+    problem: str = ""
     #: The part's extent with its pins, and of what it draws alone: its
     #: symbol's two boxes as placed. A part whose symbol was not found has the
     #: placeholder it is drawn as for both.
@@ -556,51 +527,8 @@ class Scene:
 
 
 # ---------------------------------------------------------------------------
-# .asy parsing (render-oriented)
+# Symbol libraries
 # ---------------------------------------------------------------------------
-
-
-def proto_of(found: FoundSymbol) -> SymbolProto:
-    """A symbol the resolver read, as the drawing places it.
-
-    The reading is ``symbol_file.read_symbol``, the one the schematic editor's
-    pin geometry comes from; a line that does not read is left out of the
-    drawing.
-    """
-    symbol = found.file
-    return SymbolProto(
-        name=found.name,
-        path=found.path,
-        lines=tuple(DrawLine(*box) for box in symbol.lines),
-        rects=tuple(DrawRect(*box) for box in symbol.rects),
-        circles=tuple(DrawEllipse(*box) for box in symbol.circles),
-        arcs=symbol.arcs,
-        pins=symbol.pins,
-        windows=symbol.windows,
-        bbox=symbol.bbox,
-        body=symbol.body,
-    )
-
-
-def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
-    """Read the ``.asy`` file at ``asy_path`` and draw it as :func:`proto_of` does.
-
-    Reads via ``read_spice_text`` (BOM/UTF-16/cp1252 fallback): vendor symbols
-    routinely carry cp1252 bytes in description fields.
-    """
-    return proto_of(FoundSymbol(name, asy_path, read_symbol(read_spice_text(asy_path))))
-
-
-def editor_symbol_resolver(asc_path: Path) -> SymbolResolver:
-    """A resolver that finds a symbol where the schematic editor's pin geometry does.
-
-    The sheet's own folder, then ``symbol_geometry.library_roots``, which is
-    what ``symbol_geometry.get_symbol_info`` searches, and nothing more. A
-    scene built with it has a part's pins exactly when the editor has them, so
-    what is said of a sheet from its scene and what the editor counts on it
-    are about the same parts.
-    """
-    return SymbolResolver(local_dir=asc_path.parent, project_paths=library_roots())
 
 
 def default_stock_paths() -> list[Path]:
@@ -625,37 +553,8 @@ def default_stock_paths() -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# .asc parsing → raw records
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Placement: symbol-local geometry → absolute scene primitives
 # ---------------------------------------------------------------------------
-
-
-def _place_point(px: int, py: int, ox: int, oy: int, rot: str) -> tuple[int, int]:
-    rx, ry = _apply_rotation(px, py, rot)
-    return (ox + rx, oy + ry)
-
-
-def _place_aabb(
-    x1: int, y1: int, x2: int, y2: int, ox: int, oy: int, rot: str
-) -> tuple[int, int, int, int]:
-    """Transform a local axis-aligned box; return the absolute AABB.
-
-    Rects and ellipses stay axis-aligned under LTspice's 90°/mirror transforms,
-    so transforming the four corners and taking their AABB is exact.
-    """
-    corners = [(x1, y1), (x2, y1), (x1, y2), (x2, y2)]
-    placed = [_place_point(cx, cy, ox, oy, rot) for cx, cy in corners]
-    bb = BBox.from_points(placed)
-    assert bb is not None  # four corners always non-empty
-    return (bb.x1, bb.y1, bb.x2, bb.y2)
-
-
-def _place_box(box: BBox, ox: int, oy: int, rot: str) -> BBox:
-    return BBox(*_place_aabb(box.x1, box.y1, box.x2, box.y2, ox, oy, rot))
 
 
 def _arc_polyline(arc: SymbolArc, ox: int, oy: int, rot: str) -> DrawPolyline | None:
@@ -673,15 +572,16 @@ def _arc_polyline(arc: SymbolArc, ox: int, oy: int, rot: str) -> DrawPolyline | 
     pts: list[tuple[int, int]] = []
     for k in range(_ARC_SEGMENTS + 1):
         lx, ly = arc.at(start + turn * (k / _ARC_SEGMENTS))
-        pts.append(_place_point(round(lx), round(ly), ox, oy, rot))
+        pts.append(place_point(round(lx), round(ly), ox, oy, rot))
     return DrawPolyline(tuple(pts))
 
 
-def _place_symbol(part: SheetPart, proto: SymbolProto | None) -> PlacedSymbol:
+def _place_symbol(part: SheetPart) -> PlacedSymbol:
     ref = part.reference
     (ox, oy), rot = part.at, part.rotation
 
-    if proto is None:
+    if part.symbol is None or not part.usable:
+        placeholder = place_box(_PLACEHOLDER, ox, oy, rot)
         placed = PlacedSymbol(
             reference=ref,
             symbol=part.symbol_name,
@@ -690,19 +590,17 @@ def _place_symbol(part: SheetPart, proto: SymbolProto | None) -> PlacedSymbol:
             rotation=rot,
             resolved_path=part.symbol.path if part.symbol is not None else None,
             missing=True,
-            unreadable=part.unreadable,
+            problem=part.symbol.problem if part.symbol is not None else "",
         )
-        x1, y1, x2, y2 = _place_aabb(
-            _PLACEHOLDER.x1, _PLACEHOLDER.y1, _PLACEHOLDER.x2, _PLACEHOLDER.y2, ox, oy, rot
+        placed.graphics.append(
+            DrawRect(placeholder.x1, placeholder.y1, placeholder.x2, placeholder.y2)
         )
-        placed.graphics.append(DrawRect(x1, y1, x2, y2))
-        placed.box = placed.body = BBox(x1, y1, x2, y2)
-        label = ref or part.symbol_name
+        placed.box = placed.body = placeholder
         placed.texts.append(
             DrawText(
-                x=(x1 + x2) // 2,
-                y=(y1 + y2) // 2,
-                text=label,
+                x=(placeholder.x1 + placeholder.x2) // 2,
+                y=(placeholder.y1 + placeholder.y2) // 2,
+                text=ref or part.symbol_name,
                 anchor="middle",
                 size=2,
                 role="placeholder",
@@ -710,40 +608,38 @@ def _place_symbol(part: SheetPart, proto: SymbolProto | None) -> PlacedSymbol:
         )
         return placed
 
+    drawing = part.symbol.file
     placed = PlacedSymbol(
         reference=ref,
         symbol=part.symbol_name,
         x=ox,
         y=oy,
         rotation=rot,
-        resolved_path=proto.path,
+        resolved_path=part.symbol.path,
         missing=False,
-        box=_place_box(proto.bbox, ox, oy, rot),
-        body=_place_box(proto.body, ox, oy, rot) if proto.body is not None else None,
+        box=part.box,
+        body=part.body,
     )
-    for ln in proto.lines:
-        ax1, ay1 = _place_point(ln.x1, ln.y1, ox, oy, rot)
-        ax2, ay2 = _place_point(ln.x2, ln.y2, ox, oy, rot)
-        placed.graphics.append(DrawLine(ax1, ay1, ax2, ay2))
-    for rc in proto.rects:
-        x1, y1, x2, y2 = _place_aabb(rc.x1, rc.y1, rc.x2, rc.y2, ox, oy, rot)
-        placed.graphics.append(DrawRect(x1, y1, x2, y2))
-    for ci in proto.circles:
-        x1, y1, x2, y2 = _place_aabb(ci.x1, ci.y1, ci.x2, ci.y2, ox, oy, rot)
-        placed.graphics.append(DrawEllipse(x1, y1, x2, y2))
-    for ar in proto.arcs:
-        poly = _arc_polyline(ar, ox, oy, rot)
+    for x1, y1, x2, y2 in drawing.lines:
+        placed.graphics.append(
+            DrawLine(*place_point(x1, y1, ox, oy, rot), *place_point(x2, y2, ox, oy, rot))
+        )
+    for kind, boxes in ((DrawRect, drawing.rects), (DrawEllipse, drawing.circles)):
+        for box in boxes:
+            at = place_box(BBox(*box), ox, oy, rot)
+            placed.graphics.append(kind(at.x1, at.y1, at.x2, at.y2))
+    for arc in drawing.arcs:
+        poly = _arc_polyline(arc, ox, oy, rot)
         if poly is not None:
             placed.graphics.append(poly)
-    for pin in proto.pins:
-        ax, ay = _place_point(pin.x, pin.y, ox, oy, rot)
-        placed.pins.append(DrawPin(ax, ay, pin.name))
-
-    placed.texts.extend(_attr_texts(part, proto, ox, oy, rot))
+    placed.pins.extend(DrawPin(pin.x, pin.y, pin.name) for pin in part.pins)
+    placed.texts.extend(_attr_texts(part, drawing.windows, ox, oy, rot))
     return placed
 
 
-def _attr_texts(part: SheetPart, proto: SymbolProto, ox: int, oy: int, rot: str) -> list[DrawText]:
+def _attr_texts(
+    part: SheetPart, windows: Sequence[Window], ox: int, oy: int, rot: str
+) -> list[DrawText]:
     """Instance-name and value text at their window anchors.
 
     Window anchor coordinates are symbol-local: a per-instance ``WINDOW``
@@ -758,10 +654,10 @@ def _attr_texts(part: SheetPart, proto: SymbolProto, ox: int, oy: int, rot: str)
     overrides = {w.number: w for w in part.record.windows}
 
     def placed(number: int, text: str) -> DrawText | None:
-        w = overrides.get(number) or proto.window(number)
+        w = overrides.get(number) or next((w for w in windows if w.number == number), None)
         if w is None:
             return None
-        ax, ay = _place_point(w.x, w.y, ox, oy, rot)
+        ax, ay = place_point(w.x, w.y, ox, oy, rot)
         turn, anchor = _attr_text_placement(w.align, rot, explicit=number in overrides)
         return DrawText(ax, ay, text, anchor, w.size, "attr", rotation=turn)
 
@@ -853,19 +749,6 @@ def _svg_anchor(align: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _unread_note(keyword: str, lines: list[int]) -> str:
-    """What the drawing, and every check read from it, leaves out of a sheet."""
-    if len(lines) == 1:
-        return (
-            f"line {lines[0]}: a {keyword} record, which the drawing does not read; it is "
-            "not drawn and no check built on the drawing includes it"
-        )
-    return (
-        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which the drawing "
-        "does not read; they are not drawn and no check built on the drawing includes them"
-    )
-
-
 def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene:
     """Parse ``asc_path`` and build a fully-placed :class:`Scene`.
 
@@ -880,10 +763,9 @@ def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene
     # that commits between them cannot make the reported provenance a hash of
     # something that was never drawn.
     data = asc_path.read_bytes()
-    return scene_of_text(
-        decode_spice_bytes(data),
+    return scene_of_sheet(
+        read_sheet(data, resolver),
         asc_path,
-        resolver,
         hashlib.sha256(data).hexdigest(),
         refused_sheet_mark(data),
     )
@@ -914,23 +796,27 @@ def scene_of_sheet(
 ) -> Scene:
     """The fully-placed :class:`Scene` of ``sheet``, which is or will be at ``source``."""
     scene = Scene(source=source, source_sha256=source_sha256, byte_order_mark=byte_order_mark)
-    for keyword, lines in sheet.unread_lines().items():
-        scene.diagnostics.append(_unread_note(keyword, lines))
+    scene.diagnostics.extend(
+        sheet.unread_notes(
+            "the drawing",
+            "it is not drawn and no check built on the drawing includes it",
+            "they are not drawn and no check built on the drawing includes them",
+        )
+    )
 
     for part in sheet.parts:
-        proto = proto_of(part.symbol) if part.usable and part.symbol is not None else None
         instance = f" (instance {part.reference})" if part.reference else ""
         if part.symbol is None:
             scene.diagnostics.append(
                 f"symbol '{part.symbol_name}'{instance} not found in any library path; "
                 "placeholder rendered"
             )
-        elif part.unreadable:
+        elif part.symbol.problem:
             scene.diagnostics.append(
-                f"symbol '{part.symbol_name}'{instance} has a pin line that does not read "
-                f"({part.unreadable!r}); placeholder rendered"
+                f"symbol '{part.symbol_name}'{instance} {part.symbol.problem}; "
+                "placeholder rendered"
             )
-        scene.symbols.append(_place_symbol(part, proto))
+        scene.symbols.append(_place_symbol(part))
 
     wires = [Wire(*wire) for wire in sheet.wires]
     scene.wires.extend(wires)
@@ -996,7 +882,7 @@ def sheet_view(scene: Scene) -> SheetView:
                 pins=tuple((pin.name, pin.x, pin.y) for pin in sym.pins),
                 texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
                 missing=sym.missing,
-                unreadable=sym.unreadable,
+                problem=sym.problem,
             )
             for sym in scene.symbols
         ),

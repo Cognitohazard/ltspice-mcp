@@ -89,10 +89,10 @@ from ltspice_mcp.lib.schematic_ops import (
     wiring_profile,
 )
 from ltspice_mcp.lib.schematic_scene import (
-    editor_symbol_resolver,
     scene_of_text,
     sheet_view,
 )
+from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from ltspice_mcp.lib.sheet_findings import RULES, Finding, findings
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.symbol_library import SymbolResolver

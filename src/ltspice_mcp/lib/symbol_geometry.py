@@ -14,7 +14,7 @@ from spicelib import AscEditor
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
-from ltspice_mcp.lib.symbol_file import PinInfo, read_symbol
+from ltspice_mcp.lib.symbol_file import PinInfo, SymbolFile, read_symbol
 from ltspice_mcp.lib.symbol_library import find_beside, find_symbol
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,25 @@ def _apply_rotation(x: int, y: int, rotation: str) -> tuple[int, int]:
     return (a * x + b * y, c * x + d * y)
 
 
+def place_point(x: int, y: int, origin_x: int, origin_y: int, rotation: str) -> tuple[int, int]:
+    """A symbol-local point placed on the sheet at ``origin`` with ``rotation``."""
+    rx, ry = _apply_rotation(x, y, rotation)
+    return (origin_x + rx, origin_y + ry)
+
+
+def place_box(box: BBox, origin_x: int, origin_y: int, rotation: str) -> BBox:
+    """A symbol-local box placed on the sheet: the box around its four placed corners.
+
+    LTspice's turns and mirrors keep a box upright, so this is exact.
+    """
+    corners = [(box.x1, box.y1), (box.x2, box.y1), (box.x1, box.y2), (box.x2, box.y2)]
+    placed = BBox.from_points(
+        [place_point(x, y, origin_x, origin_y, rotation) for x, y in corners]
+    )
+    assert placed is not None  # four corners are never empty
+    return placed
+
+
 _DIRECTION_NAMES = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
 
 
@@ -137,11 +156,20 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
     pin left out is a terminal no wire could be checked against, so the symbol
     is refused whole (``_parse_or_none`` turns that into an unusable symbol).
     """
-    symbol = read_symbol(read_spice_text(asy_path))
+    return symbol_info_of(asy_path.stem, read_symbol(read_spice_text(asy_path)))
+
+
+def symbol_info_of(name: str, symbol: SymbolFile) -> SymbolInfo:
+    """What the placement of a part needs of a symbol file read as ``name``.
+
+    Raises ``ValueError`` for a symbol with a pin line that does not read: a
+    pin left out is a terminal no wire could be checked against, so the
+    symbol is unusable whole.
+    """
     if symbol.unread_pins:
-        raise ValueError(f"{asy_path.name}: unreadable pin line {symbol.unread_pins[0]!r}")
+        raise ValueError(f"{name}: unreadable pin line {symbol.unread_pins[0]!r}")
     return SymbolInfo(
-        name=asy_path.stem,
+        name=name,
         pins=symbol.pins,
         bbox=symbol.bbox,
         symbol_type=symbol.symbol_type,
@@ -218,11 +246,5 @@ def compute_placed_geometry(
             }
         )
 
-    # Transform the four corners of the local bbox, then take the AABB of the result.
-    corners = [(bb.x1, bb.y1), (bb.x2, bb.y1), (bb.x1, bb.y2), (bb.x2, bb.y2)]
-    transformed = [
-        (origin_x + tx, origin_y + ty)
-        for tx, ty in (_apply_rotation(cx, cy, rotation) for cx, cy in corners)
-    ]
-    placed = BBox.from_points(transformed) or BBox(origin_x, origin_y, origin_x, origin_y)
+    placed = place_box(bb, origin_x, origin_y, rotation)
     return {"pins": placed_pins, "bounding_box": placed.to_origin_size_dict()}

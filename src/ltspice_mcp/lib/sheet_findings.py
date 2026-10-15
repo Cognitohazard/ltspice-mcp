@@ -211,9 +211,9 @@ class Part:
     missing: bool = False
     body: BBox | None = None
     at: Point | None = None
-    #: The first pin line of a found symbol that does not read, which makes
-    #: the symbol unusable; the part is then ``missing`` too.
-    unreadable: str = ""
+    #: Why a symbol that was found cannot be used, as words that follow its
+    #: name (``FoundSymbol.problem``); the part is then ``missing`` too.
+    problem: str = ""
 
     @property
     def name(self) -> str:
@@ -296,9 +296,8 @@ def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
             continue
         facts: dict[str, Any] = {"symbol": part.symbol}
         why = "was not found"
-        if part.unreadable:
-            facts["unreadable"] = part.unreadable
-            why = f"has a pin line that does not read ({part.unreadable!r})"
+        if part.problem:
+            facts["problem"] = why = part.problem
         found.append(
             Finding(
                 "unresolved_symbol",

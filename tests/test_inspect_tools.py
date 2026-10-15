@@ -1418,3 +1418,37 @@ class TestAComponentListing:
             ("R1", "1k", {"x": 96, "y": 96}),
             ("R1", "2k", {"x": 300, "y": 96}),
         ]
+
+
+class TestASheetReadOncePerCall:
+    async def test_every_query_of_a_call_on_one_sheet_reads_it_once(
+        self, asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing symbol is looked for through the whole library each time a
+        sheet is read, so a call of many queries reads its sheet once."""
+        from tests._asc_ops import build_sheet
+
+        add = {"op": "add_component", "symbol": "res", "y": 100}
+        await build_sheet(
+            asc_state,
+            "read_once",
+            [{**add, "reference": "R1", "x": 100}, {**add, "reference": "R2", "x": 300}],
+        )
+        sheet = str(work_dir / "read_once.asc")
+        reads: list[Path] = []
+        original = insp.read_sheet_file
+
+        def counted(path: Path) -> typing.Any:
+            reads.append(path)
+            return original(path)
+
+        monkeypatch.setattr(insp, "read_sheet_file", counted)
+        queries = [{"kind": "components", "path": sheet}]
+        queries += [{"kind": "net", "path": sheet, "at": at} for at in ("R1.1", "R1.2", "R2.1")]
+        reply = await handle_inspect(InspectInput.model_validate({"queries": queries}), asc_state)
+        assert reply.structured_content is not None
+        assert reply.structured_content["ok_count"] == 4
+        assert len(reads) == 1
+        # A later call reads it again: nothing is kept between calls.
+        await handle_inspect(InspectInput.model_validate({"queries": queries[:1]}), asc_state)
+        assert len(reads) == 2
