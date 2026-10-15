@@ -18,6 +18,12 @@ Visible Traces command, and LTspice then ties the plot to the sheet: a click
 on a net plots it. The bridge has no call for that, so the window's frame is
 asked (``LtspiceFrame``).
 
+LTspice reads a results file once and looks for a sheet's results once, as it
+opens each. So showing a newer run means closing what is open and opening it
+again, and both showings do that themselves instead of leaving it to a person:
+a results pane closes without a question, and a sheet is closed only where the
+window holds what its file does, so that nothing anyone did there can be lost.
+
 Those three are for a caller who was asked to show something in LTspice, and
 each of them, and nothing else, starts LTspice when no window is open
 (``start_in_view``, kept with the other starts of LTspice on Windows): where a
@@ -65,7 +71,7 @@ from ltspice_mcp.lib.ltspice_bridge import (
     Instance,
     bridge_command,
 )
-from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame
+from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame, SaveQuestion
 from ltspice_mcp.lib.ltspice_windows import start_in_view
 
 # The lines that say how a sheet is stored and how far it extends, which
@@ -83,6 +89,13 @@ takes a second or two; this is a cap on one that never does."""
 _OPENED_S = 5.0
 """How long LTspice is given to show the results it was asked to open. Opening
 a results file is quick; this is a cap on a window that did nothing."""
+_LOOKED_S = 2.0
+"""How long a sheet that was already open is given to open its results. One
+that knows of them does it in a fraction of a second however large they are,
+and one that knows of none never does: this is how long it takes to tell."""
+_CLOSED_S = 2.0
+"""How long LTspice is given to close a pane it was told to close, or to ask
+about it. Either takes a moment; this is a cap on a window that did neither."""
 
 
 class WindowsUnavailable(BridgeError):
@@ -91,10 +104,6 @@ class WindowsUnavailable(BridgeError):
 
 class NoWindow(BridgeError):
     """No LTspice window is open to show something in."""
-
-
-class ResultsNotLookedFor(BridgeError):
-    """The window opened the sheet before it had results, and knows of none."""
 
 
 def _within(seconds: float, every: float, happened: Callable[[], bool]) -> bool:
@@ -260,13 +269,18 @@ class Shown:
     LTspice does not read a file again, so with the copy the caller can say
     whether what the person is shown is the file. ``started`` says LTspice
     was not running and was started for this. ``reopened`` says a plot of the
-    same results was open and was closed to show these.
+    same results was open and was closed to show these. ``sheet_reopened``
+    says the sheet was open, knew of no results, and was closed and opened
+    again so that it would. ``tied`` says results were opened from their
+    sheet, so the plot is tied to it.
     """
 
     window: Instance
     held: str | None = None
     started: bool = False
     reopened: bool = False
+    sheet_reopened: bool = False
+    tied: bool = False
 
 
 def _same_file(ours: Path, theirs: str) -> bool:
@@ -348,8 +362,13 @@ class OpenWindows:
         return [instance for instance in session.instances() if instance.mode == _WINDOW]
 
     @staticmethod
+    def _spelling(session: BridgeSession, path: Path) -> str | None:
+        """How the attached window spells ``path``, or None when it does not have it open."""
+        return next((each for each in session.open_designs() if _same_file(path, each)), None)
+
+    @classmethod
     def _having(
-        session: BridgeSession, windows: Sequence[Instance], path: Path
+        cls, session: BridgeSession, windows: Sequence[Instance], path: Path
     ) -> Iterator[tuple[Instance, str]]:
         """Each of ``windows`` that has ``path`` open, with the path as it spells it.
 
@@ -357,9 +376,9 @@ class OpenWindows:
         """
         for window in windows:
             session.attach(window.pid)
-            for spelled in session.open_designs():
-                if _same_file(path, spelled):
-                    yield window, spelled
+            spelled = cls._spelling(session, path)
+            if spelled is not None:
+                yield window, spelled
 
     def _to_show_in(self, session: BridgeSession) -> list[Instance]:
         """``_windows``, for a caller with something to show: raises ``NoWindow`` for none."""
@@ -371,12 +390,14 @@ class OpenWindows:
     def _holder(self, session: BridgeSession, path: Path) -> tuple[Instance, str | None]:
         """The window to show ``path`` in, and how it spells the path if it has it open.
 
-        The first window that has the file open, with the session attached to
-        it; else the first window and None. Raises ``NoWindow`` for none.
+        The first window that has the file open, else the first window and
+        None; the session is left attached to it. Raises ``NoWindow`` for none.
         """
         windows = self._to_show_in(session)
         for window, spelled in self._having(session, windows, path):
             return window, spelled
+        if len(windows) > 1:
+            session.attach(windows[0].pid)
         return windows[0], None
 
     def _starting(self, show: Callable[[], Shown]) -> Shown:
@@ -466,7 +487,6 @@ class OpenWindows:
                 window, spelled = self._holder(session, path)
                 held = None
                 if spelled is None:
-                    session.attach(window.pid)
                     session.open_design(str(path))
                 else:
                     held = session.design_text(spelled)
@@ -476,46 +496,77 @@ class OpenWindows:
         return self._starting(show)
 
     def show_results(self, results: Path) -> Shown:
-        """Open a results file in an LTspice window, in front.
+        """Open a results file in an LTspice window, in front, on its own.
 
-        For a caller who was asked to show it, so LTspice is started when no
-        window is open. Blocks; raises ``BridgeError`` when there is no
-        bridge, when no window is open and none may be started, or when
-        LTspice refuses the file.
+        A window that already has the file open goes on showing what it read
+        of it and of the plot settings beside it, so that pane is closed
+        first and ``reopened`` says so; traces someone added to it by hand go
+        with it. For a caller who was asked to show it, so LTspice is started
+        when no window is open. Blocks; raises ``BridgeError`` when there is
+        no bridge, when no window is open and none may be started, when the
+        open pane does not close, or when LTspice refuses the file.
         """
 
         def show() -> Shown:
             with self._session() as session:
                 window = self._to_show_in(session)[0]
                 session.attach(window.pid)
+                reopened = self._close_results(session, window.pid, results)
                 session.show_results(str(results))
-                return Shown(window)
+                return Shown(window, reopened=reopened)
 
         return self._starting(show)
 
-    def results_pane_open(self, pid: int, sheet: Path) -> bool:
-        """Whether LTspice process ``pid`` has the results beside ``sheet`` open in a pane.
-
-        The pane is known by its title, the results file's name. Raises
-        ``BridgeError`` when the window's frame cannot be asked.
-        """
-        return self._frame.pane(pid, results_beside(sheet).name) is not None
-
-    def _close_results_pane(self, pid: int, sheet: Path) -> bool:
-        """Close the pane of the results beside ``sheet``; False when none is open.
-
-        Raises ``BridgeError`` when it is open and does not close.
-        """
-        if not self.results_pane_open(pid, sheet):
-            return False
-        results = results_beside(sheet).name
-        self._frame.close_pane(pid, results)
-        # A pane closes in a moment, so this looks often.
-        if not _within(_OPENED_S, 0.02, lambda: not self.results_pane_open(pid, sheet)):
+    def _free(self, pid: int) -> None:
+        """Raise ``BridgeError`` while LTspice process ``pid`` waits on a box of its own."""
+        if not self._frame.takes_input(pid):
             raise BridgeError(
-                f"LTspice has {results} open and did not close it within {_OPENED_S:g} s, "
-                "so it goes on showing the results it read; close that plot there and "
-                "ask again"
+                "LTspice is waiting for an answer to a box of its own, so nothing was "
+                "closed in it; answer that box and ask again"
+            )
+
+    def _pane_in_front(
+        self,
+        session: BridgeSession,
+        pid: int,
+        path: Path,
+        spelled: str,
+        in_front: Callable[[], str | None],
+    ) -> int | None:
+        """The pane of ``path`` in the attached window ``pid``, put in front; None
+        when the window does not have it open.
+
+        A pane is titled with its file's name, which the results of two runs
+        of one deck share, and two sheets can, so the file is found by path:
+        the bridge puts ``spelled`` in front, which does nothing with a file
+        that is not open, and ``in_front`` asks it what is in front then.
+        Where that is ``path``, the first pane of its title is the one
+        (recorded). The frame is asked only then, so a file that is not open
+        is shown where the frame cannot be reached.
+        """
+        session.bring_to_front(spelled)
+        shown = in_front()
+        if shown is None or not _same_file(path, shown):
+            return None
+        return self._frame.pane(pid, path.name)
+
+    def _close_results(self, session: BridgeSession, pid: int, results: Path) -> bool:
+        """Close the pane showing ``results`` in the attached window ``pid``.
+
+        False when the window does not have that file open. Raises
+        ``BridgeError`` when it is open and does not close.
+        """
+        pane = self._pane_in_front(session, pid, results, str(results), session.results_in_front)
+        if pane is None:
+            return False
+        self._free(pid)
+        self._frame.close(pane)
+        # A pane closes in a moment, so this looks often.
+        if not _within(_CLOSED_S, 0.02, lambda: not self._frame.is_open(pane)):
+            raise BridgeError(
+                f"LTspice has {results.name} open and did not close it within "
+                f"{_CLOSED_S:g} s, so it goes on showing the results it read; close "
+                "that plot there and ask again"
             )
         return True
 
@@ -528,14 +579,6 @@ class OpenWindows:
         ``open_sheet`` does. For a caller who was asked to show them, so
         LTspice is started when no window is open.
 
-        LTspice looks for a sheet's results as it opens the sheet, and
-        afterwards knows of none but those of a run it made there. So a sheet
-        no window has open is opened only once ``place`` has been called. One
-        that is already open keeps what LTspice found then: where that was
-        nothing, the command does nothing, and this raises
-        ``ResultsNotLookedFor`` once the wait for them runs out, with the
-        results in place for the next time the sheet is opened.
-
         A window that already has those results open goes on showing what
         it read, and with them open its command asks the person which traces
         to show. So that pane is closed first, before ``place`` is called,
@@ -543,40 +586,135 @@ class OpenWindows:
         traces someone added to it by hand go with it, and ``reopened`` says
         that it was done.
 
-        Raises ``BridgeError`` when the open pane does not close, when there
-        is no bridge, when no window is open and none may be started, when
-        the sheet cannot be put in front, and when this build has no such
+        LTspice looks for a sheet's results as it opens the sheet, and
+        afterwards knows of none but those of a run it made there. So a sheet
+        no window has open is opened only once ``place`` has been called. One
+        that was open before it had any does nothing with the command, and is
+        closed and opened again, which ``sheet_reopened`` says: its place in
+        the window and its undo history go with it, and nothing else, because
+        it is closed only where the window holds what the file does
+        (``_close_sheet``). Where it holds anything else, the results are
+        opened on their own instead: ``tied`` is False, and ``held`` is what
+        the window holds.
+
+        Raises ``BridgeError`` when a pane does not close, when there is no
+        bridge, when no window is open and none may be started, when the
+        sheet cannot be put in front, and when this build has no such
         command; what ``place`` raises is the caller's.
         """
         return self._starting(lambda: self._results_from_sheet(sheet, place))
 
     def _results_from_sheet(self, sheet: Path, place: Callable[[], None]) -> Shown:
-        results = results_beside(sheet).name
+        results = results_beside(sheet)
         with self._session() as session:
             window, spelled = self._holder(session, sheet)
             held = None if spelled is None else session.design_text(spelled)
-        reopened = self._close_results_pane(window.pid, sheet)
+            reopened = self._close_results(session, window.pid, results)
+        # A sheet open with no results beside it knows of none: LTspice looks
+        # for them only as it opens a sheet, and a run made there leaves them.
+        may_know = results.exists()
         place()
+        if held is None or may_know:
+            if self._open_from_sheet(window.pid, sheet, _OPENED_S if held is None else _LOOKED_S):
+                return Shown(window, held, reopened=reopened, tied=True)
+            if held is None:
+                raise BridgeError(f"LTspice did not open {results.name} within {_OPENED_S:g} s")
         with self._session() as session:
             session.attach(window.pid)
-            if spelled is None:
-                session.open_design(str(sheet))
-            # The command goes to whatever is in front, and time has passed.
-            for now_spelled in session.open_designs():
-                if _same_file(sheet, now_spelled):
-                    session.bring_to_front(now_spelled)
-            in_front = session.active_design()
-            if in_front is None or not _same_file(sheet, in_front):
-                raise BridgeError(f"{sheet.name} could not be put in front in LTspice")
-        self._frame.send(window.pid, VISIBLE_TRACES)
-        if _within(_OPENED_S, 0.1, lambda: self.results_pane_open(window.pid, sheet)):
-            return Shown(window, held, reopened=reopened)
-        if held is None:
-            raise BridgeError(f"LTspice did not open {results} within {_OPENED_S:g} s")
-        raise ResultsNotLookedFor(
-            f"LTspice had {sheet.name} open before these results were beside it, and "
-            "looks for a sheet's results only as it opens the sheet"
+            unsaved = self._close_sheet(session, window.pid, sheet, held)
+            if unsaved is not None:
+                session.show_results(str(results))
+                return Shown(window, unsaved, reopened=reopened)
+            self._sheet_in_front(session, sheet)
+        if self._visible_traces(window.pid, sheet, _OPENED_S):
+            return Shown(window, reopened=reopened, sheet_reopened=True, tied=True)
+        raise BridgeError(
+            f"LTspice opened {sheet.name} again and did not open {results.name} within "
+            f"{_OPENED_S:g} s"
         )
+
+    def _sheet_in_front(self, session: BridgeSession, sheet: Path) -> None:
+        """Open ``sheet`` in the attached window where it is not open, and put it in front.
+
+        Raises ``BridgeError`` when it is not in front then: the command that
+        opens its results goes to whatever is.
+        """
+        spelled = self._spelling(session, sheet)
+        if spelled is None:
+            session.open_design(str(sheet))
+        session.bring_to_front(spelled or str(sheet))
+        in_front = session.active_design()
+        if in_front is None or not _same_file(sheet, in_front):
+            raise BridgeError(f"{sheet.name} could not be put in front in LTspice")
+
+    def _visible_traces(self, pid: int, sheet: Path, seconds: float) -> bool:
+        """Send the sheet in front in window ``pid`` its Visible Traces command:
+        whether a pane of its results opened within ``seconds``.
+
+        What is waited for is a pane of the results' name that was not there
+        before, since the results of another run of that name may be open on
+        their own.
+        """
+        results = results_beside(sheet).name
+        before = set(self._frame.panes_titled(pid, results))
+        self._frame.send(pid, VISIBLE_TRACES)
+        return _within(
+            seconds,
+            0.05,
+            lambda: any(pane not in before for pane in self._frame.panes_titled(pid, results)),
+        )
+
+    def _open_from_sheet(self, pid: int, sheet: Path, seconds: float) -> bool:
+        """``_sheet_in_front`` and then ``_visible_traces``."""
+        with self._session() as session:
+            session.attach(pid)
+            self._sheet_in_front(session, sheet)
+        return self._visible_traces(pid, sheet, seconds)
+
+    def _close_sheet(self, session: BridgeSession, pid: int, sheet: Path, held: str) -> str | None:
+        """Close ``sheet`` in the attached window ``pid``, so that opened again it
+        looks for its results. Returns None once it is closed.
+
+        Only where the window holds what the file does: ``held`` is what it
+        held when the caller last read it, and where that differs the sheet is
+        left open and what it holds is returned. LTspice counts a sheet it was
+        handed through the bridge as changed even when it reads as its file
+        does, which every sheet this server edited while it was open is, and
+        asks whether to save it before closing (recorded). While it asks
+        nobody can change the sheet and the bridge still reads it, so it is
+        read again then: the answer is No where it reads as the file, which
+        loses nothing, and otherwise Cancel, which leaves it as it was.
+        """
+        on_disk = sheet.read_bytes()
+        if file_difference(on_disk, held) is not None:
+            return held
+        spelled = self._spelling(session, sheet)
+        if spelled is None:
+            return None  # closed by someone since
+        pane = self._pane_in_front(session, pid, sheet, spelled, session.active_design)
+        if pane is None:
+            raise BridgeError(f"{sheet.name} could not be put in front in LTspice")
+        self._free(pid)
+        self._frame.close(pane)
+        question: SaveQuestion | None = None
+
+        def closed_or_asked() -> bool:
+            nonlocal question
+            question = self._frame.save_question(pid)
+            return question is not None or not self._frame.is_open(pane)
+
+        if not _within(_CLOSED_S, 0.02, closed_or_asked):
+            raise BridgeError(f"LTspice did not close {sheet.name} within {_CLOSED_S:g} s")
+        if question is None:
+            return None
+        now = session.design_text(spelled)
+        keep = not _same_file(sheet, question.path) or file_difference(on_disk, now) is not None
+        self._frame.answer(question, discard=not keep)
+        # Cancelled, the box goes; answered No, the sheet goes after it.
+        gone = question.box if keep else pane
+        if not _within(_CLOSED_S, 0.02, lambda: not self._frame.is_open(gone)):
+            raise BridgeError(f"LTspice did not take its answer about {sheet.name}")
+        return now if keep else None
 
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""

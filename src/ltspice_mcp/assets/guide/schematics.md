@@ -45,17 +45,22 @@ When they want to plot nets by clicking the sheet in LTspice, show them a run
 of the sheet: `plot_waveform(job_id=..., signals=[...], in_ltspice=true)` for a
 job that ran an `.asc`. The run's results are put beside the sheet under its
 name, replacing the ones there, and opened from the sheet, which is what makes
-LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, and
-a click on a net there plots it. Results beside a sheet of the same name,
-which is what a run in LTspice leaves, open the same way by `raw_file`. A plot
-of the sheet's results that LTspice already has open is closed and opened
-again, since an open plot goes on showing the run it read: the block says
-`reopened: true`, and traces the user added to that plot by hand are gone, so
-say so if they had been working in it. One reply asks something of the user.
-LTspice had the sheet open before it had any results, and looks for them only
-as it opens a sheet: they close the sheet there, and you ask again, since the
-results are beside it now. A run of a netlist has no sheet to tie to and opens
-on its own, as before.
+LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, says
+`tied: true`, and a click on a net there plots it. Results beside a sheet of
+the same name, which is what a run in LTspice leaves, open the same way by
+`raw_file`. LTspice reads a plot only when it opens it, so if a plot of these
+results is already open it is closed and reopened: the block says
+`reopened: true`. Traces the user added to that plot by hand are lost, so tell
+them if they had been working in it. LTspice also looks for a sheet's results
+only when it opens the sheet, so a sheet it opened before it had results is
+closed and reopened too (`sheet_reopened: true`), which clears its undo
+history in LTspice. This is done only when the sheet in LTspice matches the
+file. If it has changes that are not in the file, the sheet stays open and the
+plot opens separately: the block says `tied: false` and
+`differs_from_file: true`. Tell the user that clicking nets will work after
+they save or close the sheet in LTspice and you show the run again. A
+netlist's run has no sheet to tie to and opens as a separate plot; it is also
+closed and reopened if it was already open.
 
 LTspice ships an MCP server of its own, which a session may have beside this
 one (its tools include `set_design_content` and `start_simulation`). It works

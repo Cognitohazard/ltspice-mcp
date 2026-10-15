@@ -679,18 +679,24 @@ documents themselves are the vendor's and are not recorded. The opt-in tier
 checks that the documents read from the install are the ones LTspice's own
 server lists.
 
-One thing here is observed and not recorded: that LTspice loads the plot
-settings file beside a results file it is asked to open on its own, as it does
-when a sheet runs, which is what `plot_waveform(in_ltspice=true)` relies on. A
-window does not report what it draws, so it was looked at, by capturing the
-window on its hidden desktop: the traces the file names are drawn, and a
-results file that is already open keeps the traces it had. `cases.toml` lists
-it as unrecordable (`plot-settings-on-open`) and says what is recorded around
-it: how each build reads a file written here when a sheet runs with it beside
-it (*Plot settings*, above), and that the call the server uses opens a results
-file and leaves it in front. If that needs checking again, capture the window;
-`PrintWindow` works on a window of another desktop when the capturing process
-is started on that desktop.
+Which traces a pane draws is recorded by having the pane save its plot
+settings, which lists them. The recorder writes plot settings beside results,
+opens the results, and reads back what the pane saves. The pane draws the
+traces named; if the results are opened again while the pane is open, it keeps
+its old traces; after it is closed and reopened, it draws the new ones
+(`plot-settings-on-open`). This is why `plot_waveform(in_ltspice=true)` closes
+and reopens a pane. The opt-in tier uses the same check on the traces the
+reply names.
+
+The recorder also closes sheets from outside, as the server does to make
+LTspice look for a sheet's results again (`sheet-closed-from-outside`). An
+unchanged sheet closes without a question, its plot closes with it, and after
+reopening it finds results added beside it in the meantime. For a sheet the
+bridge has written to, LTspice asks whether to save first, even when it
+matches the file. The recording keeps the box's text and records that the
+window takes no input while the box is up, that the bridge still answers, that
+Cancel leaves the sheet open as it was, and that No closes it without writing
+the file.
 
 A second is when LTspice ties a plot to a sheet, so that clicking a net plots
 it. The same grid of clicks was posted to the sheet's view in each window and

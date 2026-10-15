@@ -173,7 +173,14 @@ the steps, each recorded from a window:
 - It looks for a sheet's results as it opens the sheet, and afterwards knows
   of none but those of a run made there. So a sheet no window has open is
   opened only after the results are in place, and one that was already open
-  with none is reported as such, for the person to close.
+  with none is closed and reopened (`sheet_reopened`). This is done only when
+  the window's copy matches the file, so no unsaved work is lost. LTspice asks
+  whether to save any sheet the bridge has written to, which includes every
+  sheet the server edited while it was open, even when the copy matches the
+  file. The sheet cannot be edited while the question is up and the bridge
+  still answers, so the server reads it again then and answers No only if it
+  still matches. A sheet with unsaved changes stays open, and its results
+  open as a separate plot that is not tied to it (`tied: false`).
 - It reads the file when the command is given, so results replaced since it
   last looked are the ones shown, and no earlier run's are passed off as the
   job's.
@@ -189,8 +196,12 @@ the steps, each recorded from a window:
 
 This is the one place the server reaches a window other than through the
 bridge. It sends one command, to a sheet it has just put in front, reads
-the titles of the frame's panes, and closes a results pane it is about to
-open again. It does not start a run in the window to get
+the titles of the frame's panes, closes a pane before opening it again, and
+answers LTspice's save question as above. Panes are identified by title,
+which is the file name, and two runs of one deck share a file name. So the
+server first brings the file to the front through the bridge, by path, and
+then takes the first pane with that title, which is the one in front.
+Nothing is closed while LTspice is showing a dialog. It does not start a run in the window to get
 a tied plot: such a run is of the window's copy and not of the file, and
 leaves no record, the opposite of a job on each count the job system exists
 for.
@@ -499,7 +510,9 @@ so zoom / pan / hover does nothing for it.
   works in LTspice wants to look in LTspice: its cursors, its Add Trace box,
   the viewer they already know. `in_ltspice` opens the run's results file in
   the LTspice window that is already running, through the bridge LTspice
-  ships (`OpenWindows.show_results`). A results file opened there shows an
+  ships (`OpenWindows.show_results`). LTspice reads the results and their
+  plot settings only when it opens them, so a pane already showing that file
+  is closed and reopened. A results file opened there shows an
   empty plot unless a plot settings file of the same name sits beside it, so
   the server writes one naming the panels' traces, with the module that
   writes a sheet's for `set_plot_panes` (`lib/plot_settings.py`), replacing
@@ -517,10 +530,7 @@ so zoom / pan / hover does nothing for it.
   its traces when the person opens it by hand. It opens something in a
   window, and can bring LTspice to the front, only when asked, which is why
   it is an argument and not a setting. The chart and the trace summaries
-  are made all the same, and the browser is not opened as well. What LTspice
-  loads when it opens a results file it does not load again while the file
-  stays open, and nothing the bridge answers says whether it was open, so the
-  reply says that a file already open keeps the traces it had. A run of a
+  are made all the same, and the browser is not opened as well. A run of a
   sheet is opened from the sheet instead, so that the plot is tied to it
   (*LTspice's own MCP server*, above): its results and log are copied beside
   the sheet under its name, which replaces the ones a run in LTspice left
