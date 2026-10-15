@@ -56,7 +56,7 @@ _STARTF_USESTDHANDLES = 0x00000100
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 _DUPLICATE_SAME_ACCESS = 0x00000002
 # The window class of a dialog box.
-_DIALOG_CLASS = "#32770"
+DIALOG_CLASS = "#32770"
 
 DIALOG_LOOK_S = 0.5
 """How often ``HiddenDesktop.run`` looks for a message box while the program
@@ -225,6 +225,8 @@ def _user() -> Any:
             wintypes.DWORD,
         ),
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
+        "IsWindow": ([wintypes.HWND], wintypes.BOOL),
+        "IsWindowEnabled": ([wintypes.HWND], wintypes.BOOL),
         "PostMessageW": (
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
             wintypes.BOOL,
@@ -302,6 +304,20 @@ def post_close(window: int) -> None:
     """
     if not _user().PostMessageW(window, _WM_CLOSE, 0, 0):
         raise _last_error()
+
+
+def window_exists(window: int) -> bool:
+    """Whether ``window`` is still a window: False once it has closed."""
+    return bool(_user().IsWindow(window))
+
+
+def takes_input(window: int) -> bool:
+    """Whether a person could use ``window`` now.
+
+    A program showing a box that has to be answered first turns its other
+    windows off for as long, and this is False of them.
+    """
+    return bool(_user().IsWindowEnabled(window))
 
 
 def _last_error() -> OSError:
@@ -498,7 +514,7 @@ class HiddenDesktop:
         for window in self.windows(pid):
             title = window_text(window)
             if (
-                window_class(window) == _DIALOG_CLASS
+                window_class(window) == DIALOG_CLASS
                 and _user().IsWindowVisible(window)
                 and title != ignore
             ):
