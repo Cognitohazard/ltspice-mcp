@@ -69,13 +69,16 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ltspice_mcp.lib import pe_menu
+from ltspice_mcp.lib import pe_menu, plot_settings
 from ltspice_mcp.lib.hidden_desktop import (
+    DIALOG_CLASS,
     BoxWatch,
     HiddenDesktop,
     StartedProcess,
     child_windows,
+    post_command,
     window_class,
+    window_exists,
     window_text,
 )
 from ltspice_mcp.lib.ltspice_frame import is_frame
@@ -837,7 +840,6 @@ def _user32() -> Any:
     user = ctypes.WinDLL("user32", use_last_error=True)
     signatures: dict[str, tuple[list[Any], Any]] = {
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
-        "IsWindow": ([wintypes.HWND], wintypes.BOOL),
         "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
         "PostMessageW": (
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
@@ -875,10 +877,6 @@ def _send(window: int, message: int, wparam: int, lparam: int) -> None:
         window, message, wparam, lparam, abort_if_hung, 5000, ctypes.byref(result)
     ):
         raise RecorderError(f"LTspice's window did not answer message {message:#06x}")
-
-
-def _closed(window: int) -> bool:
-    return not _user32().IsWindow(window)
 
 
 def _top(window: int) -> int:
@@ -988,19 +986,36 @@ class _Waits:
         self.until(lambda: time.monotonic() >= settled, doing)
 
     def saved(self, path: Path, window: int, command: int, doing: str) -> None:
-        """Send ``window`` its save ``command`` and wait for ``path`` to be written:
-        changed from what it was, and then still for a settle."""
-        before = _file_stamp(path)
-        _user32().PostMessageW(window, _WM_COMMAND, command, 0)
-        written = self.until(
-            lambda: _file_stamp(path) not in (None, before) and _file_stamp(path), doing
+        """``save_and_wait`` with this case's waits."""
+        save_and_wait(
+            window,
+            command,
+            path,
+            functools.partial(self.until, doing=doing),
+            functools.partial(self.settle, doing),
         )
-        while True:
-            self.settle(doing)
-            now = _file_stamp(path)
-            if now == written:
-                return
-            written = now
+
+
+def save_and_wait(
+    window: int,
+    command: int,
+    path: Path,
+    until: Callable[[Callable[[], Any]], Any],
+    settle: Callable[[], None],
+) -> None:
+    """Send ``window`` its save ``command`` and wait for ``path`` to be written:
+    changed from what it was, and then still across a ``settle``. ``until``
+    waits for what a function returns to be true and hands that back.
+    """
+    before = _file_stamp(path)
+    post_command(window, command)
+    written = until(lambda: _file_stamp(path) not in (None, before) and _file_stamp(path))
+    while True:
+        settle()
+        now = _file_stamp(path)
+        if now == written:
+            return
+        written = now
 
 
 def drive_plot(
@@ -1109,7 +1124,7 @@ def drive_save(
 def _dialog(top_level: Sequence[int], title: str) -> int | None:
     """The dialog titled ``title`` among a process's top-level windows."""
     return next(
-        (w for w in top_level if window_class(w) == "#32770" and window_text(w) == title), None
+        (w for w in top_level if window_class(w) == DIALOG_CLASS and window_text(w) == title), None
     )
 
 
@@ -1127,12 +1142,37 @@ def add_trace_by_hand(
     waits for what a function returns to be true and hands that back; what is
     said of a wait that runs out, and what else ends one, is the caller's.
     """
-    user = _user32()
-    user.PostMessageW(pane, _WM_COMMAND, waveform_commands(exe)[_ADD_TRACE], 0)
+    post_command(pane, waveform_commands(exe)[_ADD_TRACE])
     dialog = until(lambda: _dialog(top_level(), _ADD_TRACES))
     _type_expression(dialog, expression)
-    user.PostMessageW(dialog, _WM_COMMAND, _IDOK, 0)
-    until(functools.partial(_closed, dialog))
+    post_command(dialog, _IDOK)
+    until(lambda: not window_exists(dialog))
+
+
+def drawn_traces(
+    pane: int, exe: Path, results: Path, until: Callable[[Callable[[], Any]], Any]
+) -> list[list[str]]:
+    """The traces a transient's waveform pane draws, pane by pane.
+
+    What the pane of ``results`` writes when its File menu's Save Plot
+    Settings is sent to it. The plot settings beside ``results`` are then put
+    back as they were: one a build saved is a file the server leaves alone.
+    ``until`` is as ``add_trace_by_hand`` takes it.
+    """
+    settings = plot_settings.plot_settings_path(results)
+    before = settings.read_bytes() if settings.exists() else None
+
+    def settle() -> None:
+        time.sleep(0.25)  # timing: between two looks at a file nothing reports finished
+
+    save_and_wait(pane, waveform_commands(exe)[_SAVE_PLOT], settings, until, settle)
+    saved = settings.read_bytes()
+    if before is None:
+        settings.unlink()
+    else:
+        settings.write_bytes(before)
+    section = plot_settings.read_plot_settings(saved).section(plot_settings.SECTION_NAMES["tran"])
+    return [list(each.traces) for each in (section.panes if section is not None else ())]
 
 
 def _type_expression(dialog: int, expression: str) -> None:

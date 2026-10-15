@@ -442,9 +442,9 @@ model = ["lib/ltspice_bridge.py", "lib/ltspice_window.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json, which test_ltspice_bridge.py also replays against the stand-in bridge the suite uses"
 
 [behaviour.plot-settings-on-open]
-summary = "That LTspice loads the plot settings file beside a results file when that file is opened on its own, as it does when a sheet runs, and that a results file already open keeps the traces it had."
+summary = "That LTspice loads the plot settings file beside a results file when that file is opened on its own, as it does when a sheet runs; that a results file already open keeps the traces it had; and that closed and opened again it draws the traces the file names then."
 model = ["lib/ltspice_window.py", "tools/analysis.py"]
-unrecordable = "What a window draws is seen and not reported: the bridge has no call that lists a window's traces. It was looked at on LTspice 26.1.1, by opening results files in a window on a desktop of its own and capturing the window. What is recorded is around it: how each build reads a file the server wrote when a sheet runs with it beside it (plot-settings-read), and that reading a results file's description opens it and leaves it the one in front (tests/fixtures/ltspice_bridge_recorded, conversation.json). LTspice XVII has no bridge to open a file through."
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open results on their own'. What a pane draws is what it writes when told to save its plot settings. LTspice XVII has no bridge to open a file through."
 
 [behaviour.window-run]
 summary = "That a run made in a window simulates the window's copy of the sheet and not the file, does not write the sheet, and leaves its netlist, results and log beside it."
@@ -462,9 +462,14 @@ model = ["lib/ltspice_window.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the two facts noted before 'one window is open', from an LTspice started on a desktop of its own with a settings file and no document. Started with no arguments at all it did the same; that was looked at and is not in the recording, which names a settings file so as not to run on the recording user's own."
 
 [behaviour.sheet-results-command]
-summary = "What the window's frame shows and what a sheet's Visible Traces command does: panes are titled with their files' names; the command opens the results beside a sheet that had them when it was opened and not ones put there afterwards; with those results open it shows a dialog to pick traces from; the number the build's sheet menu gives the command; and what a results pane does: it goes on holding the run it read when its file is replaced, closes without a question and without saving plot settings when told to, a trace added by hand or not, and holds the file as it is now once opened again from the sheet."
+summary = "What the window's frame shows and what a sheet's Visible Traces command does: panes are titled with their files' names; the command opens the results beside a sheet that had them when it was opened and not ones put there afterwards; with those results open it shows a dialog to pick traces from; the number the build's sheet menu gives the command; and what a results pane does: it goes on holding the run it read when its file is replaced, closes without a question and without saving plot settings when told to, a trace added by hand or not, and holds the file as it is now once opened again from the sheet; and that of two panes of one title, the first the frame lists is the one in front, for results files and for sheets."
 model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json, the facts noted after 'a results file that is not there', made by asking the frame of a window on a desktop of its own; manifest.json, sheet_commands. LTspice XVII is not recorded: it has no bridge to find the window through."
+
+[behaviour.sheet-closed-from-outside]
+summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file."
+model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet with no results beside it', made by asking the frame of a window on a desktop of its own. LTspice XVII is not recorded: it has no bridge to find the window through."
 
 [behaviour.plot-tied-to-sheet]
 summary = "That LTspice ties a plot to a sheet, so that clicking a net plots it, when the results are opened from the sheet (a run made in that window, or the sheet's Visible Traces command), and not when they are opened on their own; and that the command reads the results file as it is when the command is given."
