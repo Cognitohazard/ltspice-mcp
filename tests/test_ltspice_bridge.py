@@ -175,6 +175,23 @@ class TestRecording:
             "takes input": [True, True, True],
             "answered No, the sheet closes and its file is as it was": [True, True],
             "of two sheets of one title, the first pane found is the one in front": True,
+            # How the server tells whether an open sheet knows of results.
+            "Visible Traces is enabled for a sheet with no results, one with results put "
+            "beside it after it was opened, one with results beside it when it was opened, "
+            "and that one with its plot open": [False, False, True, True],
+            # Only the sheet's own command ties a plot to it: the bridge, asked
+            # by either path, opens a plot that ignores clicks on the sheet.
+            "a plot opened by its sheet's Visible Traces plots what a click on the sheet "
+            "lands on": True,
+            "a plot of results opened by their own path does, for a sheet that knows of none": (
+                False
+            ),
+            "asked about a sheet by its path, the bridge opens the results beside it": [
+                "tie_late.raw",
+                "tie_known.raw",
+            ],
+            "that plot does, for a sheet that knows of none and for one that knows of its "
+            "results": [False, False],
             "no LTspice was started in its place": True,
         }
 
