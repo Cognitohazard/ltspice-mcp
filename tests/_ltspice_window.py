@@ -116,7 +116,9 @@ class FakeFrame(LtspiceFrame):
     under ``with_results``, which the stand-in bridge adds a sheet to when it
     opens one that has results beside it. A world with ``frame_ignores`` is a
     window that does nothing with a command, and one with
-    ``frame_has_no_command`` a build whose menu lacks it.
+    ``frame_has_no_command`` a build whose menu lacks it. The command is
+    enabled for a sheet the window knows has results, and a world with
+    ``menu_unread`` is one whose menu cannot be read.
 
     Whatever is told to close is noted under ``closed``, and all of it stays
     in a world with ``frame_keeps_panes``. Otherwise a results pane goes, and
@@ -225,6 +227,16 @@ class FakeFrame(LtspiceFrame):
         else:
             self._closed(entry, path)
         self._keep(world)
+
+    def command_enabled(self, pid: int, label: str) -> bool | None:
+        """Visible Traces is enabled for a sheet in front that knows of results,
+        as LTspice was recorded showing it; None in a world whose menu cannot
+        be read (``menu_unread``)."""
+        world = read_world(self._world)
+        if world.get("menu_unread"):
+            return None
+        entry = self._entry(world, pid)
+        return label == VISIBLE_TRACES and in_front(entry) in entry.get("with_results", [])
 
     def is_open(self, window: int) -> bool:
         world = read_world(self._world)

@@ -392,3 +392,37 @@ def test_the_stand_in_closes_a_sheet_as_ltspice_was_recorded_closing_one(
             "answered No, the sheet closes and its file is as it was"
         ]
     assert read_world(world)["windows"][0]["answers"] == ["cancel", "no"]
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_menu_says_what_ltspice_was_recorded_saying_of_a_sheets_results(
+    build: str, tmp_path: Path
+):
+    """Visible Traces is turned off for a sheet that knows of no results."""
+    recorded = observed(build)[
+        "Visible Traces is enabled for a sheet with no results, one with results put beside "
+        "it after it was opened, one with results beside it when it was opened, and that "
+        "one with its plot open"
+    ]
+    sheets = {name: tmp_path / f"{name}.asc" for name in ("none", "late", "known")}
+    for sheet in sheets.values():
+        sheet.write_text("Version 4.1\n", encoding="utf-8")
+    shutil.copyfile(sheets["known"], sheets["known"].with_suffix(".raw"))
+    world = tmp_path / "world.json"
+    write_world(world, [a_window()])
+    frame = FakeFrame(world)
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        session.attach(PID)
+        for sheet in sheets.values():
+            session.open_design(str(sheet))
+        shutil.copyfile(sheets["known"], sheets["late"].with_suffix(".raw"))
+        said = []
+        for name in ("none", "late", "known"):
+            session.bring_to_front(str(sheets[name]))
+            said.append(frame.command_enabled(PID, VISIBLE_TRACES))
+        frame.send(PID, VISIBLE_TRACES)
+        session.bring_to_front(str(sheets["known"]))
+        said.append(frame.command_enabled(PID, VISIBLE_TRACES))
+
+    assert said == recorded

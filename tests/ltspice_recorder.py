@@ -789,6 +789,10 @@ def recording_desktop() -> HiddenDesktop:
 _WM_SETTEXT = 0x000C
 _WM_COMMAND = 0x0111
 _WM_MDIACTIVATE = 0x0222
+_WM_MOUSEMOVE = 0x0200
+_WM_LBUTTONDOWN = 0x0201
+_WM_LBUTTONUP = 0x0202
+_MK_LBUTTON = 0x0001
 _IDOK = 1
 #: The dialog the waveform window's Add Trace command opens, in both builds.
 _ADD_TRACES = "Add Traces to Plot"
@@ -841,6 +845,7 @@ def _user32() -> Any:
     signatures: dict[str, tuple[list[Any], Any]] = {
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
         "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
+        "GetClientRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
         "PostMessageW": (
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
             wintypes.BOOL,
@@ -1126,6 +1131,25 @@ def _dialog(top_level: Sequence[int], title: str) -> int | None:
     return next(
         (w for w in top_level if window_class(w) == DIALOG_CLASS and window_text(w) == title), None
     )
+
+
+def click_all_over(window: int, columns: int = 27, rows: int = 19) -> None:
+    """Click a grid of points over ``window``'s client area, one after another,
+    as a person probing a sheet would: on a sheet whose plot is tied to it, a
+    click on a wire or a part plots it. Returns once the clicks are posted; a
+    command posted to the same window afterwards is carried out after them.
+    """
+    from ctypes import wintypes
+
+    user = _user32()
+    area = wintypes.RECT()
+    user.GetClientRect(window, ctypes.byref(area))
+    for row in range(1, rows + 1):
+        for column in range(1, columns + 1):
+            at = (area.bottom * row // (rows + 1)) << 16 | area.right * column // (columns + 1)
+            user.PostMessageW(window, _WM_MOUSEMOVE, 0, at)
+            user.PostMessageW(window, _WM_LBUTTONDOWN, _MK_LBUTTON, at)
+            user.PostMessageW(window, _WM_LBUTTONUP, 0, at)
 
 
 def add_trace_by_hand(
