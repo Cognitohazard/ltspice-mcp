@@ -85,11 +85,11 @@ opaque, checksummed ``cursor``; a ``.asc`` ``net`` pages two collections — pin
 and wire-vertex coordinates — under that one cursor, each advancing by its own
 offset, so paging until ``next_cursor`` is null reaches every row of both.
 
-Concurrency discipline (see the contract in ``tools/_base.py``): cached
-``AscEditor`` access (the ``.asc`` net and component paths) stays on the event
-loop; only immutable parsing (netlist lexing, ``.asy`` and ``.lib`` parses,
-symbol-directory walks) is offloaded to a worker thread. Every response is built
-in the handler coroutine.
+Concurrency discipline (see the contract in ``tools/_base.py``): reading and
+parsing (an ``.asc`` read into a ``sheet.Sheet``, netlist lexing, ``.asy`` and
+``.lib`` parses, symbol-directory walks) runs in a worker thread. An ``.asc`` is
+read once per call, however many of its queries ask about it
+(``_sheet_of_file``). Every response is built in the handler coroutine.
 """
 
 from __future__ import annotations
@@ -100,6 +100,7 @@ import hashlib
 import sys
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias, overload
@@ -129,6 +130,7 @@ from ltspice_mcp.lib import (
     services,
     simulator_docs,
 )
+from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
@@ -137,7 +139,6 @@ from ltspice_mcp.lib.connectivity import (
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
-from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
@@ -161,8 +162,8 @@ from ltspice_mcp.lib.schematic_ops import (
     require_asc,
     wires_of_one_net,
 )
-from ltspice_mcp.lib.schematic_scene import default_stock_paths, editor_symbol_resolver
-from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet
+from ltspice_mcp.lib.schematic_scene import default_stock_paths
+from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -225,49 +226,30 @@ class TraceNetInput(ToolInput):
     )
 
 
-def _not_read(keyword: str, lines: list[int], reader: str, one: str, many: str) -> str:
-    """A reader's note of the lines of one keyword its sheet does not read.
+#: The sheets one ``inspect`` call has read, by path and file stamp, each with
+#: the digest of the bytes it was read from: the queries of one call on one sheet
+#: read and parse it once. ``handle_inspect`` sets it for the call; with none
+#: set, every read is a fresh one.
+_SHEETS_READ: ContextVar[dict[tuple[str, object], tuple[Sheet, str]] | None] = ContextVar(
+    "_SHEETS_READ", default=None
+)
 
-    ``one`` and ``many`` say what that leaves out, for one line and for several.
+
+async def _sheet_of_file(path: Path) -> tuple[Sheet, str]:
+    """The sheet at ``path`` and the SHA-256 of the bytes it was read from.
+
+    Read from the file, never from the editor an edit in progress may be
+    changing, and off the event loop. The digest is the edit token
+    ``edit_schematic`` takes as ``expected_sha256``, of exactly the bytes the
+    answer describes.
     """
-    if len(lines) == 1:
-        return f"line {lines[0]}: a {keyword} record, which {reader} does not read; {one}"
-    return (
-        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which {reader} "
-        f"does not read; {many}"
-    )
-
-
-def _not_followed(keyword: str, lines: list[int]) -> str:
-    """A trace's note of the lines of one keyword its sheet does not read."""
-    return _not_read(
-        keyword,
-        lines,
-        "this trace",
-        "anything it connects is not followed",
-        "anything they connect is not followed",
-    )
-
-
-def _not_listed(keyword: str, lines: list[int]) -> str:
-    """A component listing's note of the lines of one keyword its sheet does not read."""
-    return _not_read(
-        keyword,
-        lines,
-        "this listing",
-        "a part it holds is not listed",
-        "a part they hold is not listed",
-    )
-
-
-def read_sheet_file(path: Path) -> Sheet:
-    """The sheet at ``path``, read from the file.
-
-    Its symbols are found where the schematic editor's pin geometry finds them
-    (``editor_symbol_resolver``), so a reader shows the pins an edit of the
-    same sheet would resolve. Blocking: call it off the event loop.
-    """
-    return read_sheet(path.read_bytes(), editor_symbol_resolver(path))
+    memo = _SHEETS_READ.get()
+    if memo is None:
+        return await asyncio.to_thread(read_sheet_file, path)
+    key = (str(path), await asyncio.to_thread(stamps.file_stamp, str(path)))
+    if key not in memo:
+        memo[key] = await asyncio.to_thread(read_sheet_file, path)
+    return memo[key]
 
 
 @declare_output_schema(
@@ -328,7 +310,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     """
     asc_path = safe_path(args.path, state)
     require_asc(asc_path)
-    sheet = await asyncio.to_thread(read_sheet_file, asc_path)
+    sheet, _digest = await _sheet_of_file(asc_path)
 
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
@@ -396,7 +378,11 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     net_segments = [
         s for s in wires if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
     ]
-    warnings = [_not_followed(keyword, lines) for keyword, lines in sheet.unread_lines().items()]
+    warnings = sheet.unread_notes(
+        "this trace",
+        "anything it connects is not followed",
+        "anything they connect is not followed",
+    )
     warnings += [
         f"{d['ref']}.{d['pins'][0]} and {d['ref']}.{d['pins'][1]} are joined by a "
         f"wire between two pins of the same component; LTspice drops that wire from "
@@ -1403,21 +1389,6 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
     return at
 
 
-async def _asc_digest(path: Path) -> str:
-    """The sheet's SHA-256 — the edit token ``edit_schematic`` takes as
-    ``expected_sha256``.
-
-    Read tools are where a caller gets it alongside the content it describes;
-    ``edit_schematic``'s own refusals also report the target's current digest,
-    so a caller who edits without reading first still recovers in one retry.
-    Taken BEFORE the rows are read, so the digest can never be
-    newer than the content reported alongside it — a token from the future
-    would let an edit made against stale rows commit, while a stale token only
-    conflicts, which is the safe direction.
-    """
-    return await asyncio.to_thread(sha256_file, path)
-
-
 def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     """Classify a resolved circuit ``path`` as an ``.asc`` schematic or a netlist.
 
@@ -1515,7 +1486,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
         }
 
     # .asc: a geometric trace of the sheet as the file holds it.
-    digest = await _asc_digest(path)
+    _sheet, digest = await _sheet_of_file(path)
     trace_input = _trace_input_for(q.path, q.at)
     trace = await handle_trace_net(trace_input, state)
     tdata = trace.structured_content or {}
@@ -1640,7 +1611,7 @@ def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:
     row: dict[str, Any] = {"reference": part.reference, "value": part.attribute("Value") or ""}
     attributes = {
         name: value
-        for name, value in dict(part.record.attrs).items()
+        for name, value in part.record.attributes().items()
         if name not in ("Value", "InstName") and value
     }
     if attributes:
@@ -1649,11 +1620,8 @@ def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:
         row["symbol"] = part.symbol_name
         row["position"] = {"x": part.at[0], "y": part.at[1]}
         row["rotation"] = part.rotation
-        if part.usable and part.box is not None:
-            row["pins"] = [
-                {"name": p.name, "order": p.order, "x": p.x, "y": p.y, "dir": p.direction}
-                for p in part.pins
-            ]
+        if part.box is not None:
+            row["pins"] = [pin.as_dict() for pin in part.pins]
             row["bounding_box"] = part.box.to_origin_size_dict()
     return row
 
@@ -1670,18 +1638,16 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     lex_notes: list[str] = []
 
     if _route_circuit_kind(path, "components") == "asc":
-        digest = await _asc_digest(path)
-        # The file, not the editor an edit in progress may be changing.
-        sheet = await asyncio.to_thread(read_sheet_file, path)
+        sheet, digest = await _sheet_of_file(path)
         # By reference; two parts of one reference both listed, in file order.
         parts = sorted(sheet.parts, key=lambda part: part.reference)
         if prefix is not None:
             parts = [part for part in parts if matches_prefix(part.reference, prefix)]
         page = _paginate(parts, "components", identity, q.cursor, [path], view)
         rows = [_component_row(part, detail) for part in page["items"]]
-        lex_notes = [
-            _not_listed(keyword, lines) for keyword, lines in sheet.unread_lines().items()
-        ]
+        lex_notes = sheet.unread_notes(
+            "this listing", "a part it holds is not listed", "a part they hold is not listed"
+        )
     else:
         try:
             text = await asyncio.to_thread(read_spice_text, path)
@@ -2696,11 +2662,15 @@ INSPECT_DESCRIPTION = (
 )
 async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:
     """Answer a batch of read-only queries with per-item success/failure isolation."""
-    budget = resolve_response_budget(args.budget, state)
-    if budget.tokens is None:
-        results = await _run_queries(args, state, _View())
-        return format_response(_summary_text(results), inspect_envelope(results))
-    return await _negotiate_inspect(args, state, budget)
+    reading = _SHEETS_READ.set({})
+    try:
+        budget = resolve_response_budget(args.budget, state)
+        if budget.tokens is None:
+            results = await _run_queries(args, state, _View())
+            return format_response(_summary_text(results), inspect_envelope(results))
+        return await _negotiate_inspect(args, state, budget)
+    finally:
+        _SHEETS_READ.reset(reading)
 
 
 async def _run_queries(

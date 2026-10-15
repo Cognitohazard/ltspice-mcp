@@ -101,11 +101,17 @@ class FoundSymbol:
     """A symbol as a resolver found it: its name, its file, and the file read.
 
     ``name`` is the bare name, without any folder the sheet gave it.
+    ``problem`` says why the symbol cannot be used, as words that follow its
+    name ("has a pin line that does not read ('PIN 32')"); it is empty for a
+    usable one. A pin left out is a terminal no wire could be checked against,
+    so a symbol with a pin line that does not read is unusable whole, as it is
+    to the schematic editor's geometry.
     """
 
     name: str
     path: Path
     file: SymbolFile
+    problem: str = ""
 
 
 class SymbolResolver:
@@ -172,7 +178,10 @@ class SymbolResolver:
         return result
 
     def load(self, symbol: str) -> FoundSymbol | None:
-        """Resolve and read ``symbol``; ``None`` if unresolved or unreadable."""
+        """Resolve and read ``symbol``; ``None`` when no file of that name is found.
+
+        A file that is found and cannot be used comes back with its ``problem``.
+        """
         path = self.resolve(symbol)
         if path is None:
             return None
@@ -184,9 +193,17 @@ class SymbolResolver:
         cached = self._parse_cache.get(key)
         if cached is not None:
             return cached
+        name = spellings(symbol)[1]
         try:
-            found = FoundSymbol(spellings(symbol)[1], path, read_symbol(read_spice_text(path)))
-        except Exception:
-            return None
+            read = read_symbol(read_spice_text(path))
+        except Exception as failed:
+            found = FoundSymbol(name, path, SymbolFile(), f"could not be read ({failed})")
+        else:
+            problem = (
+                f"has a pin line that does not read ({read.unread_pins[0]!r})"
+                if read.unread_pins
+                else ""
+            )
+            found = FoundSymbol(name, path, read, problem)
         self._parse_cache[key] = found
         return found

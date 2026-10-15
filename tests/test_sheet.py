@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import typing
 from collections import Counter
 from pathlib import Path
 
@@ -10,21 +11,14 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.schematic_ops import make_editor, net_partition, placed_geometry
-from ltspice_mcp.lib.schematic_scene import build_scene, editor_symbol_resolver
-from ltspice_mcp.lib.sheet import Sheet, read_sheet
+from ltspice_mcp.lib.schematic_scene import build_scene
+from ltspice_mcp.lib.sheet import Sheet, editor_symbol_resolver, read_sheet
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests._proposal_record import stage
 from tests._schematic_fixtures import BOX2_ASY, SUITE_SHEETS, suite_name, write_file
 
-
-@pytest.fixture(autouse=True)
-def _only_the_suites_own_symbols(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No LTspice library the machine has is searched; spicelib's cache is put back after."""
-    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
-    monkeypatch.setattr(AscEditor, "symbol_cache", {})
-    monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
+pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 
 def _staged(sheet: Path, tmp_path: Path) -> tuple[Path, Sheet]:
@@ -123,7 +117,6 @@ class TestAPart:
             ("A", 1, 96, 8, "left"),
             ("B", 2, 128, 8, "right"),
         ]
-        assert u1.line == 4
 
     def test_a_repeated_attribute_reads_as_its_last(self, tmp_path: Path) -> None:
         (u1,) = self._read(tmp_path).parts_named("U1")
@@ -141,7 +134,8 @@ class TestAPart:
         could be checked against."""
         (u3,) = self._read(tmp_path).parts_named("U3")
         assert u3.symbol is not None
-        assert (u3.unreadable, u3.usable, u3.pins, u3.box) == ("PIN 32", False, (), None)
+        assert u3.symbol.problem == "has a pin line that does not read ('PIN 32')"
+        assert (u3.usable, u3.pins, u3.box) == (False, (), None)
 
     def test_the_sheet_keeps_its_wires_and_labels(self, tmp_path: Path) -> None:
         read = self._read(tmp_path)
@@ -184,3 +178,31 @@ class TestAPinByName:
         read = self._read(tmp_path, "SYMBOL box2 96 0 R0\nSYMATTR InstName U1\n")
         with pytest.raises(NetlistError, match=re.escape(said)):
             read.pin_at(spec)
+
+
+class TestASymbolFileThatCannotBeRead:
+    def test_is_found_and_unusable_and_says_why(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Found, so not reported as missing from every library."""
+        from ltspice_mcp.lib import symbol_library
+
+        write_file(tmp_path / "box2.asy", BOX2_ASY)
+
+        def fails(_text: str) -> typing.NoReturn:
+            raise ValueError("no such shape")
+
+        monkeypatch.setattr(symbol_library, "read_symbol", fails)
+        found = SymbolResolver(local_dir=tmp_path).load("box2")
+        assert found is not None
+        assert found.problem == "could not be read (no such shape)"
+        read = read_sheet(
+            b"Version 4\nSYMBOL box2 96 0 R0\nSYMATTR InstName U1\n",
+            SymbolResolver(local_dir=tmp_path),
+        )
+        (u1,) = read.parts
+        assert (u1.usable, u1.pins) == (False, ())
+        with pytest.raises(
+            NetlistError, match=r"symbol 'box2' could not be read \(no such shape\)"
+        ):
+            read.pin_at("U1.A")

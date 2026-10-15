@@ -111,6 +111,7 @@ from ltspice_mcp.lib.routing import (
     segment_text,
     wires_through,
 )
+from ltspice_mcp.lib.sheet import PlacedPin, find_pin
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
@@ -1309,7 +1310,8 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     case-insensitively. Only when no pin carries that name, and it is all
     digits, is it read as the pin's 1-based SpiceOrder — the terminal number a
     netlist uses. Names win because some symbols name their pins '1', '2' in an
-    order that need not be their SpiceOrder.
+    order that need not be their SpiceOrder. The match is ``sheet.find_pin``,
+    which ``inspect``'s net trace uses too.
 
     Raises NetlistError if the reference cannot be resolved.
     """
@@ -1351,25 +1353,11 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
 
     symbol = editor.components[ref].symbol
     geometry = placed_geometry(editor, ref)
-    if geometry is None:
-        raise NetlistError(f"Cannot resolve pins for '{ref}': symbol '{symbol}' not found.")
-
-    pins = geometry["pins"]
-    for pin in pins:
-        if pin["name"].upper() == pin_name.upper():
-            return pin["x"], pin["y"]
-    # A pin with no SpiceOrder line parses as order 0, which is no ordinal.
-    ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
-    if ordinal:
-        for pin in pins:
-            if pin["order"] == ordinal:
-                return pin["x"], pin["y"]
-
-    available = [f"{p['name']} ({p['order']})" if p["order"] else p["name"] for p in pins]
-    raise NetlistError(
-        f"Pin '{pin_name}' not found on {ref} ({symbol}). Available: {', '.join(available)} "
-        "(pin name, with its SpiceOrder in parentheses)."
-    )
+    pins = [
+        PlacedPin(pin["name"], pin["order"], pin["x"], pin["y"], pin["dir"])
+        for pin in (geometry["pins"] if geometry is not None else ())
+    ]
+    return find_pin(pins, ref, symbol or "", pin_name, "not found" if geometry is None else "")
 
 
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:

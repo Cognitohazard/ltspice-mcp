@@ -14,6 +14,7 @@ import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.schematic_scene import (
     DrawEllipse,
     DrawLine,
@@ -27,18 +28,18 @@ from ltspice_mcp.lib.schematic_scene import (
     decode_text_lines,
     default_stock_paths,
     drawn_text_extent,
-    editor_symbol_resolver,
     flag_label_anchor,
     font_px,
     ground_polygon,
-    parse_symbol,
     resolve_flag_placement,
     scene_of_text,
     sheet_view,
     text_extent,
     wire_directions_at,
 )
+from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from ltspice_mcp.lib.sheet_findings import findings
+from ltspice_mcp.lib.symbol_file import read_symbol
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
 )
@@ -62,17 +63,15 @@ from tests._schematic_fixtures import (
 class TestAsyParse:
     def test_parses_elements_pins_windows(self, tmp_path: Path) -> None:
         asy = _write(tmp_path / "box2.asy", BOX2_ASY)
-        proto = parse_symbol(asy, "box2")
-        assert len(proto.rects) == 1
-        assert proto.rects[0] == DrawRect(0, 0, 32, 16)
-        assert len(proto.lines) == 1
-        assert [p.name for p in proto.pins] == ["A", "B"]
-        assert proto.pins[1].x == 32 and proto.pins[1].y == 8
+        symbol = read_symbol(read_spice_text(asy))
+        assert symbol.rects == ((0, 0, 32, 16),)
+        assert len(symbol.lines) == 1
+        assert [p.name for p in symbol.pins] == ["A", "B"]
+        assert symbol.pins[1].x == 32 and symbol.pins[1].y == 8
         # WINDOW 0 (InstName) and 3 (Value) captured.
-        assert proto.window(0) is not None
-        assert proto.window(3) is not None
+        assert {window.number for window in symbol.windows} == {0, 3}
         # bbox encloses rect + pins.
-        assert (proto.bbox.x1, proto.bbox.y1, proto.bbox.x2, proto.bbox.y2) == (0, 0, 32, 16)
+        assert (symbol.bbox.x1, symbol.bbox.y1, symbol.bbox.x2, symbol.bbox.y2) == (0, 0, 32, 16)
 
     def test_degenerate_lines_do_not_crash(self, tmp_path: Path) -> None:
         asy = _write(
@@ -80,10 +79,10 @@ class TestAsyParse:
             "Version 4\nLINE Normal 0\nRECTANGLE Normal a b c d\nARC Normal 0 0 0 0 0 0 0 0\n"
             "PIN 5\nPIN 1 2 NONE 0\nPINATTR PinName Z\nPINATTR SpiceOrder 1\n",
         )
-        proto = parse_symbol(asy, "junk")
-        assert proto.lines == () and proto.rects == ()
+        symbol = read_symbol(read_spice_text(asy))
+        assert symbol.lines == () and symbol.rects == ()
         # The one well-formed pin survives; the malformed 'PIN 5' is skipped.
-        assert [p.name for p in proto.pins] == ["Z"]
+        assert [p.name for p in symbol.pins] == ["Z"]
 
 
 class TestDecodeTextLines:
@@ -555,8 +554,7 @@ class TestArcPlacement:
             "Version 4\nSymbolType CELL\nARC Normal 0 0 40 40 40 20 20 40\n"
             "PIN 20 20 NONE 0\nPINATTR PinName C\nPINATTR SpiceOrder 1\n",
         )
-        proto = parse_symbol(asy, "arcsym")
-        assert len(proto.arcs) == 1
+        assert len(read_symbol(read_spice_text(asy)).arcs) == 1
         asc = _write(tmp_path / "s.asc", "Version 4\nSHEET 1 880 680\nSYMBOL arcsym 0 0 R0\n")
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         polys = [g for g in scene.symbols[0].graphics if isinstance(g, DrawPolyline)]
@@ -573,7 +571,7 @@ class TestArcPlacement:
             tmp_path / "arcsym.asy",
             "Version 4\nSymbolType CELL\nARC Normal 0 0 40 40 40 20 20 40\n",
         )
-        assert len(parse_symbol(asy, "arcsym").arcs) == 1
+        assert len(read_symbol(read_spice_text(asy)).arcs) == 1
         asc = _write(tmp_path / "s.asc", "Version 4\nSHEET 1 880 680\nSYMBOL arcsym 0 0 R0\n")
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         poly = next(g for g in scene.symbols[0].graphics if isinstance(g, DrawPolyline))
@@ -587,8 +585,7 @@ class TestArcPlacement:
             tmp_path / "flat.asy",
             "Version 4\nSymbolType CELL\nARC Normal 0 10 40 10 0 10 40 10\n",
         )
-        proto = parse_symbol(asy, "flat")
-        assert len(proto.arcs) == 1  # parsed
+        assert len(read_symbol(read_spice_text(asy)).arcs) == 1  # parsed
         asc = _write(tmp_path / "s.asc", "Version 4\nSHEET 1 880 680\nSYMBOL flat 0 0 R0\n")
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         # Zero-height ellipse → no polyline emitted, no crash.
@@ -646,6 +643,10 @@ class TestALineTheDrawingDoesNotRead:
             ("WIRE 0 0 16\n", [("WIRE", 3)]),
             ("FLAG 0 0\n", [("FLAG", 3)]),
             ("SYMBOL box2 96 0 R0\nWINDOW 0 x y Left 2\nSYMATTR InstName U1\n", [("WINDOW", 4)]),
+            # A port direction with no label of its own before it, and a header
+            # line that does not read: neither is skipped as a known record.
+            ("IOPIN 0 0 In\n", [("IOPIN", 3)]),
+            ("SHEET 2 wide\n", [("SHEET", 3)]),
         ],
     )
     def test_it_is_reported_and_not_guessed_at(
@@ -671,7 +672,8 @@ class TestALineTheDrawingDoesNotRead:
         _write(tmp_path / "broken.asy", BOX2_ASY + "PIN 32\n")
         scene = self.scene(tmp_path, "SYMBOL broken 96 0 R0\nSYMATTR InstName U1\n")
         (part,) = scene.symbols
-        assert (part.missing, part.unreadable, part.pins) == (True, "PIN 32", [])
+        problem = "has a pin line that does not read ('PIN 32')"
+        assert (part.missing, part.problem, part.pins) == (True, problem, [])
         assert scene.diagnostics == [
             "symbol 'broken' (instance U1) has a pin line that does not read ('PIN 32'); "
             "placeholder rendered"
@@ -681,7 +683,7 @@ class TestALineTheDrawingDoesNotRead:
             "Symbol 'broken' of U1 has a pin line that does not read ('PIN 32'): the part "
             "has no pins and no extent here, so nothing about them is checked"
         )
-        assert found.facts == {"symbol": "broken", "unreadable": "PIN 32"}
+        assert found.facts == {"symbol": "broken", "problem": problem}
 
 
 # A frame drawn one unit outside its two pins, as many of LTspice's own

@@ -576,7 +576,9 @@ what must hold before the next one starts.
    sheet's records do not read is named in both replies. A test holds an
    edit at its await and shows that both queries read the file. Two readers
    of a sheet are left: `asc_document` and spicelib's editor on the edit path,
-   which step 6 replaces.
+   which step 6 replaces. Not done here: the session owning the symbol
+   search roots (step 2). The readers still take them from spicelib's editor
+   class, and they move with step 6.
 6. **Ops on the sheet**, in two parts, and the step most likely to go wrong.
    First the ops that move records (parts, wires, labels): each becomes
    sheet -> (sheet, facts), the batch is a fold, and the transaction keeps

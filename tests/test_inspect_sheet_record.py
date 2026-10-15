@@ -25,13 +25,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from spicelib import AscEditor
 
-from ltspice_mcp.lib import symbol_geometry
-from ltspice_mcp.lib.schematic_scene import build_scene, editor_symbol_resolver
+from ltspice_mcp.lib.schematic_scene import build_scene
+from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests._proposal_record import stage, write_record
+from tests._proposal_record import every_nth, stage_afresh, write_record
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 
 _RECORD = TESTS / "fixtures" / "inspect_sheet_record.json"
@@ -48,6 +47,9 @@ _BATCH = 64
 _OBJECT = re.compile(r"<[^<>]* object at 0x[0-9a-fA-F]+>")
 
 
+pytestmark = pytest.mark.usefixtures("suite_symbols_only")
+
+
 def _starts(sheet: Path) -> list[str | list[int]]:
     """Where to start a net trace: each pin, each label name, a point on each wire."""
     scene = build_scene(sheet, editor_symbol_resolver(sheet))
@@ -61,9 +63,7 @@ def _starts(sheet: Path) -> list[str | list[int]]:
             starts.append([(wire.x1 + wire.x2) // 2, wire.y1])
         elif wire.x1 == wire.x2 and wire.y1 != wire.y2:
             starts.append([wire.x1, (wire.y1 + wire.y2) // 2])
-    if len(starts) > _MOST_STARTS:
-        starts = starts[:: -(-len(starts) // _MOST_STARTS)]
-    return starts
+    return every_nth(starts, _MOST_STARTS)
 
 
 def _plain(value: Any) -> Any:
@@ -112,11 +112,7 @@ async def answers_of(sheet: Path, state: SessionState, folder: str) -> dict[str,
     """What `inspect` answers about ``sheet``, staged on its own in ``folder``."""
     sandbox = Path(state.working_dir) / folder
     sandbox.mkdir()
-    # Both symbol caches are keyed by name for the whole process: without this
-    # a sheet is read with whatever symbol of that name the sheet before left.
-    AscEditor.symbol_cache = {}
-    symbol_geometry._symbol_cache.clear()  # pyright: ignore[reportPrivateUsage]
-    staged = stage(sheet, sandbox)
+    staged = stage_afresh(sheet, sandbox)
     starts = _starts(staged)
     queries = [{"kind": "components", "path": str(staged), "detail": "full"}]
     queries += [{"kind": "net", "path": str(staged), "at": at} for at in starts]
@@ -127,14 +123,6 @@ async def answers_of(sheet: Path, state: SessionState, folder: str) -> dict[str,
             "nets": [{"at": at, **_net(item)} for at, item in zip(starts, nets, strict=True)],
         }
     )
-
-
-@pytest.fixture(autouse=True)
-def _only_the_suites_own_symbols(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No LTspice library the machine has is searched, and spicelib's symbol
-    cache, which `answers_of` empties, is put back afterwards."""
-    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
-    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
 
 def _recorded() -> dict[str, Any]:

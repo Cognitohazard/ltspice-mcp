@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
-from spicelib import AscEditor, SpiceEditor
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
 from ltspice_mcp.lib import recent
@@ -53,7 +52,6 @@ from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-Editor = AscEditor | SpiceEditor
 T = TypeVar("T")
 
 

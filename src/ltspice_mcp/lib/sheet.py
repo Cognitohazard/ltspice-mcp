@@ -1,37 +1,42 @@
 """A schematic sheet as a read-only value: its records and the parts they place.
 
-``read_sheet`` parses an ``.asc`` file's bytes with ``asc_document`` and looks
-up each part's symbol with a ``SymbolResolver``. A ``Sheet`` holds the parsed
-document and, for each part, where its pins and boxes are. Readers that do not
-edit a sheet use it instead of spicelib's editor.
+``read_sheet`` reads an ``.asc`` file's bytes with ``asc_document`` and finds
+each part's symbol with a ``SymbolResolver``. A ``Sheet`` holds the parsed
+document and, for each part, where its pins and boxes are. The scene draws it,
+and the readers that do not edit a sheet (``inspect``) read it instead of
+spicelib's editor.
 
 Nothing here writes a file or needs the event loop.
 """
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Symbol, parse_asc, parse_asc_text
+from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
 from ltspice_mcp.lib.connectivity import NetPartition, partition
+from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
-    SymbolInfo,
-    _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
     compute_placed_geometry,
+    library_roots,
+    place_box,
+    symbol_info_of,
 )
 from ltspice_mcp.lib.symbol_library import FoundSymbol, SymbolResolver
 
 Point = tuple[int, int]
 
-# The records a sheet holds that nothing draws or connects through: the header,
-# a port's direction (its label is the FLAG before it) and a data label's
-# expression (recorded as export/data_flags: the export is the circuit without
-# them). Any other keyword that does not read is reported, a bus tap among
-# them: LTspice draws one, though it connects nothing in the netlist
+# The one record a sheet holds that nothing draws or connects through: a data
+# label's expression (recorded as export/data_flags: the export is the circuit
+# without it). Any other line the records do not read is reported, a bus tap
+# among them: LTspice draws one, though it connects nothing in the netlist
 # (export/bus_tap).
-NOTHING_TO_READ = frozenset({"Version", "SHEET", "IOPIN", "DATAFLAG"})
+NOTHING_TO_READ = frozenset({"DATAFLAG"})
 
 
 @dataclass(frozen=True)
@@ -46,22 +51,28 @@ class PlacedPin:
     #: The side of the part the pin points away from, as ``compute_placed_geometry`` names it.
     direction: str
 
+    def as_dict(self) -> dict[str, object]:
+        """The pin as ``compute_placed_geometry`` and the tools' replies give one."""
+        return {
+            "name": self.name,
+            "order": self.order,
+            "x": self.x,
+            "y": self.y,
+            "dir": self.direction,
+        }
+
 
 @dataclass(frozen=True)
 class SheetPart:
     """A placed part.
 
     ``symbol`` is the symbol file the part's name resolved to, or ``None`` when
-    none was found or it could not be read. ``unreadable`` is the first pin line
-    of a found symbol that does not parse. Such a symbol is unusable, as it is to
-    the schematic editor, so the part then has no pins and no boxes either.
+    none was found. A found symbol with a ``problem`` is unusable, as it is to
+    the schematic editor; the part then has no pins and no boxes.
     """
 
     record: Symbol
-    #: The 1-based line of the part's ``SYMBOL`` record.
-    line: int
     symbol: FoundSymbol | None
-    unreadable: str = ""
     pins: tuple[PlacedPin, ...] = ()
     #: The part's extent including its pins, and the extent of its drawing alone.
     box: BBox | None = None
@@ -70,7 +81,7 @@ class SheetPart:
     @property
     def reference(self) -> str:
         """The instance name, or ``""`` when the part has none."""
-        return self.attribute("InstName") or ""
+        return self.record.reference
 
     @property
     def symbol_name(self) -> str:
@@ -87,13 +98,51 @@ class SheetPart:
 
     @property
     def usable(self) -> bool:
-        """True when the symbol was found and every pin line of it parses."""
-        return self.symbol is not None and not self.unreadable
+        """True when the symbol was found and can be used."""
+        return self.symbol is not None and not self.symbol.problem
 
     def attribute(self, name: str) -> str | None:
         """The value of attribute ``name``; the last one when the part repeats it."""
-        found = [value for key, value in self.record.attrs if key == name]
-        return found[-1] if found else None
+        return self.record.attr(name)
+
+
+def _numbered(document: AscDocument) -> Iterator[tuple[int, Record]]:
+    """Each record with the 1-based line it starts on."""
+    line = 1
+    for record in document.records:
+        yield line, record
+        line += len(record.source or ())
+
+
+def find_pin(
+    pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
+) -> Point:
+    """Where pin ``pin_name`` of part ``reference`` is.
+
+    The name is matched against the pin names first, case-insensitively. Only
+    when no pin carries it, and it is all digits, is it read as the pin's
+    1-based SpiceOrder, the terminal number a netlist uses: some symbols name
+    their pins '1', '2' in an order that need not be their SpiceOrder.
+    ``problem`` says why the part has no usable symbol, when it has none.
+    Raises ``NetlistError`` for that, and for a pin that is not there, naming
+    the pins there are.
+    """
+    if problem:
+        raise NetlistError(f"Cannot resolve pins for '{reference}': symbol '{symbol}' {problem}.")
+    for pin in pins:
+        if pin.name.upper() == pin_name.upper():
+            return pin.x, pin.y
+    # A pin with no SpiceOrder line reads as order 0, which is no ordinal.
+    ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
+    if ordinal:
+        for pin in pins:
+            if pin.order == ordinal:
+                return pin.x, pin.y
+    available = [f"{p.name} ({p.order})" if p.order else p.name for p in pins]
+    raise NetlistError(
+        f"Pin '{pin_name}' not found on {reference} ({symbol}). Available: "
+        f"{', '.join(available)} (pin name, with its SpiceOrder in parentheses)."
+    )
 
 
 @dataclass(frozen=True)
@@ -121,33 +170,46 @@ class Sheet:
         reports it.
         """
         unread: dict[str, list[int]] = {}
-        line = 1
-        for record in self.document.records:
-            lines = record.source or ()
+        for line, record in _numbered(self.document):
             if isinstance(record, Opaque):
                 if record.keyword and record.keyword not in NOTHING_TO_READ:
                     unread.setdefault(record.keyword, []).append(line)
             elif isinstance(record, Symbol) and record.unread:
                 pending = list(record.unread)
-                for offset, text in enumerate(lines[1:], 1):
+                for offset, text in enumerate((record.source or ())[1:], 1):
                     if pending and text.rstrip("\r\n") == pending[0]:
                         keyword = pending.pop(0).split(None, 1)[0]
                         unread.setdefault(keyword, []).append(line + offset)
-            line += len(lines)
         return unread
+
+    def unread_notes(self, reader: str, one: str, many: str) -> list[str]:
+        """A note for each keyword of a line the records do not read, as ``reader`` says it.
+
+        ``one`` and ``many`` say what not reading it leaves out, for one line and
+        for several.
+        """
+        notes: list[str] = []
+        for keyword, lines in self.unread_lines().items():
+            if len(lines) == 1:
+                notes.append(
+                    f"line {lines[0]}: a {keyword} record, which {reader} does not read; {one}"
+                )
+            else:
+                notes.append(
+                    f"{len(lines)} {keyword} records, the first at line {lines[0]}, which "
+                    f"{reader} does not read; {many}"
+                )
+        return notes
 
     def parts_named(self, reference: str) -> tuple[SheetPart, ...]:
         """Every part with instance name ``reference``; more than one when the sheet repeats it."""
         return tuple(part for part in self.parts if part.reference == reference)
 
     def pin_at(self, spec: str) -> Point:
-        """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is.
+        """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is, by ``find_pin``.
 
-        The part after the last dot is matched against the pin names first,
-        case-insensitively, and only then read as a 1-based SpiceOrder, as
-        ``schematic_ops.resolve_pin`` reads it. Raises ``NetlistError`` when the
-        part or the pin is not there, when the part's symbol is unusable, and
-        when two parts share the reference, naming where each is.
+        Raises ``NetlistError`` as ``find_pin`` does, for a part that is not
+        there, and for a reference two parts share, naming where each is.
         """
         if "." not in spec:
             raise NetlistError(
@@ -169,29 +231,8 @@ class Sheet:
                 f"'{reference}' could be on either. Give the pin's coordinate instead."
             )
         part = named[0]
-        if part.symbol is None:
-            raise NetlistError(
-                f"Cannot resolve pins for '{reference}': symbol '{part.symbol_name}' not found."
-            )
-        if part.unreadable:
-            raise NetlistError(
-                f"Cannot resolve pins for '{reference}': symbol '{part.symbol_name}' has a "
-                f"pin line that does not read ({part.unreadable!r})."
-            )
-        for pin in part.pins:
-            if pin.name.upper() == pin_name.upper():
-                return pin.x, pin.y
-        # A pin with no SpiceOrder line reads as order 0, which is no ordinal.
-        ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
-        if ordinal:
-            for pin in part.pins:
-                if pin.order == ordinal:
-                    return pin.x, pin.y
-        available = [f"{p.name} ({p.order})" if p.order else p.name for p in part.pins]
-        raise NetlistError(
-            f"Pin '{pin_name}' not found on {reference} ({part.symbol_name}). Available: "
-            f"{', '.join(available)} (pin name, with its SpiceOrder in parentheses)."
-        )
+        problem = "not found" if part.symbol is None else part.symbol.problem
+        return find_pin(part.pins, reference, part.symbol_name, pin_name, problem)
 
     def partition(self) -> NetPartition:
         """The sheet's nets, grouped by ``connectivity.partition``."""
@@ -206,45 +247,34 @@ class Sheet:
         )
 
 
-def _placed_box(box: BBox, x: int, y: int, rotation: str) -> BBox:
-    corners = [(box.x1, box.y1), (box.x2, box.y1), (box.x1, box.y2), (box.x2, box.y2)]
-    placed = BBox.from_points(
-        [(x + dx, y + dy) for dx, dy in (_apply_rotation(cx, cy, rotation) for cx, cy in corners)]
-    )
-    assert placed is not None  # four corners are never empty
-    return placed
-
-
-def _placed(record: Symbol, line: int, found: FoundSymbol | None) -> SheetPart:
-    if found is None:
-        return SheetPart(record, line, None)
-    if found.file.unread_pins:
-        return SheetPart(record, line, found, unreadable=found.file.unread_pins[0])
-    info = SymbolInfo(name=found.name, pins=found.file.pins, bbox=found.file.bbox)
+def _placed(record: Symbol, found: FoundSymbol | None) -> SheetPart:
+    if found is None or found.problem:
+        return SheetPart(record, found)
+    info = symbol_info_of(found.name, found.file)
     geometry = compute_placed_geometry(info, record.x, record.y, record.rotation)
     pins = tuple(
         PlacedPin(pin["name"], pin["order"], pin["x"], pin["y"], pin["dir"])
         for pin in geometry["pins"]
     )
+    box = geometry["bounding_box"]
     body = found.file.body
     return SheetPart(
         record,
-        line,
         found,
         pins=pins,
-        box=_placed_box(found.file.bbox, record.x, record.y, record.rotation),
-        body=_placed_box(body, record.x, record.y, record.rotation) if body is not None else None,
+        box=BBox.from_origin_size(box["x"], box["y"], box["width"], box["height"]),
+        body=place_box(body, record.x, record.y, record.rotation) if body is not None else None,
     )
 
 
 def sheet_of(document: AscDocument, resolver: SymbolResolver) -> Sheet:
     """The sheet ``document`` describes, with each part's symbol found by ``resolver``."""
+    found: dict[str, FoundSymbol | None] = {}
     parts: list[SheetPart] = []
-    line = 1
-    for record in document.records:
-        if isinstance(record, Symbol):
-            parts.append(_placed(record, line, resolver.load(record.symbol)))
-        line += len(record.source or ())
+    for record in document.symbols:
+        if record.symbol not in found:
+            found[record.symbol] = resolver.load(record.symbol)
+        parts.append(_placed(record, found[record.symbol]))
     return Sheet(document, tuple(parts))
 
 
@@ -254,8 +284,29 @@ def read_sheet_text(text: str, resolver: SymbolResolver) -> Sheet:
 
 
 def read_sheet(data: bytes, resolver: SymbolResolver) -> Sheet:
-    """The sheet whose ``.asc`` bytes are ``data``.
+    """The sheet whose ``.asc`` bytes are ``data``, decoded as a sheet's text always is
+    (``encoding.decode_spice_bytes``)."""
+    return read_sheet_text(decode_spice_bytes(data), resolver)
 
-    Raises ``NetlistError`` only for bytes that are not text (``parse_asc``).
+
+def editor_symbol_resolver(asc_path: Path) -> SymbolResolver:
+    """A resolver that finds a symbol where the schematic editor's pin geometry does.
+
+    The sheet's own folder, then ``symbol_geometry.library_roots``, which is
+    what ``symbol_geometry.get_symbol_info`` searches, and nothing more. A
+    sheet read with it has a part's pins exactly when the editor has them, so
+    what is said of a sheet and what an edit of it resolves are about the same
+    parts.
     """
-    return sheet_of(parse_asc(data), resolver)
+    return SymbolResolver(local_dir=asc_path.parent, project_paths=library_roots())
+
+
+def read_sheet_file(path: Path) -> tuple[Sheet, str]:
+    """The sheet at ``path``, with the SHA-256 of the bytes it was read from.
+
+    Its symbols are found with ``editor_symbol_resolver``. One read, so the
+    digest is of exactly what the sheet holds. Blocking: call it off the event
+    loop.
+    """
+    data = path.read_bytes()
+    return read_sheet(data, editor_symbol_resolver(path)), hashlib.sha256(data).hexdigest()
