@@ -156,15 +156,13 @@ from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
-    get_asc_editor,
     named_labels,
     netlist_card_value,
-    placed_geometry,
     require_asc,
     wires_of_one_net,
 )
 from ltspice_mcp.lib.schematic_scene import default_stock_paths, editor_symbol_resolver
-from ltspice_mcp.lib.sheet import Sheet, read_sheet
+from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -227,16 +225,38 @@ class TraceNetInput(ToolInput):
     )
 
 
+def _not_read(keyword: str, lines: list[int], reader: str, one: str, many: str) -> str:
+    """A reader's note of the lines of one keyword its sheet does not read.
+
+    ``one`` and ``many`` say what that leaves out, for one line and for several.
+    """
+    if len(lines) == 1:
+        return f"line {lines[0]}: a {keyword} record, which {reader} does not read; {one}"
+    return (
+        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which {reader} "
+        f"does not read; {many}"
+    )
+
+
 def _not_followed(keyword: str, lines: list[int]) -> str:
     """A trace's note of the lines of one keyword its sheet does not read."""
-    if len(lines) == 1:
-        return (
-            f"line {lines[0]}: a {keyword} record, which this trace does not read; "
-            "anything it connects is not followed"
-        )
-    return (
-        f"{len(lines)} {keyword} records, the first at line {lines[0]}, which this trace "
-        "does not read; anything they connect is not followed"
+    return _not_read(
+        keyword,
+        lines,
+        "this trace",
+        "anything it connects is not followed",
+        "anything they connect is not followed",
+    )
+
+
+def _not_listed(keyword: str, lines: list[int]) -> str:
+    """A component listing's note of the lines of one keyword its sheet does not read."""
+    return _not_read(
+        keyword,
+        lines,
+        "this listing",
+        "a part it holds is not listed",
+        "a part they hold is not listed",
     )
 
 
@@ -416,9 +436,6 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         lines.append(f"  WARNING: {w}")
     return format_response("\n".join(lines), data, args.format)
 
-
-# The .asc net and component paths share lib/schematic_ops.py's cached editor —
-# the same object an edit mutates, so a read never sees a stale sheet.
 
 # Fixed server-side page size for the paginated kinds. The A.5 query specs list
 # a cursor but no caller-facing limit knob, so the page is a server constant.
@@ -1614,31 +1631,31 @@ def _components_netlist_payload(
     return rows, _lex_warnings(lexed)
 
 
-def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
-    """Build per-component detail for a page of .asc references (editor on loop)."""
-    rows: list[dict[str, Any]] = []
-    for ref in refs:
-        try:
-            value = services.asc_component_value(editor, ref)
-        except Exception:
-            value = "<unparseable>"
-        entry: dict[str, Any] = {"reference": ref, "value": value}
-        comp = editor.components.get(ref)
-        if comp is not None:
-            attrs = services.asc_component_attributes(comp)
-            if attrs:
-                entry["attributes"] = attrs
-            if detail == "full":
-                pos, erot = editor.get_component_position(ref)
-                entry["symbol"] = comp.symbol
-                entry["position"] = {"x": pos.X, "y": pos.Y}
-                entry["rotation"] = erot.name if erot else "R0"
-                geom = placed_geometry(editor, ref)
-                if geom is not None:
-                    entry["pins"] = geom["pins"]
-                    entry["bounding_box"] = geom["bounding_box"]
-        rows.append(entry)
-    return rows
+def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:
+    """One part of a sheet as the components listing shows it.
+
+    ``attributes`` holds the part's ``SYMATTR`` lines other than its name and
+    value, each the last of its name, and only those with a value.
+    """
+    row: dict[str, Any] = {"reference": part.reference, "value": part.attribute("Value") or ""}
+    attributes = {
+        name: value
+        for name, value in dict(part.record.attrs).items()
+        if name not in ("Value", "InstName") and value
+    }
+    if attributes:
+        row["attributes"] = attributes
+    if detail == "full":
+        row["symbol"] = part.symbol_name
+        row["position"] = {"x": part.at[0], "y": part.at[1]}
+        row["rotation"] = part.rotation
+        if part.usable and part.box is not None:
+            row["pins"] = [
+                {"name": p.name, "order": p.order, "x": p.x, "y": p.y, "dir": p.direction}
+                for p in part.pins
+            ]
+            row["bounding_box"] = part.box.to_origin_size_dict()
+    return row
 
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -1654,18 +1671,17 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
 
     if _route_circuit_kind(path, "components") == "asc":
         digest = await _asc_digest(path)
-        # Cached editor + component reads stay on the event loop.
-        editor = get_asc_editor(path, state)
-        try:
-            refs = sorted(editor.get_components())
-        except Exception as exc:
-            raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        # Filtered here as in the netlist branch: spicelib's prefix filter reads
-        # its argument as a set of case-sensitive first letters (docs/spicelib_bugs.md).
+        # The file, not the editor an edit in progress may be changing.
+        sheet = await asyncio.to_thread(read_sheet_file, path)
+        # By reference; two parts of one reference both listed, in file order.
+        parts = sorted(sheet.parts, key=lambda part: part.reference)
         if prefix is not None:
-            refs = [ref for ref in refs if matches_prefix(ref, prefix)]
-        page = _paginate(refs, "components", identity, q.cursor, [path], view)
-        rows = _components_asc_page(editor, page["items"], detail)
+            parts = [part for part in parts if matches_prefix(part.reference, prefix)]
+        page = _paginate(parts, "components", identity, q.cursor, [path], view)
+        rows = [_component_row(part, detail) for part in page["items"]]
+        lex_notes = [
+            _not_listed(keyword, lines) for keyword, lines in sheet.unread_lines().items()
+        ]
     else:
         try:
             text = await asyncio.to_thread(read_spice_text, path)

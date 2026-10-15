@@ -165,7 +165,7 @@ def test_the_record_holds_answers_of_every_kind():
     assert any(net.get("is_shorted") for net in nets)
     assert any(net.get("warnings") for net in nets)
     assert any("error" in net for net in nets)
-    assert any("error" in entry["components"] for entry in record)
+    assert all("rows" in entry["components"] for entry in record)
 
 
 @pytest.mark.skipif(_RECORDING, reason="recording")

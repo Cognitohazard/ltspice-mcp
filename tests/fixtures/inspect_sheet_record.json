@@ -35,10 +35,6 @@
      "value": "1\u00b5"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -71,10 +67,6 @@
      "value": "1k"
     },
     {
-     "attributes": {
-      "_WINDOW 123": "123",
-      "_WINDOW 39": "39"
-     },
      "bounding_box": {
       "height": 64,
       "width": 64,
@@ -833,10 +825,6 @@
      "value": "1\u00b5"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -869,10 +857,6 @@
      "value": "1k"
     },
     {
-     "attributes": {
-      "_WINDOW 123": "123",
-      "_WINDOW 39": "39"
-     },
      "bounding_box": {
       "height": 64,
       "width": 64,
@@ -1228,10 +1212,6 @@
      "value": "100n"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -1622,10 +1602,6 @@
      "value": "4.7u"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -1660,9 +1636,7 @@
     {
      "attributes": {
       "SpiceLine": "\"\"",
-      "Value2": "\"\"",
-      "_WINDOW 123": "123",
-      "_WINDOW 39": "39"
+      "Value2": "\"\""
      },
      "bounding_box": {
       "height": 64,
@@ -2281,10 +2255,6 @@
      "value": "1\u00b5"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -2317,10 +2287,6 @@
      "value": "1k"
     },
     {
-     "attributes": {
-      "_WINDOW 123": "123",
-      "_WINDOW 39": "39"
-     },
      "bounding_box": {
       "height": 64,
       "width": 64,
@@ -2676,10 +2642,6 @@
      "value": "100n"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -3070,10 +3032,6 @@
      "value": "4.7\u00b5"
     },
     {
-     "attributes": {
-      "_WINDOW 0": "0",
-      "_WINDOW 3": "3"
-     },
      "bounding_box": {
       "height": 32,
       "width": 96,
@@ -3106,10 +3064,6 @@
      "value": "1k"
     },
     {
-     "attributes": {
-      "_WINDOW 123": "123",
-      "_WINDOW 39": "39"
-     },
      "bounding_box": {
       "height": 64,
       "width": 64,
@@ -13078,7 +13032,41 @@
  },
  "fixtures/ltspice_recorded/inputs/export/blank_line.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -13496,7 +13484,319 @@
  },
  "fixtures/ltspice_recorded/inputs/export/boilerplate.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 64,
+      "width": 32,
+      "x": 1264,
+      "y": 64
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 1280,
+       "y": 64
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 1280,
+       "y": 128
+      }
+     ],
+     "position": {
+      "x": 1280,
+      "y": 96
+     },
+     "reference": "C1",
+     "rotation": "R0",
+     "symbol": "cap",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 0,
+      "x": 960,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "A",
+       "order": 1,
+       "x": 960,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "K",
+       "order": 2,
+       "x": 960,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 960,
+      "y": 96
+     },
+     "reference": "D1",
+     "rotation": "R0",
+     "symbol": "diode",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 128,
+      "width": 32,
+      "x": 1744,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "In",
+       "order": 1,
+       "x": 1760,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "Out",
+       "order": 2,
+       "x": 1760,
+       "y": 176
+      }
+     ],
+     "position": {
+      "x": 1760,
+      "y": 96
+     },
+     "reference": "I1",
+     "rotation": "R0",
+     "symbol": "current",
+     "value": ""
+    },
+    {
+     "position": {
+      "x": 640,
+      "y": 96
+     },
+     "reference": "J1",
+     "rotation": "R0",
+     "symbol": "njf",
+     "value": ""
+    },
+    {
+     "position": {
+      "x": 800,
+      "y": 96
+     },
+     "reference": "J2",
+     "rotation": "R0",
+     "symbol": "pjf",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 1424,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 1440,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 1440,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 1440,
+      "y": 96
+     },
+     "reference": "L1",
+     "rotation": "R0",
+     "symbol": "ind",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 192,
+      "width": 128,
+      "x": -64,
+      "y": 0
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "D",
+       "order": 1,
+       "x": 0,
+       "y": 0
+      },
+      {
+       "dir": "left",
+       "name": "G",
+       "order": 2,
+       "x": -48,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "S",
+       "order": 3,
+       "x": 0,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 0,
+      "y": 96
+     },
+     "reference": "M1",
+     "rotation": "R0",
+     "symbol": "nmos",
+     "value": ""
+    },
+    {
+     "position": {
+      "x": 160,
+      "y": 96
+     },
+     "reference": "M2",
+     "rotation": "R0",
+     "symbol": "pmos",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 64,
+      "x": 320,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "right",
+       "name": "C",
+       "order": 1,
+       "x": 384,
+       "y": 96
+      },
+      {
+       "dir": "left",
+       "name": "B",
+       "order": 2,
+       "x": 320,
+       "y": 144
+      },
+      {
+       "dir": "right",
+       "name": "E",
+       "order": 3,
+       "x": 384,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 320,
+      "y": 96
+     },
+     "reference": "Q1",
+     "rotation": "R0",
+     "symbol": "npn",
+     "value": ""
+    },
+    {
+     "position": {
+      "x": 480,
+      "y": 96
+     },
+     "reference": "Q2",
+     "rotation": "R0",
+     "symbol": "pnp",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 1104,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 1120,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 1120,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 1120,
+      "y": 96
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": ""
+    },
+    {
+     "bounding_box": {
+      "height": 64,
+      "width": 64,
+      "x": 1568,
+      "y": 64
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "+",
+       "order": 1,
+       "x": 1600,
+       "y": 64
+      },
+      {
+       "dir": "down",
+       "name": "-",
+       "order": 2,
+       "x": 1600,
+       "y": 128
+      }
+     ],
+     "position": {
+      "x": 1600,
+      "y": 96
+     },
+     "reference": "V1",
+     "rotation": "R0",
+     "symbol": "voltage",
+     "value": ""
+    }
+   ],
+   "total": 12
   },
   "nets": [
    {
@@ -13791,7 +14091,105 @@
  },
  "fixtures/ltspice_recorded/inputs/export/bus_tap.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 528,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 544,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 544,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 544,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 240,
+      "y": 192
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 256,
+       "y": 192
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 256,
+       "y": 288
+      }
+     ],
+     "position": {
+      "x": 256,
+      "y": 240
+     },
+     "reference": "R2",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "2k"
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 384,
+      "y": 192
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 400,
+       "y": 192
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 400,
+       "y": 288
+      }
+     ],
+     "position": {
+      "x": 400,
+      "y": 240
+     },
+     "reference": "R3",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "3k"
+    }
+   ],
+   "total": 3
   },
   "nets": [
    {
@@ -15599,7 +15997,41 @@
  },
  "fixtures/ltspice_recorded/inputs/export/micro_utf8_bom.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1\u00b5"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -21916,7 +22348,41 @@
  },
  "fixtures/ltspice_recorded/inputs/export/unknown_record.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -23518,8 +23984,7 @@
    "rows": [
     {
      "attributes": {
-      "SpiceLine": "tol=1",
-      "_WINDOW 3": "3"
+      "SpiceLine": "tol=1"
      },
      "bounding_box": {
       "height": 96,
@@ -23846,7 +24311,19 @@
  },
  "fixtures/ltspice_recorded/inputs/search/library_folder_bare.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "position": {
+      "x": 96,
+      "y": 96
+     },
+     "reference": "V1",
+     "rotation": "R0",
+     "symbol": "battery",
+     "value": "5"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -23875,7 +24352,19 @@
  },
  "fixtures/ltspice_recorded/inputs/search/library_folder_named.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "position": {
+      "x": 96,
+      "y": 96
+     },
+     "reference": "V1",
+     "rotation": "R0",
+     "symbol": "Misc\\\\battery",
+     "value": "5"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -23904,7 +24393,19 @@
  },
  "fixtures/ltspice_recorded/inputs/search/library_folder_wrong.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "position": {
+      "x": 96,
+      "y": 96
+     },
+     "reference": "V1",
+     "rotation": "R0",
+     "symbol": "Wrong\\\\battery",
+     "value": "5"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -24046,7 +24547,19 @@
  },
  "fixtures/ltspice_recorded/inputs/search_flat/named_folder_absent.asc": {
   "components": {
-   "error": "error"
+   "rows": [
+    {
+     "position": {
+      "x": 96,
+      "y": 96
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "lib\\\\part",
+     "value": "1k"
+    }
+   ],
+   "total": 1
   },
   "nets": [
    {
@@ -24989,8 +25502,7 @@
    "rows": [
     {
      "attributes": {
-      "SpiceLine": "tol=1",
-      "_WINDOW 3": "3"
+      "SpiceLine": "tol=1"
      },
      "bounding_box": {
       "height": 96,
@@ -26190,8 +26702,7 @@
    "rows": [
     {
      "attributes": {
-      "SpiceLine": "tol=1",
-      "_WINDOW 3": "3"
+      "SpiceLine": "tol=1"
      },
      "bounding_box": {
       "height": 96,

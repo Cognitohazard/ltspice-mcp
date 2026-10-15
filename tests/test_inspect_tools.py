@@ -1303,7 +1303,11 @@ class TestAReadDuringAnEdit:
 
     @staticmethod
     async def _while_an_edit_waits(
-        state: SessionState, sheet: Path, monkeypatch: pytest.MonkeyPatch, query: dict
+        state: SessionState,
+        sheet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        query: dict,
+        ops: list[dict] | None = None,
     ) -> dict:
         import threading
 
@@ -1322,8 +1326,8 @@ class TestAReadDuringAnEdit:
         monkeypatch.setattr(schematic_edit, "_findings_before_and_after", held)
 
         async def edit() -> dict:
-            ops = [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"}]
-            return await apply_ops(state, sheet, ops)
+            edits = ops or [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"}]
+            return await apply_ops(state, sheet, edits)
 
         async def read() -> dict:
             try:
@@ -1352,3 +1356,65 @@ class TestAReadDuringAnEdit:
             asc_state, sheet, monkeypatch, {"kind": "net", "path": str(sheet), "at": "R1.1"}
         )
         assert [pin["reference"] for pin in traced["pins"]] == ["R1"]
+
+    async def test_a_component_listing_shows_the_file(
+        self, asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests._asc_ops import build_sheet
+
+        add = {"op": "add_component", "symbol": "res", "y": 100}
+        await build_sheet(
+            asc_state,
+            "mid_edit_parts",
+            [{**add, "reference": "R1", "x": 100}, {**add, "reference": "R2", "x": 300}],
+        )
+        sheet = work_dir / "mid_edit_parts.asc"
+        listed = await self._while_an_edit_waits(
+            asc_state,
+            sheet,
+            monkeypatch,
+            {"kind": "components", "path": str(sheet)},
+            [{**add, "reference": "R3", "x": 500}],
+        )
+        assert [row["reference"] for row in listed["components"]] == ["R1", "R2"]
+
+
+class TestAComponentListing:
+    async def test_its_attributes_are_the_parts_own_attribute_lines(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        """A WINDOW line places a part's text; it is not one of its attributes."""
+        from tests._asc_ops import inspect_one
+
+        sheet = work_dir / "windows.asc"
+        sheet.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL res 96 96 R0\nWINDOW 0 36 40 Left 2\n"
+            "WINDOW 3 36 76 Left 2\nSYMATTR InstName R1\nSYMATTR Value 1k\n"
+            "SYMATTR SpiceLine tol=5\n",
+            encoding="utf-8",
+        )
+        listed = await inspect_one(asc_state, {"kind": "components", "path": str(sheet)})
+        assert listed["components"] == [
+            {"reference": "R1", "value": "1k", "attributes": {"SpiceLine": "tol=5"}}
+        ]
+
+    async def test_two_parts_of_one_reference_are_both_listed(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        from tests._asc_ops import inspect_one
+
+        sheet = work_dir / "twice.asc"
+        sheet.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL res 96 96 R0\nSYMATTR InstName R1\n"
+            "SYMATTR Value 1k\nSYMBOL res 300 96 R0\nSYMATTR InstName R1\nSYMATTR Value 2k\n",
+            encoding="utf-8",
+        )
+        listed = await inspect_one(
+            asc_state, {"kind": "components", "path": str(sheet), "detail": "full"}
+        )
+        assert [
+            (row["reference"], row["value"], row["position"]) for row in listed["components"]
+        ] == [
+            ("R1", "1k", {"x": 96, "y": 96}),
+            ("R1", "2k", {"x": 300, "y": 96}),
+        ]

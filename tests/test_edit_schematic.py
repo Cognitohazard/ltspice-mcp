@@ -2343,7 +2343,7 @@ class TestRecordTheEditorCannotRead:
         assert named in message
         assert path.read_bytes() == original
 
-    async def test_inspect_reports_a_refusal_not_an_internal_error(self, state_no_sim, work_dir):
+    async def test_inspect_reads_the_sheet_and_names_the_record(self, state_no_sim, work_dir):
         path = self._sheet(work_dir, "BUSTAP 80 0 80 16")
         results = (
             await handle_inspect(
@@ -2359,11 +2359,12 @@ class TestRecordTheEditorCannotRead:
             )
         ).structured_content["results"]
         components, net = results
-        assert components["ok"] is False
-        assert components["error"]["code"] != "internal_error"
-        assert "line 5" in components["error"]["message"]
-        assert "BUSTAP" in components["error"]["message"]
-        # The trace reads the sheet itself, and names the record it does not follow.
+        # Both read the sheet themselves, and name the record they do not read.
+        assert components["ok"] is True
+        assert components["data"]["warnings"] == [
+            "line 5: a BUSTAP record, which this listing does not read; a part it holds "
+            "is not listed"
+        ]
         assert net["ok"] is True
         assert net["data"]["labels"] == ["D[0:3]", "OUT"]
         assert net["data"]["warnings"] == [
