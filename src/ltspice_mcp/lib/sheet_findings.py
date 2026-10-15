@@ -75,7 +75,8 @@ _RULES = (
         "unresolved_symbol",
         "structural",
         "part",
-        "A part whose symbol is not found, so that it has no pins.",
+        "A part whose symbol is not found, or has a pin line that does not read, "
+        "so that it has no pins.",
         check="symbols",
         severity="error",
     ),
@@ -210,6 +211,9 @@ class Part:
     missing: bool = False
     body: BBox | None = None
     at: Point | None = None
+    #: The first pin line of a found symbol that does not read, which makes
+    #: the symbol unusable; the part is then ``missing`` too.
+    unreadable: str = ""
 
     @property
     def name(self) -> str:
@@ -286,18 +290,26 @@ def _wire(a: Point, b: Point) -> str:
 
 @_finds("unresolved_symbol")
 def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
-    return [
-        Finding(
-            "unresolved_symbol",
-            f"Symbol '{part.symbol}' of {part.name} was not found: the part has no pins "
-            "and no extent here, so nothing about them is checked",
-            refs=(part.name,),
-            points=(part.at,) if part.at is not None else (),
-            facts={"symbol": part.symbol},
+    found: list[Finding] = []
+    for part in ix.view.parts:
+        if not part.missing:
+            continue
+        facts: dict[str, Any] = {"symbol": part.symbol}
+        why = "was not found"
+        if part.unreadable:
+            facts["unreadable"] = part.unreadable
+            why = f"has a pin line that does not read ({part.unreadable!r})"
+        found.append(
+            Finding(
+                "unresolved_symbol",
+                f"Symbol '{part.symbol}' of {part.name} {why}: the part has no pins "
+                "and no extent here, so nothing about them is checked",
+                refs=(part.name,),
+                points=(part.at,) if part.at is not None else (),
+                facts=facts,
+            )
         )
-        for part in ix.view.parts
-        if part.missing
-    ]
+    return found
 
 
 @_finds("dropped_wire")

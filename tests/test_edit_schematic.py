@@ -1193,7 +1193,9 @@ async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_st
     """spicelib reads a text line only with its ``!`` or ``;`` and writes back
     what it read, so a sheet with one that has neither is one line shorter once
     edited. The sheet before the batch is read the same way, or the two stacked
-    directives left would be reported as something the batch did."""
+    directives left would be reported as something the batch did. A check of
+    the file does not draw that line either: it reports it as a line it does
+    not read."""
     sheet = work_dir / "three-texts.asc"
     sheet.write_text(
         "Version 4\nSHEET 1 880 680\n"
@@ -1204,7 +1206,7 @@ async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_st
     )
     of_the_file = await run_verify_circuit(asc_state, path=str(sheet), checks=["quality"])
     assert [f["evidence"]["detail"] for f in of_the_file["findings"]] == [
-        "3 directives/comments share anchor (16,16) — they render on top of each other"
+        "2 directives/comments share anchor (16,16) — they render on top of each other"
     ]
 
     data = await apply_ops(

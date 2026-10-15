@@ -622,8 +622,17 @@ def parse_asc(data: bytes) -> AscDocument:
         text, encoding = decode_spice_bytes_strictly(data)
     except UnicodeError as exc:
         raise NetlistError(f"the sheet is not readable text: {exc}") from exc
+    return parse_asc_text(text, encoding, bom_of(data))
+
+
+def parse_asc_text(text: str, encoding: str = "utf-8", bom: bytes = b"") -> AscDocument:
+    """Read a sheet already decoded to ``text``.
+
+    ``encoding`` and ``bom`` say how the document is written back; they do not
+    change how it reads.
+    """
     lines = _LINE.findall(text)
     endings = Counter(line[len(_body(line)) :] for line in lines)
     endings.pop("", None)
     newline = endings.most_common(1)[0][0] if endings else "\n"
-    return AscDocument(tuple(_read(lines)), encoding=encoding, bom=bom_of(data), newline=newline)
+    return AscDocument(tuple(_read(lines)), encoding=encoding, bom=bom, newline=newline)

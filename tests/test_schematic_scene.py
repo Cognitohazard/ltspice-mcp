@@ -21,7 +21,7 @@ from ltspice_mcp.lib.schematic_scene import (
     DrawRect,
     NetFlag,
     PlacedSymbol,
-    SymbolResolver,
+    Scene,
     Wire,
     build_scene,
     decode_text_lines,
@@ -42,6 +42,7 @@ from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
 )
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests._schematic_fixtures import (
     BOX2_ALT_ASY,
     BOX2_ASY,
@@ -623,6 +624,64 @@ class TestSceneOfText:
         asc = _write(tmp_path / "s.asc", _asc_with_box2("R0"))
         (part,) = build_scene(asc, SymbolResolver(local_dir=tmp_path)).symbols
         assert [(pin.name, pin.x, pin.y) for pin in part.pins] == [("A", 0, 8), ("B", 32, 8)]
+
+
+class TestALineTheDrawingDoesNotRead:
+    """The scene reads a sheet through ``asc_document``. A line it cannot read
+    is reported with its line number, and nothing is guessed from it."""
+
+    def scene(self, tmp_path: Path, body: str) -> Scene:
+        _write(tmp_path / "box2.asy", BOX2_ASY)
+        text = "Version 4\nSHEET 1 880 680\n" + body
+        return scene_of_text(text, tmp_path / "s.asc", SymbolResolver(local_dir=tmp_path))
+
+    @pytest.mark.parametrize(
+        ("body", "unread"),
+        [
+            # A part's name after a line that ends the part: the part keeps no name.
+            ("SYMBOL box2 96 0 R0\nWIRE 0 0 16 0\nSYMATTR InstName U1\n", [("SYMATTR", 5)]),
+            # A part with no rotation is no part, and the name under it no name.
+            ("SYMBOL box2 96 0\nSYMATTR InstName U1\n", [("SYMBOL", 3), ("SYMATTR", 4)]),
+            ("TEXT 0 0 Left 2 hello\n", [("TEXT", 3)]),
+            ("WIRE 0 0 16\n", [("WIRE", 3)]),
+            ("FLAG 0 0\n", [("FLAG", 3)]),
+            ("SYMBOL box2 96 0 R0\nWINDOW 0 x y Left 2\nSYMATTR InstName U1\n", [("WINDOW", 4)]),
+        ],
+    )
+    def test_it_is_reported_and_not_guessed_at(
+        self, tmp_path: Path, body: str, unread: list[tuple[str, int]]
+    ) -> None:
+        scene = self.scene(tmp_path, body)
+        assert scene.diagnostics == [
+            f"line {line}: a {keyword} record, which the drawing does not read; it is "
+            "not drawn and no check built on the drawing includes it"
+            for keyword, line in unread
+        ]
+        assert [sym.reference for sym in scene.symbols if sym.reference] == (
+            ["U1"] if unread == [("WINDOW", 4)] else []
+        )
+        assert scene.wires == ([Wire(0, 0, 16, 0)] if unread == [("SYMATTR", 5)] else [])
+        assert not scene.directives and not scene.flags
+
+    def test_a_symbol_with_a_pin_line_that_does_not_read_is_a_placeholder(
+        self, tmp_path: Path
+    ) -> None:
+        """As the schematic editor treats it: a pin left out is a terminal no
+        wire could be checked against."""
+        _write(tmp_path / "broken.asy", BOX2_ASY + "PIN 32\n")
+        scene = self.scene(tmp_path, "SYMBOL broken 96 0 R0\nSYMATTR InstName U1\n")
+        (part,) = scene.symbols
+        assert (part.missing, part.unreadable, part.pins) == (True, "PIN 32", [])
+        assert scene.diagnostics == [
+            "symbol 'broken' (instance U1) has a pin line that does not read ('PIN 32'); "
+            "placeholder rendered"
+        ]
+        (found,) = findings(sheet_view(scene), ["unresolved_symbol"])
+        assert found.detail == (
+            "Symbol 'broken' of U1 has a pin line that does not read ('PIN 32'): the part "
+            "has no pins and no extent here, so nothing about them is checked"
+        )
+        assert found.facts == {"symbol": "broken", "unreadable": "PIN 32"}
 
 
 # A frame drawn one unit outside its two pins, as many of LTspice's own
