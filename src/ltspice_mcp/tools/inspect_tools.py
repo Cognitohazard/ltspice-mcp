@@ -166,7 +166,7 @@ from ltspice_mcp.lib.schematic_ops import (
     wire_segments_of,
     wires_of_one_net,
 )
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
+from ltspice_mcp.lib.schematic_scene import default_stock_paths
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -183,6 +183,7 @@ from ltspice_mcp.lib.simulator_build import (
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,

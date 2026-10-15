@@ -18,8 +18,9 @@ diagnostics (e.g. an unresolved symbol). :mod:`schematic_renderer` turns a
 Why a render-oriented ``.asy`` parse instead of reusing
 ``symbol_geometry.parse_asy_file``: that function keeps only pins and a bounding
 box and discards the drawing primitives and text — everything a renderer needs.
-So :func:`parse_symbol` does a full parse (lines/rects/circles/arcs/pins/
-windows/text) while still reusing ``PinInfo`` and the rotation transform.
+So :func:`proto_of` keeps the whole reading of a symbol file
+(lines/rects/circles/arcs/pins/windows), which ``symbol_library.SymbolResolver``
+reads once, while still reusing ``PinInfo`` and the rotation transform.
 """
 
 from __future__ import annotations
@@ -32,7 +33,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ltspice_mcp.lib.asc_document import ROTATIONS, Window
-from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import point_on_segment
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text, refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
@@ -49,7 +49,7 @@ from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
     library_roots,
 )
-from ltspice_mcp.lib.symbol_library import find_symbol, spellings
+from ltspice_mcp.lib.symbol_library import FoundSymbol, SymbolResolver
 
 # Attribute-window numbers we render as text next to a symbol. LTspice assigns
 # window 0 to the instance name and window 3 to the value; the rest (SpiceLine,
@@ -560,18 +560,17 @@ class Scene:
 # ---------------------------------------------------------------------------
 
 
-def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
-    """Parse a ``.asy`` file into a render-ready :class:`SymbolProto`.
+def proto_of(found: FoundSymbol) -> SymbolProto:
+    """A symbol the resolver read, as the drawing places it.
 
-    Reads via ``read_spice_text`` (BOM/UTF-16/cp1252 fallback) — vendor symbols
-    routinely carry cp1252 bytes in description fields. The reading is
-    ``symbol_file.read_symbol``, the one the schematic editor's pin geometry
-    comes from; a line that does not read is left out of the drawing.
+    The reading is ``symbol_file.read_symbol``, the one the schematic editor's
+    pin geometry comes from; a line that does not read is left out of the
+    drawing.
     """
-    symbol = read_symbol(read_spice_text(asy_path))
+    symbol = found.file
     return SymbolProto(
-        name=name,
-        path=asy_path,
+        name=found.name,
+        path=found.path,
         lines=tuple(DrawLine(*box) for box in symbol.lines),
         rects=tuple(DrawRect(*box) for box in symbol.rects),
         circles=tuple(DrawEllipse(*box) for box in symbol.circles),
@@ -583,93 +582,13 @@ def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
     )
 
 
-# ---------------------------------------------------------------------------
-# Symbol resolution (schematic-local → project → stock), content-stamp cached
-# ---------------------------------------------------------------------------
+def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
+    """Read the ``.asy`` file at ``asy_path`` and draw it as :func:`proto_of` does.
 
-
-class SymbolResolver:
-    """Resolve a symbol name to a ``.asy`` file and parse it, with caching.
-
-    Precedence, highest first:
-
-    1. the schematic's own directory (``local_dir``),
-    2. configured project symbol paths (``project_paths``),
-    3. stock LTspice library paths (``stock_paths``).
-
-    Each resolver owns its caches; its search roots (and therefore its
-    ``active_set``) are fixed at construction. The parse cache is keyed by
-    ``(resolved path, content stamp, active library-path set)`` — never by bare
-    symbol name — so rewriting a local ``.asy`` bumps the content stamp and
-    invalidates the entry, while an unchanged file is served from cache. The
-    active-set component is what keeps entries from bleeding across resolvers
-    configured with different libraries: a different library set is a different
-    resolver, and because it never resolves to a foreign entry, ``resolve`` for
-    a symbol whose winning file changed with the search order returns the right
-    path. Resolution results (including misses) are cached per instance, so a
-    repeated miss does not re-walk the stock tree.
+    Reads via ``read_spice_text`` (BOM/UTF-16/cp1252 fallback): vendor symbols
+    routinely carry cp1252 bytes in description fields.
     """
-
-    def __init__(
-        self,
-        local_dir: Path | None,
-        project_paths: Sequence[Path] = (),
-        stock_paths: Sequence[Path] = (),
-    ) -> None:
-        roots: list[Path] = []
-        if local_dir is not None:
-            roots.append(local_dir)
-        roots.extend(project_paths)
-        roots.extend(stock_paths)
-        # De-duplicate while preserving precedence order.
-        seen: set[str] = set()
-        self._roots: list[Path] = []
-        for r in roots:
-            key = str(r)
-            if key not in seen:
-                seen.add(key)
-                self._roots.append(r)
-        self._local_dir = local_dir
-        self._active_set: frozenset[str] = frozenset(str(r) for r in self._roots)
-        self._resolve_cache: dict[str, Path | None] = {}
-        self._parse_cache: dict[tuple[str, tuple[int, int], frozenset[str]], SymbolProto] = {}
-
-    @property
-    def active_set(self) -> frozenset[str]:
-        return self._active_set
-
-    def resolve(self, symbol: str) -> Path | None:
-        """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.
-
-        ``symbol_library.find_symbol`` is the rule, with the sheet's own folder
-        first and every other root a library: the rule the schematic editor's
-        pin geometry follows too.
-        """
-        if symbol in self._resolve_cache:
-            return self._resolve_cache[symbol]
-        result = find_symbol(symbol, self._local_dir, self._roots)
-        self._resolve_cache[symbol] = result
-        return result
-
-    def load(self, symbol: str) -> SymbolProto | None:
-        """Resolve and parse ``symbol``; ``None`` if unresolved or unparseable."""
-        path = self.resolve(symbol)
-        if path is None:
-            return None
-        try:
-            stamp = file_stamp(path)
-        except OSError:
-            return None
-        key = (str(path), stamp, self._active_set)
-        cached = self._parse_cache.get(key)
-        if cached is not None:
-            return cached
-        try:
-            proto = parse_symbol(path, spellings(symbol)[1])
-        except Exception:
-            return None
-        self._parse_cache[key] = proto
-        return proto
+    return proto_of(FoundSymbol(name, asy_path, read_symbol(read_spice_text(asy_path))))
 
 
 def editor_symbol_resolver(asc_path: Path) -> SymbolResolver:
@@ -1131,7 +1050,8 @@ def scene_of_text(
         scene.diagnostics.append(_unread_note(keyword, lines))
 
     for raw in doc.symbols:
-        proto = resolver.load(raw.symbol)
+        found = resolver.load(raw.symbol)
+        proto = proto_of(found) if found is not None else None
         if proto is None:
             scene.diagnostics.append(
                 f"symbol '{raw.symbol}'"
