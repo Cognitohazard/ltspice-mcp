@@ -174,7 +174,8 @@ class Component:
     canonicalized net names (ground folded to ``0``, lowercased). ``type_letter``
     is the uppercased element prefix. ``model`` is the model / subcircuit name
     for M/Q/J/X (and controlling-source name for F/H); ``value`` is the passive
-    value or source spec for R/C/L/V/I. ``params`` are the ``key=value`` tokens.
+    value or source spec for R/C/L/V/I. ``params`` are the ``key=value`` tokens
+    in card order, a key the card gives twice listed twice.
     """
 
     ref: str
@@ -184,10 +185,6 @@ class Component:
     value: str | None
     params: tuple[tuple[str, str], ...]
     line: int = 0
-
-    @property
-    def params_dict(self) -> dict[str, str]:
-        return dict(self.params)
 
 
 @dataclass(frozen=True)
@@ -232,6 +229,21 @@ class DuplicateSubckt:
     name: str
     used: str
     ignored: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DuplicateParam:
+    """An instance that gives one parameter more than once on its card.
+
+    ``key`` is lowercased, as SPICE reads it; ``values`` are the copies in card
+    order. Which copy a simulator uses is not modelled here, so the comparison
+    holds an instance equal only where it is equal whichever copy is read.
+    """
+
+    ref: str
+    side: str
+    key: str
+    values: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -281,10 +293,6 @@ class FlatComponent:
     model: str | None
     value: str | None
     params: tuple[tuple[str, str], ...]
-
-    @property
-    def params_dict(self) -> dict[str, str]:
-        return dict(self.params)
 
 
 @dataclass(frozen=True)
@@ -444,10 +452,12 @@ class GraphComparison:
     node_partition_mismatches: list[NodePartitionDiff] = field(default_factory=list)
     anchor_violations: list[AnchorViolation] = field(default_factory=list)
     arity_errors: list[ArityError] = field(default_factory=list)
-    # Fact-level context, not differences: a black-boxed subcircuit and a
-    # duplicate definition are both legitimate, so neither flips ``equivalent``.
+    # Fact-level context, not differences: a black-boxed subcircuit, a
+    # duplicate definition and a parameter given twice are all legitimate, so
+    # none of them flips ``equivalent`` by itself.
     unresolved_subckts: list[UnresolvedSubckt] = field(default_factory=list)
     duplicate_subckts: list[DuplicateSubckt] = field(default_factory=list)
+    duplicate_params: list[DuplicateParam] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         """Project to a plain-dict payload (JSON-friendly)."""
@@ -481,6 +491,10 @@ class GraphComparison:
             "duplicate_subckts": [
                 {"name": d.name, "used": d.used, "ignored": list(d.ignored)}
                 for d in self.duplicate_subckts
+            ],
+            "duplicate_params": [
+                {"ref": d.ref, "side": d.side, "key": d.key, "values": list(d.values)}
+                for d in self.duplicate_params
             ],
         }
 
@@ -846,7 +860,7 @@ def _component_from_card(card: object) -> Component:
         nodes=tuple(canon_net(n) for n in line.nodes),
         model=line.model,
         value=line.value,
-        params=tuple(line.params.items()),
+        params=tuple(line.param_pairs()),
         line=getattr(card, "line_start", 0),
     )
 
@@ -1057,6 +1071,13 @@ def compare_graphs(
         for dup in outcome.graph.duplicate_subckts:
             if dup not in result.duplicate_subckts:
                 result.duplicate_subckts.append(dup)
+    for side, flat in (("reference", ref_flat), ("candidate", cand_flat)):
+        for comp in flat.components:
+            for key, values in _param_copies(comp).items():
+                if len(values) > 1:
+                    result.duplicate_params.append(
+                        DuplicateParam(ref=comp.ref, side=side, key=key, values=tuple(values))
+                    )
 
     result.equivalent = (
         result.structurally_equivalent
@@ -1354,14 +1375,48 @@ def _diff_matched_pair(
         result.value_mismatches.append(
             ValueDiff(ref=rc.ref, reference_value=rc.value, candidate_value=cc.value)
         )
-    rparams = {k.lower(): v for k, v in rc.params}
-    cparams = {k.lower(): v for k, v in cc.params}
+    rparams, cparams = _param_copies(rc), _param_copies(cc)
     for pkey in sorted(rparams.keys() | cparams.keys()):
-        rv, cv = rparams.get(pkey), cparams.get(pkey)
-        if not values_equal(rv, cv, rtol):
+        differ = _disagreement(rparams.get(pkey, []), cparams.get(pkey, []), rtol)
+        if differ is not None:
             result.param_mismatches.append(
-                ParamDiff(ref=rc.ref, key=pkey, reference_value=rv, candidate_value=cv)
+                ParamDiff(
+                    ref=rc.ref, key=pkey, reference_value=differ[0], candidate_value=differ[1]
+                )
             )
+
+
+def _param_copies(comp: FlatComponent) -> dict[str, list[str]]:
+    """Each parameter's values in card order, keyed by its lowercased name."""
+    copies: dict[str, list[str]] = {}
+    for key, value in comp.params:
+        copies.setdefault(key.lower(), []).append(value)
+    return copies
+
+
+def _disagreement(
+    rvals: list[str], cvals: list[str], rtol: float
+) -> tuple[str | None, str | None] | None:
+    """``None`` when a parameter reads the same on both sides whichever copy is
+    read, else a reference copy and a candidate copy for the mismatch row
+    (``None`` on a side that does not give it).
+
+    One copy a side is the plain comparison. With more, the sides agree when
+    they give the same copies in the same order, or when every copy on both
+    sides is the same value; anything else depends on which copy a simulator
+    takes, which this comparison does not model.
+    """
+    if rvals and cvals:
+        if len(rvals) == len(cvals) and all(
+            values_equal(r, c, rtol) for r, c in zip(rvals, cvals, strict=True)
+        ):
+            return None
+        if all(values_equal(rvals[0], v, rtol) for v in (*rvals[1:], *cvals)):
+            return None
+    first = (rvals[0] if rvals else None, cvals[0] if cvals else None)
+    # Within tolerance every cross pair can agree while two copies on one side
+    # do not; the duplicate_params fact lists those.
+    return next(((r, c) for r in rvals for c in cvals if not values_equal(r, c, rtol)), first)
 
 
 # ---------------------------------------------------------------------------

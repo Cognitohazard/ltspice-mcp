@@ -754,7 +754,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 15 characters for two more analyses on set_plot_panes, a
     # DC sweep and a noise run: a run of either had no way to open in LTspice
     # with its traces drawn. Measured 13,085.
-    "edit_schematic": 13090,
+    # Raised by about 80 characters to say where set_component_value puts a
+    # KEY=VALUE: where the part already gives the key, else in SpiceLine. It
+    # used to put every one in SpiceLine, which wrote a Schmitt trigger's
+    # thresholds twice; the op now says where the value lands. Measured 13,162.
+    "edit_schematic": 13170,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what

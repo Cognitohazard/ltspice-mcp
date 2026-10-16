@@ -286,9 +286,8 @@ def _parse_rotation(rotation: str) -> ERotation:
 
 
 # Matches one ``KEY=VALUE`` token (value may have braces, parens, sign, etc.).
-# Used to peel trailing parameters off a multi-token component value like
-# ``"NMOS1 W=10u L=1u"`` so we can route each piece through the right
-# spicelib API (model name → ``set_component_value``; W/L → ``set_component_parameters``).
+# Validation uses it to accept a value shaped ``"NMOS1 W=10u L=1u"``: one head
+# token, then only parameters.
 _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 
 # A GUI opamp complexity-level label (e.g. ``Level.2``) that belongs in the
@@ -518,7 +517,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str, element: str) -> None:
+def _apply_component_value(editor, reference: str, value: str, element: str) -> list[str]:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -526,8 +525,9 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     Calling it with ``"NMOS1 W=10u L=1u"`` against an existing ``M1 ... NMOS1 W=20u L=1u``
     leaves both sets in place (``... NMOS1 W=10u L=1u W=20u L=1u``), which
     LTspice may parse either way. To DWIM, we split off any ``KEY=VALUE``
-    tokens and route them through ``set_component_parameters``, keeping
-    the model/value field for ``set_component_value``.
+    tokens and set each where the part already gives it
+    (:func:`_set_instance_params`), keeping the model/value field for
+    ``set_component_value``. Returns the edit's warnings.
 
     Token-based split via ``spice_lex.tokenize_body``: params are the
     ``KEY_VALUE`` tokens and the head is the rest of the value as written
@@ -545,7 +545,7 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     # behind a success message.
     if element == "B" or "=" not in value:
         _set_or_create_value(editor, reference, value)
-        return
+        return []
     try:
         tokens = tokenize_body(value)
     except SpiceLexError as e:
@@ -570,8 +570,62 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     head = " ".join(part for part in head_parts if part)
     if head:
         _set_or_create_value(editor, reference, head)
-    if params:
-        editor.set_component_parameters(reference, **params)
+    return _set_instance_params(editor, reference, params) if params else []
+
+
+#: The attributes a placed part's ``KEY=VALUE`` parameters are written in.
+_PARAMETER_SLOTS = ("Value", "Value2", "SpiceLine", "SpiceLine2")
+
+
+def _replace_param(text: str, key: str, value: str) -> tuple[str, int]:
+    """``text`` with every ``KEY=VALUE`` copy of ``key`` (in any case) set to
+    ``value``, keeping its spelling of the key, and how many copies there were."""
+    try:
+        tokens = tokenize_body(text)
+    except SpiceLexError:
+        return text, 0
+    copies = [
+        tok
+        for tok in tokens
+        if tok.kind == TokenKind.KEY_VALUE and (tok.key or "").casefold() == key.casefold()
+    ]
+    for tok in reversed(copies):
+        text = f"{text[: tok.body_offset]}{tok.key}={value}{text[tok.body_end :]}"
+    return text, len(copies)
+
+
+def _set_instance_params(editor, reference: str, params: dict[str, str]) -> list[str]:
+    """Set each parameter where the part already gives it, else add it to
+    SpiceLine.
+
+    spicelib's ``set_component_parameters`` looks for a key only in SpiceLine
+    and SpiceLine2, spelled exactly, so a key the part gives in Value or Value2
+    (a Schmitt trigger's ``Vt``, a MOSFET's ``w``) got a second copy in
+    SpiceLine. It also rebuilds SpiceLine from its own parse when it adds a
+    key, rewriting the rest of the line. So nothing here goes through it: SPICE
+    reads a name in any case, every copy found is set, so copies already on the
+    part come to agree, and the warning says where they are.
+    """
+    attributes = editor.get_component(reference).attributes
+    warnings: list[str] = []
+    for key, value in params.items():
+        found: list[str] = []
+        for slot in _PARAMETER_SLOTS:
+            text, copies = _replace_param(attributes.get(slot, ""), key, value)
+            if copies:
+                editor.set_component_attribute(reference, slot, text)
+                found.extend([slot] * copies)
+        if not found:
+            line = attributes.get("SpiceLine", "").strip()
+            editor.set_component_attribute(
+                reference, "SpiceLine", f"{line} {key}={value}" if line else f"{key}={value}"
+            )
+        elif len(found) > 1:
+            warnings.append(
+                f"{reference} gives {key} {len(found)} times ({', '.join(found)}); "
+                f"every copy was set to {value}."
+            )
+    return warnings
 
 
 # Each editor's symbols, resolved once per request: get_asc_editor hands every
@@ -1737,7 +1791,12 @@ class OpSetComponentValue(StrictModel):
 
     op: Literal["set_component_value"]
     reference: str = Field(description=_REFERENCE_DESCRIPTION)
-    value: str = Field(description="New value or model name, e.g. '10k', '1u', 'BSS123'.")
+    value: str = Field(
+        description=(
+            "New value or model name, e.g. '10k', '1u', 'BSS123'. A KEY=VALUE is set "
+            "where the part already gives that key, else in SpiceLine."
+        )
+    )
 
 
 class OpSetComponentAttribute(StrictModel):
@@ -2088,10 +2147,14 @@ def apply_op_inplace(
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
-        _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
+        warnings = _apply_component_value(
+            editor, op.reference, op.value, element_class(editor, op.reference)
+        )
         result = {"op": "set_component_value", "reference": op.reference, "value": op.value}
         if lint:
-            result["warnings"] = [lint]
+            warnings.insert(0, lint)
+        if warnings:
+            result["warnings"] = warnings
         return result
 
     if isinstance(op, OpSetComponentAttribute):

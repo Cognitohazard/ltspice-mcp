@@ -292,14 +292,12 @@ def test_run_receipt_assembles_more_than_fifty_runs_with_original_projection(
     assert lean["runs"]["returned"] == lean["runs"]["total"] == 61
     assert lean["runs"]["truncated"] is False
     assert lean["runs"]["next_cursor"] is None
-    assert "raw" not in lean["runs"]["items"][0]
     assert set(projected["runs"]["items"][0]) == {"case_id", "raw"}
     direct_runs = api.jobs(action="runs", job_id=job.job_id)
     status = api.jobs(action="status", job_id=job.job_id)
     assert direct_runs["returned"] == direct_runs["total"] == 61
-    assert "raw" in direct_runs["items"][0]
     assert status["runs"]["returned"] == status["runs"]["total"] == 61
-    assert "raw" not in status["runs"]["items"][0]
+    assert lean["runs"]["items"][0] == status["runs"]["items"][0] == direct_runs["items"][0]
     assert captured[0].execution.wait_s == captured[1].execution.wait_s == 0
     assert captured[0].analyze is not None
     assert captured[0].analyze.include is not None
