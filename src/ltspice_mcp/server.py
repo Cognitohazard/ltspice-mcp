@@ -150,6 +150,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     """
     lease_owner = object()
     lease_pid = acquire_session_lease(lease_owner)
+    # The instructions below name this session's simulators and sandbox; the
+    # Server outlives the session, so they are put back when it ends.
+    instructions_before = server.instructions
     try:
         boot = await bootstrap_server_engine(
             on_config_loaded=_configure_server_logging,
@@ -239,6 +242,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             await state.shutdown()
             logger.info("Server shutdown complete")
     finally:
+        server.instructions = instructions_before
         release_session_lease(lease_owner, lease_pid)
 
 
