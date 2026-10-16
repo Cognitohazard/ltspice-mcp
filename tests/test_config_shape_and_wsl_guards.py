@@ -1,8 +1,9 @@
 """Config-shape validation and WSL interop guards.
 
 Covers three robustness fixes:
-- TOML list-of-strings fields (``allowed_paths``, ``symbol_paths``) reject a
-  bare scalar string instead of iterating it character-wise.
+- TOML path lists never iterate a bare scalar string character-wise:
+  ``allowed_paths`` reads it as a list of one directory, ``symbol_paths``
+  rejects it.
 - ``_resolve_win_env`` retries after a transient failure (only successes are
   cached).
 - ``kill_windows_ltspice_by_token`` anchors the job-id token at a filename
@@ -16,28 +17,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ltspice_mcp.config import ServerConfig, default_allowed_paths
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.wsl import _resolve_win_env, kill_windows_ltspice_by_token
 
 
 class TestAllowedPathsShape:
-    """[security] allowed_paths must be a list of strings, not a scalar."""
+    """[security] allowed_paths is a list of directories; a bare string is one."""
 
-    def test_scalar_string_rejected_and_defaults(
-        self, work_dir: Path, caplog: pytest.LogCaptureFixture
-    ):
+    def test_a_bare_string_is_one_directory(self, work_dir: Path):
         # The common TOML mistake: a bare string instead of a list. Iterating it
         # would yield one Path per character (including Path("/") per slash),
-        # silently widening the sandbox to the whole filesystem.
+        # and ignoring it would leave the server with no sandbox at all, though
+        # the key was written to set one.
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text('[security]\nallowed_paths = "/home/me/circuits"\n')
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
-            config = ServerConfig.load(toml_path)
-        # Falls back to the working-dir default, not a per-character explosion.
-        assert config.allowed_paths == default_allowed_paths(config.working_dir)
-        assert Path("/") not in config.allowed_paths
-        assert "allowed_paths" in caplog.text
-        assert "list of strings" in caplog.text
+        config = ServerConfig.load(toml_path)
+        assert config.allowed_paths == [Path("/home/me/circuits")]
 
     def test_list_of_strings_accepted(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
@@ -47,7 +42,7 @@ class TestAllowedPathsShape:
 
 
 class TestSymbolPathsShape:
-    """[schematic] symbol_paths shares the allowed_paths guard."""
+    """[schematic] symbol_paths rejects a bare string; it is not read as one path."""
 
     @pytest.fixture(autouse=True)
     def no_symbol_path_override(self, monkeypatch: pytest.MonkeyPatch):

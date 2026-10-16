@@ -44,7 +44,6 @@ from ltspice_mcp.lib.encoding import (
     rewrite_codec,
 )
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.spice_lex import emit, lex
 from ltspice_mcp.lib.spice_lex_ops import strip_instance_section_signs
 from ltspice_mcp.lib.store import Store
@@ -58,14 +57,11 @@ def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
     """Resolve and validate a netlist path. Raises SimulationError on failure.
 
     PathSecurityError propagates unchanged: the caller attaches the sandbox
-    guidance (the allowed paths, and the config line that widens them, which is
-    re-read on the next call) — re-wrapping it as SimulationError would replace
-    that guidance with a misdirecting simulator hint.
+    guidance (``state.sandbox_guidance``) — re-wrapping it as SimulationError
+    would replace that guidance with a misdirecting simulator hint.
     """
     try:
-        # ``tools._base.safe_path`` is this same call bound to the session; the
-        # tool layer sits above this module, so bind it here instead.
-        netlist_path = resolve_safe_path(netlist_str, state.allowed_paths())
+        netlist_path = state.resolve_path(netlist_str)
     except PathSecurityError:
         raise
     except Exception as e:

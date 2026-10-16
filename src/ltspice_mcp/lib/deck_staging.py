@@ -195,7 +195,7 @@ def resolve_experiment_paths(
 def stage_deck(
     source_path: Path,
     staging_root: Path,
-    allowed_roots: list[Path],
+    allowed_roots: list[Path] | None,
     *,
     origin: Path,
     allow_live_includes: bool = False,
@@ -211,7 +211,13 @@ def stage_deck(
     references use the include/lib grammar below. Those dependencies receive
     short filenames; all other sources retain their original relative layout.
 
-    Relative dependencies retain their topology within the allowed root. An
+    ``allowed_roots`` is the sandbox, or None when there is none. With a
+    sandbox, the deck and every file it reaches must lie in one of its roots
+    (or, for a reached file, in ``simulator_roots``). With none, the deck's own
+    folder is the first root, and a reached file outside every root so far
+    adds its own folder as another, so every file that exists is staged.
+
+    Relative dependencies retain their topology within their root. An
     absolute or cross-root reference is rewritten only in the staged copy so
     the simulator still consumes the snapshot. The authoring files are never
     modified.
@@ -252,14 +258,15 @@ def stage_deck(
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
-    allowed = _resolved_roots(allowed_roots)
-    roots = allowed + _resolved_roots(list(simulator_roots), required=False)
     source = source_path.resolve(strict=True)
     authored = origin.resolve(strict=True)
     exported = source != authored
     # Where the primary deck stands for the sandbox, for its place in the
     # staging tree, and for its relative references.
     stands_at = authored.parent / source.name if exported else source
+    confined = allowed_roots is not None
+    allowed = _resolved_roots(allowed_roots) if confined else [stands_at.parent]
+    roots = allowed + _resolved_roots(simulator_roots)
     # Authored files are checked against ``allowed`` alone — a prefix of
     # ``roots``, so the index means the same thing in both — which is what
     # keeps the simulator's library a place references may POINT, never a
@@ -358,11 +365,12 @@ def stage_deck(
             for reference in scan_include_references(parsed.cards, anchor, depth=depth):
                 target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
-                target_root = (
-                    _containing_root(target_resolved, roots)
-                    if target_resolved is not None
-                    else None
-                )
+                target_root = None
+                if target_resolved is not None:
+                    target_root = _containing_root(target_resolved, roots)
+                    if target_root is None and not confined:
+                        roots.append(target_resolved.parent)
+                        target_root = len(roots) - 1
                 reason = _unstaged_reason(
                     target,
                     target_resolved,
@@ -649,11 +657,7 @@ def verify_staged_manifest(manifest: list[ManifestEntry]) -> list[dict[str, Any]
     return observations
 
 
-def _resolved_roots(roots: list[Path], *, required: bool = True) -> list[Path]:
-    if not roots:
-        if required:
-            raise DeckStagingError("include_unstaged", "No allowed roots are configured")
-        return []
+def _resolved_roots(roots: Sequence[Path]) -> list[Path]:
     resolved = []
     for root in roots:
         try:

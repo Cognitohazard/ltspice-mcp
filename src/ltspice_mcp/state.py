@@ -22,6 +22,7 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.ltspice_window import OpenWindows
+from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
@@ -87,7 +88,7 @@ class SessionState:
     """The sandbox was given explicitly when the session was opened
     (``Api(allowed_paths=...)``). That outranks the file at startup, so it keeps
     outranking it: the sandbox does not follow the file for this session."""
-    _sandbox: tuple[tuple[int, int] | None, list[Path]] = field(
+    _sandbox: tuple[tuple[int, int] | None, list[Path] | None] = field(
         init=False, repr=False, compare=False
     )
     """The config file's (mtime_ns, size) stamp and the sandbox read at that
@@ -178,13 +179,14 @@ class SessionState:
     def __post_init__(self) -> None:
         self._sandbox = (_file_stamp(self.config.config_path), self.config.allowed_paths)
 
-    def allowed_paths(self) -> list[Path]:
-        """The sandbox, re-read from the config file whenever that file changed.
+    def allowed_paths(self) -> list[Path] | None:
+        """The sandbox, or None when there is none, re-read from the config
+        file whenever that file changed.
 
-        The refusal an agent gets names the config line that widens the sandbox;
-        picking the edit up on the next call is what makes that line the agent's
-        own to act on. Only ``[security] allowed_paths`` follows the file: the
-        rest of it is startup state (detected simulators, runners, caches). A
+        A refusal names the config line that sets the sandbox, and an edit to
+        it applies from the next call, whether it sets, widens or removes the
+        sandbox. Only ``[security] allowed_paths`` follows the file: the rest
+        of it is startup state (detected simulators, runners, caches). A
         pinned sandbox does not follow it at all; see ``sandbox_pinned``.
 
         Every reader of the sandbox calls this: ``config.allowed_paths`` is
@@ -203,19 +205,44 @@ class SessionState:
             self._sandbox = (stamp, paths)
         return paths
 
-    def sandbox_guidance(self) -> str:
-        """What a caller refused by the sandbox can do about it.
+    def sandbox_report(self) -> list[str] | None:
+        """The sandbox as the reports give it: each directory as text, None
+        when there is no sandbox."""
+        paths = self.allowed_paths()
+        return None if paths is None else [str(path) for path in paths]
 
-        An agent cannot widen the sandbox itself except through the setting
-        that holds it, so a refusal that does not name that setting (and the
-        move-the-file fallback) dead-ends. Every surface that reports a refusal
-        carries this text: a tool's structured ``hint``, a failed resource
-        read, and a note on the exception the Python API raises. One builder,
-        so they cannot drift.
+    def resolve_path(self, user_path: str, *also: Path) -> Path:
+        """``user_path`` resolved, refused when there is a sandbox and it lies
+        outside both the sandbox and ``also``.
+
+        With no sandbox a relative path is taken from the working directory;
+        with one, from its first entry (``resolve_safe_path``). ``also`` never
+        creates a sandbox where there is none.
         """
-        allowed = ", ".join(str(p) for p in self.allowed_paths())
+        return resolve_safe_path(
+            user_path,
+            with_roots(self.allowed_paths(), also),
+            relative_to=self.config.working_dir,
+        )
+
+    def sandbox_guidance(self) -> str:
+        """What a caller whose path was refused can do about it.
+
+        Every surface that reports a refusal carries this text: a tool's
+        structured ``hint``, a failed resource read, and a note on the
+        exception the Python API raises. One builder, so they cannot drift.
+        With a sandbox it names the setting that holds it, since that setting
+        (or moving the file) is the only way past it.
+        """
+        paths = self.allowed_paths()
         config_path = self.config.config_path
         key = f"[{SANDBOX_SECTION}] {SANDBOX_KEY}"
+        if paths is None:
+            return (
+                f"There is no sandbox ({key} is not set), so the path was refused "
+                "only because it could not be resolved as written."
+            )
+        allowed = ", ".join(str(p) for p in paths)
         # The branches follow the loader's precedence: an explicit argument, then
         # the environment, then the file.
         if self.sandbox_pinned:

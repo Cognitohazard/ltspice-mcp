@@ -32,8 +32,6 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 - A completed run can still hold a degenerate result, such as a coerced value
   or a skipped `.meas`. Read `observations`, `warnings`, `failures` and
   `completeness` before trusting a number.
-- Paths must lie in the sandbox; a refused path names the config line that
-  widens it.
 
 ## Python or tools
 
@@ -48,7 +46,7 @@ compares circuits; `plot_waveform` draws a chart; `run_code` runs Python.
 |-|-|-|
 | Cost | loops, decisions and trace math in one call; far fewer tokens over many steps | one step per call |
 | Results | complete: every row, numpy arrays, no cursors | structured replies, paged and budgeted |
-| Authority | `run_code` has the server's own file and process authority, outside the sandbox | paths confined to the sandbox |
+| Authority | `run_code` has the server's own file and process authority | a path outside `[security] allowed_paths` is refused when that is set |
 | Long jobs | owned by the worker, and stopped by a worker restart unless submitted with `detach=True` | owned by the server |
 | Limits | 60 s per snippet by default (600 at most), one snippet at a time | per-tool caps |
 | Charts | HTML chart files from the `plot` recipe | `plot_waveform`: interactive, or an inline PNG |
