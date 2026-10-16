@@ -16,13 +16,18 @@ from pathlib import Path
 from ltspice_mcp.lib.asc_document import AscDocument
 
 TESTS = Path(__file__).parent
-SUITE_SHEETS = sorted(TESTS.rglob("*.asc"))
-SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"))
 
 
 def suite_name(path: Path) -> str:
     """A file of the suite by its path under ``tests/``: a parametrized test's id."""
     return path.relative_to(TESTS).as_posix()
+
+
+# In the order of their names as text, which is one order on every platform. A
+# path's own order ignores case on Windows and not elsewhere, and a record that
+# keeps the first sheet to show something would keep a different one.
+SUITE_SHEETS = sorted(TESTS.rglob("*.asc"), key=suite_name)
+SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"), key=suite_name)
 
 
 def formatted(doc: AscDocument) -> AscDocument:

@@ -57,7 +57,7 @@ from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
     OpenWindows,
-    ResultsNotLookedFor,
+    Shown,
     WindowsUnavailable,
     results_beside,
 )
@@ -1047,7 +1047,7 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
             "Also open the run in the user's LTspice window (26.1+), started if "
             "none is open, with these traces drawn; writes a .plt beside the results file. A sheet's "
             "run is opened from the sheet, so a click on a net plots it: its "
-            "results replace those beside the sheet, reopening their plot."
+            "results replace those beside the sheet, reopening what is open."
         ),
     )
     annotate: bool = Field(
@@ -1087,11 +1087,13 @@ _IMAGE_SCHEMA: dict[str, Any] = {
 }
 
 
-_ALREADY_OPEN_NOTE = (
-    "A results file LTspice already had open keeps the traces it was showing; "
-    "close it there and ask again to change them."
-)
 _TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
+_ALONE_NOTE = (
+    "The plot is not tied to the sheet, so clicking a net there does not plot it: "
+    "LTspice opened the sheet before it had results and has unsaved changes to it, "
+    "so the sheet was not closed and reopened. After the user saves or closes it in "
+    "LTspice, showing the run again ties the plot."
+)
 _BY_HAND_NOTE = (
     "The results are beside the sheet: View > Visible Traces on it in LTspice opens "
     "them, and a click on a net then plots it."
@@ -1102,8 +1104,12 @@ _REPLACE_NOTE = (
     "them go too."
 )
 _REOPENED_NOTE = (
-    "LTspice had a plot of the sheet's results open, which was closed and opened again "
-    "to show these; traces added to it by hand were not kept."
+    "LTspice already had a plot of these results open; it was closed and reopened to "
+    "show the current results, and traces added to it by hand were lost."
+)
+_SHEET_REOPENED_NOTE = (
+    "LTspice opened the sheet before it had results and only looks for results when "
+    "it opens a sheet, so the sheet was closed and reopened."
 )
 
 
@@ -1213,7 +1219,29 @@ def _show_alone(
                 "plot settings beside it name them."
             )
         return
-    report.update(shown_in_window(shown), note=left_alone or _ALREADY_OPEN_NOTE)
+    _say_shown(report, shown, left_alone)
+
+
+def _say_shown(report: dict[str, Any], shown: Shown, *said: str | None) -> None:
+    """Fill in ``report`` for results that were shown: the window, what was
+    closed and opened again to show them, and a note of ``said`` and of that."""
+    report.update(shown_in_window(shown))
+    if shown.reopened:
+        report["reopened"] = True
+    if shown.sheet_reopened:
+        report["sheet_reopened"] = True
+    note = " ".join(
+        filter(
+            None,
+            (
+                *said,
+                _REOPENED_NOTE if shown.reopened else None,
+                _SHEET_REOPENED_NOTE if shown.sheet_reopened else None,
+            ),
+        )
+    )
+    if note:
+        report["note"] = note
 
 
 def _place_beside_sheet(sheet: Path, results: Path, log: Path | None) -> None:
@@ -1247,7 +1275,10 @@ def _show_from_sheet(
     settings that name ``panes``, and the sheet's own command opens them
     (``OpenWindows.results_from_sheet``). Nothing is written until a window is
     known that can show them, and until then the reply names the run's own
-    results and no sheet.
+    results and no sheet. ``tied`` in the reply says whether the plot is tied
+    to the sheet: it is not where the window holds a sheet with changes that
+    are not in the file and knows of no results for it, and the results beside
+    the sheet are then opened on their own.
     """
     beside = results_beside(sheet)
     left_alone: str | None = None
@@ -1260,13 +1291,6 @@ def _show_from_sheet(
 
     try:
         shown = windows.results_from_sheet(sheet, place)
-    except ResultsNotLookedFor as error:
-        report["reason"] = str(error)
-        report["note"] = (
-            f"Close {sheet.name} in LTspice and ask again: it is then opened with these "
-            "results, which are beside it now."
-        )
-        return
     except BridgeError as error:
         report["reason"] = str(error)
         # The reply names the sheet once the results are beside it.
@@ -1276,10 +1300,8 @@ def _show_from_sheet(
     except OSError as error:
         report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
         return
-    if shown.reopened:
-        report["reopened"] = True
-    said = (_TIED_NOTE, left_alone, _REOPENED_NOTE if shown.reopened else None)
-    report.update(shown_in_window(shown), note=" ".join(filter(None, said)))
+    report["tied"] = shown.tied
+    _say_shown(report, shown, _TIED_NOTE if shown.tied else _ALONE_NOTE, left_alone)
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
 
@@ -1287,7 +1309,8 @@ def _show_from_sheet(
 def _ltspice_line(report: Mapping[str, Any]) -> str:
     if report["shown"]:
         how = "LTspice was started, and it is opened there" if report.get("started") else "Opened"
-        return f"{how} in LTspice {report['version']} (process {report['pid']}). {report['note']}"
+        where = f"{how} in LTspice {report['version']} (process {report['pid']})."
+        return f"{where} {report['note']}" if "note" in report else where
     return f"Not shown in LTspice: {report['reason']}. " + str(report.get("note", ""))
 
 
@@ -1346,15 +1369,30 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                     "reopened": {
                         "type": "boolean",
                         "description": (
-                            "LTspice had a plot of the sheet's results open, which was "
-                            "closed and opened again; traces added by hand were not kept."
+                            "LTspice already had a plot of these results open; it was "
+                            "closed and reopened, and traces added to it by hand were lost."
+                        ),
+                    },
+                    "sheet_reopened": {
+                        "type": "boolean",
+                        "description": (
+                            "LTspice opened the sheet before it had results, so the "
+                            "sheet was closed and reopened to tie the plot to it."
                         ),
                     },
                     "sheet": {
                         "type": "string",
                         "description": (
-                            "The sheet the results were opened from and put beside, "
-                            "when the run is a sheet's: the plot is tied to it."
+                            "The sheet the results were put beside, when the run is a sheet's."
+                        ),
+                    },
+                    "tied": {
+                        "type": "boolean",
+                        "description": (
+                            "With sheet: whether the plot is tied to the sheet, so "
+                            "clicking a net there plots it. False when the sheet has "
+                            "unsaved changes in LTspice and could not be reopened; "
+                            "note says more."
                         ),
                     },
                     "differs_from_file": {

@@ -45,17 +45,22 @@ When they want to plot nets by clicking the sheet in LTspice, show them a run
 of the sheet: `plot_waveform(job_id=..., signals=[...], in_ltspice=true)` for a
 job that ran an `.asc`. The run's results are put beside the sheet under its
 name, replacing the ones there, and opened from the sheet, which is what makes
-LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, and
-a click on a net there plots it. Results beside a sheet of the same name,
-which is what a run in LTspice leaves, open the same way by `raw_file`. A plot
-of the sheet's results that LTspice already has open is closed and opened
-again, since an open plot goes on showing the run it read: the block says
-`reopened: true`, and traces the user added to that plot by hand are gone, so
-say so if they had been working in it. One reply asks something of the user.
-LTspice had the sheet open before it had any results, and looks for them only
-as it opens a sheet: they close the sheet there, and you ask again, since the
-results are beside it now. A run of a netlist has no sheet to tie to and opens
-on its own, as before.
+LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, says
+`tied: true`, and a click on a net there plots it. Results beside a sheet of
+the same name, which is what a run in LTspice leaves, open the same way by
+`raw_file`. LTspice reads a plot only when it opens it, so if a plot of these
+results is already open it is closed and reopened: the block says
+`reopened: true`. Traces the user added to that plot by hand are lost, so tell
+them if they had been working in it. LTspice also looks for a sheet's results
+only when it opens the sheet, so a sheet it opened before it had results is
+closed and reopened too (`sheet_reopened: true`), which clears its undo
+history in LTspice. This is done only when the sheet in LTspice matches the
+file. If it has changes that are not in the file, the sheet stays open and the
+plot opens separately: the block says `tied: false` and
+`differs_from_file: true`. Tell the user that clicking nets will work after
+they save or close the sheet in LTspice and you show the run again. A
+netlist's run has no sheet to tie to and opens as a separate plot; it is also
+closed and reopened if it was already open.
 
 LTspice ships an MCP server of its own, which a session may have beside this
 one (its tools include `set_design_content` and `start_simulation`). It works
@@ -184,8 +189,14 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   is refused rather than silently merging it; `inspect(kind="net")` at a point
   on a wire traces that wire (`snapped_to_wire`).
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires,
-  pin collisions, and wire junction overlaps. Non-blocking warnings (long runs,
-  bbox crossings) should still be addressed.
+  pin collisions, and wire junction overlaps. Read its warnings too (a crossed
+  wire, a junction made along the route). It does not report a route through
+  a part; that appears in the sheet findings below.
+- **Keep wires short; nothing reports wire length.** In LTspice's own example
+  schematics 50% of wire segments are 32 units or shorter, 90% are 192 or
+  shorter, and about 3% exceed 400. A long wire is not an error, but if it
+  only carries a signal across the sheet, a net label at each end is easier
+  to read.
 - **Read the `wiring` profile `edit_schematic` returns.** It reports
   `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only`
   high with `wire_segments` near zero means you tagged pins with net-labels
@@ -207,6 +218,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,
   and no ground flag is shared or reached by a long wire. Once several ground
   labels exist, the `wire_pins` op with `net:0` is ambiguous and errors.
+- **A label or ground flag at a crossing joins the two wires.** Place it on
+  the one wire you mean. `add_net_label` refuses it when both wires are on
+  named nets, and otherwise warns that it joined two nets.
 - **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins
   ties them together — the netlist merges same-name labels into one net
   (correct, not a short), and no routing is needed. Wire nearby pins with the

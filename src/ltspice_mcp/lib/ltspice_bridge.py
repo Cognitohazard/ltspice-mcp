@@ -381,8 +381,12 @@ class BridgeSession:
         None when the window has no document, which the bridge reports as a
         refusal like any other.
         """
+        return self._path_or_none("get_active_design_path")
+
+    def _path_or_none(self, tool: str) -> str | None:
+        """The path ``tool`` answers with, asked with no arguments; None where it refuses."""
         try:
-            path = self.call("get_active_design_path").get("path")
+            path = self.call(tool).get("path")
         except BridgeError:
             return None
         return path if isinstance(path, str) and path.strip() else None
@@ -423,10 +427,22 @@ class BridgeSession:
         bridge has no call that only opens one. LTspice loads the plot
         settings file beside it as it does, and never again while it stays
         open, so a results file the window already had keeps the traces it
-        was showing; nothing the bridge answers tells the two cases apart.
+        was showing; ``results_in_front`` is how a caller tells beforehand.
         """
         self.call("get_raw_info", path=path)
         self.bring_to_front(path)
+
+    def results_in_front(self) -> str | None:
+        """The path of the results file whose plot is in front of the attached
+        window's other plots, or None.
+
+        A sheet in front of them all changes nothing in that: it is the plot
+        that was in front last. None when the window has no plot open, which
+        the bridge reports as a refusal. Putting a results file in front
+        first (``bring_to_front``, which does nothing with one that is not
+        open) and asking this says whether the window has that file open.
+        """
+        return self._path_or_none("get_raw_info")
 
     def close(self) -> None:
         """End the bridge. It leaves the LTspice window it was attached to running."""

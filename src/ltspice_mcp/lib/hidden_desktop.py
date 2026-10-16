@@ -56,7 +56,7 @@ _STARTF_USESTDHANDLES = 0x00000100
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 _DUPLICATE_SAME_ACCESS = 0x00000002
 # The window class of a dialog box.
-_DIALOG_CLASS = "#32770"
+DIALOG_CLASS = "#32770"
 
 DIALOG_LOOK_S = 0.5
 """How often ``HiddenDesktop.run`` looks for a message box while the program
@@ -119,6 +119,11 @@ class _ProcessInformation(ctypes.Structure):
 _NEEDS_WINDOWS = "A desktop of its own for a program needs Windows"
 _WM_COMMAND = 0x0111
 _WM_CLOSE = 0x0010
+_WM_INITMENUPOPUP = 0x0117
+# GetMenuState's answer for an item a menu does not have, and the bits of an item turned off.
+_NO_SUCH_ITEM = 0xFFFFFFFF
+_MF_TURNED_OFF = 0x0001 | 0x0002
+_SMTO_ABORTIFHUNG = 0x0002
 
 
 @cache
@@ -225,6 +230,25 @@ def _user() -> Any:
             wintypes.DWORD,
         ),
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
+        "IsWindow": ([wintypes.HWND], wintypes.BOOL),
+        "IsWindowEnabled": ([wintypes.HWND], wintypes.BOOL),
+        "GetMenu": ([wintypes.HWND], wintypes.HMENU),
+        "GetMenuItemCount": ([wintypes.HMENU], ctypes.c_int),
+        "GetMenuItemID": ([wintypes.HMENU, ctypes.c_int], wintypes.UINT),
+        "GetSubMenu": ([wintypes.HMENU, ctypes.c_int], wintypes.HMENU),
+        "GetMenuState": ([wintypes.HMENU, wintypes.UINT, wintypes.UINT], wintypes.UINT),
+        "SendMessageTimeoutW": (
+            [
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+                wintypes.UINT,
+                wintypes.UINT,
+                ctypes.POINTER(ctypes.c_size_t),
+            ],
+            ctypes.c_ssize_t,
+        ),
         "PostMessageW": (
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
             wintypes.BOOL,
@@ -302,6 +326,64 @@ def post_close(window: int) -> None:
     """
     if not _user().PostMessageW(window, _WM_CLOSE, 0, 0):
         raise _last_error()
+
+
+def window_exists(window: int) -> bool:
+    """Whether ``window`` is still a window: False once it has closed."""
+    return bool(_user().IsWindow(window))
+
+
+def takes_input(window: int) -> bool:
+    """Whether a person could use ``window`` now.
+
+    A program showing a box that has to be answered first turns its other
+    windows off for as long, and this is False of them.
+    """
+    return bool(_user().IsWindowEnabled(window))
+
+
+def _menu_holding(menu: int, command: int) -> int | None:
+    """The menu, ``menu`` or one inside it, that has the item sending ``command``."""
+    user = _user()
+    for index in range(user.GetMenuItemCount(menu)):
+        if user.GetMenuItemID(menu, index) == command:
+            return menu
+        inner = user.GetSubMenu(menu, index)
+        if inner:
+            found = _menu_holding(inner, command)
+            if found is not None:
+                return found
+    return None
+
+
+def menu_item_enabled(window: int, command: int, timeout_s: float = 2.0) -> bool | None:
+    """Whether the item of ``window``'s menu bar that sends ``command`` is
+    enabled, as the window would show it on opening that menu.
+
+    None when its menu bar has no such item, or the window does not answer
+    within ``timeout_s``. A window works out which items of a menu are
+    enabled as the menu opens, so the menu holding the item is told it is
+    opening and nothing is shown. Sent with a time limit, so a window that
+    has stopped answering does not hold the caller.
+    """
+    user = _user()
+    bar = user.GetMenu(window)
+    menu = _menu_holding(bar, command) if bar else None
+    if menu is None:
+        return None
+    answer = ctypes.c_size_t(0)
+    if not user.SendMessageTimeoutW(
+        window,
+        _WM_INITMENUPOPUP,
+        menu,
+        0,
+        _SMTO_ABORTIFHUNG,
+        int(timeout_s * 1000),
+        ctypes.byref(answer),
+    ):
+        return None
+    state = user.GetMenuState(menu, command, 0)
+    return state != _NO_SUCH_ITEM and not state & _MF_TURNED_OFF
 
 
 def _last_error() -> OSError:
@@ -498,7 +580,7 @@ class HiddenDesktop:
         for window in self.windows(pid):
             title = window_text(window)
             if (
-                window_class(window) == _DIALOG_CLASS
+                window_class(window) == DIALOG_CLASS
                 and _user().IsWindowVisible(window)
                 and title != ignore
             ):
