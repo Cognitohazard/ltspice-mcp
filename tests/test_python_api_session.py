@@ -384,6 +384,26 @@ async def test_server_lifespan_and_api_are_mutually_exclusive(
 
 
 @pytest.mark.asyncio
+async def test_server_lifespan_puts_back_the_instructions_it_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The instructions name the session's sandbox, and the Server outlives the
+    session, so a later session must not be served this one's."""
+
+    async def bootstrap(**kwargs: object) -> BootstrapResult:
+        del kwargs
+        config = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path], persist_jobs=False)
+        return _boot_result(SessionState.create(config, {}))
+
+    monkeypatch.setattr(server_module, "bootstrap_server_engine", bootstrap)
+    before = server_module.server.instructions
+    async with server_module.server_lifespan(server_module.server):
+        assert "Paths must lie in the sandbox" in (server_module.server.instructions or "")
+    assert server_module.server.instructions == before
+
+
+@pytest.mark.asyncio
 async def test_server_bootstrap_failure_releases_shared_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
