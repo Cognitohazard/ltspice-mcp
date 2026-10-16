@@ -43,6 +43,14 @@ exports: LTspice emits ``0`` for ground). ``0`` and ``GND`` — and the common
 ``GND!`` variant — are treated as the same net. All net and reference matching
 is case-insensitive, per SPICE.
 
+A transistor drawn with a three-pin symbol is exported with four nodes: a BJT's
+substrate at ``0``, a MOSFET's bulk at its source. A three-node ``Q`` card is
+read with its substrate at ``0``, because both LTspice builds run it as that
+card. A three-node ``M`` card is left as written: with a level-1 model LTspice
+26 refuses it and LTspice XVII runs it with the bulk at ground, so it is not the
+card the export wrote, and the arity error that follows says to write the bulk.
+Both are recorded (``deck/bjt_three_node``, ``deck/mos_three_node``).
+
 Canonical labeling / limitations
 --------------------------------
 The structural equivalence verdict uses 1-dimensional Weisfeiler-Leman color
@@ -1168,11 +1176,28 @@ def _coerce_capturing_arity(src: NetlistGraph | str | Path) -> _FlattenOutcome:
     """
     graph = src if isinstance(src, NetlistGraph) else parse_netlist_graph(src)
     try:
-        return _FlattenOutcome(flat=flatten_graph(graph), arity_errors=[], graph=graph)
+        flat, arity = flatten_graph(graph), []
     except PortArityMismatch:
         # Re-flatten skipping the offending instances so the rest still compares.
         flat, arity = _flatten_lenient(graph)
-        return _FlattenOutcome(flat=flat, arity_errors=arity, graph=graph)
+    return _FlattenOutcome(flat=_with_bjt_substrate(flat), arity_errors=arity, graph=graph)
+
+
+def _with_bjt_substrate(flat: FlatNetlist) -> FlatNetlist:
+    """Give every three-node ``Q`` card its substrate at ground.
+
+    Both LTspice builds run ``Q1 c b e QN`` as ``Q1 c b e 0 QN``, the card the
+    export writes for a three-pin transistor symbol, so the two compare equal.
+    Applied after flattening, where ``0`` inside a subcircuit is already the
+    global ground it is to the simulator.
+    """
+    if not any(c.type_letter == "Q" and len(c.nodes) == 3 for c in flat.components):
+        return flat
+    components = tuple(
+        replace(c, nodes=(*c.nodes, _GROUND)) if c.type_letter == "Q" and len(c.nodes) == 3 else c
+        for c in flat.components
+    )
+    return replace(flat, components=components, nets=flat.nets | {_GROUND})
 
 
 def _flatten_lenient(graph: NetlistGraph) -> tuple[FlatNetlist, list[ArityError]]:
@@ -1285,21 +1310,36 @@ def _type_signature(comp: FlatComponent) -> str:
     return f"{comp.type_letter}:{comp.model.lower()}" if comp.model else comp.type_letter
 
 
+# Why a three-node M card does not match the four-node card an export writes,
+# and what to write instead. Recorded: deck/mos_three_node,
+# deck/vdmos_three_node and deck/vdmos_bulk_elsewhere.
+_THREE_NODE_MOSFET = (
+    " A three-node M card is not the card an export writes for a three-pin MOSFET"
+    " symbol, which puts the bulk at the source: with a level-1 model LTspice 26"
+    " refuses it and LTspice XVII puts the bulk at ground. Write the bulk as the"
+    " fourth node, at the source to match the export. A VDMOS card runs the same"
+    " either way, since LTspice requires its bulk to be its source."
+)
+
+
 def _diff_matched_pair(
     rc: FlatComponent, cc: FlatComponent, rtol: float, result: GraphComparison
 ) -> None:
     """Populate retype / arity / value / param diffs for one matched pair."""
     if len(rc.nodes) != len(cc.nodes):
+        detail = (
+            f"{rc.ref} has {len(rc.nodes)} terminal(s) in the reference "
+            f"({', '.join(rc.nodes)}) and {len(cc.nodes)} in the candidate "
+            f"({', '.join(cc.nodes)})."
+        )
+        if rc.type_letter == "M" and {len(rc.nodes), len(cc.nodes)} == {3, 4}:
+            detail += _THREE_NODE_MOSFET
         result.arity_errors.append(
             ArityError(
                 ref=rc.ref,
                 reference_arity=len(rc.nodes),
                 candidate_arity=len(cc.nodes),
-                detail=(
-                    f"{rc.ref} has {len(rc.nodes)} terminal(s) in the reference "
-                    f"({', '.join(rc.nodes)}) and {len(cc.nodes)} in the candidate "
-                    f"({', '.join(cc.nodes)})."
-                ),
+                detail=detail,
             )
         )
     if _type_signature(rc).lower() != _type_signature(cc).lower():

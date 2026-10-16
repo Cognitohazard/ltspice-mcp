@@ -280,6 +280,14 @@ recording that showed it.
   `detail` naming the nodes and ports, and `side` for that case; when a node
   is the subcircuit's own name, the detail says the card names it twice, as a
   symbol that gives the name as both its value and its model does.
+- The `compare` check of `verify_circuit` reported an arity error for a
+  reference that writes a transistor with three nodes, because the export of
+  a three-pin symbol writes four. Both LTspice builds run `Q1 c b e QN` as
+  `Q1 c b e 0 QN`, so a three-node `Q` card now compares equal to the
+  four-node card with its substrate at `0`. A three-node `M` card still does
+  not: with a level-1 model LTspice 26 refuses it and LTspice XVII runs it
+  with the bulk at ground, where the export puts the bulk at the source. Its
+  arity error now says so and says to write the bulk as the fourth node.
 - Two ways an 8-bit deck runs differently from how the server reads it are
   warnings now. Byte 0x85 ends the line on LTspice 24 and later, so what
   follows it is a card (`byte-85-ltspice`); and a node named with a byte from
