@@ -229,8 +229,8 @@ async def bootstrap_library_engine(
 
     Overrides are applied after environment and TOML values, and every name
     must be a ``ServerConfig`` field the library exposes. Supplying
-    ``working_dir`` makes the directory the default sandbox root and selects
-    its TOML unless ``config_path`` is explicit.
+    ``working_dir`` makes it the directory relative paths are taken from and
+    selects its TOML unless ``config_path`` is explicit.
 
     An explicit ``allowed_paths`` pins the sandbox for the session: it outranks
     the TOML here, so an edit to the TOML later must not replace it.

@@ -445,7 +445,7 @@ recording that showed it.
   as outside the allowed directories.
 - `inspect` model queries refused a `libs` file inside the detected
   simulator's own model library (LTspice's `lib/cmp/standard.bjt`, say) under
-  the default sandbox, although staging, the include resolver and the
+  a sandbox that left that library out, although staging, the include resolver and the
   hierarchy reader all read that library. These reads now admit it too, and
   `verify_circuit`'s compare reads an include into any detected simulator's
   library rather than only the default simulator's, so the two agree on every
@@ -661,9 +661,6 @@ recording that showed it.
   appeared or changed, which a server session in the same directory causes by
   writing its default config on its first tool call. A refusal in such a
   session names the argument rather than the file.
-- On Windows the default sandbox includes Claude Code's scratch directory,
-  `%TEMP%\claude`, as it already did on Linux and macOS
-  (`<tempdir>/claude-<uid>`).
 - A micro-sign scale suffix (`23µ`) no longer changes value depending on the
   LTspice version that reads the deck. Case decks, and staged decks whose
   references were rewritten, are written as UTF-8, so a `µ` reached the
@@ -1097,6 +1094,25 @@ recording that showed it.
 
 ### Changed
 
+- There is no sandbox unless `[security] allowed_paths` (or
+  `LTSPICE_MCP_ALLOWED_PATHS`, or `Api(allowed_paths=...)`) is set. An unset
+  list used to mean the working directory and Claude Code's scratch directory,
+  so a deck an agent wrote anywhere else was refused, and the refusal's remedy
+  was an edit to the server's security setting that agents rightly decline to
+  make. Now a path may name any file the server process can open, and a
+  relative path is taken from the working directory. Setting the list confines
+  the server as before; set `[tools] run_code = false` as well to keep a client
+  to those directories, since `run_code` is not confined by it. With it:
+  - a bare string in `allowed_paths` names one directory instead of being
+    ignored, so a slip in the key still confines the server;
+  - with no sandbox, a run stages every file its deck reaches, wherever it is;
+  - the server instructions no longer mention the sandbox, which is re-read
+    from the config file on every call; a refused path's guidance says what to
+    change, with a sandbox or without one;
+  - `inspect` capabilities and the `spice://config` resource report
+    `allowed_paths` as null when there is no sandbox;
+  - the Claude Desktop extension's folder is optional and empty by default, so
+    it runs with no sandbox unless one is picked.
 - `wire_pins` no longer warns about routes over 400 units ("Long wire run
   ..."). The threshold was arbitrary: 29% of LTspice's own example sheets have
   a wire that long. The guide's wiring section now gives the measured
@@ -1182,7 +1198,7 @@ recording that showed it.
   of was accepted whichever build ran. On WSL a server running XVII now finds
   XVII's library under `%USERPROFILE%`; only LTspice 24's location was probed
   before, so a transistor schematic exported by XVII could not be staged under
-  the default sandbox.
+  a sandbox that left XVII's library out.
 - On WSL, cancelling a case also matches the Windows process by the file name
   of the executable its runner launched, so a copy of LTspice under another
   name is stopped; before, only `LTspice.exe`, `XVIIx64.exe` and `scad3.exe`
@@ -1231,7 +1247,7 @@ recording that showed it.
   the guide.
 - The server instructions send the model to the guide first, say when to use
   Python and when the tools (Python for anything past a single call: loops and
-  complete results in one call; tools for one sandboxed step, charts, and jobs
+  complete results in one call; tools for one step per call, charts, and jobs
   the server owns), and keep the rules that cost a wrong answer. The per-tool
   map they carried moved to the guide's core.
 - `spice://guide` returns the guide's core and index rather than the whole

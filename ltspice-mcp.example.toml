@@ -38,11 +38,13 @@
 # executables = {xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"}
 
 [security]
-# Paths accessible to the server (sandbox). Left unset, the default is the
-# working directory plus the Claude Code scratch directory, where an agent
-# writes its throwaway decks: <tempdir>/claude-<uid> on Linux and macOS,
-# %TEMP%\claude on Windows. Set your own list to replace that default;
-# the server re-reads this list on the next call after you save the file:
+# Sandbox: the directories every path a tool is given must lie in. Unset
+# (the default), there is no sandbox and a path may name any file this
+# process can open. Set a list to confine the server to it; a relative
+# path is then taken from the list's first entry. run_code is not
+# confined by it: set [tools] run_code = false as well to keep a client
+# to these directories. The server re-reads this list on the next call
+# after you save the file:
 # allowed_paths = ["."]
 
 [simulation]
@@ -89,9 +91,10 @@
 # listing = "compact"
 # run_code = false removes the tool that runs a Python snippet with the engine
 # in scope (loops over runs, numpy on samples). The snippet has the server's
-# own file and process authority, not the sandbox above: permission it in
-# your client the way you would a shell, and turn it off when the server is
-# reachable by more than one trusted client, for example through a proxy.
+# own file and process authority, which allowed_paths does not confine:
+# permission it in your client the way you would a shell, and turn it off
+# when the server is reachable by more than one trusted client, for example
+# through a proxy.
 # run_code = true
 
 [schematic]

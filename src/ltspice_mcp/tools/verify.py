@@ -22,8 +22,8 @@ Checks by file kind:
   made on a text deck: it carries no geometry and no symbol library.
 
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
-connectivity engine (every include/lib open gated by ``safe_path`` so an in-deck
-include that escapes the allowed roots is denied and never read); ``structural_diff``
+connectivity engine (every include/lib open gated by ``safe_path``, so with a
+sandbox set an in-deck include that escapes it is denied and never read); ``structural_diff``
 lexes both decks and reports an added/removed/changed delta over the parsed cards,
 leaving out the boilerplate LTspice's netlister adds to every export. Both modes
 compare netlists: an ``.asc`` under test is compared as its export, so an ``.asc``

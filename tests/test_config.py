@@ -5,7 +5,6 @@ import logging
 import os
 import tempfile
 import tomllib
-import types
 from pathlib import Path
 
 import pytest
@@ -13,8 +12,6 @@ import pytest
 import ltspice_mcp.config as config_module
 from ltspice_mcp.config import (
     ServerConfig,
-    claude_scratch_root,
-    default_allowed_paths,
     generate_default_config,
 )
 
@@ -53,10 +50,14 @@ class TestServerConfig:
         monkeypatch.setattr(config_module.os, "cpu_count", lambda: None)
         assert ServerConfig().max_parallel_sims == 4
 
-    def test_allowed_paths_defaults_to_working_dir_and_scratch_root(self):
-        config = ServerConfig()
-        assert config.allowed_paths == default_allowed_paths(config.working_dir)
-        assert config.allowed_paths[0] == config.working_dir
+    def test_an_unset_or_empty_allowed_paths_is_no_sandbox(self, work_dir: Path):
+        assert ServerConfig().allowed_paths is None
+        assert ServerConfig(allowed_paths=[]).allowed_paths is None
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text("[security]\nallowed_paths = []\n")
+        assert ServerConfig.load(toml_path).allowed_paths is None
+        toml_path.write_text(f"[security]\nallowed_paths = ['{work_dir.as_posix()}']\n")
+        assert ServerConfig.load(toml_path).allowed_paths == [work_dir]
 
     def test_load_from_toml(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
@@ -148,38 +149,13 @@ class TestServerConfig:
         assert "analysis_budget_s" in content
         assert "result_set_ttl_hours" in content
 
-    def test_default_sandbox_includes_the_claude_scratch_root(self, work_dir: Path):
-        """Claude Code tells an agent to write throwaway files to its scratch
-        directory, outside the working directory; the default sandbox admits
-        it so a deck written there runs without a copy first."""
-        root = claude_scratch_root()
-        # Claude Code's layout: <tempdir>/claude-<uid>/... on POSIX, and
-        # %TEMP%\claude\<project>\<session>\scratchpad on Windows, where there
-        # is no uid to key it on.
-        leaf = "claude" if os.name == "nt" else f"claude-{os.getuid()}"
-        assert root == Path(tempfile.gettempdir()) / leaf
+    def test_the_generated_config_sets_no_sandbox(self, work_dir: Path):
+        """The file shows ``allowed_paths`` as a comment, so a server reading it
+        has no sandbox until someone writes the key."""
         path = work_dir / "generated.toml"
         generate_default_config(path)
-        # The generated file documents the default without pinning a machine-
-        # specific path, so the same default reaches the file-less library boot.
-        text = path.read_text()
-        assert "claude-<uid>" in text
-        assert "%TEMP%\\claude" in text
-        assert root in ServerConfig.load(path).allowed_paths
-        assert root in ServerConfig(working_dir=work_dir).allowed_paths
-
-    def test_windows_scratch_root_is_the_claude_folder_in_temp(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """The Windows branch, pinned from any platform: a native Windows session
-        keeps its scratchpad under %TEMP%\\claude, with no per-user suffix.
-
-        Only the ``os`` the config module sees is swapped: patching ``os.name``
-        itself would also switch pathlib's flavour and tempfile's candidates. A
-        namespace with no ``getuid`` also proves the branch never asks for one,
-        which Windows does not have."""
-        monkeypatch.setattr(config_module, "os", types.SimpleNamespace(name="nt"))
-        assert claude_scratch_root() == Path(tempfile.gettempdir()) / "claude"
+        assert '# allowed_paths = ["."]' in path.read_text()
+        assert ServerConfig.load(path).allowed_paths is None
 
     def test_analysis_budget_and_result_ttl_load_from_toml(
         self,
@@ -641,7 +617,6 @@ class TestSimulatorRemediation:
         cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
         remediation = simulator_remediation("ltspice", cfg)
         section, key = str(remediation["config_key"]).split(".")
-        import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             toml = Path(tmp) / "ltspice-mcp.toml"
@@ -956,7 +931,7 @@ class TestLoadCoversEveryKey:
             "ngbehavior = 42\n"
             'enabled = "ngspice"\n'
             "[security]\n"
-            'allowed_paths = "/tmp/scalar"\n'
+            "allowed_paths = [1, 2]\n"
             "[simulation]\n"
             "max_parallel = 0\n"
             "max_experiment_cases = 99999999\n"
@@ -984,8 +959,8 @@ class TestLoadCoversEveryKey:
         defaults = ServerConfig(working_dir=config.working_dir)
         assert config.ngbehavior is None
         assert config.enabled_simulators == []
-        # A scalar string must NOT be expanded character-wise into paths.
-        assert config.allowed_paths == default_allowed_paths(config.working_dir)
+        # A list that is not of strings is dropped, like any rejected value.
+        assert config.allowed_paths is None
         assert config.symbol_paths == []
         assert config.max_parallel_sims == defaults.max_parallel_sims
         assert config.max_experiment_cases == defaults.max_experiment_cases

@@ -5,7 +5,8 @@ and the circuits it can reach. Each query names one supported kind:
 
 * ``capabilities`` — detected simulators + dialects and whether a run can
   select each (``selectable``, with the ``refusal`` when this host cannot run
-  that family), exporter presence, job persistence, allowed roots, the active
+  that family), exporter presence, job persistence, the sandbox
+  (``allowed_paths``, null when none is set), the active
   profile and which of the two tool listings this session was served, the
   configured limits, the linter version, and ``diagnostics``: the startup
   notes (bad configured simulator path, a requested engine that fell back, WSL
@@ -47,8 +48,9 @@ than a hunt.
   in the given ``libs``, or in the detected simulators' own model libraries
   when ``libs`` is omitted; ``enumerate`` lists every model defined in the
   given ``libs``, narrowed to the names containing ``query`` when one is
-  given. A ``libs`` file may sit inside the sandbox or inside one of those
-  simulator libraries, so every ``source_path`` a search returns reads back.
+  given. With a sandbox set, a ``libs`` file may sit inside it or inside one
+  of those simulator libraries, so every ``source_path`` a search returns
+  reads back.
 * ``reference`` — the tools' own branch vocabulary (``tools/reference_index.py``):
   a plain-words ``query`` returns the closest analysis recipes, schematic ops,
   variation kinds, checks and job actions with their full field tables, and no
@@ -69,11 +71,11 @@ than a hunt.
   the guide is about this server.
 * ``open_in_ltspice`` — the documents open in the LTspice windows on this
   machine, and which is in front in its window: where a request about "this
-  circuit" starts when no path was given. A sheet inside the sandbox comes
+  circuit" starts when no path was given. A sheet the server may read comes
   with its ``sha256`` and with whether the window's copy differs from the file
   (unsaved changes, or a file that changed after it was opened), which is what
-  ``edit_schematic`` refuses on. A document outside the sandbox is listed and
-  not read. It is asked of LTspice itself, through the bridge it ships from
+  ``edit_schematic`` refuses on. A document outside the sandbox, when one is
+  set, is listed and not read. It is asked of LTspice itself, through the bridge it ships from
   26.1; where that cannot be reached the query fails, saying why, since
   "nothing is open" would be a different answer.
 
@@ -498,9 +500,8 @@ CapabilityField: TypeAlias = Literal[
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
     reported builds and raw dialects, and which a run can select; the named
-    executables, whether the .asc exporter is available, job persistence,
-    allowed roots, the configured
-    limits, and the linter version."""
+    executables, whether the .asc exporter is available, job persistence, the
+    sandbox, the configured limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -1138,7 +1139,7 @@ def _do_capabilities(
         "diagnostics": list(state.diagnostics),
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
-        "allowed_paths": [str(p) for p in state.allowed_paths()],
+        "allowed_paths": state.sandbox_report(),
         # One surface, and no setting selects it; the key stays because a
         # client reads it to know which one it is talking to.
         "tool_profile": "consolidated",
@@ -1939,7 +1940,8 @@ def _design_kind(spelled: str) -> str:
 
 def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
     """One open document as the reply lists it; ``resolved`` is its path where
-    the sandbox admits it. Reads the file: call off the loop."""
+    the server may read it, None outside the sandbox. Reads the file: call off
+    the loop."""
     row: dict[str, Any] = {
         "path": design.path,
         "kind": _design_kind(design.path),
@@ -2038,11 +2040,18 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         if q.simulator == "ngspice"
         else None,
     )
+    sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(
         q.path,
-        state.allowed_paths(),
+        sandbox,
         profile,
-        simulator_roots=simulator_library_roots(state.available_simulators.get(q.simulator)),
+        # Roots that widen a sandbox; with none they would go unused.
+        simulator_roots=(
+            ()
+            if sandbox is None
+            else simulator_library_roots(state.available_simulators.get(q.simulator))
+        ),
+        relative_to=state.config.working_dir,
     )
     selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
     if selected and not any(
@@ -2502,7 +2511,8 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
                     "type": "boolean",
                     "description": (
                         "The window's copy is not the file's: unsaved changes, or a "
-                        "file that changed after it was opened. A sheet in the sandbox only."
+                        "file that changed after it was opened. Only for a sheet the "
+                        "server may read."
                     ),
                 },
                 "difference": {"type": "string"},
