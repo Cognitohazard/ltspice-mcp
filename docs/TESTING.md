@@ -322,6 +322,41 @@ and holds the thinking plane constant; it does not represent authoring from
 a blank sheet, topology choice, or long-horizon context growth, which need
 the instruments above.
 
+### The schematic build benchmark
+
+Authoring from a blank sheet has a model-free instrument of its own:
+`tests/test_build_benchmark.py`. Eleven reference netlists
+(`tests/fixtures/build_benchmark/`, from a 3-part filter to a 153-part line)
+are each drawn through `edit_schematic` by scripted builds
+(`tests/_benchmark_builds.py`): a `labelled` build, parts on a grid joined by
+labels, and a `drawn` build, the readable drawing a person makes with the
+present ops. `tests/_build_benchmark.py` scores a build on equivalence with
+the netlist, on cost (calls, ops, refusals, the coordinates the caller wrote,
+the part origins it worked out from a pin, reply size) and on the drawing (each sheet rule's findings, crossings, bends,
+wire length, pins reached only by a label). The scores and the sheets are
+held to a record, so a change to how ops build shows as a diff.
+
+- **Re-recording.** `LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1` writes
+  `tests/fixtures/build_benchmark_record.json` and the built sheets, which
+  are inputs of the LTspice recordings
+  (`tests/fixtures/ltspice_recorded/inputs/benchmark/`). A changed sheet needs
+  its export recorded again (`--only 'benchmark/*'`, *Recording again*
+  below), and the four records that read every sheet under `tests/` gain or
+  change its entries.
+- **Judging a new op.** Write a third build of a circuit with it, drawing
+  the same thing. If it helps the caller, the record shows fewer
+  coordinates, origins worked out from a pin, ops or refusals for the same
+  drawing measures.
+- **A run with a model.** `uv run python scripts/build_benchmark.py score
+  SHEET NETLIST` scores a sheet a model built, with the same functions;
+  `table` prints the record. Such runs are paired as above.
+
+The equivalence is the sheet's nets read offline, so it is held to LTspice:
+both builds' export of every benchmark sheet is recorded
+(`build-benchmark-export`), and the scorer must net each sheet as the export
+does, pin for pin. That is how it learned that LTspice exports a transistor
+drawn with three pins with four nodes.
+
 ## Privacy checks before pushing
 
 Enable the repository hooks once per clone with
@@ -492,6 +527,7 @@ These run everywhere, with no LTspice:
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes when it saves one: its line endings, encoding and record order, and that the lossless document reads it, writes it back byte for byte, and spells a record as the build does|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
+|`test_build_benchmark.py`|the build benchmark's reading of a sheet's nets, pin for pin, on every sheet it builds, the fourth node of a transistor drawn with three pins, and that each export is the benchmark's reference circuit|
 |`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
 
 They go through the code a live result goes through: the contained decoder,

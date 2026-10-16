@@ -1,0 +1,894 @@
+{
+ "common_source_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 14,
+   "ops": 17,
+   "origins_from_pins": 5,
+   "refused": 0,
+   "reply_bytes": 2528
+  },
+  "digests": [
+   "58d235ff0701aa0c081f3b48f79aa0dd9c74fb601ef80fb14bb8dabcb9eedbe9"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    20.0,
+    30.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 2,
+   "off_grid_points": 0,
+   "wire_length": 12.0,
+   "wires": 3
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ },
+ "common_source_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 10,
+   "ops": 16,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 3019
+  },
+  "digests": [
+   "7ae31635e8cea0d69901ee32586bc3864d2aabc8ba41aaf0551ac1ef60df8c93"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    18.5,
+    29.8
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 4,
+   "off_grid_points": 16,
+   "wire_length": 5.8,
+   "wires": 2
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [
+    "out"
+   ],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 2
+  }
+ },
+ "diff_pair_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 24,
+   "ops": 30,
+   "origins_from_pins": 8,
+   "refused": 0,
+   "reply_bytes": 3516
+  },
+  "digests": [
+   "c88321afee254ed6fcafabc866ec10d1d1d9bebd3f821d62fb7c72ec043d7c5a"
+  ],
+  "drawing": {
+   "bends": 2,
+   "crossings": 0,
+   "extent": [
+    34.0,
+    27.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 6,
+   "label_only_pins": 3,
+   "off_grid_points": 0,
+   "wire_length": 32.0,
+   "wires": 8
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ },
+ "diff_pair_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 16,
+   "ops": 30,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 6136
+  },
+  "digests": [
+   "40fef114bf33284bcf994ee6720cc2b87158a7bbb32129ecb39e662390f09257"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    73.0,
+    9.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 6,
+   "label_only_pins": 14,
+   "off_grid_points": 0,
+   "wire_length": 0.0,
+   "wires": 0
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 6
+  }
+ },
+ "nmos_mirror_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 20,
+   "ops": 21,
+   "origins_from_pins": 5,
+   "refused": 0,
+   "reply_bytes": 3245
+  },
+  "digests": [
+   "c4456e2cf09211f6f0e2a6ee7c5fae685f2e8650301e2d35c1686245485fbffc"
+  ],
+  "drawing": {
+   "bends": 1,
+   "crossings": 0,
+   "extent": [
+    22.0,
+    19.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 5,
+   "label_only_pins": 3,
+   "off_grid_points": 0,
+   "wire_length": 27.0,
+   "wires": 5
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ },
+ "nmos_mirror_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 10,
+   "ops": 21,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 4156
+  },
+  "digests": [
+   "eb8729a9d0120934d5b14d8f4383248fc7302cd8202119f189db780ffebac353"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    43.0,
+    9.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 5,
+   "label_only_pins": 9,
+   "off_grid_points": 0,
+   "wire_length": 0.0,
+   "wires": 0
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 3
+  }
+ },
+ "r2r_ladder_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 104,
+   "ops": 129,
+   "origins_from_pins": 51,
+   "refused": 0,
+   "reply_bytes": 10522
+  },
+  "digests": [
+   "fc625f04186d5657ed1f331f499cc2abe06bd9e3c13cd4000dac6b8732d5aabb"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    254.0,
+    12.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 26,
+   "label_only_pins": 0,
+   "off_grid_points": 0,
+   "wire_length": 226.0,
+   "wires": 50
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "r2r_ladder_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 102,
+   "ops": 129,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 11001
+  },
+  "digests": [
+   "d9a4b93f219dda17134843bed0ae7a2d47d3d63a9019474f4ceaaa3aa5ac7364"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    28.0,
+    314.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 26,
+   "label_only_pins": 2,
+   "off_grid_points": 153,
+   "wire_length": 468.5,
+   "wires": 49
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ },
+ "rc_lowpass_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 8,
+   "ops": 10,
+   "origins_from_pins": 3,
+   "refused": 0,
+   "reply_bytes": 1613
+  },
+  "digests": [
+   "30187c8ba89a435a2574ea11e0d3dd7a32f90ed3b34f514c28cd0346ada8ee6a"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    19.0,
+    5.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 2,
+   "label_only_pins": 0,
+   "off_grid_points": 0,
+   "wire_length": 10.0,
+   "wires": 2
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "rc_lowpass_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 6,
+   "ops": 10,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 2587
+  },
+  "digests": [
+   "0f1a1580d1511acfc1b1cbe01f0c77bdf7ff6cae7d45d48f7428cb384679d6e9"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    23.0,
+    6.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 2,
+   "label_only_pins": 4,
+   "off_grid_points": 0,
+   "wire_length": 0.0,
+   "wires": 0
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 2
+  }
+ },
+ "rectifier_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 10,
+   "ops": 11,
+   "origins_from_pins": 3,
+   "refused": 0,
+   "reply_bytes": 1612
+  },
+  "digests": [
+   "bc541fe802ebe82ec61face1d4e1ceb6f252e0aad6c95d0fc2bd756920a70a5e"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    19.0,
+    6.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 2,
+   "label_only_pins": 0,
+   "off_grid_points": 0,
+   "wire_length": 10.0,
+   "wires": 2
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "rectifier_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 6,
+   "ops": 10,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 2097
+  },
+  "digests": [
+   "304d87107f8eb92912a7d4dbfb0dcde7f8f3ee979d66932e8112ca8796a91853"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    15.5,
+    16.6
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 2,
+   "label_only_pins": 2,
+   "off_grid_points": 9,
+   "wire_length": 4.6,
+   "wires": 1
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [
+    "out"
+   ],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ },
+ "rlc_line_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 412,
+   "ops": 414,
+   "origins_from_pins": 153,
+   "refused": 0,
+   "reply_bytes": 39810
+  },
+  "digests": [
+   "39532e94ee94df0bce6d5943acce4ca3e6380bf11645f7cb301083128242d26b"
+  ],
+  "drawing": {
+   "bends": 4,
+   "crossings": 0,
+   "extent": [
+    163.0,
+    99.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 102,
+   "label_only_pins": 4,
+   "off_grid_points": 0,
+   "wire_length": 802.0,
+   "wires": 153
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "rlc_line_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 306,
+   "ops": 460,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 65970
+  },
+  "digests": [
+   "409d011ef1cb8cf96cab5416eb5e92b2366a4c0e2b4940e02373bb40bb943acd"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    73.0,
+    291.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 102,
+   "label_only_pins": 204,
+   "off_grid_points": 0,
+   "wire_length": 0.0,
+   "wires": 0
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 52
+  }
+ },
+ "sallen_key_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 32,
+   "ops": 19,
+   "origins_from_pins": 6,
+   "refused": 0,
+   "reply_bytes": 2732
+  },
+  "digests": [
+   "be3ddd9ade1b3d25a3b29cc801f339c8ba8a9b34b9869fa21ca334cb0f9f0458"
+  ],
+  "drawing": {
+   "bends": 4,
+   "crossings": 0,
+   "extent": [
+    39.0,
+    20.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 0,
+   "off_grid_points": 0,
+   "wire_length": 90.0,
+   "wires": 12
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "sallen_key_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 12,
+   "ops": 21,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 4531
+  },
+  "digests": [
+   "f2159bc2175c6aaa03f83154bdcd8d0e163fc91b6e339a14d0da0d36ced3b919"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    54.0,
+    9.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 11,
+   "off_grid_points": 0,
+   "wire_length": 0.0,
+   "wires": 0
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 4
+  }
+ },
+ "two_stage_opamp_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 78,
+   "ops": 58,
+   "origins_from_pins": 14,
+   "refused": 0,
+   "reply_bytes": 7963
+  },
+  "digests": [
+   "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61"
+  ],
+  "drawing": {
+   "bends": 7,
+   "crossings": 0,
+   "extent": [
+    45.0,
+    30.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 12,
+   "label_only_pins": 10,
+   "off_grid_points": 0,
+   "wire_length": 143.0,
+   "wires": 27
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 2
+  }
+ },
+ "two_stage_opamp_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 28,
+   "ops": 61,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 10257
+  },
+  "digests": [
+   "adcad5f63545894caf1b80b1147decf2e98040f0fb78edd2914bbaa5c8217925"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    75.0,
+    24.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 12,
+   "label_only_pins": 32,
+   "off_grid_points": 0,
+   "wire_length": 0.0,
+   "wires": 0
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 8
+  }
+ },
+ "vccs_stage_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 8,
+   "ops": 11,
+   "origins_from_pins": 3,
+   "refused": 0,
+   "reply_bytes": 1876
+  },
+  "digests": [
+   "3a3d6c642e235a27980faf5535c1337e410433856bed474c39aef8c8610602b0"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    13.0,
+    15.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 1,
+   "off_grid_points": 0,
+   "wire_length": 10.0,
+   "wires": 2
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "vccs_stage_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 6,
+   "ops": 11,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 2363
+  },
+  "digests": [
+   "b15548d3f45f2da383410c4c57b81e7e50ccdb09310fdc84500adea2f47ebd9d"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    16.5,
+    13.8
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 3,
+   "off_grid_points": 11,
+   "wire_length": 2.2,
+   "wires": 1
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ },
+ "vcvs_stage_drawn": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 8,
+   "ops": 11,
+   "origins_from_pins": 3,
+   "refused": 0,
+   "reply_bytes": 1873
+  },
+  "digests": [
+   "84b639fea906822922e1dd63a37747c22a91ebf5a43817f1a67a56a956e038c3"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    22.0,
+    6.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 1,
+   "off_grid_points": 0,
+   "wire_length": 11.0,
+   "wires": 2
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {}
+ },
+ "vcvs_stage_labelled": {
+  "cost": {
+   "calls": 1,
+   "coordinates": 6,
+   "ops": 11,
+   "origins_from_pins": 0,
+   "refused": 0,
+   "reply_bytes": 2355
+  },
+  "digests": [
+   "51fd79e309dd2fc11c13d1e5fa3beae051b0c3c6a3a1599c9154e985aeaee063"
+  ],
+  "drawing": {
+   "bends": 0,
+   "crossings": 0,
+   "extent": [
+    16.5,
+    14.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 3,
+   "label_only_pins": 3,
+   "off_grid_points": 11,
+   "wire_length": 3.0,
+   "wires": 1
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 1
+  }
+ }
+}

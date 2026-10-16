@@ -107,6 +107,49 @@ inputs = [
 ]
 extra = ["connectivity/res.asy"]
 
+[behaviour.build-benchmark-export]
+summary = "The netlist each build exports from every sheet the schematic build benchmark draws: which pins are one node, the name each node gets, and each card's value."
+model = ["tests/_build_benchmark.py", "lib/connectivity.py"]
+# The sheets are what edit_schematic builds today (tests/test_build_benchmark.py
+# writes them), with the suite's stand-in symbols beside them.
+inputs = [
+    "benchmark/common_source_drawn.asc",
+    "benchmark/common_source_labelled.asc",
+    "benchmark/diff_pair_drawn.asc",
+    "benchmark/diff_pair_labelled.asc",
+    "benchmark/nmos_mirror_drawn.asc",
+    "benchmark/nmos_mirror_labelled.asc",
+    "benchmark/r2r_ladder_drawn.asc",
+    "benchmark/r2r_ladder_labelled.asc",
+    "benchmark/rc_lowpass_drawn.asc",
+    "benchmark/rc_lowpass_labelled.asc",
+    "benchmark/rectifier_drawn.asc",
+    "benchmark/rectifier_labelled.asc",
+    "benchmark/rlc_line_drawn.asc",
+    "benchmark/rlc_line_labelled.asc",
+    "benchmark/sallen_key_drawn.asc",
+    "benchmark/sallen_key_labelled.asc",
+    "benchmark/two_stage_opamp_drawn.asc",
+    "benchmark/two_stage_opamp_labelled.asc",
+    "benchmark/vccs_stage_drawn.asc",
+    "benchmark/vccs_stage_labelled.asc",
+    "benchmark/vcvs_stage_drawn.asc",
+    "benchmark/vcvs_stage_labelled.asc",
+]
+extra = [
+    "benchmark/cap.asy",
+    "benchmark/current.asy",
+    "benchmark/diode.asy",
+    "benchmark/e.asy",
+    "benchmark/g.asy",
+    "benchmark/ind.asy",
+    "benchmark/nmos.asy",
+    "benchmark/nmos4.asy",
+    "benchmark/pmos4.asy",
+    "benchmark/res.asy",
+    "benchmark/voltage.asy",
+]
+
 [behaviour.export-boilerplate]
 summary = "The lines the netlister adds to every export: the header comments, .backanno, a parameterless default model per device class, and the .lib of the build's own standard.* files."
 model = ["lib/netlist_diff.py", "lib/lint_rules.py", "lib/simulator.py", "lib/deck_prep.py"]

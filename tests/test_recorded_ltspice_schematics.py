@@ -150,7 +150,7 @@ class TestPinPositions:
 
 #: Stand-in symbols written to carry a stock symbol's pins exactly. The rest of
 #: ``tests/fixtures/symbols`` are stand-ins with pins of their own.
-MATCHES_STOCK = ("e", "g", "nmos4", "npn")
+MATCHES_STOCK = ("e", "g", "nmos4", "npn", "pmos4")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

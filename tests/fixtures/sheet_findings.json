@@ -4812,6 +4812,5028 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 96,
+       "y": 80
+      },
+      {
+       "x": 320,
+       "y": 80
+      }
+     ],
+     "x": 96,
+     "y": 80
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 5,
+    "pins_total": 11,
+    "pins_wired": 6,
+    "wire_segments": 3
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "common_source_drawn.asc",
+     "x": 96,
+     "y": 80
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       80
+      ],
+      [
+       320,
+       80
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/common_source_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 352,
+       "y": 300
+      },
+      {
+       "x": 200,
+       "y": 268
+      }
+     ],
+     "x": 352,
+     "y": 300
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 400,
+       "y": 72
+      },
+      {
+       "x": 200,
+       "y": 88
+      }
+     ],
+     "x": 400,
+     "y": 72
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 7,
+    "pins_total": 11,
+    "pins_wired": 4,
+    "wire_segments": 2
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "common_source_labelled.asc",
+     "x": 352,
+     "y": 300
+    },
+    "evidence": {
+     "coords": [
+      [
+       352,
+       300
+      ],
+      [
+       200,
+       268
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   },
+   {
+    "at": {
+     "file": "common_source_labelled.asc",
+     "x": 400,
+     "y": 72
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       72
+      ],
+      [
+       200,
+       88
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 64,
+       "y": 176
+      },
+      {
+       "x": 304,
+       "y": 176
+      },
+      {
+       "x": 400,
+       "y": 176
+      }
+     ],
+     "x": 64,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 9,
+    "pins_total": 20,
+    "pins_wired": 11,
+    "wire_segments": 8
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "diff_pair_drawn.asc",
+     "x": 64,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       64,
+       176
+      ],
+      [
+       304,
+       176
+      ],
+      [
+       400,
+       176
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "points": [
+      {
+       "x": 480,
+       "y": 128
+      },
+      {
+       "x": 1120,
+       "y": 240
+      }
+     ],
+     "x": 480,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "points": [
+      {
+       "x": 320,
+       "y": 128
+      },
+      {
+       "x": 960,
+       "y": 240
+      }
+     ],
+     "x": 320,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'outn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "outn",
+     "points": [
+      {
+       "x": 640,
+       "y": 208
+      },
+      {
+       "x": 1008,
+       "y": 160
+      }
+     ],
+     "x": 640,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'outp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "outp",
+     "points": [
+      {
+       "x": 800,
+       "y": 208
+      },
+      {
+       "x": 1168,
+       "y": 160
+      }
+     ],
+     "x": 800,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'tail' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "tail",
+     "points": [
+      {
+       "x": 1008,
+       "y": 256
+      },
+      {
+       "x": 1168,
+       "y": 256
+      },
+      {
+       "x": 1280,
+       "y": 112
+      }
+     ],
+     "x": 1008,
+     "y": 256
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 160,
+       "y": 128
+      },
+      {
+       "x": 640,
+       "y": 112
+      },
+      {
+       "x": 800,
+       "y": 112
+      }
+     ],
+     "x": 160,
+     "y": 128
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 20,
+    "pins_total": 20,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 480,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       128
+      ],
+      [
+       1120,
+       240
+      ]
+     ],
+     "detail": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inn"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 320,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       128
+      ],
+      [
+       960,
+       240
+      ]
+     ],
+     "detail": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inp"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 640,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       208
+      ],
+      [
+       1008,
+       160
+      ]
+     ],
+     "detail": "Net 'outn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "outn",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "outn"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 800,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       208
+      ],
+      [
+       1168,
+       160
+      ]
+     ],
+     "detail": "Net 'outp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "outp",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "outp"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 1008,
+     "y": 256
+    },
+    "evidence": {
+     "coords": [
+      [
+       1008,
+       256
+      ],
+      [
+       1168,
+       256
+      ],
+      [
+       1280,
+       112
+      ]
+     ],
+     "detail": "Net 'tail' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "tail",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "tail"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 160,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       128
+      ],
+      [
+       640,
+       112
+      ],
+      [
+       800,
+       112
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 96,
+       "y": 176
+      },
+      {
+       "x": 208,
+       "y": 112
+      },
+      {
+       "x": 400,
+       "y": 176
+      }
+     ],
+     "x": 96,
+     "y": 176
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 8,
+    "pins_total": 14,
+    "pins_wired": 6,
+    "wire_segments": 5
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "nmos_mirror_drawn.asc",
+     "x": 96,
+     "y": 176
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       176
+      ],
+      [
+       208,
+       112
+      ],
+      [
+       400,
+       176
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 688,
+       "y": 160
+      },
+      {
+       "x": 800,
+       "y": 208
+      }
+     ],
+     "x": 688,
+     "y": 160
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'ref' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "ref",
+     "points": [
+      {
+       "x": 320,
+       "y": 240
+      },
+      {
+       "x": 528,
+       "y": 160
+      },
+      {
+       "x": 480,
+       "y": 240
+      },
+      {
+       "x": 640,
+       "y": 240
+      }
+     ],
+     "x": 320,
+     "y": 240
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 160,
+       "y": 128
+      },
+      {
+       "x": 320,
+       "y": 112
+      },
+      {
+       "x": 800,
+       "y": 112
+      }
+     ],
+     "x": 160,
+     "y": 128
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 14,
+    "pins_total": 14,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "nmos_mirror_labelled.asc",
+     "x": 688,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       160
+      ],
+      [
+       800,
+       208
+      ]
+     ],
+     "detail": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   },
+   {
+    "at": {
+     "file": "nmos_mirror_labelled.asc",
+     "x": 320,
+     "y": 240
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       240
+      ],
+      [
+       528,
+       160
+      ],
+      [
+       480,
+       240
+      ],
+      [
+       640,
+       240
+      ]
+     ],
+     "detail": "Net 'ref' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "ref",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "ref"
+   },
+   {
+    "at": {
+     "file": "nmos_mirror_labelled.asc",
+     "x": 160,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       128
+      ],
+      [
+       320,
+       112
+      ],
+      [
+       800,
+       112
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/r2r_ladder_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 26,
+    "pins_total": 102,
+    "pins_wired": 76,
+    "wire_segments": 50
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/r2r_ladder_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 400,
+       "y": 252
+      },
+      {
+       "x": 200,
+       "y": 220
+      }
+     ],
+     "x": 400,
+     "y": 252
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 28,
+    "pins_total": 102,
+    "pins_wired": 74,
+    "wire_segments": 49
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "r2r_ladder_labelled.asc",
+     "x": 400,
+     "y": 252
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       252
+      ],
+      [
+       200,
+       220
+      ]
+     ],
+     "detail": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/rc_lowpass_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 2,
+    "pins_total": 6,
+    "pins_wired": 4,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/rc_lowpass_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 160,
+       "y": 128
+      },
+      {
+       "x": 320,
+       "y": 112
+      }
+     ],
+     "x": 160,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 320,
+       "y": 208
+      },
+      {
+       "x": 480,
+       "y": 128
+      }
+     ],
+     "x": 320,
+     "y": 208
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 6,
+    "pins_total": 6,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "rc_lowpass_labelled.asc",
+     "x": 160,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       128
+      ],
+      [
+       320,
+       112
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   },
+   {
+    "at": {
+     "file": "rc_lowpass_labelled.asc",
+     "x": 320,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       208
+      ],
+      [
+       480,
+       128
+      ]
+     ],
+     "detail": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/rectifier_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 2,
+    "pins_total": 6,
+    "pins_wired": 4,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/rectifier_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 100,
+       "y": 268
+      },
+      {
+       "x": 300,
+       "y": 102
+      }
+     ],
+     "x": 100,
+     "y": 268
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 6,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "rectifier_labelled.asc",
+     "x": 100,
+     "y": 268
+    },
+    "evidence": {
+     "coords": [
+      [
+       100,
+       268
+      ],
+      [
+       300,
+       102
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 106,
+    "pins_total": 306,
+    "pins_wired": 200,
+    "wire_segments": 153
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 160,
+       "y": 128
+      },
+      {
+       "x": 320,
+       "y": 112
+      }
+     ],
+     "x": 160,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n0' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "n0",
+     "points": [
+      {
+       "x": 320,
+       "y": 208
+      },
+      {
+       "x": 480,
+       "y": 112
+      }
+     ],
+     "x": 320,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n1' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n1",
+     "points": [
+      {
+       "x": 480,
+       "y": 208
+      },
+      {
+       "x": 640,
+       "y": 128
+      },
+      {
+       "x": 800,
+       "y": 112
+      },
+      {
+       "x": 960,
+       "y": 112
+      }
+     ],
+     "x": 480,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n10' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n10",
+     "points": [
+      {
+       "x": 960,
+       "y": 928
+      },
+      {
+       "x": 1120,
+       "y": 848
+      },
+      {
+       "x": 1280,
+       "y": 832
+      },
+      {
+       "x": 160,
+       "y": 1072
+      }
+     ],
+     "x": 960,
+     "y": 928
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n11' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n11",
+     "points": [
+      {
+       "x": 160,
+       "y": 1168
+      },
+      {
+       "x": 320,
+       "y": 1088
+      },
+      {
+       "x": 480,
+       "y": 1072
+      },
+      {
+       "x": 640,
+       "y": 1072
+      }
+     ],
+     "x": 160,
+     "y": 1168
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n12' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n12",
+     "points": [
+      {
+       "x": 640,
+       "y": 1168
+      },
+      {
+       "x": 800,
+       "y": 1088
+      },
+      {
+       "x": 960,
+       "y": 1072
+      },
+      {
+       "x": 1120,
+       "y": 1072
+      }
+     ],
+     "x": 640,
+     "y": 1168
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n13' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n13",
+     "points": [
+      {
+       "x": 1120,
+       "y": 1168
+      },
+      {
+       "x": 1280,
+       "y": 1088
+      },
+      {
+       "x": 160,
+       "y": 1312
+      },
+      {
+       "x": 320,
+       "y": 1312
+      }
+     ],
+     "x": 1120,
+     "y": 1168
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n14' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n14",
+     "points": [
+      {
+       "x": 320,
+       "y": 1408
+      },
+      {
+       "x": 480,
+       "y": 1328
+      },
+      {
+       "x": 640,
+       "y": 1312
+      },
+      {
+       "x": 800,
+       "y": 1312
+      }
+     ],
+     "x": 320,
+     "y": 1408
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n15' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n15",
+     "points": [
+      {
+       "x": 800,
+       "y": 1408
+      },
+      {
+       "x": 960,
+       "y": 1328
+      },
+      {
+       "x": 1120,
+       "y": 1312
+      },
+      {
+       "x": 1280,
+       "y": 1312
+      }
+     ],
+     "x": 800,
+     "y": 1408
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n16' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n16",
+     "points": [
+      {
+       "x": 1280,
+       "y": 1408
+      },
+      {
+       "x": 160,
+       "y": 1568
+      },
+      {
+       "x": 320,
+       "y": 1552
+      },
+      {
+       "x": 480,
+       "y": 1552
+      }
+     ],
+     "x": 1280,
+     "y": 1408
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n17' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n17",
+     "points": [
+      {
+       "x": 480,
+       "y": 1648
+      },
+      {
+       "x": 640,
+       "y": 1568
+      },
+      {
+       "x": 800,
+       "y": 1552
+      },
+      {
+       "x": 960,
+       "y": 1552
+      }
+     ],
+     "x": 480,
+     "y": 1648
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n18' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n18",
+     "points": [
+      {
+       "x": 960,
+       "y": 1648
+      },
+      {
+       "x": 1120,
+       "y": 1568
+      },
+      {
+       "x": 1280,
+       "y": 1552
+      },
+      {
+       "x": 160,
+       "y": 1792
+      }
+     ],
+     "x": 960,
+     "y": 1648
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n19' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n19",
+     "points": [
+      {
+       "x": 160,
+       "y": 1888
+      },
+      {
+       "x": 320,
+       "y": 1808
+      },
+      {
+       "x": 480,
+       "y": 1792
+      },
+      {
+       "x": 640,
+       "y": 1792
+      }
+     ],
+     "x": 160,
+     "y": 1888
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n2' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n2",
+     "points": [
+      {
+       "x": 960,
+       "y": 208
+      },
+      {
+       "x": 1120,
+       "y": 128
+      },
+      {
+       "x": 1280,
+       "y": 112
+      },
+      {
+       "x": 160,
+       "y": 352
+      }
+     ],
+     "x": 960,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n20' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n20",
+     "points": [
+      {
+       "x": 640,
+       "y": 1888
+      },
+      {
+       "x": 800,
+       "y": 1808
+      },
+      {
+       "x": 960,
+       "y": 1792
+      },
+      {
+       "x": 1120,
+       "y": 1792
+      }
+     ],
+     "x": 640,
+     "y": 1888
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n21' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n21",
+     "points": [
+      {
+       "x": 1120,
+       "y": 1888
+      },
+      {
+       "x": 1280,
+       "y": 1808
+      },
+      {
+       "x": 160,
+       "y": 2032
+      },
+      {
+       "x": 320,
+       "y": 2032
+      }
+     ],
+     "x": 1120,
+     "y": 1888
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n22' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n22",
+     "points": [
+      {
+       "x": 320,
+       "y": 2128
+      },
+      {
+       "x": 480,
+       "y": 2048
+      },
+      {
+       "x": 640,
+       "y": 2032
+      },
+      {
+       "x": 800,
+       "y": 2032
+      }
+     ],
+     "x": 320,
+     "y": 2128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n23' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n23",
+     "points": [
+      {
+       "x": 800,
+       "y": 2128
+      },
+      {
+       "x": 960,
+       "y": 2048
+      },
+      {
+       "x": 1120,
+       "y": 2032
+      },
+      {
+       "x": 1280,
+       "y": 2032
+      }
+     ],
+     "x": 800,
+     "y": 2128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n24' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n24",
+     "points": [
+      {
+       "x": 1280,
+       "y": 2128
+      },
+      {
+       "x": 160,
+       "y": 2288
+      },
+      {
+       "x": 320,
+       "y": 2272
+      },
+      {
+       "x": 480,
+       "y": 2272
+      }
+     ],
+     "x": 1280,
+     "y": 2128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n25' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n25",
+     "points": [
+      {
+       "x": 480,
+       "y": 2368
+      },
+      {
+       "x": 640,
+       "y": 2288
+      },
+      {
+       "x": 800,
+       "y": 2272
+      },
+      {
+       "x": 960,
+       "y": 2272
+      }
+     ],
+     "x": 480,
+     "y": 2368
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n26' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n26",
+     "points": [
+      {
+       "x": 960,
+       "y": 2368
+      },
+      {
+       "x": 1120,
+       "y": 2288
+      },
+      {
+       "x": 1280,
+       "y": 2272
+      },
+      {
+       "x": 160,
+       "y": 2512
+      }
+     ],
+     "x": 960,
+     "y": 2368
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n27' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n27",
+     "points": [
+      {
+       "x": 160,
+       "y": 2608
+      },
+      {
+       "x": 320,
+       "y": 2528
+      },
+      {
+       "x": 480,
+       "y": 2512
+      },
+      {
+       "x": 640,
+       "y": 2512
+      }
+     ],
+     "x": 160,
+     "y": 2608
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n28' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n28",
+     "points": [
+      {
+       "x": 640,
+       "y": 2608
+      },
+      {
+       "x": 800,
+       "y": 2528
+      },
+      {
+       "x": 960,
+       "y": 2512
+      },
+      {
+       "x": 1120,
+       "y": 2512
+      }
+     ],
+     "x": 640,
+     "y": 2608
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n29' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n29",
+     "points": [
+      {
+       "x": 1120,
+       "y": 2608
+      },
+      {
+       "x": 1280,
+       "y": 2528
+      },
+      {
+       "x": 160,
+       "y": 2752
+      },
+      {
+       "x": 320,
+       "y": 2752
+      }
+     ],
+     "x": 1120,
+     "y": 2608
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n3' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n3",
+     "points": [
+      {
+       "x": 160,
+       "y": 448
+      },
+      {
+       "x": 320,
+       "y": 368
+      },
+      {
+       "x": 480,
+       "y": 352
+      },
+      {
+       "x": 640,
+       "y": 352
+      }
+     ],
+     "x": 160,
+     "y": 448
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n30' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n30",
+     "points": [
+      {
+       "x": 320,
+       "y": 2848
+      },
+      {
+       "x": 480,
+       "y": 2768
+      },
+      {
+       "x": 640,
+       "y": 2752
+      },
+      {
+       "x": 800,
+       "y": 2752
+      }
+     ],
+     "x": 320,
+     "y": 2848
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n31' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n31",
+     "points": [
+      {
+       "x": 800,
+       "y": 2848
+      },
+      {
+       "x": 960,
+       "y": 2768
+      },
+      {
+       "x": 1120,
+       "y": 2752
+      },
+      {
+       "x": 1280,
+       "y": 2752
+      }
+     ],
+     "x": 800,
+     "y": 2848
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n32' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n32",
+     "points": [
+      {
+       "x": 1280,
+       "y": 2848
+      },
+      {
+       "x": 160,
+       "y": 3008
+      },
+      {
+       "x": 320,
+       "y": 2992
+      },
+      {
+       "x": 480,
+       "y": 2992
+      }
+     ],
+     "x": 1280,
+     "y": 2848
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n33' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n33",
+     "points": [
+      {
+       "x": 480,
+       "y": 3088
+      },
+      {
+       "x": 640,
+       "y": 3008
+      },
+      {
+       "x": 800,
+       "y": 2992
+      },
+      {
+       "x": 960,
+       "y": 2992
+      }
+     ],
+     "x": 480,
+     "y": 3088
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n34' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n34",
+     "points": [
+      {
+       "x": 960,
+       "y": 3088
+      },
+      {
+       "x": 1120,
+       "y": 3008
+      },
+      {
+       "x": 1280,
+       "y": 2992
+      },
+      {
+       "x": 160,
+       "y": 3232
+      }
+     ],
+     "x": 960,
+     "y": 3088
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n35' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n35",
+     "points": [
+      {
+       "x": 160,
+       "y": 3328
+      },
+      {
+       "x": 320,
+       "y": 3248
+      },
+      {
+       "x": 480,
+       "y": 3232
+      },
+      {
+       "x": 640,
+       "y": 3232
+      }
+     ],
+     "x": 160,
+     "y": 3328
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n36' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n36",
+     "points": [
+      {
+       "x": 640,
+       "y": 3328
+      },
+      {
+       "x": 800,
+       "y": 3248
+      },
+      {
+       "x": 960,
+       "y": 3232
+      },
+      {
+       "x": 1120,
+       "y": 3232
+      }
+     ],
+     "x": 640,
+     "y": 3328
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n37' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n37",
+     "points": [
+      {
+       "x": 1120,
+       "y": 3328
+      },
+      {
+       "x": 1280,
+       "y": 3248
+      },
+      {
+       "x": 160,
+       "y": 3472
+      },
+      {
+       "x": 320,
+       "y": 3472
+      }
+     ],
+     "x": 1120,
+     "y": 3328
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n38' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n38",
+     "points": [
+      {
+       "x": 320,
+       "y": 3568
+      },
+      {
+       "x": 480,
+       "y": 3488
+      },
+      {
+       "x": 640,
+       "y": 3472
+      },
+      {
+       "x": 800,
+       "y": 3472
+      }
+     ],
+     "x": 320,
+     "y": 3568
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n39' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n39",
+     "points": [
+      {
+       "x": 800,
+       "y": 3568
+      },
+      {
+       "x": 960,
+       "y": 3488
+      },
+      {
+       "x": 1120,
+       "y": 3472
+      },
+      {
+       "x": 1280,
+       "y": 3472
+      }
+     ],
+     "x": 800,
+     "y": 3568
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n4' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n4",
+     "points": [
+      {
+       "x": 640,
+       "y": 448
+      },
+      {
+       "x": 800,
+       "y": 368
+      },
+      {
+       "x": 960,
+       "y": 352
+      },
+      {
+       "x": 1120,
+       "y": 352
+      }
+     ],
+     "x": 640,
+     "y": 448
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n40' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n40",
+     "points": [
+      {
+       "x": 1280,
+       "y": 3568
+      },
+      {
+       "x": 160,
+       "y": 3728
+      },
+      {
+       "x": 320,
+       "y": 3712
+      },
+      {
+       "x": 480,
+       "y": 3712
+      }
+     ],
+     "x": 1280,
+     "y": 3568
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n41' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n41",
+     "points": [
+      {
+       "x": 480,
+       "y": 3808
+      },
+      {
+       "x": 640,
+       "y": 3728
+      },
+      {
+       "x": 800,
+       "y": 3712
+      },
+      {
+       "x": 960,
+       "y": 3712
+      }
+     ],
+     "x": 480,
+     "y": 3808
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n42' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n42",
+     "points": [
+      {
+       "x": 960,
+       "y": 3808
+      },
+      {
+       "x": 1120,
+       "y": 3728
+      },
+      {
+       "x": 1280,
+       "y": 3712
+      },
+      {
+       "x": 160,
+       "y": 3952
+      }
+     ],
+     "x": 960,
+     "y": 3808
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n43' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n43",
+     "points": [
+      {
+       "x": 160,
+       "y": 4048
+      },
+      {
+       "x": 320,
+       "y": 3968
+      },
+      {
+       "x": 480,
+       "y": 3952
+      },
+      {
+       "x": 640,
+       "y": 3952
+      }
+     ],
+     "x": 160,
+     "y": 4048
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n44' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n44",
+     "points": [
+      {
+       "x": 640,
+       "y": 4048
+      },
+      {
+       "x": 800,
+       "y": 3968
+      },
+      {
+       "x": 960,
+       "y": 3952
+      },
+      {
+       "x": 1120,
+       "y": 3952
+      }
+     ],
+     "x": 640,
+     "y": 4048
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n45' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n45",
+     "points": [
+      {
+       "x": 1120,
+       "y": 4048
+      },
+      {
+       "x": 1280,
+       "y": 3968
+      },
+      {
+       "x": 160,
+       "y": 4192
+      },
+      {
+       "x": 320,
+       "y": 4192
+      }
+     ],
+     "x": 1120,
+     "y": 4048
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n46' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n46",
+     "points": [
+      {
+       "x": 320,
+       "y": 4288
+      },
+      {
+       "x": 480,
+       "y": 4208
+      },
+      {
+       "x": 640,
+       "y": 4192
+      },
+      {
+       "x": 800,
+       "y": 4192
+      }
+     ],
+     "x": 320,
+     "y": 4288
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n47' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n47",
+     "points": [
+      {
+       "x": 800,
+       "y": 4288
+      },
+      {
+       "x": 960,
+       "y": 4208
+      },
+      {
+       "x": 1120,
+       "y": 4192
+      },
+      {
+       "x": 1280,
+       "y": 4192
+      }
+     ],
+     "x": 800,
+     "y": 4288
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n48' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n48",
+     "points": [
+      {
+       "x": 1280,
+       "y": 4288
+      },
+      {
+       "x": 160,
+       "y": 4448
+      },
+      {
+       "x": 320,
+       "y": 4432
+      },
+      {
+       "x": 480,
+       "y": 4432
+      }
+     ],
+     "x": 1280,
+     "y": 4288
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n49' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n49",
+     "points": [
+      {
+       "x": 480,
+       "y": 4528
+      },
+      {
+       "x": 640,
+       "y": 4448
+      },
+      {
+       "x": 800,
+       "y": 4432
+      },
+      {
+       "x": 960,
+       "y": 4432
+      }
+     ],
+     "x": 480,
+     "y": 4528
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n5' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n5",
+     "points": [
+      {
+       "x": 1120,
+       "y": 448
+      },
+      {
+       "x": 1280,
+       "y": 368
+      },
+      {
+       "x": 160,
+       "y": 592
+      },
+      {
+       "x": 320,
+       "y": 592
+      }
+     ],
+     "x": 1120,
+     "y": 448
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n6' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n6",
+     "points": [
+      {
+       "x": 320,
+       "y": 688
+      },
+      {
+       "x": 480,
+       "y": 608
+      },
+      {
+       "x": 640,
+       "y": 592
+      },
+      {
+       "x": 800,
+       "y": 592
+      }
+     ],
+     "x": 320,
+     "y": 688
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n7' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n7",
+     "points": [
+      {
+       "x": 800,
+       "y": 688
+      },
+      {
+       "x": 960,
+       "y": 608
+      },
+      {
+       "x": 1120,
+       "y": 592
+      },
+      {
+       "x": 1280,
+       "y": 592
+      }
+     ],
+     "x": 800,
+     "y": 688
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n8' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n8",
+     "points": [
+      {
+       "x": 1280,
+       "y": 688
+      },
+      {
+       "x": 160,
+       "y": 848
+      },
+      {
+       "x": 320,
+       "y": 832
+      },
+      {
+       "x": 480,
+       "y": 832
+      }
+     ],
+     "x": 1280,
+     "y": 688
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'n9' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n9",
+     "points": [
+      {
+       "x": 480,
+       "y": 928
+      },
+      {
+       "x": 640,
+       "y": 848
+      },
+      {
+       "x": 800,
+       "y": 832
+      },
+      {
+       "x": 960,
+       "y": 832
+      }
+     ],
+     "x": 480,
+     "y": 928
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 960,
+       "y": 4528
+      },
+      {
+       "x": 1120,
+       "y": 4448
+      },
+      {
+       "x": 1280,
+       "y": 4432
+      },
+      {
+       "x": 160,
+       "y": 4672
+      }
+     ],
+     "x": 960,
+     "y": 4528
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 306,
+    "pins_total": 306,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       128
+      ],
+      [
+       320,
+       112
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       208
+      ],
+      [
+       480,
+       112
+      ]
+     ],
+     "detail": "Net 'n0' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "n0",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n0"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       208
+      ],
+      [
+       640,
+       128
+      ],
+      [
+       800,
+       112
+      ],
+      [
+       960,
+       112
+      ]
+     ],
+     "detail": "Net 'n1' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n1",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n1"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 928
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       928
+      ],
+      [
+       1120,
+       848
+      ],
+      [
+       1280,
+       832
+      ],
+      [
+       160,
+       1072
+      ]
+     ],
+     "detail": "Net 'n10' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n10",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n10"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 1168
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       1168
+      ],
+      [
+       320,
+       1088
+      ],
+      [
+       480,
+       1072
+      ],
+      [
+       640,
+       1072
+      ]
+     ],
+     "detail": "Net 'n11' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n11",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n11"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 640,
+     "y": 1168
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       1168
+      ],
+      [
+       800,
+       1088
+      ],
+      [
+       960,
+       1072
+      ],
+      [
+       1120,
+       1072
+      ]
+     ],
+     "detail": "Net 'n12' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n12",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n12"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1120,
+     "y": 1168
+    },
+    "evidence": {
+     "coords": [
+      [
+       1120,
+       1168
+      ],
+      [
+       1280,
+       1088
+      ],
+      [
+       160,
+       1312
+      ],
+      [
+       320,
+       1312
+      ]
+     ],
+     "detail": "Net 'n13' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n13",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n13"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 1408
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       1408
+      ],
+      [
+       480,
+       1328
+      ],
+      [
+       640,
+       1312
+      ],
+      [
+       800,
+       1312
+      ]
+     ],
+     "detail": "Net 'n14' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n14",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n14"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 800,
+     "y": 1408
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       1408
+      ],
+      [
+       960,
+       1328
+      ],
+      [
+       1120,
+       1312
+      ],
+      [
+       1280,
+       1312
+      ]
+     ],
+     "detail": "Net 'n15' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n15",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n15"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1280,
+     "y": 1408
+    },
+    "evidence": {
+     "coords": [
+      [
+       1280,
+       1408
+      ],
+      [
+       160,
+       1568
+      ],
+      [
+       320,
+       1552
+      ],
+      [
+       480,
+       1552
+      ]
+     ],
+     "detail": "Net 'n16' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n16",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n16"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 1648
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       1648
+      ],
+      [
+       640,
+       1568
+      ],
+      [
+       800,
+       1552
+      ],
+      [
+       960,
+       1552
+      ]
+     ],
+     "detail": "Net 'n17' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n17",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n17"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 1648
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       1648
+      ],
+      [
+       1120,
+       1568
+      ],
+      [
+       1280,
+       1552
+      ],
+      [
+       160,
+       1792
+      ]
+     ],
+     "detail": "Net 'n18' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n18",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n18"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 1888
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       1888
+      ],
+      [
+       320,
+       1808
+      ],
+      [
+       480,
+       1792
+      ],
+      [
+       640,
+       1792
+      ]
+     ],
+     "detail": "Net 'n19' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n19",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n19"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       208
+      ],
+      [
+       1120,
+       128
+      ],
+      [
+       1280,
+       112
+      ],
+      [
+       160,
+       352
+      ]
+     ],
+     "detail": "Net 'n2' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n2",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n2"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 640,
+     "y": 1888
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       1888
+      ],
+      [
+       800,
+       1808
+      ],
+      [
+       960,
+       1792
+      ],
+      [
+       1120,
+       1792
+      ]
+     ],
+     "detail": "Net 'n20' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n20",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n20"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1120,
+     "y": 1888
+    },
+    "evidence": {
+     "coords": [
+      [
+       1120,
+       1888
+      ],
+      [
+       1280,
+       1808
+      ],
+      [
+       160,
+       2032
+      ],
+      [
+       320,
+       2032
+      ]
+     ],
+     "detail": "Net 'n21' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n21",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n21"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 2128
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       2128
+      ],
+      [
+       480,
+       2048
+      ],
+      [
+       640,
+       2032
+      ],
+      [
+       800,
+       2032
+      ]
+     ],
+     "detail": "Net 'n22' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n22",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n22"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 800,
+     "y": 2128
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       2128
+      ],
+      [
+       960,
+       2048
+      ],
+      [
+       1120,
+       2032
+      ],
+      [
+       1280,
+       2032
+      ]
+     ],
+     "detail": "Net 'n23' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n23",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n23"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1280,
+     "y": 2128
+    },
+    "evidence": {
+     "coords": [
+      [
+       1280,
+       2128
+      ],
+      [
+       160,
+       2288
+      ],
+      [
+       320,
+       2272
+      ],
+      [
+       480,
+       2272
+      ]
+     ],
+     "detail": "Net 'n24' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n24",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n24"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 2368
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       2368
+      ],
+      [
+       640,
+       2288
+      ],
+      [
+       800,
+       2272
+      ],
+      [
+       960,
+       2272
+      ]
+     ],
+     "detail": "Net 'n25' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n25",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n25"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 2368
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       2368
+      ],
+      [
+       1120,
+       2288
+      ],
+      [
+       1280,
+       2272
+      ],
+      [
+       160,
+       2512
+      ]
+     ],
+     "detail": "Net 'n26' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n26",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n26"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 2608
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       2608
+      ],
+      [
+       320,
+       2528
+      ],
+      [
+       480,
+       2512
+      ],
+      [
+       640,
+       2512
+      ]
+     ],
+     "detail": "Net 'n27' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n27",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n27"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 640,
+     "y": 2608
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       2608
+      ],
+      [
+       800,
+       2528
+      ],
+      [
+       960,
+       2512
+      ],
+      [
+       1120,
+       2512
+      ]
+     ],
+     "detail": "Net 'n28' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n28",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n28"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1120,
+     "y": 2608
+    },
+    "evidence": {
+     "coords": [
+      [
+       1120,
+       2608
+      ],
+      [
+       1280,
+       2528
+      ],
+      [
+       160,
+       2752
+      ],
+      [
+       320,
+       2752
+      ]
+     ],
+     "detail": "Net 'n29' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n29",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n29"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 448
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       448
+      ],
+      [
+       320,
+       368
+      ],
+      [
+       480,
+       352
+      ],
+      [
+       640,
+       352
+      ]
+     ],
+     "detail": "Net 'n3' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n3",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n3"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 2848
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       2848
+      ],
+      [
+       480,
+       2768
+      ],
+      [
+       640,
+       2752
+      ],
+      [
+       800,
+       2752
+      ]
+     ],
+     "detail": "Net 'n30' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n30",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n30"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 800,
+     "y": 2848
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       2848
+      ],
+      [
+       960,
+       2768
+      ],
+      [
+       1120,
+       2752
+      ],
+      [
+       1280,
+       2752
+      ]
+     ],
+     "detail": "Net 'n31' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n31",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n31"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1280,
+     "y": 2848
+    },
+    "evidence": {
+     "coords": [
+      [
+       1280,
+       2848
+      ],
+      [
+       160,
+       3008
+      ],
+      [
+       320,
+       2992
+      ],
+      [
+       480,
+       2992
+      ]
+     ],
+     "detail": "Net 'n32' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n32",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n32"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 3088
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       3088
+      ],
+      [
+       640,
+       3008
+      ],
+      [
+       800,
+       2992
+      ],
+      [
+       960,
+       2992
+      ]
+     ],
+     "detail": "Net 'n33' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n33",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n33"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 3088
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       3088
+      ],
+      [
+       1120,
+       3008
+      ],
+      [
+       1280,
+       2992
+      ],
+      [
+       160,
+       3232
+      ]
+     ],
+     "detail": "Net 'n34' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n34",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n34"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 3328
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       3328
+      ],
+      [
+       320,
+       3248
+      ],
+      [
+       480,
+       3232
+      ],
+      [
+       640,
+       3232
+      ]
+     ],
+     "detail": "Net 'n35' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n35",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n35"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 640,
+     "y": 3328
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       3328
+      ],
+      [
+       800,
+       3248
+      ],
+      [
+       960,
+       3232
+      ],
+      [
+       1120,
+       3232
+      ]
+     ],
+     "detail": "Net 'n36' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n36",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n36"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1120,
+     "y": 3328
+    },
+    "evidence": {
+     "coords": [
+      [
+       1120,
+       3328
+      ],
+      [
+       1280,
+       3248
+      ],
+      [
+       160,
+       3472
+      ],
+      [
+       320,
+       3472
+      ]
+     ],
+     "detail": "Net 'n37' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n37",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n37"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 3568
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       3568
+      ],
+      [
+       480,
+       3488
+      ],
+      [
+       640,
+       3472
+      ],
+      [
+       800,
+       3472
+      ]
+     ],
+     "detail": "Net 'n38' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n38",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n38"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 800,
+     "y": 3568
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       3568
+      ],
+      [
+       960,
+       3488
+      ],
+      [
+       1120,
+       3472
+      ],
+      [
+       1280,
+       3472
+      ]
+     ],
+     "detail": "Net 'n39' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n39",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n39"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 640,
+     "y": 448
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       448
+      ],
+      [
+       800,
+       368
+      ],
+      [
+       960,
+       352
+      ],
+      [
+       1120,
+       352
+      ]
+     ],
+     "detail": "Net 'n4' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n4",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n4"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1280,
+     "y": 3568
+    },
+    "evidence": {
+     "coords": [
+      [
+       1280,
+       3568
+      ],
+      [
+       160,
+       3728
+      ],
+      [
+       320,
+       3712
+      ],
+      [
+       480,
+       3712
+      ]
+     ],
+     "detail": "Net 'n40' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n40",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n40"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 3808
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       3808
+      ],
+      [
+       640,
+       3728
+      ],
+      [
+       800,
+       3712
+      ],
+      [
+       960,
+       3712
+      ]
+     ],
+     "detail": "Net 'n41' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n41",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n41"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 3808
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       3808
+      ],
+      [
+       1120,
+       3728
+      ],
+      [
+       1280,
+       3712
+      ],
+      [
+       160,
+       3952
+      ]
+     ],
+     "detail": "Net 'n42' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n42",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n42"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 160,
+     "y": 4048
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       4048
+      ],
+      [
+       320,
+       3968
+      ],
+      [
+       480,
+       3952
+      ],
+      [
+       640,
+       3952
+      ]
+     ],
+     "detail": "Net 'n43' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n43",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n43"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 640,
+     "y": 4048
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       4048
+      ],
+      [
+       800,
+       3968
+      ],
+      [
+       960,
+       3952
+      ],
+      [
+       1120,
+       3952
+      ]
+     ],
+     "detail": "Net 'n44' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n44",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n44"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1120,
+     "y": 4048
+    },
+    "evidence": {
+     "coords": [
+      [
+       1120,
+       4048
+      ],
+      [
+       1280,
+       3968
+      ],
+      [
+       160,
+       4192
+      ],
+      [
+       320,
+       4192
+      ]
+     ],
+     "detail": "Net 'n45' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n45",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n45"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 4288
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       4288
+      ],
+      [
+       480,
+       4208
+      ],
+      [
+       640,
+       4192
+      ],
+      [
+       800,
+       4192
+      ]
+     ],
+     "detail": "Net 'n46' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n46",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n46"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 800,
+     "y": 4288
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       4288
+      ],
+      [
+       960,
+       4208
+      ],
+      [
+       1120,
+       4192
+      ],
+      [
+       1280,
+       4192
+      ]
+     ],
+     "detail": "Net 'n47' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n47",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n47"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1280,
+     "y": 4288
+    },
+    "evidence": {
+     "coords": [
+      [
+       1280,
+       4288
+      ],
+      [
+       160,
+       4448
+      ],
+      [
+       320,
+       4432
+      ],
+      [
+       480,
+       4432
+      ]
+     ],
+     "detail": "Net 'n48' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n48",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n48"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 4528
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       4528
+      ],
+      [
+       640,
+       4448
+      ],
+      [
+       800,
+       4432
+      ],
+      [
+       960,
+       4432
+      ]
+     ],
+     "detail": "Net 'n49' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n49",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n49"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1120,
+     "y": 448
+    },
+    "evidence": {
+     "coords": [
+      [
+       1120,
+       448
+      ],
+      [
+       1280,
+       368
+      ],
+      [
+       160,
+       592
+      ],
+      [
+       320,
+       592
+      ]
+     ],
+     "detail": "Net 'n5' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n5",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n5"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 320,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       688
+      ],
+      [
+       480,
+       608
+      ],
+      [
+       640,
+       592
+      ],
+      [
+       800,
+       592
+      ]
+     ],
+     "detail": "Net 'n6' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n6",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n6"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 800,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       800,
+       688
+      ],
+      [
+       960,
+       608
+      ],
+      [
+       1120,
+       592
+      ],
+      [
+       1280,
+       592
+      ]
+     ],
+     "detail": "Net 'n7' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n7",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n7"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 1280,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       1280,
+       688
+      ],
+      [
+       160,
+       848
+      ],
+      [
+       320,
+       832
+      ],
+      [
+       480,
+       832
+      ]
+     ],
+     "detail": "Net 'n8' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n8",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n8"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 480,
+     "y": 928
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       928
+      ],
+      [
+       640,
+       848
+      ],
+      [
+       800,
+       832
+      ],
+      [
+       960,
+       832
+      ]
+     ],
+     "detail": "Net 'n9' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "n9",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "n9"
+   },
+   {
+    "at": {
+     "file": "rlc_line_labelled.asc",
+     "x": 960,
+     "y": 4528
+    },
+    "evidence": {
+     "coords": [
+      [
+       960,
+       4528
+      ],
+      [
+       1120,
+       4448
+      ],
+      [
+       1280,
+       4432
+      ],
+      [
+       160,
+       4672
+      ]
+     ],
+     "detail": "Net 'out' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 3,
+    "pins_total": 14,
+    "pins_wired": 11,
+    "wire_segments": 12
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'a' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "a",
+     "points": [
+      {
+       "x": 320,
+       "y": 208
+      },
+      {
+       "x": 480,
+       "y": 112
+      },
+      {
+       "x": 640,
+       "y": 128
+      }
+     ],
+     "x": 320,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'b' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "b",
+     "points": [
+      {
+       "x": 480,
+       "y": 208
+      },
+      {
+       "x": 800,
+       "y": 128
+      },
+      {
+       "x": 912,
+       "y": 192
+      }
+     ],
+     "x": 480,
+     "y": 208
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 160,
+       "y": 128
+      },
+      {
+       "x": 320,
+       "y": 112
+      }
+     ],
+     "x": 160,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 640,
+       "y": 192
+      },
+      {
+       "x": 960,
+       "y": 176
+      },
+      {
+       "x": 912,
+       "y": 240
+      }
+     ],
+     "x": 640,
+     "y": 192
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 14,
+    "pins_total": 14,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "sallen_key_labelled.asc",
+     "x": 320,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       208
+      ],
+      [
+       480,
+       112
+      ],
+      [
+       640,
+       128
+      ]
+     ],
+     "detail": "Net 'a' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "a",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "a"
+   },
+   {
+    "at": {
+     "file": "sallen_key_labelled.asc",
+     "x": 480,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       208
+      ],
+      [
+       800,
+       128
+      ],
+      [
+       912,
+       192
+      ]
+     ],
+     "detail": "Net 'b' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "b",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "b"
+   },
+   {
+    "at": {
+     "file": "sallen_key_labelled.asc",
+     "x": 160,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       128
+      ],
+      [
+       320,
+       112
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   },
+   {
+    "at": {
+     "file": "sallen_key_labelled.asc",
+     "x": 640,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       192
+      ],
+      [
+       960,
+       176
+      ],
+      [
+       912,
+       240
+      ]
+     ],
+     "detail": "Net 'out' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "points": [
+      {
+       "x": 272,
+       "y": 368
+      },
+      {
+       "x": 64,
+       "y": 416
+      }
+     ],
+     "x": 272,
+     "y": 368
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "points": [
+      {
+       "x": 496,
+       "y": 368
+      },
+      {
+       "x": 64,
+       "y": 256
+      }
+     ],
+     "x": 496,
+     "y": 368
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 22,
+    "pins_total": 44,
+    "pins_wired": 22,
+    "wire_segments": 27
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 272,
+     "y": 368
+    },
+    "evidence": {
+     "coords": [
+      [
+       272,
+       368
+      ],
+      [
+       64,
+       416
+      ]
+     ],
+     "detail": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inn"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 496,
+     "y": 368
+    },
+    "evidence": {
+     "coords": [
+      [
+       496,
+       368
+      ],
+      [
+       64,
+       256
+      ]
+     ],
+     "detail": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inp"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'bias' is connected by 5 net-label stubs and no drawn wire segment",
+     "net": "bias",
+     "points": [
+      {
+       "x": 640,
+       "y": 240
+      },
+      {
+       "x": 848,
+       "y": 160
+      },
+      {
+       "x": 800,
+       "y": 240
+      },
+      {
+       "x": 960,
+       "y": 240
+      },
+      {
+       "x": 640,
+       "y": 480
+      }
+     ],
+     "x": 640,
+     "y": 240
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "points": [
+      {
+       "x": 480,
+       "y": 128
+      },
+      {
+       "x": 1120,
+       "y": 240
+      }
+     ],
+     "x": 480,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "points": [
+      {
+       "x": 320,
+       "y": 128
+      },
+      {
+       "x": 1280,
+       "y": 240
+      }
+     ],
+     "x": 320,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'out' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "points": [
+      {
+       "x": 528,
+       "y": 400
+      },
+      {
+       "x": 688,
+       "y": 400
+      },
+      {
+       "x": 800,
+       "y": 432
+      },
+      {
+       "x": 960,
+       "y": 368
+      }
+     ],
+     "x": 528,
+     "y": 400
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'tail' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "tail",
+     "points": [
+      {
+       "x": 1008,
+       "y": 160
+      },
+      {
+       "x": 1168,
+       "y": 256
+      },
+      {
+       "x": 1328,
+       "y": 256
+      }
+     ],
+     "x": 1008,
+     "y": 160
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'vdd' is connected by 8 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "points": [
+      {
+       "x": 160,
+       "y": 128
+      },
+      {
+       "x": 640,
+       "y": 112
+      },
+      {
+       "x": 208,
+       "y": 496
+      },
+      {
+       "x": 208,
+       "y": 448
+      },
+      {
+       "x": 368,
+       "y": 496
+      },
+      {
+       "x": 368,
+       "y": 448
+      },
+      {
+       "x": 528,
+       "y": 496
+      },
+      {
+       "x": 528,
+       "y": 448
+      }
+     ],
+     "x": 160,
+     "y": 128
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'x' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "x",
+     "points": [
+      {
+       "x": 1168,
+       "y": 160
+      },
+      {
+       "x": 208,
+       "y": 400
+      },
+      {
+       "x": 160,
+       "y": 480
+      },
+      {
+       "x": 320,
+       "y": 480
+      }
+     ],
+     "x": 1168,
+     "y": 160
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'y' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "y",
+     "points": [
+      {
+       "x": 1328,
+       "y": 160
+      },
+      {
+       "x": 368,
+       "y": 400
+      },
+      {
+       "x": 480,
+       "y": 480
+      },
+      {
+       "x": 800,
+       "y": 368
+      }
+     ],
+     "x": 1328,
+     "y": 160
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 44,
+    "pins_total": 44,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 640,
+     "y": 240
+    },
+    "evidence": {
+     "coords": [
+      [
+       640,
+       240
+      ],
+      [
+       848,
+       160
+      ],
+      [
+       800,
+       240
+      ],
+      [
+       960,
+       240
+      ],
+      [
+       640,
+       480
+      ]
+     ],
+     "detail": "Net 'bias' is connected by 5 net-label stubs and no drawn wire segment",
+     "net": "bias",
+     "stub_count": 5
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "bias"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 480,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       128
+      ],
+      [
+       1120,
+       240
+      ]
+     ],
+     "detail": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inn"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 320,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       320,
+       128
+      ],
+      [
+       1280,
+       240
+      ]
+     ],
+     "detail": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inp"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 528,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       528,
+       400
+      ],
+      [
+       688,
+       400
+      ],
+      [
+       800,
+       432
+      ],
+      [
+       960,
+       368
+      ]
+     ],
+     "detail": "Net 'out' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "out",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "out"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1008,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       1008,
+       160
+      ],
+      [
+       1168,
+       256
+      ],
+      [
+       1328,
+       256
+      ]
+     ],
+     "detail": "Net 'tail' is connected by 3 net-label stubs and no drawn wire segment",
+     "net": "tail",
+     "stub_count": 3
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "tail"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 160,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       128
+      ],
+      [
+       640,
+       112
+      ],
+      [
+       208,
+       496
+      ],
+      [
+       208,
+       448
+      ],
+      [
+       368,
+       496
+      ],
+      [
+       368,
+       448
+      ],
+      [
+       528,
+       496
+      ],
+      [
+       528,
+       448
+      ]
+     ],
+     "detail": "Net 'vdd' is connected by 8 net-label stubs and no drawn wire segment",
+     "net": "vdd",
+     "stub_count": 8
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "vdd"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1168,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       1168,
+       160
+      ],
+      [
+       208,
+       400
+      ],
+      [
+       160,
+       480
+      ],
+      [
+       320,
+       480
+      ]
+     ],
+     "detail": "Net 'x' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "x",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "x"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1328,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       1328,
+       160
+      ],
+      [
+       368,
+       400
+      ],
+      [
+       480,
+       480
+      ],
+      [
+       800,
+       368
+      ]
+     ],
+     "detail": "Net 'y' is connected by 4 net-label stubs and no drawn wire segment",
+     "net": "y",
+     "stub_count": 4
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "y"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 8,
+    "pins_wired": 4,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 352,
+       "y": 232
+      },
+      {
+       "x": 200,
+       "y": 208
+      }
+     ],
+     "x": 352,
+     "y": 232
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 6,
+    "pins_total": 8,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "vccs_stage_labelled.asc",
+     "x": 352,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       352,
+       232
+      ],
+      [
+       200,
+       208
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/vcvs_stage_drawn.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 8,
+    "pins_wired": 4,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/benchmark/vcvs_stage_labelled.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "points": [
+      {
+       "x": 352,
+       "y": 332
+      },
+      {
+       "x": 200,
+       "y": 308
+      }
+     ],
+     "x": 352,
+     "y": 332
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 6,
+    "pins_total": 8,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "vcvs_stage_labelled.asc",
+     "x": 352,
+     "y": 332
+    },
+    "evidence": {
+     "coords": [
+      [
+       352,
+       332
+      ],
+      [
+       200,
+       308
+      ]
+     ],
+     "detail": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "in",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "in"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
   "dropped_wire": [],
   "edit": {
