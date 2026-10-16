@@ -34,8 +34,9 @@ process that holds the engine as `api` — the same six ops as methods, complete
 results — for loops over runs and numpy on samples. It is outside the envelope
 too: its reply is `status` (ok, error, timeout, busy, reset) plus captured
 output, and its contract is the tool description and `tools/run_code.py`. The
-snippet has the server process's own file and process authority, not the
-sandbox, which is why the setting exists: an operator who exposes the server
+snippet has the server process's own file and process authority, which
+`allowed_paths` does not confine; that is why the setting exists: an operator
+who exposes the server
 beyond one trusted local client turns it off.
 
 Canonical loops:
@@ -87,9 +88,9 @@ From the error hierarchy:
 
 | code | meaning |
 |-|-|
-| `path_denied` | the path resolves outside `allowed_paths`; a `hint` names the config file and key that widen it (an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal) |
+| `path_denied` | a sandbox (`allowed_paths`) is set and the path resolves outside it, or the path cannot be resolved; a `hint` says what to change, for a sandbox the config file and key that widen it (an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal) |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
-| `symbol_unresolved` | the schematic opened, but a symbol, sub-sheet or library it refers to was not found |
+| `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
@@ -231,7 +232,7 @@ shows in place of the description.
 the client so rather than making it re-list every turn: `tools/list`,
 `resources/list`, `resources/templates/list` and `prompts/list` are advertised
 as fresh for an hour and `private` (`ttlMs` / `cacheScope`, SEP-2549). Private
-because each listing is shaped by this server's own configuration and sandbox,
+because each listing is shaped by this server's own configuration,
 so it must not come out of a cache shared with another authorization context;
 an hour because the only route by which any of them could change is a new
 server process, and therefore a new connection. The hint lives in one place,
@@ -559,8 +560,9 @@ The point of attaching analysis is that one call can carry simulation plus
 measurement; without it, analysis always costs a second call.
 
 **Input snapshot and provenance.** At submission the server stages the primary
-deck (content-addressed) plus the includes and libs that resolve inside the
-allowed roots, to a recursion depth of 3; staged copies preserve relative
+deck (content-addressed) plus every include and lib it reaches (with a
+sandbox set, those inside it or the simulator's own library), to a recursion
+depth of 8; staged copies preserve relative
 topology. The manifest records `{path, sha256, staged, live, staged_path,
 reason, section}` for every reference, including `.lib` section selections.
 Runs read only those copies, so editing the original afterwards cannot change
@@ -1504,7 +1506,8 @@ Python API), which are never capped. The gate stays a whole-file answer.
     starts_ltspice}` (whether edit_schematic can keep a sheet open in an
     LTspice window in step with its file, and whether in_ltspice starts
     LTspice when no window is open), dialects, persistence,
-    allowed roots, profile, the tool listing this session was served,
+    the sandbox (allowed_paths, null when none is set), profile, the tool
+    listing this session was served,
     limits, linter_version, the startup diagnostics that say whether
     this server started degraded, and `render: {png, missing, reason,
     remedy}` — whether verify_circuit can make the PNG it inlines, and
@@ -1538,8 +1541,8 @@ Python API), which are never capped. The gate stays a whole-file answer.
     search requires query and fuzzy-matches it; enumerate requires libs and,
     given a query, lists the names containing it (case-insensitive) rather
     than refusing it. A search without libs reads the detected simulators'
-    own model libraries; libs may name a file inside the sandbox or inside
-    one of those libraries, so every source_path a search returns can be read
+    own model libraries; with a sandbox set, libs may name a file inside it
+    or inside one of those libraries, so every source_path a search returns can be read
     back through libs. Every route returns the same row: name, type,
     source_path, include_directive (source_path as the server sees it, which
     is what staging reads), ports, params, and for a .MODEL its device_type
@@ -1584,13 +1587,13 @@ Python API), which are never capped. The gate stays a whole-file answer.
     the documents open in the LTspice windows on this machine: `windows`
     (how many are running), `total`, and `designs`, each {path, kind:
     "schematic"|"netlist"|"other", active (the one in front in its window),
-    pid, version, in_sandbox}. A sheet inside the sandbox adds its `sha256`
+    pid, version, in_sandbox}. A sheet the server may read adds its `sha256`
     and `differs_from_file`. When the window's copy is not the file's,
     `difference` names a few entries in a sentence, and `only_in_window` and
     `only_in_file` list the entries that differ (a symbol with its
     attributes, or one other line), up to 25 a side, with
-    `difference_omitted` counting the rest. A document outside the sandbox is
-    named and not read. Fails as `open_windows_unavailable` where there is no bridge
+    `difference_omitted` counting the rest. A document outside the sandbox,
+    when one is set, is named and not read. Fails as `open_windows_unavailable` where there is no bridge
     to ask (not Windows, LTspice before 26.1, the setting off) and as
     `open_windows_unreachable` when the bridge does not answer
 ```
@@ -1628,7 +1631,7 @@ compared and never returned as a sheet. What a caller gets is where it differs
 from the file, entry by entry, each marked as the window's or the file's:
 enough to tell the person what they have not saved, and to see what an edit
 was refused over, and not something that could be taken for the circuit a run
-would use. A document outside the sandbox is named, as its path is not a secret from
+would use. A document outside the sandbox, when one is set, is named, as its path is not a secret from
 a client on the same machine, but neither it nor the window's copy of it is
 read. A query that cannot be answered fails; an empty list would say that
 nothing is open.
@@ -2172,7 +2175,7 @@ The initial profile is `sky130-e6f9c887-ngspice-v1`: the generated Sky130A model
 set at open_pdks revision `e6f9c8876da77220403014b116761b0b2d79aab4`, with
 `sky130_fd_pr__nfet_01v8` physical MOS coverage. The profile checks original
 captured bytes against its packaged acquisition hashes. Install the matching
-PDK separately and include its location in the server's allowed paths.
+PDK separately; with a sandbox set, include its location in it.
 
 The caller authors one `.lib` binding to `libs.tech/ngspice/sky130.lib.spice`:
 
