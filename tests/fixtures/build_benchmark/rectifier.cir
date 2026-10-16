@@ -1,0 +1,8 @@
+* Half-wave rectifier
+* names: in out
+V1 in 0 SINE(0 5 60)
+D1 in out Dmod
+R1 out 0 1k
+.model Dmod D(Is=1e-14)
+.tran 50m
+.end

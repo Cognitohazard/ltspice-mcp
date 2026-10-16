@@ -1,0 +1,10 @@
+* C:\recording\sallen_key_drawn.asc
+Vin in 0 AC 1
+R1 in N001 10k
+R2 N001 N002 10k
+E1 out 0 N002 out 1e5
+C1 out N001 10n
+C2 N002 0 10n
+.ac dec 20 10 100k
+.backanno
+.end

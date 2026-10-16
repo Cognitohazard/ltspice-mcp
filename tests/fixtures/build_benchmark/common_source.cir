@@ -1,0 +1,10 @@
+* Common-source amplifier with source degeneration
+* names: vdd in out
+Vdd vdd 0 5
+Vin in 0 SINE(1.5 0.1 1k)
+RD vdd out 5k
+M1 out in src src NMOS_MOD
+RS src 0 500
+.model NMOS_MOD NMOS(Kp=200u Vto=1)
+.op
+.end

@@ -1,0 +1,7 @@
+* RC low-pass filter
+* names: in out
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 100n
+.ac dec 20 10 1meg
+.end

@@ -1,6 +1,820 @@
 {
   "build": "ltspice26",
   "cases": {
+    "benchmark/common_source_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/common_source_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/common_source_drawn.asc": "58d235ff0701aa0c081f3b48f79aa0dd9c74fb601ef80fb14bb8dabcb9eedbe9",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/common_source_drawn.net": {
+          "bytes": 328,
+          "sha256": "70f53586e234be1597444f64bab50f1d3ebe977381511336bd4e2fceb63ad42d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/common_source_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/common_source_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/common_source_labelled.asc": "7ae31635e8cea0d69901ee32586bc3864d2aabc8ba41aaf0551ac1ef60df8c93",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/common_source_labelled.net": {
+          "bytes": 333,
+          "sha256": "c1969e43840857290f604e6e92cb59bfeddf739cb35ee4a2a6c887815cc8b17a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/diff_pair_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/diff_pair_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diff_pair_drawn.asc": "c88321afee254ed6fcafabc866ec10d1d1d9bebd3f821d62fb7c72ec043d7c5a",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/diff_pair_drawn.net": {
+          "bytes": 398,
+          "sha256": "37f5fff701493f20953e23d394eeaef17e41246301f2f67f071205147d6e0ce5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/diff_pair_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/diff_pair_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diff_pair_labelled.asc": "40fef114bf33284bcf994ee6720cc2b87158a7bbb32129ecb39e662390f09257",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/diff_pair_labelled.net": {
+          "bytes": 401,
+          "sha256": "1dcdbc6869d654fa028e88a0954764b302d06ac0fed7f3216ba7f0005cb47529"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/nmos_mirror_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/nmos_mirror_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/nmos_mirror_drawn.asc": "c4456e2cf09211f6f0e2a6ee7c5fae685f2e8650301e2d35c1686245485fbffc",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/nmos_mirror_drawn.net": {
+          "bytes": 329,
+          "sha256": "4d1596b095ac26fd89c97c90e148b356fd906f0b7a34b2aaab28136e25c68d98"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/nmos_mirror_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/nmos_mirror_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/nmos_mirror_labelled.asc": "eb8729a9d0120934d5b14d8f4383248fc7302cd8202119f189db780ffebac353",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/nmos_mirror_labelled.net": {
+          "bytes": 332,
+          "sha256": "ea8c688ec714196c483312100d7497c9b096c445f5e70c19189ffa1ecd4ffc7c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/r2r_ladder_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/r2r_ladder_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/r2r_ladder_drawn.asc": "fc625f04186d5657ed1f331f499cc2abe06bd9e3c13cd4000dac6b8732d5aabb",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/r2r_ladder_drawn.net": {
+          "bytes": 913,
+          "sha256": "d625fba4560d6dc910610f0a1d0b164fd832d689d79a82447aa9fc356cb5a195"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/r2r_ladder_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/r2r_ladder_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/r2r_ladder_labelled.asc": "d9a4b93f219dda17134843bed0ae7a2d47d3d63a9019474f4ceaaa3aa5ac7364",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/r2r_ladder_labelled.net": {
+          "bytes": 916,
+          "sha256": "14af8c95ce13a99ed5cbcab5877231cf1596808ec36e979ea70542a6778ca007"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rc_lowpass_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/rc_lowpass_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rc_lowpass_drawn.asc": "30187c8ba89a435a2574ea11e0d3dd7a32f90ed3b34f514c28cd0346ada8ee6a",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rc_lowpass_drawn.net": {
+          "bytes": 153,
+          "sha256": "609824dd3492c321088b2d52666e8af1f9e9c867c9172afd15ab250bccbbc171"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rc_lowpass_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/rc_lowpass_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rc_lowpass_labelled.asc": "0f1a1580d1511acfc1b1cbe01f0c77bdf7ff6cae7d45d48f7428cb384679d6e9",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rc_lowpass_labelled.net": {
+          "bytes": 156,
+          "sha256": "d60d42c746f5584a666dc9dd4fd3692239c1b18fa4a74874993a5e3b6e1b8452"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rectifier_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/rectifier_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rectifier_drawn.asc": "bc541fe802ebe82ec61face1d4e1ceb6f252e0aad6c95d0fc2bd756920a70a5e",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rectifier_drawn.net": {
+          "bytes": 248,
+          "sha256": "8ba999e5fdb5d48373b5545bee110485444256dfdaae55ce1005bdbeef274925"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rectifier_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/rectifier_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rectifier_labelled.asc": "304d87107f8eb92912a7d4dbfb0dcde7f8f3ee979d66932e8112ca8796a91853",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rectifier_labelled.net": {
+          "bytes": 253,
+          "sha256": "d4ef6771c01d167fba86d2992651479cd9db33052ce2c583a3e59d215fa58e7f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rlc_line_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/rlc_line_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/rlc_line_drawn.asc": "39532e94ee94df0bce6d5943acce4ca3e6380bf11645f7cb301083128242d26b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rlc_line_drawn.net": {
+          "bytes": 2502,
+          "sha256": "144eda1c3a732848fa2483fcf612b149e4edfec8ff0c5922906bb4ddd0cb97aa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rlc_line_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/rlc_line_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/rlc_line_labelled.asc": "409d011ef1cb8cf96cab5416eb5e92b2366a4c0e2b4940e02373bb40bb943acd",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rlc_line_labelled.net": {
+          "bytes": 2285,
+          "sha256": "93ee26167cb5819625c0d54d36d417f55c9c3344c805fe6662822810700029f4"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/sallen_key_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/sallen_key_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/sallen_key_drawn.asc": "be3ddd9ade1b3d25a3b29cc801f339c8ba8a9b34b9869fa21ca334cb0f9f0458",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/sallen_key_drawn.net": {
+          "bytes": 211,
+          "sha256": "cfefbf83bd4828c2fef01d85640cb643a49c7421037a5e871e8d83a6ce93d4bf"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/sallen_key_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/sallen_key_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/sallen_key_labelled.asc": "f2159bc2175c6aaa03f83154bdcd8d0e163fc91b6e339a14d0da0d36ced3b919",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/sallen_key_labelled.net": {
+          "bytes": 196,
+          "sha256": "dbd3c8abda376272265babe829bc332a60f899f0579d7c3cf520bc164eb60249"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/two_stage_opamp_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/two_stage_opamp_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/two_stage_opamp_drawn.asc": "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/two_stage_opamp_drawn.net": {
+          "bytes": 611,
+          "sha256": "cc6ab36f7c4f0c03a4fbfaebf7bece51b80af01c3014a276162dd1e62059ee6c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/two_stage_opamp_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/two_stage_opamp_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/two_stage_opamp_labelled.asc": "adcad5f63545894caf1b80b1147decf2e98040f0fb78edd2914bbaa5c8217925",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/two_stage_opamp_labelled.net": {
+          "bytes": 590,
+          "sha256": "d90acd891ffd5360b53095f9030584132cb7536b68ba50fc3fd42b48446f9258"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vccs_stage_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/vccs_stage_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vccs_stage_drawn.asc": "3a3d6c642e235a27980faf5535c1337e410433856bed474c39aef8c8610602b0",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vccs_stage_drawn.net": {
+          "bytes": 145,
+          "sha256": "da1ce8bae5f63db78f8b1773d57cb9426c0105038aac4bb5f5ea57064e136402"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vccs_stage_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/vccs_stage_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vccs_stage_labelled.asc": "b15548d3f45f2da383410c4c57b81e7e50ccdb09310fdc84500adea2f47ebd9d",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vccs_stage_labelled.net": {
+          "bytes": 148,
+          "sha256": "96b6d9faac8f84a1d0888d112697546dcec3873ec562410199504a4c7f8f29ed"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vcvs_stage_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/vcvs_stage_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vcvs_stage_drawn.asc": "84b639fea906822922e1dd63a37747c22a91ebf5a43817f1a67a56a956e038c3",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vcvs_stage_drawn.net": {
+          "bytes": 159,
+          "sha256": "71a928cf17a9fe4b76f2d668ea5ef37e2fd6cf22e7c1f95f8d7798535d81e7a9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vcvs_stage_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/vcvs_stage_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vcvs_stage_labelled.asc": "51fd79e309dd2fc11c13d1e5fa3beae051b0c3c6a3a1599c9154e985aeaee063",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vcvs_stage_labelled.net": {
+          "bytes": 162,
+          "sha256": "ed027f3fc1b1b8ec96275c33cc59c1af0f101137a71628d8c21e848f775e537a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/bus_label": {
       "behaviour": "bus-labels",
       "command": [
