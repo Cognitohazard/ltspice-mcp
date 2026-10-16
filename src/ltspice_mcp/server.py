@@ -23,7 +23,6 @@ from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.observability import configure_stderr_logging
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.simulator import SIMULATOR_DISPLAY, no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
@@ -84,7 +83,7 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     if not raw:
         return
     try:
-        resolved = resolve_safe_path(raw, state.allowed_paths())
+        resolved = state.resolve_path(raw)
     except (PathSecurityError, OSError):
         return
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
@@ -95,7 +94,8 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
 
 # Error type → hint appended to error messages. Hints name only tools the
 # consolidated surface exposes (the only profile since 0.6.0).
-# PathSecurityError is handled separately (needs dynamic allowed_paths).
+# PathSecurityError is handled separately: its hint is the session's sandbox
+# guidance, which reads the sandbox as it stands at the call.
 _ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     _err.SimulationError: (
         "Use inspect with a capabilities query to verify simulator availability."
@@ -144,6 +144,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     """
     lease_owner = object()
     lease_pid = acquire_session_lease(lease_owner)
+    # The instructions below name this session's simulators; the Server
+    # outlives the session, so they are put back when it ends.
+    instructions_before = server.instructions
     try:
         boot = await bootstrap_server_engine(
             on_config_loaded=_configure_server_logging,
@@ -208,9 +211,13 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             for diag in state.diagnostics:
                 logger.warning(f"  - {diag}")
 
-        logger.info("Allowed paths (sandbox):")
-        for allowed_path in state.allowed_paths():
-            logger.info(f"  - {allowed_path.resolve()}")
+        sandbox = state.allowed_paths()
+        if sandbox is None:
+            logger.info("No sandbox: [security] allowed_paths is not set")
+        else:
+            logger.info("Sandbox ([security] allowed_paths):")
+            for allowed_path in sandbox:
+                logger.info(f"  - {allowed_path.resolve()}")
 
         if boot.preloaded_circuits:
             logger.info(
@@ -226,6 +233,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             await state.shutdown()
             logger.info("Server shutdown complete")
     finally:
+        server.instructions = instructions_before
         release_session_lease(lease_owner, lease_pid)
 
 
@@ -238,15 +246,17 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # else lives in the guide, which is read on demand. Kept under
 # _INSTRUCTIONS_BUDGET including the runtime simulator prefix: Claude Code
 # silently truncates server instructions at 2048 chars, and the tail (the
-# result-trust and sandbox rules) is the part that must survive.
+# result-trust rule) is the part that must survive. They do not mention the
+# sandbox: it is re-read from the config file on every call, so anything said
+# of it here could be stale, and a refusal says what to change itself.
 _INSTRUCTIONS_TEMPLATE = """\
 SPICE simulation with LTspice and ngspice, and LTspice .asc schematic editing.
 
 Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) returns its core (how to work here, the Python API, the rules that cause silent errors) and an index of topic sections and task playbooks; add "section" to read one. Read the section for a task before starting it.
 
-{python_door} Tools: one sandboxed step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
+{python_door} Tools: one step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
 
-Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures. Paths must lie in the sandbox; a refused path names the config line that widens it.
+Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures.
 """
 
 # Claude Code's client truncates MCP server instructions at 2048 characters;
@@ -260,8 +270,8 @@ _PYTHON_DOOR_TOOL = (
     "Python: run_code runs a snippet with api in scope (in your own Python, from "
     "ltspice_mcp.api import Api), so loops, decisions, trace math and complete results "
     "take one call and far fewer tokens than a tool call per step. run_code has the "
-    "server's own file and process authority, outside the sandbox, and a job it owns "
-    "stops if its worker restarts unless submitted with detach=True."
+    "server's own file and process authority, and a job it owns stops if its worker "
+    "restarts unless submitted with detach=True."
 )
 _PYTHON_DOOR_LIBRARY = (
     "Python: from ltspice_mcp.api import Api gives the same operations in your own "
@@ -269,6 +279,7 @@ _PYTHON_DOOR_LIBRARY = (
     "fewer tokens than a tool call per step. A job it owns stops when your process "
     "exits unless submitted with detach=True."
 )
+
 
 #: The instructions as the default configuration serves them (run_code on) —
 #: the static default the Server is constructed with, and what the tests pin.
@@ -581,7 +592,7 @@ async def get_prompt(
 # The tool, resource and prompt listings are all built once, during lifespan
 # startup, and never change while the process runs — so a client may hold onto
 # one instead of re-listing every turn. The scope is private: each listing is
-# shaped by this server's own configuration and sandbox, so it must not be
+# shaped by this server's own configuration, so it must not be
 # served from a cache shared with another authorization context. An hour is
 # well inside a session and well under any route by which the listings could
 # change, since that needs a new server process and therefore a new connection.

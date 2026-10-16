@@ -212,7 +212,6 @@ checkout's source and test files matched the final working tree byte for byte.
 | Outcome rule does not apply to the parametrized module | 3 |
 | Windows Claude scratch directory is not known | 1 |
 
-A later native Windows session showed Claude Code's layout there,
-`%TEMP%\claude\<project>\<session>\scratchpad`, so the default sandbox now
-admits `%TEMP%\claude` on Windows. The scratch-directory test no longer skips
-on any platform: it asserts the root each platform uses.
+The scratch-directory skip no longer applies on any platform: there is no
+sandbox unless `[security] allowed_paths` is set, so the server keeps no
+scratch-directory default to test.

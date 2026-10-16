@@ -64,7 +64,14 @@ class TestServerInstructions:
         text = CONSOLIDATED_INSTRUCTIONS
         assert "edit_schematic" in text
         assert "status completed and still hold a degenerate result" in text
-        assert "a refused path names the config line that widens it" in text
+
+    def test_say_nothing_of_the_sandbox(self):
+        """The sandbox is re-read from the config file on every call, so the
+        instructions, sent once, could only state a stale one; a refused path's
+        reply says what to change."""
+        for served in (("run_code",), ()):
+            text = build_instructions({}, None, served=served)
+            assert "sandbox" not in text and "allowed_paths" not in text
 
     def test_state_both_doors_and_their_tradeoffs(self):
         served = build_instructions({}, None)
@@ -72,11 +79,11 @@ class TestServerInstructions:
         for text in (served, library):
             assert "from ltspice_mcp.api import Api" in text
             assert "detach=True" in text
-            assert "Tools: one sandboxed step per call" in text
-        assert "outside the sandbox" in served
+            assert "Tools: one step per call" in text
+        assert "run_code has the server's own file and process authority" in served
         # run_code off: the library runs with the caller's own authority, so
         # the authority warning that belongs to run_code is not stated.
-        assert "run_code" not in library and "outside the sandbox" not in library
+        assert "run_code" not in library
 
 
 class TestGuideStructure:

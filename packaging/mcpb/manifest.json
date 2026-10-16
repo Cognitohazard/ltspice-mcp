@@ -25,10 +25,10 @@
   "user_config": {
     "allowed_paths": {
       "type": "directory",
-      "title": "Circuits directory",
-      "description": "The folder the server may read and write. Put your .asc, .cir, and .net files here.",
-      "default": "${HOME}/Documents",
-      "required": true
+      "title": "Sandbox folder (optional)",
+      "description": "Leave blank for no sandbox. Pick a folder to keep the server's tools inside it: they then read and write only there, and a relative path is taken from it.",
+      "required": false,
+      "default": ""
     },
     "simulator_exe": {
       "type": "file",

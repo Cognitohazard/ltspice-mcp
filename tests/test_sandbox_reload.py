@@ -1,5 +1,7 @@
 """The sandbox follows ``[security] allowed_paths`` in the config file while the
 server runs, so the refusal an agent gets can name a line the agent edits itself.
+With the key unset (or an empty list) there is no sandbox: a path is resolved
+wherever it lands, a relative one from the working directory.
 
 Two halves, both pinned here. Every reader of the sandbox goes through the
 reload, so a report or a resolution made right after an edit sees the edit even
@@ -33,7 +35,7 @@ from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experi
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-from tests.conftest import LIVENESS_S, FakeSim
+from tests.conftest import LIVENESS_S, FakeSim, capabilities_report
 
 _DECK = "* deck\nR1 in 0 1k\n.end\n"
 
@@ -69,6 +71,10 @@ class _Sandbox:
     def widen(self) -> None:
         _write(self.toml, [".", str(self.elsewhere)], self.now + 2)
 
+    def lift(self) -> None:
+        """Remove the sandbox: an empty list is the same as no key."""
+        _write(self.toml, [], self.now + 2)
+
 
 def test_editing_allowed_paths_takes_effect_on_the_next_call(tmp_path: Path, monkeypatch):
     box = _Sandbox(tmp_path, monkeypatch)
@@ -82,6 +88,13 @@ def test_editing_allowed_paths_takes_effect_on_the_next_call(tmp_path: Path, mon
 
     # Narrowing is honoured the same way: the file is the authority, not the first read.
     _write(box.toml, ["."], box.now + 4)
+    with pytest.raises(PathSecurityError):
+        safe_path(str(box.deck), state)
+
+    # And so is removing the sandbox, and setting it again.
+    _write(box.toml, [], box.now + 6)
+    assert safe_path(str(box.deck), state) == box.deck.resolve()
+    _write(box.toml, ["."], box.now + 8)
     with pytest.raises(PathSecurityError):
         safe_path(str(box.deck), state)
 
@@ -152,6 +165,17 @@ def test_every_path_reader_admits_a_newly_allowed_directory(tmp_path: Path, monk
     read(state, box.deck)
 
 
+@pytest.mark.parametrize(
+    "read",
+    [_netlist_path, _raw_source, _log_source, _netlist_resource],
+    ids=["netlist-path", "raw-source", "log-source", "netlist-resource"],
+)
+def test_every_path_reader_admits_any_path_with_no_sandbox(tmp_path: Path, monkeypatch, read):
+    box = _Sandbox(tmp_path, monkeypatch)
+    box.lift()
+    read(box.state(), box.deck)
+
+
 async def test_hierarchy_query_admits_a_newly_allowed_directory(tmp_path: Path, monkeypatch):
     """The hierarchy loader checks every file it opens against the list it is
     handed, so it has to be handed the reloaded one."""
@@ -169,6 +193,55 @@ async def test_hierarchy_query_admits_a_newly_allowed_directory(tmp_path: Path, 
     assert result.structured_content is not None
     (item,) = result.structured_content["results"]
     assert item["ok"], item["error"]
+
+
+# ---------------------------------------------------------------------------
+# With no sandbox
+# ---------------------------------------------------------------------------
+
+
+def test_a_relative_path_with_no_sandbox_is_taken_from_the_working_directory(
+    tmp_path: Path, monkeypatch
+):
+    """Not from the process directory, which the server need not share."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    box.lift()
+    state = box.state()
+    monkeypatch.chdir(box.elsewhere)
+    assert state.allowed_paths() is None
+    assert safe_path("deck.cir", state) == (box.work / "deck.cir").resolve()
+
+
+def test_a_root_added_for_one_read_never_creates_a_sandbox(tmp_path: Path, monkeypatch):
+    """The simulator's own library widens a sandbox for some reads; with no
+    sandbox, naming it must not confine the read to that library."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    box.lift()
+    library = tmp_path / "simulator-lib"
+    library.mkdir()
+    assert box.state().resolve_path(str(box.deck), library) == box.deck.resolve()
+
+
+def test_with_no_sandbox_a_refusal_says_there_is_none(tmp_path: Path, monkeypatch):
+    """An unresolvable path is the one thing refused, and its guidance does
+    not send the caller to widen a sandbox that does not exist."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    box.lift()
+    state = box.state()
+    with pytest.raises(PathSecurityError, match="null byte"):
+        safe_path("deck\x00.cir", state)
+    guidance = state.sandbox_guidance()
+    assert "There is no sandbox" in guidance
+    assert "Allowed paths" not in guidance
+
+
+async def test_the_reports_give_no_sandbox_as_null(tmp_path: Path, monkeypatch):
+    box = _Sandbox(tmp_path, monkeypatch)
+    box.lift()
+    state = box.state()
+    assert (await capabilities_report(state))["allowed_paths"] is None
+    config = handle_read_resource("spice://config", state)
+    assert json.loads(config.contents[0].text)["allowed_paths"] is None  # type: ignore[union-attr]
 
 
 #: The modules allowed to read ``config.allowed_paths``: the one that defines it

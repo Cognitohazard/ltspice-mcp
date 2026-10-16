@@ -36,7 +36,6 @@ from ltspice_mcp.lib.parser_process import (
     run_parser_sync,
 )
 from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_header import RawLimits
 from ltspice_mcp.lib.result_cache import ParserCleanupError
 
@@ -211,15 +210,14 @@ def load_artifacts_sync(
 def _admit(source: AnalysisSource, state: SessionState) -> dict[str, JsonValue]:
     """Each role's authorized absolute path, or None for a role not requested."""
     paths = {"raw": source.raw, "log": source.log, "console": source.console}
-    allowed = state.allowed_paths() if not source.trusted_job_artifact else None
     admitted: dict[str, JsonValue] = {}
     for role, path in paths.items():
         if path is None:
             admitted[role] = None
-        elif allowed is None:
+        elif source.trusted_job_artifact:
             admitted[role] = str(path.absolute())
         else:
-            admitted[role] = str(resolve_safe_path(str(path), allowed))
+            admitted[role] = str(state.resolve_path(str(path)))
     return admitted
 
 
