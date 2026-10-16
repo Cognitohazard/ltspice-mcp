@@ -469,6 +469,251 @@
   ]
  },
  {
+  "note": "put a sheet in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\micro_sign.asc"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "put results that are not open in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\runs\\one\\run.raw"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "the results in front, with a sheet in front",
+  "call": "get_raw_info",
+  "arguments": {},
+  "reply": {
+   "path": "C:\\recording\\older_version.raw"
+  }
+ },
+ {
+  "note": "open results on their own",
+  "call": "get_raw_info",
+  "arguments": {
+   "path": "C:\\recording\\runs\\one\\run.raw"
+  },
+  "reply": {
+   "path": "C:\\recording\\runs\\one\\run.raw"
+  }
+ },
+ {
+  "note": "put them in front",
+  "call": "bring_to_front",
+  "arguments": {
+   "path": "C:\\recording\\runs\\one\\run.raw"
+  },
+  "reply": {
+   "status": "ok"
+  }
+ },
+ {
+  "note": "the results in front",
+  "call": "get_raw_info",
+  "arguments": {},
+  "reply": {
+   "path": "C:\\recording\\runs\\one\\run.raw"
+  }
+ },
+ {
+  "note": "results opened on their own draw the traces the plot settings beside them name",
+  "observed": [
+   [
+    "I(R1)"
+   ]
+  ]
+ },
+ {
+  "note": "asked for again while open, they draw what they drew",
+  "observed": [
+   [
+    "I(R1)"
+   ]
+  ]
+ },
+ {
+  "note": "closed, they are not in front any more",
+  "observed": true
+ },
+ {
+  "note": "closed and opened again, they draw what the settings name now",
+  "observed": [
+   [
+    "V(out)"
+   ]
+  ]
+ },
+ {
+  "note": "the results put in front, of two of one name",
+  "observed": [
+   "one",
+   "other",
+   "one"
+  ]
+ },
+ {
+  "note": "of two results panes of one title, the first found is the one in front",
+  "observed": true
+ },
+ {
+  "note": "with that one closed, the results left open are the other run's",
+  "observed": "other"
+ },
+ {
+  "note": "open a sheet with no results beside it",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\closing.asc"
+  },
+  "reply": {
+   "already_open": "false",
+   "path": "C:\\recording\\closing.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "the frame takes input while LTspice asks nothing",
+  "observed": true
+ },
+ {
+  "note": "a sheet nobody changed, told to close, is closed, and LTspice asks nothing",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "opened again, it opens the results put beside it while it was open",
+  "observed": true
+ },
+ {
+  "note": "the plot opened from a sheet closes with it",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "hand the window a changed sheet",
+  "call": "set_design_content",
+  "arguments": {
+   "path": "C:\\recording\\closing.asc",
+   "text": "Version 4.1\nSHEET 1 880 680\nWIRE 32 128 -48 128\nWIRE 208 128 112 128\nWIRE 240 128 208 128\nWIRE -48 144 -48 128\nWIRE 240 144 240 128\nWIRE 240 256 240 208\nWIRE -48 272 -48 224\nFLAG 240 256 0\nFLAG -48 272 0\nFLAG 208 128 out\nSYMBOL voltage -48 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nSYMBOL res 128 112 R90\nWINDOW 0 0 56 VBottom 2\nWINDOW 3 32 56 VTop 2\nSYMATTR InstName R1\nSYMATTR Value 2k\nSYMBOL cap 224 144 R0\nSYMATTR InstName C1\nSYMATTR Value 100n\nTEXT -64 320 Left 2 !.tran 1m\n"
+  },
+  "reply": {
+   "message": "",
+   "status": "ok",
+   "unchanged": "false"
+  }
+ },
+ {
+  "note": "hand it back what it held",
+  "call": "set_design_content",
+  "arguments": {
+   "path": "C:\\recording\\closing.asc",
+   "text": "Version 4.1\nSHEET 1 880 680\nWIRE 32 128 -48 128\nWIRE 208 128 112 128\nWIRE 240 128 208 128\nWIRE -48 144 -48 128\nWIRE 240 144 240 128\nWIRE 240 256 240 208\nWIRE -48 272 -48 224\nFLAG 240 256 0\nFLAG -48 272 0\nFLAG 208 128 out\nSYMBOL voltage -48 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nSYMBOL res 128 112 R90\nWINDOW 0 0 56 VBottom 2\nWINDOW 3 32 56 VTop 2\nSYMATTR InstName R1\nSYMATTR Value 1k\nSYMBOL cap 224 144 R0\nSYMATTR InstName C1\nSYMATTR Value 100n\nTEXT -64 320 Left 2 !.tran 1m\n"
+  },
+  "reply": {
+   "message": "",
+   "status": "ok",
+   "unchanged": "false"
+  }
+ },
+ {
+  "note": "it then reads as its file does",
+  "observed": true
+ },
+ {
+  "note": "a sheet the window was handed is asked about before it closes, in these words",
+  "observed": [
+   [
+    "&Yes",
+    "&No",
+    "Cancel",
+    "Save changes to C:\\recording\\closing.asc?"
+   ]
+  ]
+ },
+ {
+  "note": "the document the question names is the sheet",
+  "observed": true
+ },
+ {
+  "note": "the frame takes input while LTspice asks that",
+  "observed": false
+ },
+ {
+  "note": "the window's copy, while LTspice asks",
+  "call": "get_design_content",
+  "arguments": {
+   "path": "C:\\recording\\closing.asc"
+  },
+  "reply": {
+   "path": "C:\\recording\\closing.asc",
+   "text": "<24 lines>"
+  }
+ },
+ {
+  "note": "answered Cancel, the sheet stays open, holds what it held, and the frame takes input",
+  "observed": [
+   true,
+   true,
+   true
+  ]
+ },
+ {
+  "note": "answered No, the sheet closes and its file is as it was",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "of two sheets of one title, the first pane found is the one in front",
+  "observed": true
+ },
+ {
+  "note": "Visible Traces is enabled for a sheet with no results, one with results put beside it after it was opened, one with results beside it when it was opened, and that one with its plot open",
+  "observed": [
+   false,
+   false,
+   true,
+   true
+  ]
+ },
+ {
+  "note": "a plot opened by its sheet's Visible Traces plots what a click on the sheet lands on",
+  "observed": true
+ },
+ {
+  "note": "a plot of results opened by their own path does, for a sheet that knows of none",
+  "observed": false
+ },
+ {
+  "note": "asked about a sheet by its path, the bridge opens the results beside it",
+  "observed": [
+   "tie_late.raw",
+   "tie_known.raw"
+  ]
+ },
+ {
+  "note": "that plot does, for a sheet that knows of none and for one that knows of its results",
+  "observed": [
+   false,
+   false
+  ]
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},

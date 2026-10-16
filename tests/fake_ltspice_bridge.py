@@ -17,7 +17,15 @@ one listed, which is the one LTspice had in front after opening them in turn.
 A window opens a sheet that exists on disk, or one the world lists under
 ``files`` with the text it would then hold, and puts it in front. It opens a
 results file that exists on disk, or one the world lists under ``results``;
-each one opened is added to the window's ``shown``.
+each one asked for is added to the window's ``shown``.
+
+A window's ``panes`` are the results files it has open, by path, the one in
+front of the others first: that one is the results in front to the bridge,
+whether or not a document is in front of it, as LTspice was recorded
+answering. ``plot_in_front`` says it is in front of the documents too. Those
+listed under ``tied`` were opened from their sheet (``tests/_ltspice_window.py``,
+which stands in for the window's frame and keeps the same file). A sheet whose
+text was replaced is listed under ``unsaved``: LTspice asks before closing one.
 
 ``silent_on`` names a tool this program stops answering at, for the tests of a
 bridge that hangs. A replaced design is written back to the world. One tool is
@@ -39,6 +47,9 @@ PORT = 50000
 NO_LTSPICE = (
     "Could not start or attach an LTspice instance. "
     "Open an LTspice window, or use start_headless/attach."
+)
+NO_RESULTS_IN_FRONT = (
+    "no active raw waveform window; supply a '.raw' file path or design file path"
 )
 
 
@@ -67,6 +78,25 @@ def own_desktop() -> str:
 
 def _kind(path: str) -> str:
     return "schematic" if path.lower().endswith(".asc") else "netlist"
+
+
+def front_design(window: dict[str, Any]) -> str | None:
+    """The document in front of a window's other documents, or None when it has none."""
+    return window.get("active") or next(reversed(window["designs"]), None)
+
+
+def in_front(window: dict[str, Any]) -> str | None:
+    """The document a window has in front: none with a plot in front of it."""
+    return None if window.get("plot_in_front") else front_design(window)
+
+
+def _to_front(entry: dict[str, Any], results: str) -> None:
+    """Put a results file's pane in front of the window's panes and documents."""
+    panes = entry.setdefault("panes", [])
+    if results in panes:
+        panes.remove(results)
+    panes.insert(0, results)
+    entry["plot_in_front"] = True
 
 
 class _Refused(Exception):
@@ -157,6 +187,7 @@ class Bridge:
             else:
                 raise _Refused("file not found")
             entry["active"] = path
+            entry["plot_in_front"] = False
             if Path(path).with_suffix(".raw").is_file():
                 entry.setdefault("with_results", []).append(path)
 
@@ -170,9 +201,14 @@ class Bridge:
         }
 
     def _bring_to_front(self, path: str | None) -> None:
+        """Put an open document or results file in front; one that is not open is no one's."""
+
         def front(entry: dict[str, Any], _world: dict[str, Any]) -> None:
             if path in entry["designs"]:
                 entry["active"] = path
+                entry["plot_in_front"] = False
+            elif path is not None and path in entry.get("panes", []):
+                _to_front(entry, path)
 
         self._in_window(front)
 
@@ -181,9 +217,18 @@ class Bridge:
             if path not in world.get("results", []) and not Path(path).is_file():
                 raise _Refused("file not found")
             entry.setdefault("shown", []).append(path)
+            if path not in entry.get("panes", []):
+                _to_front(entry, path)
 
         self._in_window(show)
         return path
+
+    def _results_in_front(self) -> str:
+        """The results whose plot is in front of the window's other plots."""
+        panes = self._window().get("panes", [])
+        if not panes:
+            raise _Refused(NO_RESULTS_IN_FRONT)
+        return panes[0]
 
     def _replace(self, path: str, text: str) -> dict[str, Any]:
         _window, held = self._design(path)
@@ -192,6 +237,8 @@ class Bridge:
 
         def replace(entry: dict[str, Any], _world: dict[str, Any]) -> None:
             entry["designs"][path] = text
+            if path not in entry.setdefault("unsaved", []):
+                entry["unsaved"].append(path)
 
         self._in_window(replace)
         self._committed = True
@@ -210,15 +257,17 @@ class Bridge:
         if name == "list_open_designs":
             return {"paths": "\n".join(self._window()["designs"])}
         if name == "get_active_design_path":
-            window = self._window()
-            if not window["designs"]:
-                # A window with no document has none in front: the recording
-                # has that, and not the bridge's wording, which the client
-                # does not read (a refusal and an empty path are alike to it).
+            front = in_front(self._window())
+            if front is None:
+                # A window with no document has none in front, and nor has
+                # one with a plot in front: the recording has that, and not
+                # the bridge's wording, which the client does not read (a
+                # refusal and an empty path are alike to it).
                 raise _Refused("document not found")
-            in_front = window.get("active") or list(window["designs"])[-1]
-            return {"path": in_front, "type": _kind(in_front)}
+            return {"path": front, "type": _kind(front)}
         if name == "get_raw_info":
+            if "path" not in arguments:
+                return {"path": self._results_in_front()}
             return {"path": self._show_results(arguments["path"])}
         if name == "open_design":
             return self._open(arguments["path"])
