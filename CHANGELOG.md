@@ -1106,8 +1106,9 @@ recording that showed it.
   - a bare string in `allowed_paths` names one directory instead of being
     ignored, so a slip in the key still confines the server;
   - with no sandbox, a run stages every file its deck reaches, wherever it is;
-  - the server instructions state the sandbox rule only when a sandbox is set,
-    and a refused path's guidance fits either case;
+  - the server instructions no longer mention the sandbox, which is re-read
+    from the config file on every call; a refused path's guidance says what to
+    change, with a sandbox or without one;
   - `inspect` capabilities and the `spice://config` resource report
     `allowed_paths` as null when there is no sandbox;
   - the Claude Desktop extension's folder is optional and empty by default, so

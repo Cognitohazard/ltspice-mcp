@@ -388,8 +388,8 @@ async def test_server_lifespan_puts_back_the_instructions_it_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The instructions name the session's sandbox, and the Server outlives the
-    session, so a later session must not be served this one's."""
+    """The instructions name the session's simulators, and the Server outlives
+    the session, so a later session must not be served this one's."""
 
     async def bootstrap(**kwargs: object) -> BootstrapResult:
         del kwargs
@@ -399,7 +399,7 @@ async def test_server_lifespan_puts_back_the_instructions_it_set(
     monkeypatch.setattr(server_module, "bootstrap_server_engine", bootstrap)
     before = server_module.server.instructions
     async with server_module.server_lifespan(server_module.server):
-        assert "Paths must lie in the sandbox" in (server_module.server.instructions or "")
+        assert server_module.server.instructions != before
     assert server_module.server.instructions == before
 
 

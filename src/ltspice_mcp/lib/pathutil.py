@@ -7,19 +7,13 @@ from pathlib import Path
 
 from ltspice_mcp.errors import PathSecurityError
 
-#: Directory a relative path is taken from, when a host declares one.
-#:
-#: Unset (the MCP server, and any caller that does not opt in), a relative path
-#: is taken from the first allowed directory when there is a sandbox, else from
-#: the ``relative_to`` the caller passes (the session's working directory), and
-#: through ``Path.resolve()`` for anything relative in either, which is the
-#: process working directory. The in-process ``Api`` sets it to its
-#: ``working_dir`` for the duration of each call, because that interface lets the
-#: caller name a working directory that is not their cwd: ``Api(working_dir=D)``
-#: plus a bare ``"opamp2.asc"`` names ``D/opamp2.asc``. A context variable rather
-#: than an argument: every relative path on every op has to be rebased, so the
-#: rule belongs at the one chokepoint they all pass through, where no new path
-#: field can be added without inheriting it.
+#: Directory a relative path is taken from, when a host declares one
+#: (``resolve_safe_path`` gives the order). The in-process ``Api`` sets it to its
+#: ``working_dir`` around every call: ``Api(working_dir=D)`` plus a bare
+#: ``"opamp2.asc"`` names ``D/opamp2.asc``. A context variable rather than an
+#: argument: every relative path on every op has to be rebased, so the rule
+#: belongs at the one chokepoint they all pass through, where no new path field
+#: can be added without inheriting it.
 _relative_base: ContextVar[Path | None] = ContextVar("relative_path_base", default=None)
 
 
@@ -65,11 +59,14 @@ def resolve_safe_path(
     after it, as the open would follow it, and on Windows ``..`` collapses
     before any link is followed, as the open collapses it.
 
+    A relative path is taken from the host's declared base
+    (``relative_paths_from``) when there is one, else from the first allowed
+    directory, else from ``relative_to``.
+
     Args:
         user_path: Path string from user (relative or absolute)
         allowed_dirs: The allowed base directories, or None for no sandbox
-        relative_to: Where a relative path is taken from when no host base is
-            declared and there is no sandbox (the session's working directory)
+        relative_to: The session's working directory
 
     Returns:
         The resolved absolute path
@@ -78,24 +75,16 @@ def resolve_safe_path(
         PathSecurityError: If the path cannot be resolved, or there is a
                           sandbox and the path resolves outside it
     """
-    if allowed_dirs is not None and not allowed_dirs:
-        raise PathSecurityError("No allowed directories configured")
-
     # Refused up front: on Windows with Python 3.13, resolve() returns a path
     # holding the NUL instead of raising, and the sandbox check would pass it.
     if "\x00" in user_path:
         raise PathSecurityError(f"Failed to resolve path {user_path!r}: embedded null byte")
 
-    path = Path(user_path)
-
-    # Resolve relative paths against the host's declared base when there is one,
-    # else against the first allowed_dir, else against ``relative_to``. Absolute
-    # paths are used as-is.
     base = _relative_base.get()
-    if not path.is_absolute():
-        anchor = base if base is not None else allowed_dirs[0] if allowed_dirs else relative_to
-        if anchor is not None:
-            path = anchor / path
+    path = _anchor(
+        Path(user_path),
+        base if base is not None else allowed_dirs[0] if allowed_dirs else relative_to,
+    )
 
     # Resolve symlinks and normalize (strict=False allows non-existent files).
     # ValueError covers an embedded NUL byte ("embedded null byte"), which

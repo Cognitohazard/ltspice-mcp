@@ -1139,10 +1139,7 @@ def _do_capabilities(
         "diagnostics": list(state.diagnostics),
         "ngbehavior": (current_ngbehavior() if "ngspice" in state.available_simulators else None),
         "persist_jobs": state.config.persist_jobs,
-        # None when there is no sandbox.
-        "allowed_paths": (
-            None if (sandbox := state.allowed_paths()) is None else [str(p) for p in sandbox]
-        ),
+        "allowed_paths": state.sandbox_report(),
         # One surface, and no setting selects it; the key stays because a
         # client reads it to know which one it is talking to.
         "tool_profile": "consolidated",
@@ -2043,11 +2040,18 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         if q.simulator == "ngspice"
         else None,
     )
+    sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(
-        str(state.resolve_path(q.path)),
-        state.allowed_paths(),
+        q.path,
+        sandbox,
         profile,
-        simulator_roots=simulator_library_roots(state.available_simulators.get(q.simulator)),
+        # Roots that widen a sandbox; with none they would go unused.
+        simulator_roots=(
+            ()
+            if sandbox is None
+            else simulator_library_roots(state.available_simulators.get(q.simulator))
+        ),
+        relative_to=state.config.working_dir,
     )
     selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
     if selected and not any(

@@ -252,10 +252,7 @@ def _read_config(
     cfg = state.config
     data = {
         "working_dir": str(cfg.working_dir),
-        # None when there is no sandbox.
-        "allowed_paths": (
-            None if (sandbox := state.allowed_paths()) is None else [str(p) for p in sandbox]
-        ),
+        "allowed_paths": state.sandbox_report(),
         "simulator": cfg.simulator,
         "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
         "detected_simulators": list(state.available_simulators.keys()),

@@ -3,10 +3,9 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Collection, Sequence
+from collections.abc import AsyncIterator, Collection
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
-from pathlib import Path
 from typing import Any
 
 from mcp import types
@@ -19,12 +18,7 @@ from pydantic import ValidationError
 from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
 from ltspice_mcp.api._session import acquire_session_lease, release_session_lease
-from ltspice_mcp.config import (
-    SANDBOX_KEY,
-    SANDBOX_SECTION,
-    ServerConfig,
-    generate_default_config,
-)
+from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
@@ -150,8 +144,8 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     """
     lease_owner = object()
     lease_pid = acquire_session_lease(lease_owner)
-    # The instructions below name this session's simulators and sandbox; the
-    # Server outlives the session, so they are put back when it ends.
+    # The instructions below name this session's simulators; the Server
+    # outlives the session, so they are put back when it ends.
     instructions_before = server.instructions
     try:
         boot = await bootstrap_server_engine(
@@ -178,10 +172,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         # builds when it answers — so setting it here, before the first request
         # is served, is what a client of either era reads.
         server.instructions = build_instructions(
-            available,
-            state.default_simulator,
-            served=state.tool_dispatch,
-            sandbox=state.allowed_paths(),
+            available, state.default_simulator, served=state.tool_dispatch
         )
 
         logger.info("=== LTSpice MCP Server Starting ===")
@@ -255,8 +246,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # else lives in the guide, which is read on demand. Kept under
 # _INSTRUCTIONS_BUDGET including the runtime simulator prefix: Claude Code
 # silently truncates server instructions at 2048 chars, and the tail (the
-# result-trust rule, and the sandbox rule when there is a sandbox) is the
-# part that must survive.
+# result-trust rule) is the part that must survive. They do not mention the
+# sandbox: it is re-read from the config file on every call, so anything said
+# of it here could be stale, and a refusal says what to change itself.
 _INSTRUCTIONS_TEMPLATE = """\
 SPICE simulation with LTspice and ngspice, and LTspice .asc schematic editing.
 
@@ -264,7 +256,7 @@ Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) retu
 
 {python_door} Tools: one step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
 
-Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures.{sandbox_rule}
+Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures.
 """
 
 # Claude Code's client truncates MCP server instructions at 2048 characters;
@@ -289,23 +281,9 @@ _PYTHON_DOOR_LIBRARY = (
 )
 
 
-def _sandbox_rule(sandbox: Sequence[Path] | None, served: Collection[str]) -> str:
-    """The instructions' sentence on the sandbox, empty when there is none."""
-    if sandbox is None:
-        return ""
-    unconfined = "; run_code is not confined by it" if "run_code" in served else ""
-    return (
-        f" Paths must lie in the sandbox, [{SANDBOX_SECTION}] {SANDBOX_KEY}{unconfined}."
-        " A refused path names the config line that widens it."
-    )
-
-
-#: The instructions as the default configuration serves them (run_code on, no
-#: sandbox): the static default the Server is constructed with, and what the
-#: tests pin.
-CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(
-    python_door=_PYTHON_DOOR_TOOL, sandbox_rule=""
-)
+#: The instructions as the default configuration serves them (run_code on) —
+#: the static default the Server is constructed with, and what the tests pin.
+CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(python_door=_PYTHON_DOOR_TOOL)
 
 #: Sent once, on the first tool reply of a session that has not read the guide.
 #: The instructions ask for the read up front, but a client is not obliged to
@@ -321,7 +299,6 @@ def build_instructions(
     default: type | None,
     *,
     served: Collection[str] = ("run_code",),
-    sandbox: Sequence[Path] | None = None,
 ) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
@@ -330,12 +307,9 @@ def build_instructions(
     degradation. Stating the active engine up front removes that ambiguity.
     ``served`` is the session's tool set (the default configuration's surface
     when not given); the Python clause names run_code only when it is in it.
-    ``sandbox`` is the session's sandbox at startup, None when there is none;
-    the sandbox rule is stated only when there is one.
     """
     instructions = _INSTRUCTIONS_TEMPLATE.format(
-        python_door=_PYTHON_DOOR_TOOL if "run_code" in served else _PYTHON_DOOR_LIBRARY,
-        sandbox_rule=_sandbox_rule(sandbox, served),
+        python_door=_PYTHON_DOOR_TOOL if "run_code" in served else _PYTHON_DOOR_LIBRARY
     )
     if not available:
         # The short no-simulator form: the long one plus the guide would

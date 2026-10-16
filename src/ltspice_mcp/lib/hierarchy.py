@@ -384,13 +384,15 @@ def load_hierarchy(
     profile: SemanticProfile,
     *,
     simulator_roots: Sequence[Path] = (),
+    relative_to: Path | None = None,
 ) -> Hierarchy:
     """Capture bounded bytes and path/classification facts, then resolve purely.
 
-    ``allowed_roots`` is the sandbox every file read must lie in, None for no
-    sandbox; ``simulator_roots`` widen it for the files the deck reaches.
+    ``allowed_roots`` are the directories every file read must lie in, None
+    for anywhere; ``simulator_roots`` widen them for the files the deck
+    reaches. A relative ``path`` is taken as ``resolve_safe_path`` takes it.
     """
-    root = resolve_safe_path(path, allowed_roots)
+    root = resolve_safe_path(path, allowed_roots, relative_to=relative_to)
     if root.suffix.casefold() not in NETLIST_SUFFIXES:
         raise NetlistError(
             f"hierarchy requires a {NETLIST_SUFFIX_TEXT} netlist; explicitly export .asc first"

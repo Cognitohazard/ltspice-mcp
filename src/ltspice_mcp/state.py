@@ -205,6 +205,12 @@ class SessionState:
             self._sandbox = (stamp, paths)
         return paths
 
+    def sandbox_report(self) -> list[str] | None:
+        """The sandbox as the reports give it: each directory as text, None
+        when there is no sandbox."""
+        paths = self.allowed_paths()
+        return None if paths is None else [str(path) for path in paths]
+
     def resolve_path(self, user_path: str, *also: Path) -> Path:
         """``user_path`` resolved, refused when there is a sandbox and it lies
         outside both the sandbox and ``also``.

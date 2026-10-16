@@ -65,16 +65,13 @@ class TestServerInstructions:
         assert "edit_schematic" in text
         assert "status completed and still hold a degenerate result" in text
 
-    def test_state_the_sandbox_rule_only_when_there_is_a_sandbox(self):
-        """With no sandbox there is no rule to keep, so none is stated."""
-        assert "sandbox" not in CONSOLIDATED_INSTRUCTIONS
-        assert "sandbox" not in build_instructions({}, None)
-        sandboxed = build_instructions({}, None, sandbox=[Path("/circuits")])
-        assert "Paths must lie in the sandbox, [security] allowed_paths" in sandboxed
-        assert "a refused path names the config line that widens it" in sandboxed.lower()
-        assert "run_code is not confined by it" in sandboxed
-        library = build_instructions({}, None, served=(), sandbox=[Path("/circuits")])
-        assert "run_code" not in library
+    def test_say_nothing_of_the_sandbox(self):
+        """The sandbox is re-read from the config file on every call, so the
+        instructions, sent once, could only state a stale one; a refused path's
+        reply says what to change."""
+        for served in (("run_code",), ()):
+            text = build_instructions({}, None, served=served)
+            assert "sandbox" not in text and "allowed_paths" not in text
 
     def test_state_both_doors_and_their_tradeoffs(self):
         served = build_instructions({}, None)

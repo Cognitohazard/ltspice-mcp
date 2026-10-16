@@ -1280,21 +1280,7 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
 
 
 def safe_path(user_path: str, state: SessionState) -> Path:
-    """Resolve a user-provided path, refused outside the sandbox when one is set.
-
-    The tool-side spelling of ``state.resolve_path``.
-
-    Args:
-        user_path: Path string from user (relative or absolute)
-        state: Current session state containing security configuration
-
-    Returns:
-        The resolved absolute path
-
-    Raises:
-        PathSecurityError: If the path cannot be resolved, or lies outside
-            the sandbox when one is set
-    """
+    """``user_path`` resolved for the tools: ``state.resolve_path``."""
     return state.resolve_path(user_path)
 
 
@@ -1407,7 +1393,7 @@ def safe_library_path(
     when there is no simulator library, else with one naming both.
     """
     try:
-        return safe_path(user_path, state)
+        return state.resolve_path(user_path)
     except PathSecurityError:
         roots = state.libraries.library_roots() if library_roots is None else library_roots
         if not roots:

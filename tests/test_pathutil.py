@@ -87,8 +87,8 @@ class TestResolveSafePath:
         with pytest.raises(PathSecurityError, match="outside allowed"):
             resolve_safe_path("/etc/passwd", [work_dir])
 
-    def test_empty_allowed_dirs(self):
-        with pytest.raises(PathSecurityError, match="No allowed directories"):
+    def test_empty_allowed_dirs_admit_nothing(self):
+        with pytest.raises(PathSecurityError, match="outside allowed directories"):
             resolve_safe_path("file.cir", [])
 
     def test_embedded_nul_byte_rejected(self, work_dir: Path):
