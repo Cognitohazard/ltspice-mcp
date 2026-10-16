@@ -132,7 +132,7 @@ hidden_desktop = true    # Windows: run LTspice where its window can't take your
 # xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"
 
 [security]
-# allowed_paths = ["."]  # folders the server may use; unset = the working directory and the Claude Code scratch folder
+# allowed_paths = ["."]  # a sandbox: the only folders the tools may use; unset = no sandbox
 
 [simulation]
 # max_parallel = 4       # default: number of CPU cores, capped at 8
@@ -159,8 +159,8 @@ call lists the fields it accepts. `full` sends every description.
 
 **`run_code`** runs a Python snippet in a worker process that holds the
 engine as `api`, for loops over runs and numpy on samples. The snippet runs
-with the server's own file and process permissions, not inside
-`allowed_paths`. Approve `mcp__spice__run_code` in your client as you would a
+with the server's own file and process permissions, which `allowed_paths`
+does not confine. Approve `mcp__spice__run_code` in your client as you would a
 shell, and don't allow it as part of a blanket `mcp__spice__*` rule. Set
 `run_code = false` if more than one client can reach the server, for example
 through a proxy. The change takes effect at the next start;
@@ -271,8 +271,9 @@ works in either place.
 A web chat with no sandbox can't run it. To use one, connect it to a machine
 you control with a stdio-to-HTTP bridge such as
 [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy). Only expose the server
-on a network you fully control: it writes files and starts processes inside
-`allowed_paths`. [SECURITY.md](../SECURITY.md) has the threat model.
+on a network you fully control: it writes files and starts processes, and
+only `allowed_paths` together with `run_code = false` keeps it to chosen
+folders. [SECURITY.md](../SECURITY.md) has the threat model.
 
 ## What a session looks like
 

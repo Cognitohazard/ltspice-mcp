@@ -12,7 +12,6 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.state import SessionState
 
 
@@ -145,7 +144,7 @@ async def load_raw_result(
 ) -> RawResult:
     """Resolve and bounded-parse one raw result on the API event loop."""
     if raw_path is not None:
-        resolved = resolve_safe_path(str(raw_path), state.allowed_paths())
+        resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
             resolved, state, plot_index=plot_index, dialect=dialect
         )

@@ -26,7 +26,6 @@ from ltspice_mcp.lib import atomic_write_bytes, response_budget
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 
 # Re-exported, not defined here: both netlist injections live in the runner
@@ -1281,22 +1280,8 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
 
 
 def safe_path(user_path: str, state: SessionState) -> Path:
-    """Resolve and validate a user-provided path within security sandbox.
-
-    This is a convenience wrapper around resolve_safe_path that uses
-    the allowed_paths from the session state configuration.
-
-    Args:
-        user_path: Path string from user (relative or absolute)
-        state: Current session state containing security configuration
-
-    Returns:
-        Resolved absolute path within sandbox
-
-    Raises:
-        PathSecurityError: If path violates security constraints
-    """
-    return resolve_safe_path(user_path, state.allowed_paths())
+    """``user_path`` resolved for the tools: ``state.resolve_path``."""
+    return state.resolve_path(user_path)
 
 
 def sandboxed(user_path: str, state: SessionState) -> Path | None:
@@ -1319,8 +1304,8 @@ def path_denied_text(exc: PathSecurityError, state: SessionState) -> str:
 
 def resolve_reference(reference: str, state: SessionState) -> str | Path:
     """A ``CompareSpec.reference`` is literal netlist text when it spans lines,
-    else a path inside the sandbox. A path outside it is refused with the text
-    alternative named, since a caller's scratch directory is usually outside."""
+    else a path. A path the sandbox refuses is refused with the text
+    alternative named, which reaches the same comparison from anywhere."""
     if "\n" in reference:
         return reference
     try:
@@ -1408,22 +1393,22 @@ def safe_library_path(
     when there is no simulator library, else with one naming both.
     """
     try:
-        return safe_path(user_path, state)
+        return state.resolve_path(user_path)
     except PathSecurityError:
         roots = state.libraries.library_roots() if library_roots is None else library_roots
         if not roots:
             raise
-    return resolve_safe_path(user_path, [*state.allowed_paths(), *roots])
+    return state.resolve_path(user_path, *roots)
 
 
 def make_include_resolver(state: SessionState) -> IncludeResolver:
     """An include resolver that routes every include/lib open through
     ``safe_library_path``.
 
-    The graph engine calls this before opening any include, so an in-deck include
-    that escapes the allowed roots and the simulator's own library is denied and
-    never read. The library roots are worked out once per resolver rather than
-    per include.
+    The graph engine calls this before opening any include, so with a sandbox
+    set an in-deck include that escapes it and the simulator's own library is
+    denied and never read. The library roots are worked out once per resolver
+    rather than per include.
     """
     roots = state.libraries.library_roots()
 

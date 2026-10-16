@@ -93,7 +93,7 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
 # resolved to (base directory joined with the target, or an absolute target),
 # it returns the path to actually open, or ``None`` to deny the open. The engine
 # never reads a denied path — the callback is the sandbox seam the tool layer
-# wires to ``safe_path`` so an in-deck include cannot escape the allowed roots.
+# wires to ``safe_path`` so an in-deck include cannot escape a sandbox.
 IncludeResolver = Callable[[Path], "Path | None"]
 
 # LTspice writes ground as ``0``; ``GND``/``GND!`` are common hand-written
