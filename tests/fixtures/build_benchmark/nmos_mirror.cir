@@ -1,0 +1,10 @@
+* NMOS current mirror with a resistor load
+* names: vdd ref out
+Vdd vdd 0 3.3
+Iref vdd ref 100u
+M1 ref ref 0 0 NMOS_MOD
+M2 out ref 0 0 NMOS_MOD
+RL vdd out 10k
+.model NMOS_MOD NMOS(Kp=200u Vto=0.7)
+.op
+.end

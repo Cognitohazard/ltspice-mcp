@@ -1,0 +1,7 @@
+* Voltage-controlled voltage source driving a series resistor
+* names: in out
+Vin in 0 AC 1
+E1 drive 0 in 0 2
+RL out drive 10k
+.ac dec 10 1 1meg
+.end
