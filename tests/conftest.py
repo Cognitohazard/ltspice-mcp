@@ -1260,6 +1260,23 @@ def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
 
 
 @pytest.fixture
+def suite_symbols_only(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Symbols are found beside a sheet and in the suite's stand-in library only.
+
+    No LTspice library the machine has is searched, and both process-wide
+    symbol caches start empty and are put back afterwards. A test that records
+    what the server says of the suite's sheets uses this, so that its record is
+    the same on every machine.
+    """
+    from ltspice_mcp.lib import symbol_geometry
+
+    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
+    monkeypatch.setattr(AscEditor, "symbol_cache", {})
+    monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
+    return asc_symbols
+
+
+@pytest.fixture
 def isolated_spicelib_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """spicelib caches a symbol's path by file name for the whole process; keep
     the temporary folders a test adds out of every later test."""

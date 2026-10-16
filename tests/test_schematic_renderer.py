@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.lib.schematic_renderer import render_svg, render_to_file
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene
+from ltspice_mcp.lib.schematic_scene import build_scene
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.render import main as render_main
 from tests._schematic_fixtures import (
     BOX2_ASY,

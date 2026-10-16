@@ -10,6 +10,10 @@ tool-surface changes.
 
 ### Fixed
 
+- An `inspect` net trace or components listing made while an `edit_schematic`
+  call was in progress could show that edit's changes before they were
+  committed, next to the digest of the file as it still was. Both now read
+  the file.
 - On Windows, every LTspice run and every schematic export took the keyboard
   focus for as long as it lasted: LTspice opens a window even in batch mode,
   and a sweep took the focus continuously. LTspice is now started on a desktop
@@ -1094,6 +1098,24 @@ recording that showed it.
 
 ### Changed
 
+- `inspect(kind="net")` and `inspect(kind="components")` on an `.asc` read the
+  file instead of the schematic editor `edit_schematic` uses. They now answer
+  on sheets the editor cannot open (a bus tap, a blank line, an unknown
+  record, a sheet whose symbol the editor does not find), and name each line
+  of the sheet they do not read in `warnings`. A components row's
+  `attributes` holds the part's `SYMATTR` lines only: per-instance `WINDOW`
+  lines no longer appear there as `_WINDOW n`. Two parts that share a
+  reference are both listed, where only the last was; a net trace from a pin
+  of such a reference is refused, naming where both parts are.
+- `verify_circuit` and the findings an edit reports read a sheet through the
+  same reader as `inspect`. A malformed line is now reported with its line
+  number instead of being guessed at or dropped: an attribute after a line
+  that ends a part, a part with no rotation, a `TEXT` with no `!` or `;`, a
+  malformed `WIRE` or `FLAG`, and a `WINDOW` under a part that does not parse.
+  A symbol with a pin line that does not parse is drawn as a placeholder, as
+  the editor already treated it, and the finding names that line; a symbol
+  file that is found but cannot be read is named as such, where it was
+  reported as not found in any library.
 - There is no sandbox unless `[security] allowed_paths` (or
   `LTSPICE_MCP_ALLOWED_PATHS`, or `Api(allowed_paths=...)`) is set. An unset
   list used to mean the working directory and Claude Code's scratch directory,

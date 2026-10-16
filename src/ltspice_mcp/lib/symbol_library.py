@@ -30,7 +30,12 @@ from __future__ import annotations
 
 import glob
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+
+from ltspice_mcp.lib.cache import file_stamp
+from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.symbol_file import SymbolFile, read_symbol
 
 
 def spellings(symbol: str) -> tuple[str, str]:
@@ -84,3 +89,121 @@ def find_symbol(symbol: str, sheet_folder: Path | None, libraries: Sequence[Path
         if found is not None:
             return found
     return None
+
+
+# ---------------------------------------------------------------------------
+# Symbol resolution (schematic-local → project → stock), content-stamp cached
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FoundSymbol:
+    """A symbol as a resolver found it: its name, its file, and the file read.
+
+    ``name`` is the bare name, without any folder the sheet gave it.
+    ``problem`` says why the symbol cannot be used, as words that follow its
+    name ("has a pin line that does not read ('PIN 32')"); it is empty for a
+    usable one. A pin left out is a terminal no wire could be checked against,
+    so a symbol with a pin line that does not read is unusable whole, as it is
+    to the schematic editor's geometry.
+    """
+
+    name: str
+    path: Path
+    file: SymbolFile
+    problem: str = ""
+
+
+class SymbolResolver:
+    """Resolve a symbol name to a ``.asy`` file and read it, with caching.
+
+    Precedence, highest first:
+
+    1. the schematic's own directory (``local_dir``),
+    2. configured project symbol paths (``project_paths``),
+    3. stock LTspice library paths (``stock_paths``).
+
+    Each resolver owns its caches; its search roots (and therefore its
+    ``active_set``) are fixed at construction. The parse cache is keyed by
+    ``(resolved path, content stamp, active library-path set)`` — never by bare
+    symbol name — so rewriting a local ``.asy`` bumps the content stamp and
+    invalidates the entry, while an unchanged file is served from cache. The
+    active-set component is what keeps entries from bleeding across resolvers
+    configured with different libraries: a different library set is a different
+    resolver, and because it never resolves to a foreign entry, ``resolve`` for
+    a symbol whose winning file changed with the search order returns the right
+    path. Resolution results (including misses) are cached per instance, so a
+    repeated miss does not re-walk the stock tree.
+    """
+
+    def __init__(
+        self,
+        local_dir: Path | None,
+        project_paths: Sequence[Path] = (),
+        stock_paths: Sequence[Path] = (),
+    ) -> None:
+        roots: list[Path] = []
+        if local_dir is not None:
+            roots.append(local_dir)
+        roots.extend(project_paths)
+        roots.extend(stock_paths)
+        # De-duplicate while preserving precedence order.
+        seen: set[str] = set()
+        self._roots: list[Path] = []
+        for r in roots:
+            key = str(r)
+            if key not in seen:
+                seen.add(key)
+                self._roots.append(r)
+        self._local_dir = local_dir
+        self._active_set: frozenset[str] = frozenset(str(r) for r in self._roots)
+        self._resolve_cache: dict[str, Path | None] = {}
+        self._parse_cache: dict[tuple[str, tuple[int, int], frozenset[str]], FoundSymbol] = {}
+
+    @property
+    def active_set(self) -> frozenset[str]:
+        return self._active_set
+
+    def resolve(self, symbol: str) -> Path | None:
+        """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.
+
+        ``symbol_library.find_symbol`` is the rule, with the sheet's own folder
+        first and every other root a library: the rule the schematic editor's
+        pin geometry follows too.
+        """
+        if symbol in self._resolve_cache:
+            return self._resolve_cache[symbol]
+        result = find_symbol(symbol, self._local_dir, self._roots)
+        self._resolve_cache[symbol] = result
+        return result
+
+    def load(self, symbol: str) -> FoundSymbol | None:
+        """Resolve and read ``symbol``; ``None`` when no file of that name is found.
+
+        A file that is found and cannot be used comes back with its ``problem``.
+        """
+        path = self.resolve(symbol)
+        if path is None:
+            return None
+        try:
+            stamp = file_stamp(path)
+        except OSError:
+            return None
+        key = (str(path), stamp, self._active_set)
+        cached = self._parse_cache.get(key)
+        if cached is not None:
+            return cached
+        name = spellings(symbol)[1]
+        try:
+            read = read_symbol(read_spice_text(path))
+        except Exception as failed:
+            found = FoundSymbol(name, path, SymbolFile(), f"could not be read ({failed})")
+        else:
+            problem = (
+                f"has a pin line that does not read ({read.unread_pins[0]!r})"
+                if read.unread_pins
+                else ""
+            )
+            found = FoundSymbol(name, path, read, problem)
+        self._parse_cache[key] = found
+        return found

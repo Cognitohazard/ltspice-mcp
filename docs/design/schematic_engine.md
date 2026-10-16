@@ -528,9 +528,57 @@ what must hold before the next one starts.
      the published size of both tools raised on purpose. *The list is done:*
      `rules_run` in both replies names each sheet rule that ran with its
      count, zero included. Limits and waivers are not built.
-5. **Readers on the sheet.** `inspect`'s net and component queries and the
-   schematic resource stop using the cached editor; a cache of sheets keyed
-   by the file's stamp takes its place.
+5. **Readers on the sheet.** `inspect`'s net and component queries on an
+   `.asc` read the file through `asc_document` and the symbol library
+   instead of spicelib's cached editor. They are the last readers on that
+   editor outside the edit path; the schematic resource this step once named
+   no longer exists. Sharing the editor is also a defect: an `inspect` that
+   runs while an edit awaits its findings or its commit sees the edit's
+   uncommitted changes next to the file's digest. The plan, as reviewed:
+   1. Snapshot both queries on every suite sheet through the present path:
+      component rows verbatim; for each net start (each pin, each label, a
+      point on each wire) its labels, pins, wire snap, short flag, warnings
+      and a digest of its coordinates; a sheet the editor cannot open as
+      such. Object addresses spicelib leaks into attributes are replaced by
+      a token.
+   2. `lib/sheet.py`: a sheet as a read-only value, built from
+      `asc_document` records and a `SymbolResolver`. Placed parts use
+      `compute_placed_geometry`. A symbol with an unreadable pin line is not
+      usable, as the editor already treats it. Gate: its view equals the
+      scene's view on every suite sheet.
+   3. The scene is built from the sheet, and its own parser goes. On the
+      suite and on LTspice's 8,226 example sheets the two parsers read the
+      same symbols, wires, flags, texts and shapes. They differ only on
+      malformed lines no corpus has, where the document's reading is kept
+      and the line is reported: an attribute after a non-symbol line, a
+      symbol with no rotation, a text with no `!` or `;`, a malformed wire
+      or flag. Each is pinned by a hand-made sheet.
+   4. `inspect(kind="net")` reads the sheet, with the editor's search roots.
+      A trace from a pin of a reference two parts share is refused, naming
+      both.
+   5. `inspect(kind="components")` reads the sheet. Both parts of a shared
+      reference are listed, and `attributes` holds the `SYMATTR`s alone
+      (spicelib's `_WINDOW n` and `_SUBCKT` entries go). A block's row is
+      its symbol's; its child sheet is not read.
+   6. Remove `extract_asc_info`, which has no caller, and the two value
+      helpers only `inspect` used; reads run off the event loop. No cache:
+      a sheet reads in 7 to 103 ms on the largest example sheets.
+
+   The build benchmark is not a gate for this step, since no op changes. It
+   is built on its own and lands before step 6.
+
+   *Done.* The scene of every suite sheet and of 8,150 LTspice example sheets
+   from both builds is the same as before the scene's parser was removed. In
+   the inspect snapshot (`tests/fixtures/inspect_sheet_record.json`) the
+   answers changed only as listed: the 9 suite sheets spicelib cannot open
+   now answer both queries (50 net starts and 9 listings), and 15 component
+   rows on 10 sheets lose spicelib's `_WINDOW n` attributes. A line the
+   sheet's records do not read is named in both replies. A test holds an
+   edit at its await and shows that both queries read the file. Two readers
+   of a sheet are left: `asc_document` and spicelib's editor on the edit path,
+   which step 6 replaces. Not done here: the session owning the symbol
+   search roots (step 2). The readers still take them from spicelib's editor
+   class, and they move with step 6.
 6. **Ops on the sheet**, in two parts, and the step most likely to go wrong.
    First the ops that move records (parts, wires, labels): each becomes
    sheet -> (sheet, facts), the batch is a fold, and the transaction keeps

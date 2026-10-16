@@ -24,12 +24,14 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from spicelib import AscEditor
 
 from ltspice_mcp.lib import symbol_geometry
 from ltspice_mcp.lib.schematic_ops import make_editor
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -50,16 +52,27 @@ def stage(sheet: Path, sandbox: Path) -> Path:
     return Path(shutil.copyfile(sheet, sandbox / sheet.name))
 
 
-def open_staged(sheet: Path, sandbox: Path) -> AscEditor | None:
-    """The editor of ``sheet`` staged in ``sandbox``, or ``None`` if it cannot open it.
+def stage_afresh(sheet: Path, sandbox: Path) -> Path:
+    """``sheet`` staged in ``sandbox``, with every symbol to be read afresh.
 
-    Every symbol is read afresh: a symbol of one sheet's folder must not answer
-    for another sheet's of the same name.
+    Both symbol caches are keyed by name for the whole process, spicelib's by
+    file name alone: a symbol of one sheet's folder must not answer for another
+    sheet's of the same name.
     """
     AscEditor.symbol_cache = {}
     symbol_geometry._symbol_cache.clear()  # pyright: ignore[reportPrivateUsage]
+    return stage(sheet, sandbox)
+
+
+def every_nth(items: list[_T], most: int) -> list[_T]:
+    """``items``, or every n-th of them when there are more than ``most``."""
+    return items[:: -(-len(items) // most)] if len(items) > most else items
+
+
+def open_staged(sheet: Path, sandbox: Path) -> AscEditor | None:
+    """The editor of ``sheet`` staged afresh in ``sandbox``, or ``None`` if it cannot open it."""
     try:
-        editor = make_editor(stage(sheet, sandbox))
+        editor = make_editor(stage_afresh(sheet, sandbox))
     except Exception:
         return None
     assert isinstance(editor, AscEditor)

@@ -1193,7 +1193,9 @@ async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_st
     """spicelib reads a text line only with its ``!`` or ``;`` and writes back
     what it read, so a sheet with one that has neither is one line shorter once
     edited. The sheet before the batch is read the same way, or the two stacked
-    directives left would be reported as something the batch did."""
+    directives left would be reported as something the batch did. A check of
+    the file does not draw that line either: it reports it as a line it does
+    not read."""
     sheet = work_dir / "three-texts.asc"
     sheet.write_text(
         "Version 4\nSHEET 1 880 680\n"
@@ -1204,7 +1206,7 @@ async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_st
     )
     of_the_file = await run_verify_circuit(asc_state, path=str(sheet), checks=["quality"])
     assert [f["evidence"]["detail"] for f in of_the_file["findings"]] == [
-        "3 directives/comments share anchor (16,16) — they render on top of each other"
+        "2 directives/comments share anchor (16,16) — they render on top of each other"
     ]
 
     data = await apply_ops(
@@ -2341,7 +2343,7 @@ class TestRecordTheEditorCannotRead:
         assert named in message
         assert path.read_bytes() == original
 
-    async def test_inspect_reports_a_refusal_not_an_internal_error(self, state_no_sim, work_dir):
+    async def test_inspect_reads_the_sheet_and_names_the_record(self, state_no_sim, work_dir):
         path = self._sheet(work_dir, "BUSTAP 80 0 80 16")
         results = (
             await handle_inspect(
@@ -2356,11 +2358,19 @@ class TestRecordTheEditorCannotRead:
                 state_no_sim,
             )
         ).structured_content["results"]
-        assert [item["ok"] for item in results] == [False, False]
-        for item in results:
-            assert item["error"]["code"] != "internal_error"
-            assert "line 5" in item["error"]["message"]
-            assert "BUSTAP" in item["error"]["message"]
+        components, net = results
+        # Both read the sheet themselves, and name the record they do not read.
+        assert components["ok"] is True
+        assert components["data"]["warnings"] == [
+            "line 5: a BUSTAP record, which this listing does not read; a part it holds "
+            "is not listed"
+        ]
+        assert net["ok"] is True
+        assert net["data"]["labels"] == ["D[0:3]", "OUT"]
+        assert net["data"]["warnings"] == [
+            "line 5: a BUSTAP record, which this trace does not read; anything it "
+            "connects is not followed"
+        ]
 
     async def test_a_record_in_a_sheet_the_target_loads_names_that_sheet(
         self, asc_state, work_dir

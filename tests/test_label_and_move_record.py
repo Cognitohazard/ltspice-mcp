@@ -53,7 +53,14 @@ from ltspice_mcp.lib.schematic_ops import (
     resolve_pin,
     wire_segments_of,
 )
-from tests._proposal_record import Asked, entry_of, open_staged, without_particulars, write_record
+from tests._proposal_record import (
+    Asked,
+    entry_of,
+    every_nth,
+    open_staged,
+    without_particulars,
+    write_record,
+)
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 
 _RECORD = TESTS / "fixtures" / "label_and_move_record.json"
@@ -75,8 +82,7 @@ Point = tuple[int, int]
 Wire = tuple[int, int, int, int]
 
 
-def _every_nth(asked: list[dict[str, Any]], most: int) -> list[dict[str, Any]]:
-    return asked[:: -(-len(asked) // most)] if len(asked) > most else asked
+pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 
 def _in_order(points: list[Point]) -> list[Point]:
@@ -127,7 +133,7 @@ def _label_proposals(editor: AscEditor) -> list[dict[str, Any]]:
     at_rare = [{"net": name, "x": x, "y": y} for x, y in rare for name in names]
     elsewhere = [{"net": name, "x": x, "y": y} for x, y in wiring for name in names]
     elsewhere += [{"net": name, "pin": pin} for pin, _x, _y in pins for name in names]
-    return _every_nth(at_rare, _MOST_AT_RARE_POINTS) + _every_nth(elsewhere, _MOST_ELSEWHERE)
+    return every_nth(at_rare, _MOST_AT_RARE_POINTS) + every_nth(elsewhere, _MOST_ELSEWHERE)
 
 
 def _move_proposals(editor: AscEditor) -> list[dict[str, Any]]:
@@ -152,7 +158,7 @@ def _move_proposals(editor: AscEditor) -> list[dict[str, Any]]:
                     }
                     for x, y in places
                 )
-    return _every_nth(onto_rare, _MOST_AT_RARE_POINTS) + _every_nth(elsewhere, _MOST_ELSEWHERE)
+    return every_nth(onto_rare, _MOST_AT_RARE_POINTS) + every_nth(elsewhere, _MOST_ELSEWHERE)
 
 
 def _what_is_there(editor: AscEditor) -> Any:
@@ -252,14 +258,6 @@ def answers_of(
     for op, asked_of in _OPS.items():
         entry[op], examples[op] = entry_of(asked_of(editor))
     return entry, examples
-
-
-@pytest.fixture(autouse=True)
-def _only_the_suites_own_symbols(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No LTspice library the machine has is searched, and spicelib's symbol
-    cache, which ``open_staged`` empties, is put back afterwards."""
-    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
-    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
 
 def _recorded() -> dict[str, Any]:

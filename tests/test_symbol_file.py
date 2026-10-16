@@ -12,10 +12,11 @@ from spicelib import AscEditor
 from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_ops import collect_component_geometry, make_editor
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, parse_symbol
+from ltspice_mcp.lib.schematic_scene import build_scene
 from ltspice_mcp.lib.schematic_scene import sheet_view as scene_view
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolArc, read_symbol
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests._schematic_fixtures import SUITE_SYMBOLS, suite_name
 
 NMOS = (
@@ -234,7 +235,9 @@ class TestBothReadersUseIt:
     @pytest.mark.parametrize("path", SUITE_SYMBOLS, ids=suite_name)
     def test_they_agree_on_pins_and_box(self, path: Path) -> None:
         for_the_editor = parse_asy_file(path)
-        for_the_renderer = parse_symbol(path, path.stem)
+        found = SymbolResolver(local_dir=path.parent).load(path.stem)
+        assert found is not None
+        for_the_renderer = found.file
         assert for_the_editor.pins == for_the_renderer.pins
         assert for_the_editor.bbox == for_the_renderer.bbox
         assert for_the_editor.pins, "a fixture symbol with no pins tests nothing here"
@@ -242,9 +245,13 @@ class TestBothReadersUseIt:
     def test_a_symbol_with_an_unreadable_pin(self, tmp_path: Path) -> None:
         asy = tmp_path / "broken.asy"
         asy.write_text("LINE Normal 0 0 16 16\nPIN 5\nPIN 0 0 NONE 0\nPINATTR PinName A\n")
-        # Drawn with the pin that reads; refused where a missing pin would be a
-        # connection nobody sees.
-        assert [pin.name for pin in parse_symbol(asy, "broken").pins] == ["A"]
+        # The file holds the pin that reads; the symbol is refused where a
+        # missing pin would be a connection nobody sees, and a scene draws it as
+        # a placeholder for the same reason.
+        assert [pin.name for pin in read_symbol(asy.read_text()).pins] == ["A"]
+        found = SymbolResolver(local_dir=tmp_path).load("broken")
+        assert found is not None
+        assert found.problem == "has a pin line that does not read ('PIN 5')"
         with pytest.raises(ValueError, match="unreadable pin line 'PIN 5'"):
             parse_asy_file(asy)
 
@@ -286,4 +293,4 @@ class TestBothReadersUseIt:
         asy = tmp_path / "arc.asy"
         asy.write_text("LINE Normal 0 0 16 16\nARC Normal -64 -64 64 64\n")
         assert parse_asy_file(asy).bbox == BBox(0, 0, 16, 16)
-        assert parse_symbol(asy, "arc").bbox == BBox(0, 0, 16, 16)
+        assert read_symbol(asy.read_text()).bbox == BBox(0, 0, 16, 16)

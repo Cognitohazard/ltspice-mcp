@@ -38,7 +38,14 @@ from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     wire_segments_of,
 )
-from tests._proposal_record import Asked, entry_of, open_staged, without_particulars, write_record
+from tests._proposal_record import (
+    Asked,
+    entry_of,
+    every_nth,
+    open_staged,
+    without_particulars,
+    write_record,
+)
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 
 _RECORD = TESTS / "fixtures" / "route_planner_record.json"
@@ -51,6 +58,9 @@ _MOST = 600
 _MOST_BY_NAME = 150
 
 Proposal = tuple[Any, Any, list[GridPoint]]
+
+
+pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 
 def _proposals(editor: AscEditor) -> list[Proposal]:
@@ -87,7 +97,7 @@ def _proposals(editor: AscEditor) -> list[Proposal]:
             beyond = part["x"] + part["width"] + 32
             asked.append((name_a, GridPoint(x=beyond, y=across), [GridPoint(x=ax, y=across)]))
     if len(asked) > _MOST:
-        asked = asked[:: -(-len(asked) // _MOST)]
+        asked = every_nth(asked, _MOST)
     # An end given by the name of its net, for each name the sheet labels: to
     # each pin straight and round a corner, and from each pin round the other.
     by_name: list[Proposal] = []
@@ -102,7 +112,7 @@ def _proposals(editor: AscEditor) -> list[Proposal]:
             by_name.append((f"net:{label.text}", pin, [GridPoint(x=lx, y=py)]))
             by_name.append((pin, f"net:{label.text}", [GridPoint(x=px, y=ly)]))
     if len(by_name) > _MOST_BY_NAME:
-        by_name = by_name[:: -(-len(by_name) // _MOST_BY_NAME)]
+        by_name = every_nth(by_name, _MOST_BY_NAME)
     return asked + by_name
 
 
@@ -152,14 +162,6 @@ def answers_of(
             )
         )
     return entry_of(asked)
-
-
-@pytest.fixture(autouse=True)
-def _only_the_suites_own_symbols(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No LTspice library the machine has is searched, and spicelib's symbol
-    cache, which ``answers_of`` empties, is put back afterwards."""
-    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
-    monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
 
 def _recorded() -> dict[str, Any]:
