@@ -379,6 +379,13 @@ def _exact_node_span(positional: list[Token], exact: int | None) -> tuple[int, i
     return (head[0].body_offset, head[-1].body_end)
 
 
+def _pair(tok: Token) -> tuple[str, str]:
+    """A ``KEY_VALUE`` token as its ``(key, value)``."""
+    assert tok.key is not None
+    assert tok.value is not None
+    return tok.key, tok.value
+
+
 def _value_from_span(card: SpiceCard, tokens: list[Token]) -> str:
     """Reconstruct the value text spanning ``tokens`` from the card body.
 
@@ -428,6 +435,10 @@ class InstanceLine:
     # set_nodes can rewrite connectivity without disturbing the value/params
     # tail. None when there are no nodes or their offsets are synthesized.
     _node_span: tuple[int, int] | None = None
+    # Every key=value as read, repeats kept, and the body they were read from:
+    # an edit replaces the body, and param_pairs then reads it again.
+    _pairs: list[tuple[str, str]] = field(default_factory=list)
+    _pairs_body: str = ""
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -531,17 +542,12 @@ class InstanceLine:
 
         nodes = [t.text for t in nodes_tokens]
 
-        params: dict[str, str] = {}
-        param_tokens: dict[str, Token] = {}
-        if first_kv is not None:
-            for tok in tokens[first_kv:]:
-                if tok.kind == TokenKind.KEY_VALUE:
-                    assert tok.key is not None
-                    assert tok.value is not None
-                    params[tok.key] = tok.value
-                    param_tokens[tok.key] = tok
-                elif tok.kind == TokenKind.COMMENT_TRAIL:
-                    break
+        # A comment trail is the lexer's last token, so every KEY_VALUE token
+        # is a parameter, the first of them at first_kv.
+        kv_tokens = [tok for tok in tokens if tok.kind == TokenKind.KEY_VALUE]
+        pairs = [_pair(tok) for tok in kv_tokens]
+        params = dict(pairs)
+        param_tokens = {key: tok for (key, _), tok in zip(pairs, kv_tokens, strict=True)}
 
         value_param_key: str | None = None
         if kind == "value" and prefix in ("R", "C", "L"):
@@ -574,6 +580,8 @@ class InstanceLine:
             _value_param_key=value_param_key,
             _params_marker=params_marker,
             _node_span=node_span,
+            _pairs=pairs,
+            _pairs_body=card.body,
         )
 
     def set_model(self, name: str) -> None:
@@ -631,6 +639,16 @@ class InstanceLine:
         # writing at a wrong offset.
         self._model_token = None
         self._param_tokens.clear()
+
+    def param_pairs(self) -> list[tuple[str, str]]:
+        """Every ``key=value`` on the card as it now reads, in order, a key the
+        card names twice listed twice. ``params`` keeps one value per key, so
+        it cannot say that a card gives a parameter more than once."""
+        if self.card.body != self._pairs_body:
+            tokens = tokenize_body(self.card.body)
+            self._pairs = [_pair(tok) for tok in tokens if tok.kind == TokenKind.KEY_VALUE]
+            self._pairs_body = self.card.body
+        return list(self._pairs)
 
     def get_param(self, key: str) -> str | None:
         """Case-insensitive parameter read, matching the CI semantics of

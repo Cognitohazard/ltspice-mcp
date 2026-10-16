@@ -142,7 +142,7 @@ whose lock file lives in the per-user home rather than beside the circuit.
 **Lean by default.** The default response is the answer channel: per-case
 headline rows (label, promoted headline scalars, verdicts) plus a one-line
 completeness count. Detail sits behind named opt-ins — full nested `value`
-dicts, full run records, the `source_hashes` identity echo, and `provenance`.
+dicts, the `source_hashes` identity echo, and `provenance`.
 Never trimmed in any mode: failures, errors, observations, warnings, and any
 completeness shortfall. Lean drops the confirming detail of a success, never
 the fact channels.
@@ -157,20 +157,22 @@ warnings and failures are never scoped. `edit_schematic`'s `preexisting` block
 The reason is response cost: every response byte is re-read on every later
 turn of the conversation, and measurement put the tool path at several times
 the cost of a hand-rolled shell table for identical numbers even with the
-opt-in reductions applied. Two consequences worth knowing:
-
-- A completed row drops its raw/log artifact paths (reachable through
-  `jobs(runs)` with `run_fields`), but a **non-completed** row keeps them:
-  failure entries carry only `{case_id, code, message}`, so the failed row's
-  log path is its diagnostic and belongs on the fact channel.
-- An empty per-circuit lint entry says nothing and is dropped. A circuit absent
-  from `lint` is clean; findings always emit.
+opt-in reductions applied. One consequence worth knowing: an empty
+per-circuit lint entry says nothing and is dropped. A circuit absent from
+`lint` is clean; findings always emit.
 
 Pagination is exempt from the lean rule: `next_cursor` is a
 nullable-key-always-present, because the omit convention caused a client
 `KeyError` past the first run page and a null key costs about 20 bytes. Lean
 applies to rows, the identity echo and nested values, not to cursor-shape
 safety.
+
+Run rows are exempt too: every run row has the same keys, whatever its
+status, on every surface and at every budget, and `run_fields` is the way to
+a narrower row. Rows once left the raw and log paths and the build off a run
+that produced; a caller reading a run's log from its row got an empty string
+and counted nothing in it, and a missing build reads as one the output did
+not name.
 
 **Presentation fields.** Fields that choose how a receipt is *rendered* rather
 than what *runs* are excluded from the idempotency fingerprint, so re-asking
@@ -674,8 +676,7 @@ the Xyce log banner (`Xyce Release 7.8.0-opensource`), the ngspice console
 banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when
 none of those exists (LTspice XVII, QSPICE). It is null when the output named none.
 It is recorded per case, so an executable replaced mid-job shows up as two
-builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
-`jobs(runs)` and `run_fields` return it.
+builds.
 Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
@@ -1440,6 +1441,15 @@ read is diffed as empty, so the delta still comes back, `equivalent` is null,
 and a warning names the deck that failed. Either way the call's outcome is
 `partial` and the reason is in the response.
 
+An instance that gives one parameter more than once is reported by
+`equivalence` as a fact, `duplicate_params` (the instance, the side, the key and
+every copy in card order). Which copy a simulator reads is not modelled, so the
+parameter compares equal only where it would whichever copy is read: the same
+copies in the same order on both sides, or one value in every copy. Anything
+else is a `param_mismatches` row naming a reference copy and a candidate copy
+that differ. Keeping one value per key hid a second copy an edit had added: two
+thresholds that happened to agree compared as one.
+
 Both modes compare netlists. An `.asc` under test is compared as its LTspice
 export, so an `.asc` reference is exported the same way — on a staged copy,
 never beside the caller's file — and without LTspice the compare fails instead
@@ -1455,7 +1465,8 @@ It leaves out what the netlister adds to every export — `.backanno`, the
 install-path `.lib …/cmp/standard.*`, and a parameterless default model such as
 `.model NMOS NMOS` while the reference declares no model of that name. A
 component's signature is its model or value plus its instance parameters,
-nodes excluded (equivalence is the mode that compares wiring).
+nodes excluded (equivalence is the mode that compares wiring); a parameter
+given twice signs both copies, so a second copy is a change.
 
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled,
@@ -2031,6 +2042,15 @@ Carried over from the pre-consolidation op models: exact-segment `remove_wire`,
 `cleanup_wires`, directive placement kinds, and literal-default removal
 matching with `regex:` as an opt-in prefix. `wire_pins` was once also spelled
 `connect`; that spelling is not accepted anywhere.
+
+`set_component_value` splits a trailing `KEY=VALUE` off the value it is given
+and sets it where the part already gives that key: in `Value`, `Value2`,
+`SpiceLine` or `SpiceLine2`, matched without regard to case, every copy found.
+A key the part gives nowhere goes to `SpiceLine`. A key found more than once is
+named in a warning. The schematic editor underneath looked only in
+`SpiceLine`, by exact spelling, so a Schmitt trigger's `Vt` in `Value` got a
+second copy (`docs/spicelib_bugs.md`, Bug 29). A behavioural source's value
+is one expression and replaces `Value` whole.
 
 ### A.4 Inspect queries
 

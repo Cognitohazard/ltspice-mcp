@@ -435,7 +435,7 @@ class TestRecordedBuild:
         runs = await job_runs(state, receipt["job_id"])
         assert [row["simulator_version"] for row in runs] == [LTSPICE_26] * 2
 
-    async def test_the_lean_receipt_keeps_the_build_one_opt_in_away(
+    async def test_the_receipt_names_the_build_and_keeps_the_program_one_opt_in_away(
         self, config: ServerConfig, work_dir: Path, program: Path
     ):
         state = _state(config, program)
@@ -444,12 +444,12 @@ class TestRecordedBuild:
         receipt = await terminal_experiment(state, _payload(deck, "lean-build"))
         assert receipt["status"] == "completed", receipt
 
-        # Lean: a produced row drops it with its artifact paths.
-        assert "simulator_version" not in receipt["runs"]["items"][0]
+        # A run row is whole, so it names the build; the program is provenance.
+        assert receipt["runs"]["items"][0]["simulator_version"] == LTSPICE_26
         assert "simulator_executable" not in receipt
 
         # Asked for: the replay under provenance names the program, and a
-        # run_fields projection names the build.
+        # run_fields projection narrows the row to the build.
         _, detailed = await submit_experiment(
             state,
             _payload(deck, "lean-build", provenance=True, run_fields=["simulator_version"]),

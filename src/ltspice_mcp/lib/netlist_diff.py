@@ -77,8 +77,10 @@ def instance_signature(card: SpiceCard) -> str:
 
     Parameters are part of it because an attribute edit on a sheet (a
     SpiceLine's ``w=``, a diode's area) changes exactly those in the export; their
-    order on the card carries no meaning. An unreadable card signs as
-    ``<unparseable>``, as every other netlist read reports it.
+    order on the card carries no meaning. A parameter the card gives twice signs
+    both copies, in card order, so an edit that adds a second copy is a change.
+    An unreadable card signs as ``<unparseable>``, as every other netlist read
+    reports it.
     """
     inst = read_instance(card)
     if inst is None:
@@ -88,9 +90,11 @@ def instance_signature(card: SpiceCard) -> str:
     if inst.model is not None and inst.value:
         parts.append(inst.value)  # what follows the model: a diode area, a switch state
     prefix = inst.ref[:1].upper()
-    for key, value in sorted(inst.params.items(), key=lambda kv: kv[0].casefold()):
+    head_signed = False
+    for key, value in sorted(inst.param_pairs(), key=lambda kv: kv[0].casefold()):
         pair = f"{key}={value}"
-        if pair == head or (key.upper() == prefix and value == inst.value):
+        if not head_signed and (pair == head or (key.upper() == prefix and value == inst.value)):
+            head_signed = True
             continue  # already the head: a B-source's V=..., a keyed R=1k
         parts.append(pair)
     return " ".join(parts)

@@ -1288,6 +1288,102 @@ class TestSetComponentValueBehavioralSource:
         assert "Value V=1\n" not in content
 
 
+_SCHMITT_ASY = (
+    "Version 4\n"
+    "SymbolType CELL\n"
+    "RECTANGLE Normal -32 -32 32 32\n"
+    "SYMATTR Prefix A\n"
+    "SYMATTR SpiceModel SCHMITT\n"
+    "PIN -32 0 NONE 0\n"
+    "PINATTR PinName IN\n"
+    "PINATTR SpiceOrder 1\n"
+    "PIN 32 0 NONE 0\n"
+    "PINATTR PinName OUT\n"
+    "PINATTR SpiceOrder 6\n"
+)
+
+
+class TestSetComponentValueParameterSlots:
+    """A ``KEY=VALUE`` in a new value is set where the part already gives that
+    key. spicelib looked only in SpiceLine and SpiceLine2, so a Schmitt
+    trigger's thresholds in Value got a second copy in SpiceLine, and its
+    exported line named each threshold twice; and adding a key rebuilt
+    SpiceLine from spicelib's own parse of it."""
+
+    @pytest.mark.parametrize(
+        ("symbol", "attributes", "value", "expected", "warnings"),
+        [
+            pytest.param(
+                "schmitt_like",
+                {"Value": "Vt=2 Vh=0.5 Vhigh=5"},
+                "vt=4.15 Vh=0.2",
+                {"Value": "Vt=4.15 Vh=0.2 Vhigh=5"},
+                [],
+                id="a_threshold_in_value_is_replaced_there",
+            ),
+            pytest.param(
+                "nmos4",
+                {"Value": "NMOS1", "Value2": "l=1u w=20u"},
+                "NMOS2 W=10u",
+                {"Value": "NMOS2", "Value2": "l=1u w=10u"},
+                [],
+                id="a_mosfet_width_in_value2_is_replaced_there",
+            ),
+            pytest.param(
+                "nmos4",
+                {"Value": "NMOS1", "Value2": "l=1u"},
+                "NMOS1 w=10u",
+                {"Value": "NMOS1", "Value2": "l=1u", "SpiceLine": "w=10u"},
+                [],
+                id="a_key_the_part_does_not_give_goes_to_spiceline",
+            ),
+            pytest.param(
+                "nmos4",
+                {"Value": "NMOS1", "SpiceLine": "m=2 ad=1e3"},
+                "NMOS1 w=10u",
+                {"Value": "NMOS1", "SpiceLine": "m=2 ad=1e3 w=10u"},
+                [],
+                id="a_new_key_leaves_the_rest_of_spiceline_as_written",
+            ),
+            pytest.param(
+                "schmitt_like",
+                {"Value": "Vt=2 Vh=0.5", "SpiceLine": "Vt=3"},
+                "Vt=4.15",
+                {"Value": "Vt=4.15 Vh=0.5", "SpiceLine": "Vt=4.15"},
+                ["A1 gives Vt 2 times (Value, SpiceLine); every copy was set to 4.15."],
+                id="copies_already_on_the_part_are_all_set_and_named",
+            ),
+        ],
+    )
+    def test_set_where_the_part_gives_it(
+        self,
+        asc_state: SessionState,
+        work_dir: Path,
+        symbol: str,
+        attributes: dict[str, str],
+        value: str,
+        expected: dict[str, str],
+        warnings: list[str],
+    ):
+        from spicelib import AscEditor
+
+        (work_dir / "schmitt_like.asy").write_text(_SCHMITT_ASY, encoding="utf-8", newline="\n")
+        ref = "A1" if symbol == "schmitt_like" else "M1"
+        asc = _write_sheet(
+            work_dir / "slots.asc",
+            f"SYMBOL {symbol} 100 100 R0",
+            f"SYMATTR InstName {ref}",
+            *(f"SYMATTR {name} {text}" for name, text in attributes.items()),
+        )
+
+        result = apply_one(
+            asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value}
+        )
+
+        assert dict(AscEditor(str(asc)).get_component(ref).attributes) == expected
+        assert result.get("warnings", []) == warnings
+
+
 @pytest.mark.asyncio
 class TestSetComponentValueMultiTokenValues:
     """A space in a value was refused unless it sat inside braces, quotes,
