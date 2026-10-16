@@ -1,0 +1,58 @@
+* three-node Q cards beside four-node ones: the substrate at ground, at the emitter, and at the collector
+* Each transistor is a common-emitter stage with an emitter resistor, driven
+* through a base resistor, so no terminal sits at a supply. A large substrate
+* capacitance, on the collector or on the base, makes where the substrate goes
+* change the response. X9 and X10 are the first two stages inside a subcircuit.
+.model QN NPN (BF=100 CJS=10n)
+.model QP PNP (BF=100 CJS=10n)
+VCC vcc 0 10
+VBN bn 0 2 AC 1
+VBP bp 0 8 AC 1
+RB1 bn b1 1k
+Q1 c1 b1 e1 QN
+RE1 e1 0 1k
+RC1 vcc c1 4.7k
+RB2 bn b2 1k
+Q2 c2 b2 e2 0 QN
+RE2 e2 0 1k
+RC2 vcc c2 4.7k
+RB3 bn b3 1k
+Q3 c3 b3 e3 e3 QN
+RE3 e3 0 1k
+RC3 vcc c3 4.7k
+RB4 bn b4 1k
+Q4 c4 b4 e4 c4 QN
+RE4 e4 0 1k
+RC4 vcc c4 4.7k
+RB5 bp b5 1k
+Q5 c5 b5 e5 QP
+RE5 vcc e5 1k
+RC5 c5 0 4.7k
+RB6 bp b6 1k
+Q6 c6 b6 e6 0 QP
+RE6 vcc e6 1k
+RC6 c6 0 4.7k
+RB7 bp b7 1k
+Q7 c7 b7 e7 e7 QP
+RE7 vcc e7 1k
+RC7 c7 0 4.7k
+RB8 bp b8 1k
+Q8 c8 b8 e8 c8 QP
+RE8 vcc e8 1k
+RC8 c8 0 4.7k
+.subckt CE3 in c vcc
+RB in b 1k
+Q1 c b e QN
+RE e 0 1k
+RC vcc c 4.7k
+.ends
+.subckt CE4 in c vcc
+RB in b 1k
+Q1 c b e 0 QN
+RE e 0 1k
+RC vcc c 4.7k
+.ends
+X9 bn c9 vcc CE3
+X10 bn c10 vcc CE4
+.ac dec 2 100 10meg
+.end

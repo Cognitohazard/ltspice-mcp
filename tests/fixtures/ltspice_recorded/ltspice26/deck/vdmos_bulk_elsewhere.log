@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\vdmos_bulk_elsewhere.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\vdmos_bulk_elsewhere.cir(6): The Vertical DMOS FET requires the source and bulk to be the same node.
+M1 d1 g1 s1 0 VD
+            ^
