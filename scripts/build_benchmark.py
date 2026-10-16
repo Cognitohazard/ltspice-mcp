@@ -38,6 +38,7 @@ _COLUMNS = (
     ("ops", "cost", "ops"),
     ("refused", "cost", "refused"),
     ("coords", "cost", "coordinates"),
+    ("by pin", "cost", "origins_from_pins"),
     ("bytes", "cost", "reply_bytes"),
     ("wires", "drawing", "wires"),
     ("length", "drawing", "wire_length"),
@@ -75,7 +76,9 @@ def score(sheet_path: Path, netlist: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        description="The schematic build benchmark's record as a table, or the score of a sheet."
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("table", help="print the record")
     scoring = commands.add_parser("score", help="score a sheet against a reference netlist")

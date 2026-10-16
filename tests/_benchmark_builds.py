@@ -227,6 +227,7 @@ class Drawing:
     def __init__(self, name: str) -> None:
         self.reference = circuit(name)
         self.ops: list[dict[str, Any]] = []
+        self.origins_from_pins = 0
 
     def part(
         self, ref: str, rotation: str, pin: str, at: Point, symbol: str | None = None
@@ -239,6 +240,7 @@ class Drawing:
         _order, px, py = _pins(symbol)[pin]
         dx, dy = place_point(px, py, 0, 0, rotation)
         x, y = at[0] - dx, at[1] - dy
+        self.origins_from_pins += 1
         op: dict[str, Any] = {
             "op": "add_component",
             "reference": ref,
@@ -280,7 +282,11 @@ class Drawing:
 
     def build(self, expected_findings: Mapping[str, int] | None = None) -> Build:
         return Build(
-            self.reference.name, "drawn", (tuple(self.ops),), dict(expected_findings or {})
+            self.reference.name,
+            "drawn",
+            (tuple(self.ops),),
+            dict(expected_findings or {}),
+            self.origins_from_pins,
         )
 
 
