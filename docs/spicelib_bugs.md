@@ -2938,8 +2938,8 @@ on a sheet placing LTspice's `Digital/diffschmtbuf` symbol.
 `AscEditor.set_component_parameters` and `AscEditor.get_component_parameters`).
 **Our workaround:** `lib/schematic_ops.py:_set_instance_params` sets a key
 where the part already gives it, in `Value`, `Value2`, `SpiceLine` or
-`SpiceLine2`, matched without regard to case, and hands spicelib only the keys
-the part gives nowhere.
+`SpiceLine2`, matched without regard to case, and appends a key the part gives
+nowhere to `SpiceLine` as text. It does not call `set_component_parameters`.
 
 ### Summary
 
@@ -2987,6 +2987,10 @@ editor.get_component("M1").attributes
 With `SYMATTR SpiceLine w=20u` in place of `Value2`, `W="10u"` gives
 `SpiceLine` `w=20u W=10u`.
 
+Adding a key also rebuilds `SpiceLine` from the parameters spicelib parsed out
+of it, converted to numbers: with `SYMATTR SpiceLine m=2 ad=1e3`, `w="10u"`
+gives `m=2 ad=1000.0 w=10u`, and `params: r=2k` becomes `r=2k w=10u`.
+
 ### Impact
 
 - The part carries `w=20u` and `w=10u` at once. Which copy LTspice uses has
@@ -2994,12 +2998,15 @@ With `SYMATTR SpiceLine w=20u` in place of `Value2`, `W="10u"` gives
 - A comparison that keeps one value per key cannot see the second copy: a
   netlist equivalence check passed on a sheet whose thresholds were written
   twice.
+- Every other parameter on `SpiceLine` is rewritten when one is added, and
+  text the parse does not match, such as a `params:` marker, is dropped.
 
 ### Proposed fix
 
 Search every attribute that carries parameters (`Value`, `Value2`,
 `SpiceLine`, `SpiceLine2`) for the key, case-insensitively, and replace each
-copy found in place; append to `SpiceLine` only when none is found.
+copy found in place; append to `SpiceLine` only when none is found, as text,
+leaving what is already there as written.
 
 ### Suggested upstream test
 
@@ -3022,8 +3029,8 @@ def test_a_parameter_in_value2_is_set_there(tmp_path):
 `tests/test_circuit_asc.py::TestSetComponentValueParameterSlots` pins the
 workaround through the `set_component_value` op: a threshold in `Value` and a
 width in `Value2` are replaced where they are, a key the part does not give
-still goes to `SpiceLine`, and copies already on a part are all set and named
-in a warning. `tests/test_netlist_graph.py` pins the comparison side: a
+still goes to `SpiceLine`, appended to what it held as written, and copies
+already on a part are all set and named in a warning. `tests/test_netlist_graph.py` pins the comparison side: a
 parameter given twice is reported (`duplicate_params`) and compares equal only
-when it does whichever copy is read. Once upstream searches every slot, the
-workaround reduces to the call it wraps.
+when it does whichever copy is read. Once upstream searches every slot and
+appends as text, the workaround can call it again.

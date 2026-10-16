@@ -797,11 +797,11 @@ class TestReceiptSnapshotCoherence:
         after = snapshot_receipt(job, state_no_sim)
 
         fields = ["native_statistics"]
-        original = project_receipt_runs(before, fields, lean_default=False)
-        current = project_receipt_runs(after, fields, lean_default=False)
+        original = project_receipt_runs(before, fields)
+        current = project_receipt_runs(after, fields)
         assert original["items"] == [{"native_statistics": expected}]
         assert current["items"] == [{"native_statistics": ready.public(detailed=True)}]
-        assert project_receipt_runs(before, fields, lean_default=False) == original
+        assert project_receipt_runs(before, fields) == original
 
     async def test_seed_projection_refuses_inconsistent_native_identity(
         self, state_no_sim, work_dir
@@ -1047,18 +1047,12 @@ class TestReceiptSnapshotCoherence:
         snapshot = snapshot_receipt(job, state_no_sim)
         original = copy.deepcopy(snapshot.runs_by_key)
 
-        projected = project_receipt_runs(
-            snapshot,
-            ["case_id", "assignments"],
-            lean_default=True,
-        )
-        lean = project_receipt_runs(snapshot, None, lean_default=True)
+        projected = project_receipt_runs(snapshot, ["case_id", "assignments"])
+        whole = project_receipt_runs(snapshot, None)
 
         assert set(projected["items"][0]) == {"case_id", "assignments"}
-        assert "raw" in lean["items"][0] and "log" in lean["items"][0]
-        assert "simulator_version" not in lean["items"][0]
+        assert whole["items"] == list(original.values())
         assert snapshot.runs_by_key == original
-        assert "raw" in next(iter(snapshot.runs_by_key.values()))
 
 
 @pytest.mark.asyncio

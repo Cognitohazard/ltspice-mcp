@@ -178,10 +178,6 @@ class Component:
     params: tuple[tuple[str, str], ...]
     line: int = 0
 
-    @property
-    def params_dict(self) -> dict[str, str]:
-        return dict(self.params)
-
 
 @dataclass(frozen=True)
 class SubcktDef:
@@ -289,10 +285,6 @@ class FlatComponent:
     model: str | None
     value: str | None
     params: tuple[tuple[str, str], ...]
-
-    @property
-    def params_dict(self) -> dict[str, str]:
-        return dict(self.params)
 
 
 @dataclass(frozen=True)
@@ -1345,11 +1337,12 @@ def _diff_matched_pair(
         )
     rparams, cparams = _param_copies(rc), _param_copies(cc)
     for pkey in sorted(rparams.keys() | cparams.keys()):
-        rvals, cvals = rparams.get(pkey, []), cparams.get(pkey, [])
-        if not _copies_agree(rvals, cvals, rtol):
-            rv, cv = _first_disagreement(rvals, cvals, rtol)
+        differ = _disagreement(rparams.get(pkey, []), cparams.get(pkey, []), rtol)
+        if differ is not None:
             result.param_mismatches.append(
-                ParamDiff(ref=rc.ref, key=pkey, reference_value=rv, candidate_value=cv)
+                ParamDiff(
+                    ref=rc.ref, key=pkey, reference_value=differ[0], candidate_value=differ[1]
+                )
             )
 
 
@@ -1361,37 +1354,29 @@ def _param_copies(comp: FlatComponent) -> dict[str, list[str]]:
     return copies
 
 
-def _copies_agree(rvals: list[str], cvals: list[str], rtol: float) -> bool:
-    """Whether a parameter reads the same on both sides whichever copy is read.
+def _disagreement(
+    rvals: list[str], cvals: list[str], rtol: float
+) -> tuple[str | None, str | None] | None:
+    """``None`` when a parameter reads the same on both sides whichever copy is
+    read, else a reference copy and a candidate copy for the mismatch row
+    (``None`` on a side that does not give it).
 
     One copy a side is the plain comparison. With more, the sides agree when
     they give the same copies in the same order, or when every copy on both
     sides is the same value; anything else depends on which copy a simulator
     takes, which this comparison does not model.
     """
-    if not rvals or not cvals:
-        return False
-    if len(rvals) == len(cvals) and all(
-        values_equal(r, c, rtol) for r, c in zip(rvals, cvals, strict=True)
-    ):
-        return True
-    return all(values_equal(rvals[0], v, rtol) for v in (*rvals[1:], *cvals))
-
-
-def _first_disagreement(
-    rvals: list[str], cvals: list[str], rtol: float
-) -> tuple[str | None, str | None]:
-    """A reference copy and a candidate copy that differ, for the mismatch row;
-    ``None`` on a side that does not give the parameter."""
-    if not rvals or not cvals:
-        return (rvals[0] if rvals else None), (cvals[0] if cvals else None)
-    for r in rvals:
-        for c in cvals:
-            if not values_equal(r, c, rtol):
-                return r, c
-    # Every cross pair agrees within tolerance while two copies on one side do
-    # not; the duplicate_params fact lists them.
-    return rvals[0], cvals[0]
+    if rvals and cvals:
+        if len(rvals) == len(cvals) and all(
+            values_equal(r, c, rtol) for r, c in zip(rvals, cvals, strict=True)
+        ):
+            return None
+        if all(values_equal(rvals[0], v, rtol) for v in (*rvals[1:], *cvals)):
+            return None
+    first = (rvals[0] if rvals else None, cvals[0] if cvals else None)
+    # Within tolerance every cross pair can agree while two copies on one side
+    # do not; the duplicate_params fact lists those.
+    return next(((r, c) for r in rvals for c in cvals if not values_equal(r, c, rtol)), first)
 
 
 # ---------------------------------------------------------------------------

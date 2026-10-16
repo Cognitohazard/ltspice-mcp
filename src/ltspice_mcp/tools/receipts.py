@@ -460,12 +460,6 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[s
         result = _attached_result(data)
         if result is not None:
             emptied = [f"analysis.result.{key}" for key in analyze.trim_analysis(result)]
-    if rung.answer_channel:
-        for page in _receipt_row_pages(data):
-            for row in page["items"]:
-                if isinstance(row, dict) and row.get("status") == "produced":
-                    row.pop("raw", None)
-                    row.pop("log", None)
     return emptied
 
 
@@ -625,7 +619,6 @@ def render_receipt_snapshot(
     runs = project_receipt_runs(
         snapshot,
         run_fields,
-        lean_default=True,
         limit=runs_cap,
     )
     data: dict[str, Any] = {
@@ -779,14 +772,6 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
-#: Run-row keys a lean receipt leaves out of a produced row: the build that
-#: produced it is confirming detail, which jobs(runs) and run_fields return. A
-#: produced row keeps its raw and log paths. A caller reading a run's log from
-#: its row, with the key absent, read an empty string and parsed it as a run
-#: that logged nothing.
-_LEAN_PRODUCED_OMITS = ("simulator_version",)
-
-
 def _run_item(case: ExperimentCase) -> dict[str, Any]:
     row: dict[str, Any] = {
         "case_id": case.case_id,
@@ -814,9 +799,11 @@ def _project_run_rows(
     run_fields: list[str] | None,
     *,
     native_by_key: dict[tuple[str, int], NativeCaseRecord],
-    lean_default: bool,
 ) -> list[dict[str, Any]]:
-    """Render native evidence and project only the rows this page carries."""
+    """Render native evidence and project only the rows this page carries.
+
+    With no ``run_fields`` every row keeps every key, whatever its status, so a
+    key read off a row is never missing because the run produced."""
     plan = keep_plan(run_fields) if run_fields else None
     if plan is None or "native_statistics" in plan:
         for row in rows:
@@ -828,11 +815,6 @@ def _project_run_rows(
                 )
     if plan is not None:
         return [project_row(row, plan) for row in rows]
-    if lean_default:
-        for row in rows:
-            if row["status"] == "produced":
-                for key in _LEAN_PRODUCED_OMITS:
-                    del row[key]
     return rows
 
 
@@ -857,7 +839,6 @@ def runs_page(
         [_run_item(case) for case in selected],
         run_fields,
         native_by_key=native_by_key,
-        lean_default=True,
     )
     return page_of(rows, offset=0, total=len(cases))
 
@@ -866,16 +847,13 @@ def project_receipt_runs(
     snapshot: ReceiptSnapshot,
     run_fields: list[str] | None,
     *,
-    lean_default: bool,
     offset: int = 0,
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Purely apply one invocation's run projection to copied canonical rows.
 
-    ``run_fields`` and ``lean_default`` together are the original request's
-    projection policy.  Receipt requests use the lean default when no explicit
-    fields were supplied; ``jobs(runs)`` requests use the full-row policy.
-    ``limit=None`` renders the complete page shape for an in-process consumer.
+    ``run_fields`` is the original request's projection policy; without it
+    every row is whole. ``limit=None`` renders the complete page shape for an in-process consumer.
     ``offset`` is already decoded from the caller's cursor — a malformed one is
     that tool's error to raise, not this renderer's.
 
@@ -890,7 +868,6 @@ def project_receipt_runs(
         [dict(row) for row in page["items"]],
         run_fields,
         native_by_key=snapshot.native_by_key,
-        lean_default=lean_default,
     )
     return page
 
@@ -1179,7 +1156,6 @@ def render_runs_envelope(
     page = project_receipt_runs(
         snapshot,
         run_fields,
-        lean_default=False,
         offset=offset,
         # This page's cursor continues this page, so it never renders empty.
         limit=None if limit is None else max(1, limit),

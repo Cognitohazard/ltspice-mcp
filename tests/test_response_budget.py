@@ -740,7 +740,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
     offset = jobs_mod._decode_jobs_cursor(page["next_cursor"])
     assert offset == page["returned"]
     rendered_rows = page["items"]
-    assert all("raw" not in row and "log" not in row for row in rendered_rows)
+    assert all("raw" in row and "log" in row for row in rendered_rows)
     assert [item["case_id"] for item in rendered_rows] == [
         item["case_id"] for item in rows[:offset]
     ]
@@ -908,12 +908,12 @@ class TestJobsBudget:
         assert cursor is None
         assert seen == expected
 
-    async def test_the_answer_rung_drops_artifact_paths_only_from_produced_runs(
+    async def test_rows_keep_their_keys_at_every_rung(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """A produced run's paths are provenance the analysis tools resolve by
-        id; a run that did not produce keeps them, because its log IS the
-        diagnostic and failures entries carry only a code and a message."""
+        """A budget shrinks the page, never a row: a produced run's paths
+        dropped under a budget read back as absent to a caller reading its
+        log from the row."""
         job = _batch_with_runs(state_no_sim, 60)
         job.cases[7].status = "failed"
         job.cases[7].raw_file = None
@@ -928,8 +928,8 @@ class TestJobsBudget:
             budget=response_budget.BUDGET_MIN_TOKENS,
         )
         rows = page["items"]
-        assert all("raw" not in row for row in rows if row["status"] == "produced")
-        assert all("raw" in row for row in rows if row["status"] != "produced")
+        assert page["returned"] < 60, "this budget is supposed to shrink the page"
+        assert all(set(row) == set(plain["items"][0]) for row in rows)
 
     async def test_facts_and_handles_survive(self, state_no_sim: SessionState, work_dir: Path):
         job = _batch_with_runs(state_no_sim, 60)

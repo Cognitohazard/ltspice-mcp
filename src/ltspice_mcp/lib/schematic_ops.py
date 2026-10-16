@@ -286,9 +286,8 @@ def _parse_rotation(rotation: str) -> ERotation:
 
 
 # Matches one ``KEY=VALUE`` token (value may have braces, parens, sign, etc.).
-# Used to peel trailing parameters off a multi-token component value like
-# ``"NMOS1 W=10u L=1u"`` so we can route each piece through the right
-# spicelib API (model name → ``set_component_value``; W/L → ``set_component_parameters``).
+# Validation uses it to accept a value shaped ``"NMOS1 W=10u L=1u"``: one head
+# token, then only parameters.
 _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 
 # A GUI opamp complexity-level label (e.g. ``Level.2``) that belongs in the
@@ -578,50 +577,54 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
 _PARAMETER_SLOTS = ("Value", "Value2", "SpiceLine", "SpiceLine2")
 
 
+def _replace_param(text: str, key: str, value: str) -> tuple[str, int]:
+    """``text`` with every ``KEY=VALUE`` copy of ``key`` (in any case) set to
+    ``value``, keeping its spelling of the key, and how many copies there were."""
+    try:
+        tokens = tokenize_body(text)
+    except SpiceLexError:
+        return text, 0
+    copies = [
+        tok
+        for tok in tokens
+        if tok.kind == TokenKind.KEY_VALUE and (tok.key or "").casefold() == key.casefold()
+    ]
+    for tok in reversed(copies):
+        text = f"{text[: tok.body_offset]}{tok.key}={value}{text[tok.body_end :]}"
+    return text, len(copies)
+
+
 def _set_instance_params(editor, reference: str, params: dict[str, str]) -> list[str]:
-    """Set each parameter where the part already gives it, else in SpiceLine.
+    """Set each parameter where the part already gives it, else add it to
+    SpiceLine.
 
     spicelib's ``set_component_parameters`` looks for a key only in SpiceLine
-    and SpiceLine2, spelled exactly. A key the part gives in Value or Value2 (a
-    Schmitt trigger's ``Vt``, a MOSFET's ``w``) got a second copy in SpiceLine,
-    and the exported line named the parameter twice. SPICE reads a name in any
-    case, so the key is matched without it, and every copy found is set, so
-    copies already on the part come to agree; the warning says where they are.
+    and SpiceLine2, spelled exactly, so a key the part gives in Value or Value2
+    (a Schmitt trigger's ``Vt``, a MOSFET's ``w``) got a second copy in
+    SpiceLine. It also rebuilds SpiceLine from its own parse when it adds a
+    key, rewriting the rest of the line. So nothing here goes through it: SPICE
+    reads a name in any case, every copy found is set, so copies already on the
+    part come to agree, and the warning says where they are.
     """
     attributes = editor.get_component(reference).attributes
     warnings: list[str] = []
-    elsewhere: dict[str, str] = {}
     for key, value in params.items():
         found: list[str] = []
         for slot in _PARAMETER_SLOTS:
-            text = attributes.get(slot)
-            if not text:
-                continue
-            try:
-                tokens = tokenize_body(text)
-            except SpiceLexError:
-                continue
-            copies = [
-                tok
-                for tok in tokens
-                if tok.kind == TokenKind.KEY_VALUE
-                and tok.key is not None
-                and tok.key.casefold() == key.casefold()
-            ]
-            for tok in reversed(copies):
-                text = f"{text[: tok.body_offset]}{tok.key}={value}{text[tok.body_end :]}"
+            text, copies = _replace_param(attributes.get(slot, ""), key, value)
             if copies:
                 editor.set_component_attribute(reference, slot, text)
-                found.extend([slot] * len(copies))
+                found.extend([slot] * copies)
         if not found:
-            elsewhere[key] = value
+            line = attributes.get("SpiceLine", "").strip()
+            editor.set_component_attribute(
+                reference, "SpiceLine", f"{line} {key}={value}" if line else f"{key}={value}"
+            )
         elif len(found) > 1:
             warnings.append(
                 f"{reference} gives {key} {len(found)} times ({', '.join(found)}); "
                 f"every copy was set to {value}."
             )
-    if elsewhere:
-        editor.set_component_parameters(reference, **elsewhere)
     return warnings
 
 
