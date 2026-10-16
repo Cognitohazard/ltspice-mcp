@@ -143,6 +143,55 @@ class TestRecording:
                 True,
                 False,
             ],
+            # Results opened on their own read the plot settings beside them
+            # as they open and never again, so they too are closed and opened
+            # to draw other traces.
+            "results opened on their own draw the traces the plot settings beside them name": [
+                ["I(R1)"]
+            ],
+            # The settings named V(out) by then.
+            "asked for again while open, they draw what they drew": [["I(R1)"]],
+            "closed, they are not in front any more": True,
+            "closed and opened again, they draw what the settings name now": [["V(out)"]],
+            # Two runs of one deck: the results of each are found by path.
+            "the results put in front, of two of one name": ["one", "other", "one"],
+            "of two results panes of one title, the first found is the one in front": True,
+            "with that one closed, the results left open are the other run's": "other",
+            # What makes it safe to close a sheet so that it looks for results again.
+            "the frame takes input while LTspice asks nothing": True,
+            "a sheet nobody changed, told to close, is closed, and LTspice asks nothing": [
+                True,
+                True,
+            ],
+            "opened again, it opens the results put beside it while it was open": True,
+            "the plot opened from a sheet closes with it": [True, True],
+            "it then reads as its file does": True,
+            "a sheet the window was handed is asked about before it closes, in these words": [
+                ["&Yes", "&No", "Cancel", f"Save changes to {NEUTRAL_DIR}\\closing.asc?"]
+            ],
+            "the document the question names is the sheet": True,
+            "the frame takes input while LTspice asks that": False,
+            "answered Cancel, the sheet stays open, holds what it held, and the frame "
+            "takes input": [True, True, True],
+            "answered No, the sheet closes and its file is as it was": [True, True],
+            "of two sheets of one title, the first pane found is the one in front": True,
+            # How the server tells whether an open sheet knows of results.
+            "Visible Traces is enabled for a sheet with no results, one with results put "
+            "beside it after it was opened, one with results beside it when it was opened, "
+            "and that one with its plot open": [False, False, True, True],
+            # Only the sheet's own command ties a plot to it: the bridge, asked
+            # by either path, opens a plot that ignores clicks on the sheet.
+            "a plot opened by its sheet's Visible Traces plots what a click on the sheet "
+            "lands on": True,
+            "a plot of results opened by their own path does, for a sheet that knows of none": (
+                False
+            ),
+            "asked about a sheet by its path, the bridge opens the results beside it": [
+                "tie_late.raw",
+                "tie_known.raw",
+            ],
+            "that plot does, for a sheet that knows of none and for one that knows of its "
+            "results": [False, False],
             "no LTspice was started in its place": True,
         }
 
@@ -280,8 +329,9 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
         "designs": {f"{NEUTRAL_DIR}\\{started_with}.asc": recorded_sheet(build, started_with)},
     }
     files = {f"{NEUTRAL_DIR}\\{name}.asc": recorded_sheet(build, name) for name in opened_later}
-    # The sheet the recorder puts results beside and then opens.
-    files[f"{NEUTRAL_DIR}\\placed.asc"] = recorded_sheet(build, "older_version")
+    # The sheet the recorder puts results beside and then opens, and the one it closes.
+    for copy in ("placed", "closing"):
+        files[f"{NEUTRAL_DIR}\\{copy}.asc"] = recorded_sheet(build, "older_version")
     steps = [
         step for step in load_conversation(FIXTURES / build) if step.get("call") in SERVER_CALLS
     ]
@@ -308,7 +358,8 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
     with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
         for step in steps[:first_with_window]:
             replay(session, step)
-    write_world(world, [window], results=[f"{NEUTRAL_DIR}\\older_version.raw"], files=files)
+    results = [f"{NEUTRAL_DIR}\\older_version.raw", f"{NEUTRAL_DIR}\\runs\\one\\run.raw"]
+    write_world(world, [window], results=results, files=files)
     with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
         for step in steps[first_with_window:first_after]:
             replay(session, step)

@@ -1,4 +1,5 @@
-"""The frame of an LTspice window: its panes, and a command sent to it by label.
+"""The frame of an LTspice window: its panes, a command sent to it by label,
+a pane told to close, and the question LTspice asks before it closes a sheet.
 
 What a real frame does is in the bridge recording
 (``tests/fixtures/ltspice_bridge_recorded``, the facts noted after "a results
@@ -17,8 +18,14 @@ import pytest
 
 from ltspice_mcp.lib import hidden_desktop, ltspice_frame, pe_menu
 from ltspice_mcp.lib.ltspice_bridge import BridgeSession
-from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, FrameError, LtspiceFrame, menu_command
-from tests._ltspice_window import PID, FakeFrame, a_window, fake_command, write_world
+from ltspice_mcp.lib.ltspice_frame import (
+    VISIBLE_TRACES,
+    FrameError,
+    LtspiceFrame,
+    SaveQuestion,
+    menu_command,
+)
+from tests._ltspice_window import PID, FakeFrame, a_window, fake_command, read_world, write_world
 from tests.conftest import LIVENESS_S
 from tests.ltspice_bridge_recorder import FIXTURES, load_manifest, observed, recorded_builds
 
@@ -115,18 +122,83 @@ def test_the_panes_are_the_titles_inside_the_frame(monkeypatch: pytest.MonkeyPat
 
 
 @windows_only
-def test_closing_a_pane_asks_the_panes_own_window_and_no_other(monkeypatch: pytest.MonkeyPatch):
-    """A pane's title is on more than one window inside the frame; the one
-    asked to close is the pane itself, whose class begins as the frame's does."""
+def test_a_pane_is_the_window_of_its_title_whose_class_begins_as_the_frames_does(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A pane's title is on more than one window inside the frame, and two
+    files of one name have a pane each: Windows lists them from the front."""
     windows = Windows(monkeypatch)
-    windows.frame(7, {71: "amp.asc", 72: "amp.raw", 73: "AMP.RAW", 74: "other.raw"})
-    windows.classes.update({72: "Static", 73: "Afx:00007FF6:b", 74: "Afx:00007FF6:b"})
+    windows.frame(7, {71: "amp.asc", 72: "amp.raw", 73: "AMP.RAW", 74: "other.raw", 75: "amp.raw"})
+    pane_class = "Afx:00007FF6:b"
+    windows.classes.update({72: "Static", 73: pane_class, 74: pane_class, 75: pane_class})
     frame = LtspiceFrame(lambda _pid: [7])
-    frame.close_pane(PID, "amp.raw")
+    assert frame.panes_titled(PID, "amp.raw") == [73, 75]
+    assert frame.pane(PID, "amp.raw") == 73
+    assert frame.pane(PID, "gone.raw") is None
+
+    frame.close(73)
     assert windows.closed == [73]
-    with pytest.raises(FrameError, match=r"has no pane titled gone\.raw"):
-        frame.close_pane(PID, "gone.raw")
-    assert windows.closed == [73]
+
+
+BUTTON, WORDS, BOX = "Button", "Static", hidden_desktop.DIALOG_CLASS
+
+
+def a_box(windows: Windows, box: int, parts: list[str]) -> None:
+    """A box with ``parts`` in it: buttons, and last the words it says."""
+    windows.classes[box] = BOX
+    windows.children[box] = [box * 10 + place for place in range(len(parts))]
+    for child, text in zip(windows.children[box], parts, strict=True):
+        windows.texts[child] = text
+        windows.classes[child] = BUTTON
+    windows.classes[windows.children[box][-1]] = WORDS
+
+
+@windows_only
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_question_ltspice_was_recorded_asking_is_read_for_the_document_it_names(
+    build: str, monkeypatch: pytest.MonkeyPatch
+):
+    (asked,) = observed(build)[
+        "a sheet the window was handed is asked about before it closes, in these words"
+    ]
+    windows = Windows(monkeypatch)
+    windows.frame(7, {71: "closing.asc"})
+    a_box(windows, 9, asked)
+    frame = LtspiceFrame(lambda _pid: [7, 9])
+
+    question = frame.save_question(PID)
+
+    assert question is not None
+    assert question == SaveQuestion(9, "C:\\recording\\closing.asc")
+    # Each answer is the box's own button for it, and neither saves.
+    frame.answer(question, discard=True)
+    frame.answer(question, discard=False)
+    assert windows.posted == [(9, 7), (9, 2)]
+
+
+@windows_only
+def test_a_box_that_asks_anything_else_is_not_the_question(monkeypatch: pytest.MonkeyPatch):
+    windows = Windows(monkeypatch)
+    # The words of the question on a pane, and a box that says something else.
+    windows.frame(7, {71: "Save changes to C:\\work\\amp.asc?"})
+    windows.classes[71] = WORDS
+    a_box(windows, 9, ["OK", "The file could not be read."])
+    assert LtspiceFrame(lambda _pid: [7, 9]).save_question(PID) is None
+
+
+@windows_only
+def test_a_frame_takes_input_unless_windows_says_it_does_not(monkeypatch: pytest.MonkeyPatch):
+    windows = Windows(monkeypatch)
+    windows.frame(7, {71: "amp.asc"})
+    off: set[int] = set()
+    gone: set[int] = set()
+    monkeypatch.setattr(hidden_desktop, "takes_input", lambda window: window not in off)
+    monkeypatch.setattr(hidden_desktop, "window_exists", lambda window: window not in gone)
+    frame = LtspiceFrame(lambda _pid: [7])
+    assert frame.takes_input(PID) and frame.is_open(71)
+    off.add(7)
+    gone.add(71)
+    assert not frame.takes_input(PID) and not frame.is_open(71)
 
 
 @windows_only
@@ -184,8 +256,10 @@ def test_the_stand_in_frame_opens_results_when_ltspice_was_recorded_opening_them
         "results beside a sheet when it is opened are opened by its command"
     ]
 
-    frame.close_pane(PID, "placed.raw")
-    assert ("placed.raw" not in frame.panes(PID)) is facts[
+    pane = frame.pane(PID, "placed.raw")
+    assert pane is not None
+    frame.close(pane)
+    assert (not frame.is_open(pane) and frame.save_question(PID) is None) is facts[
         "a results pane told to close is closed, and LTspice asks nothing"
     ]
     assert (placed.name in frame.panes(PID)) is facts["the sheet it was opened from stays open"]
@@ -195,3 +269,160 @@ def test_the_stand_in_frame_opens_results_when_ltspice_was_recorded_opening_them
         "the precision of the results the pane held, and of those it holds once opened again"
     ]
     assert (frame.pane(PID, "placed.raw") is not None) is (held == ["single", "double"])
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_finds_the_pane_in_front_as_ltspice_was_recorded_listing_them(
+    build: str, tmp_path: Path
+):
+    """Two runs of one deck leave results of one name, and two folders can
+    hold a sheet of one name: the pane found first is the one put in front."""
+    facts = observed(build)
+    sheets = [tmp_path / "amp.asc", tmp_path / "elsewhere" / "amp.asc"]
+    runs = [tmp_path / "runs" / run / "run.raw" for run in ("one", "other")]
+    for file in (*sheets, *runs):
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("Version 4.1\n", encoding="utf-8")
+    world = tmp_path / "world.json"
+    write_world(world, [a_window({str(sheet): "Version 4.1\n" for sheet in sheets})])
+    frame = FakeFrame(world)
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        session.attach(PID)
+        for run in runs:
+            session.show_results(str(run))
+        in_front: list[str] = []
+        found: list[int | None] = []
+        for run in (runs[0], runs[1], runs[0]):
+            session.bring_to_front(str(run))
+            in_front.append(Path(session.results_in_front() or "").parent.name)
+            found.append(frame.pane(PID, "run.raw"))
+        assert in_front == facts["the results put in front, of two of one name"]
+        assert (found[0] == found[2] != found[1]) is facts[
+            "of two results panes of one title, the first found is the one in front"
+        ]
+        assert found[2] is not None
+        frame.close(found[2])
+        # One that is not open is not put in front: the other run's stay there.
+        session.bring_to_front(str(runs[0]))
+        assert (
+            Path(session.results_in_front() or "").parent.name
+            == (facts["with that one closed, the results left open are the other run's"])
+        )
+
+        found = []
+        for sheet in (sheets[0], sheets[1], sheets[0]):
+            session.bring_to_front(str(sheet))
+            found.append(frame.pane(PID, "amp.asc"))
+        assert (found[0] == found[2] != found[1]) is facts[
+            "of two sheets of one title, the first pane found is the one in front"
+        ]
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_closes_a_sheet_as_ltspice_was_recorded_closing_one(
+    build: str, tmp_path: Path
+):
+    facts = observed(build)
+    sheet = tmp_path / "closing.asc"
+    sheet.write_text("Version 4.1\n", encoding="utf-8")
+    world = tmp_path / "world.json"
+    # A window that opened the sheet when there were no results beside it.
+    write_world(world, [a_window({str(sheet): "Version 4.1\n"}, active=str(sheet))])
+    frame = FakeFrame(world)
+    plot = sheet.with_suffix(".raw")
+    shutil.copyfile(sheet, plot)
+    on_disk = sheet.read_bytes()
+
+    def the_sheet() -> int:
+        pane = frame.pane(PID, sheet.name)
+        assert pane is not None
+        return pane
+
+    assert frame.takes_input(PID) is facts["the frame takes input while LTspice asks nothing"]
+    pane = the_sheet()
+    frame.close(pane)
+    assert [not frame.is_open(pane), frame.save_question(PID) is None] == facts[
+        "a sheet nobody changed, told to close, is closed, and LTspice asks nothing"
+    ]
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        session.attach(PID)
+        session.open_design(str(sheet))
+        frame.send(PID, VISIBLE_TRACES)
+        assert (frame.pane(PID, plot.name) is not None) is facts[
+            "opened again, it opens the results put beside it while it was open"
+        ]
+        pane = the_sheet()
+        frame.close(pane)
+        assert [not frame.is_open(pane), frame.pane(PID, plot.name) is None] == facts[
+            "the plot opened from a sheet closes with it"
+        ]
+
+        session.open_design(str(sheet))
+        held = session.design_text(str(sheet))
+        session.replace_design_text(str(sheet), held + "TEXT 0 0 Left 2 ;a change\n")
+        session.replace_design_text(str(sheet), held)
+        pane = the_sheet()
+        frame.close(pane)
+        question = frame.save_question(PID)
+        assert question is not None and frame.is_open(pane)
+        assert (Path(question.path) == sheet) is facts[
+            "the document the question names is the sheet"
+        ]
+        assert frame.takes_input(PID) is facts["the frame takes input while LTspice asks that"]
+        # The bridge still reads the sheet while LTspice asks, as it was recorded doing.
+        assert session.design_text(str(sheet)) == held
+
+        frame.answer(question, discard=False)
+        assert [
+            frame.is_open(pane),
+            session.design_text(str(sheet)) == held,
+            frame.takes_input(PID),
+        ] == facts[
+            "answered Cancel, the sheet stays open, holds what it held, and the frame takes input"
+        ]
+        assert not frame.is_open(question.box)
+
+        frame.close(pane)
+        question = frame.save_question(PID)
+        assert question is not None
+        frame.answer(question, discard=True)
+        assert [not frame.is_open(pane), sheet.read_bytes() == on_disk] == facts[
+            "answered No, the sheet closes and its file is as it was"
+        ]
+    assert read_world(world)["windows"][0]["answers"] == ["cancel", "no"]
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_menu_says_what_ltspice_was_recorded_saying_of_a_sheets_results(
+    build: str, tmp_path: Path
+):
+    """Visible Traces is turned off for a sheet that knows of no results."""
+    recorded = observed(build)[
+        "Visible Traces is enabled for a sheet with no results, one with results put beside "
+        "it after it was opened, one with results beside it when it was opened, and that "
+        "one with its plot open"
+    ]
+    sheets = {name: tmp_path / f"{name}.asc" for name in ("none", "late", "known")}
+    for sheet in sheets.values():
+        sheet.write_text("Version 4.1\n", encoding="utf-8")
+    shutil.copyfile(sheets["known"], sheets["known"].with_suffix(".raw"))
+    world = tmp_path / "world.json"
+    write_world(world, [a_window()])
+    frame = FakeFrame(world)
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        session.attach(PID)
+        for sheet in sheets.values():
+            session.open_design(str(sheet))
+        shutil.copyfile(sheets["known"], sheets["late"].with_suffix(".raw"))
+        said = []
+        for name in ("none", "late", "known"):
+            session.bring_to_front(str(sheets[name]))
+            said.append(frame.command_enabled(PID, VISIBLE_TRACES))
+        frame.send(PID, VISIBLE_TRACES)
+        session.bring_to_front(str(sheets["known"]))
+        said.append(frame.command_enabled(PID, VISIBLE_TRACES))
+
+    assert said == recorded

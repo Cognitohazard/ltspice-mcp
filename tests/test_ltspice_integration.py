@@ -957,12 +957,12 @@ class TestSheetOpenInAWindow:
 
         command = _bridge_of(ltspice_state)
 
-        def results_in_front() -> str:
+        def results_in_front() -> str | None:
             with BridgeSession(command) as session:
                 session.attach(pid)
-                return str(session.call("get_raw_info")["path"])
+                return session.results_in_front()
 
-        assert Path(await asyncio.to_thread(results_in_front)) == Path(shown["results"])
+        assert await asyncio.to_thread(results_in_front) == shown["results"]
         # Nothing was opened in a browser beside it.
         assert result.structured_content["opened"] is False
 
@@ -1013,23 +1013,11 @@ class TestSheetOpenInAWindow:
         them, and only for a sheet opened with results beside it, is in the
         bridge recording."""
         from ltspice_mcp.lib.plot_settings import read_plot_settings
-        from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 
-        already_open, pid = open_sheet
-        sheet = work_dir / "amp.asc"
-
-        def a_sheet_with_a_run() -> None:
-            drawn = already_open.read_bytes().rstrip(b"\r\n")
-            sheet.write_bytes(drawn + b"\nTEXT -64 320 Left 2 !.tran 10m\n")
-
-        await asyncio.to_thread(a_sheet_with_a_run)
+        _already_open, pid = open_sheet
+        sheet = await self._a_sheet_with_a_run(work_dir, "amp")
         receipt = await _run_deck(ltspice_state, "tied-in-ltspice", str(sheet))
-        result = await handle_plot_waveform(
-            PlotWaveformInput(job_id=receipt["job_id"], signals=["V(filtered)"], in_ltspice=True),
-            ltspice_state,
-        )
-        assert result.structured_content is not None
-        shown = result.structured_content["ltspice"]
+        shown = await self._plot(ltspice_state, receipt["job_id"], "V(filtered)")
 
         assert shown["shown"] is True, shown
         assert shown["pid"] == pid
@@ -1040,19 +1028,169 @@ class TestSheetOpenInAWindow:
         section = read_plot_settings(settings).section("Transient Analysis")
         assert section is not None
         assert [pane.traces for pane in section.panes] == [("V(filtered)",)]
+        assert shown["tied"] is True
+        assert "sheet_reopened" not in shown
 
-        assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, pid, sheet)
+        assert await self._drawn(ltspice_state, pid, sheet.with_suffix(".raw")) == [
+            ["V(filtered)"]
+        ]
 
         # Asked again with the plot open: LTspice would go on showing what it
         # read, and ask which traces to show, so the plot is closed and opened again.
-        again = await handle_plot_waveform(
-            PlotWaveformInput(job_id=receipt["job_id"], signals=["V(filtered)"], in_ltspice=True),
-            ltspice_state,
-        )
-        assert again.structured_content is not None
-        once_more = again.structured_content["ltspice"]
+        once_more = await self._plot(ltspice_state, receipt["job_id"], "I(R1)")
         assert (once_more["shown"], once_more.get("reopened")) == (True, True), once_more
-        assert await asyncio.to_thread(ltspice_state.open_windows.results_pane_open, pid, sheet)
+        assert await self._drawn(ltspice_state, pid, sheet.with_suffix(".raw")) == [["I(R1)"]]
+
+    @staticmethod
+    async def _a_sheet_with_a_run(work_dir: Path, name: str) -> Path:
+        """The sheet the window was started with, with a transient run on it."""
+        sheet = work_dir / f"{name}.asc"
+
+        def write() -> None:
+            drawn = (_FIXTURE_DIR / "Draft1.asc").read_bytes().rstrip(b"\r\n")
+            sheet.write_bytes(drawn + b"\nTEXT -64 320 Left 2 !.tran 10m\n")
+
+        await asyncio.to_thread(write)
+        return sheet
+
+    @staticmethod
+    async def _plot(state: SessionState, job_id: str, signal: str) -> dict:
+        from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+
+        result = await handle_plot_waveform(
+            PlotWaveformInput(job_id=job_id, signals=[signal], in_ltspice=True), state
+        )
+        assert result.structured_content is not None
+        return result.structured_content["ltspice"]
+
+    @staticmethod
+    async def _drawn(state: SessionState, pid: int, results: Path) -> list[list[str]]:
+        """The traces the window's plot of ``results`` draws, pane by pane, as
+        the recorder reads them."""
+        from ltspice_mcp.lib.ltspice_bridge import BridgeSession
+        from ltspice_mcp.lib.simulator_build import executable_path
+        from tests.ltspice_bridge_recorder import _until
+        from tests.ltspice_recorder import drawn_traces
+
+        exe = executable_path(state.default_simulator)
+        assert exe is not None
+        windows = state.open_windows
+
+        def drawn() -> list[list[str]]:
+            with BridgeSession(_bridge_of(state)) as session:
+                session.attach(pid)
+                pane = windows._pane_in_front(
+                    session, pid, results, str(results), session.results_in_front
+                )
+            assert pane is not None, f"{results.name} is not open"
+            return drawn_traces(pane, Path(exe), results, lambda what: _until(what, "saving"))
+
+        return await asyncio.to_thread(drawn)
+
+    async def test_a_run_shown_again_is_opened_again_with_the_traces_asked_for(
+        self, ltspice_state: SessionState, open_sheet, tran_netlist: Path
+    ):
+        """A netlist's run, shown on its own and then again with another trace:
+        LTspice read the plot settings as it opened the results, so the plot
+        is closed and opened again to draw the new one."""
+        _sheet, pid = open_sheet
+        receipt = await _run_deck(ltspice_state, "shown-twice", str(tran_netlist))
+
+        first = await self._plot(ltspice_state, receipt["job_id"], "V(out)")
+        assert first["shown"] is True and "reopened" not in first, first
+        results = Path(first["results"])
+        assert await self._drawn(ltspice_state, pid, results) == [["V(out)"]]
+
+        again = await self._plot(ltspice_state, receipt["job_id"], "V(in)")
+        assert (again["shown"], again.get("reopened")) == (True, True), again
+        assert await self._drawn(ltspice_state, pid, results) == [["V(in)"]]
+
+    async def _opened_before_it_ran(
+        self, state: SessionState, work_dir: Path, name: str
+    ) -> tuple[Path, str]:
+        """A sheet the window opened with no results beside it, and the job of
+        a run of it made afterwards."""
+        sheet = await self._a_sheet_with_a_run(work_dir, name)
+        await asyncio.to_thread(state.open_windows.open_sheet, sheet)
+        receipt = await _run_deck(state, f"{name}-run", str(sheet))
+        return sheet, receipt["job_id"]
+
+    @staticmethod
+    async def _window_settled(state: SessionState, pid: int) -> None:
+        """Nothing is left asking in the window, and it takes input."""
+        frame = state.open_windows._frame
+        assert await asyncio.to_thread(frame.save_question, pid) is None
+        assert await asyncio.to_thread(frame.takes_input, pid)
+
+    async def test_a_sheet_open_before_it_ran_is_opened_again_to_tie_its_plot(
+        self, ltspice_state: SessionState, open_sheet, work_dir: Path
+    ):
+        _sheet, pid = open_sheet
+        sheet, job_id = await self._opened_before_it_ran(ltspice_state, work_dir, "late")
+
+        shown = await self._plot(ltspice_state, job_id, "V(filtered)")
+
+        assert (shown["shown"], shown["tied"], shown.get("sheet_reopened")) == (
+            True,
+            True,
+            True,
+        ), shown
+        assert "differs_from_file" not in shown
+        assert await self._drawn(ltspice_state, pid, sheet.with_suffix(".raw")) == [
+            ["V(filtered)"]
+        ]
+        await self._window_settled(ltspice_state, pid)
+
+    async def test_a_sheet_edited_while_open_is_closed_past_ltspices_question(
+        self, ltspice_state: SessionState, open_sheet, work_dir: Path
+    ):
+        """An edit is shown in the window through the bridge, after which
+        LTspice counts the sheet changed and asks before closing it. The window
+        holds what the file does, so it is closed without saving."""
+        from ltspice_mcp.lib.ltspice_window import file_difference
+
+        _sheet, pid = open_sheet
+        sheet = await self._a_sheet_with_a_run(work_dir, "edited")
+        await asyncio.to_thread(ltspice_state.open_windows.open_sheet, sheet)
+        edited = await self._edit(ltspice_state, sheet, "2.2k")
+        assert edited["commit_state"] == "committed"
+        receipt = await _run_deck(ltspice_state, "edited-run", str(sheet))
+        committed = await asyncio.to_thread(sheet.read_bytes)
+
+        shown = await self._plot(ltspice_state, receipt["job_id"], "V(filtered)")
+
+        assert (shown["shown"], shown["tied"], shown.get("sheet_reopened")) == (
+            True,
+            True,
+            True,
+        ), shown
+        assert await asyncio.to_thread(sheet.read_bytes) == committed
+        (held,) = await asyncio.to_thread(ltspice_state.open_windows.holding, sheet)
+        assert file_difference(committed, held.text) is None
+        assert "SYMATTR Value 2.2k" in held.text
+        await self._window_settled(ltspice_state, pid)
+
+    async def test_a_sheet_with_unsaved_changes_is_left_open_and_its_run_shown_alone(
+        self, ltspice_state: SessionState, open_sheet, work_dir: Path
+    ):
+        _sheet, pid = open_sheet
+        sheet, job_id = await self._opened_before_it_ran(ltspice_state, work_dir, "unsaved")
+        windows = ltspice_state.open_windows
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        changed = held.text.replace("SYMATTR Value 1k", "SYMATTR Value 9k")
+        await asyncio.to_thread(windows.show, held, changed)
+
+        shown = await self._plot(ltspice_state, job_id, "V(filtered)")
+
+        assert (shown["shown"], shown["tied"]) == (True, False), shown
+        assert shown["differs_from_file"] is True
+        assert "sheet_reopened" not in shown
+        (still,) = await asyncio.to_thread(windows.holding, sheet)
+        assert still.text == changed
+        assert await self._drawn(ltspice_state, pid, sheet.with_suffix(".raw")) == [
+            ["V(filtered)"]
+        ]
+        await self._window_settled(ltspice_state, pid)
 
     async def test_with_no_window_open_ltspice_is_started_and_shows_the_sheet(
         self, ltspice_state: SessionState, work_dir: Path

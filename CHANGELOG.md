@@ -863,9 +863,14 @@ recording that showed it.
   is outside the sandbox. A plot of the sheet's results that LTspice already
   has open would go on showing the run it read, so it is closed and opened
   again with the new one (`reopened: true`); traces added to it by hand are
-  not kept. A sheet LTspice had open before it had any results has to be
-  closed there once, and the reply says so. A run of a netlist opens on its
-  own, as before.
+  not kept. A sheet that LTspice opened before it had results is closed and
+  reopened too (`sheet_reopened: true`), but only when LTspice's copy matches
+  the file. For a sheet the server edited while it was open, LTspice asks
+  whether to save changes; the server checks the copy again and answers No
+  only if it still matches. A sheet with unsaved changes stays open, and the
+  run opens as a separate plot (`tied: false`). A netlist's run opens as a
+  separate plot, and is also closed and reopened if it was already open.
+  Nothing is closed while LTspice is showing a dialog.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 
