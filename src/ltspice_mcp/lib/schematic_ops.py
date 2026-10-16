@@ -1788,7 +1788,12 @@ class OpSetComponentValue(StrictModel):
 
     op: Literal["set_component_value"]
     reference: str = Field(description=_REFERENCE_DESCRIPTION)
-    value: str = Field(description="New value or model name, e.g. '10k', '1u', 'BSS123'.")
+    value: str = Field(
+        description=(
+            "New value or model name, e.g. '10k', '1u', 'BSS123'. A KEY=VALUE is set "
+            "where the part already gives that key, else in SpiceLine."
+        )
+    )
 
 
 class OpSetComponentAttribute(StrictModel):
