@@ -142,7 +142,7 @@ whose lock file lives in the per-user home rather than beside the circuit.
 **Lean by default.** The default response is the answer channel: per-case
 headline rows (label, promoted headline scalars, verdicts) plus a one-line
 completeness count. Detail sits behind named opt-ins — full nested `value`
-dicts, full run records, the `source_hashes` identity echo, and `provenance`.
+dicts, the `source_hashes` identity echo, and `provenance`.
 Never trimmed in any mode: failures, errors, observations, warnings, and any
 completeness shortfall. Lean drops the confirming detail of a success, never
 the fact channels.
@@ -157,22 +157,22 @@ warnings and failures are never scoped. `edit_schematic`'s `preexisting` block
 The reason is response cost: every response byte is re-read on every later
 turn of the conversation, and measurement put the tool path at several times
 the cost of a hand-rolled shell table for identical numbers even with the
-opt-in reductions applied. Two consequences worth knowing:
-
-- A produced row drops `simulator_version` (reachable through `jobs(runs)`
-  or `run_fields`) and keeps its raw and log paths. A caller reads a run's
-  log from its row: with the key left off, a snippet reading it got an empty
-  string and counted nothing in it. A row that did not produce keeps all
-  three, because failure entries carry only `{case_id, code, message}` and
-  the failed row's log path is its diagnostic.
-- An empty per-circuit lint entry says nothing and is dropped. A circuit absent
-  from `lint` is clean; findings always emit.
+opt-in reductions applied. One consequence worth knowing: an empty
+per-circuit lint entry says nothing and is dropped. A circuit absent from
+`lint` is clean; findings always emit.
 
 Pagination is exempt from the lean rule: `next_cursor` is a
 nullable-key-always-present, because the omit convention caused a client
 `KeyError` past the first run page and a null key costs about 20 bytes. Lean
 applies to rows, the identity echo and nested values, not to cursor-shape
 safety.
+
+Run rows are exempt too: every run row has the same keys, whatever its
+status, on every surface and at every budget, and `run_fields` is the way to
+a narrower row. Rows once left the raw and log paths and the build off a run
+that produced; a caller reading a run's log from its row got an empty string
+and counted nothing in it, and a missing build reads as one the output did
+not name.
 
 **Presentation fields.** Fields that choose how a receipt is *rendered* rather
 than what *runs* are excluded from the idempotency fingerprint, so re-asking
@@ -676,17 +676,14 @@ the Xyce log banner (`Xyce Release 7.8.0-opensource`), the ngspice console
 banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when
 none of those exists (LTspice XVII, QSPICE). It is null when the output named none.
 It is recorded per case, so an executable replaced mid-job shows up as two
-builds. The lean receipt drops it from produced rows; `jobs(runs)` and
-`run_fields` return it.
+builds.
 Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
 Under a `budget`, receipts keep the common envelope and negotiate the shared
 trim -> answer -> shrink ladder. The trim rung empties the attached analysis's
 `source_hashes`, one identity row per run, by `analyze_results`' own rung-0
-allowlist; `source` stays, because it carries staging disclosures. The answer
-rung takes the raw and log paths off produced rows, and the budget note says
-the presentation was reduced; `jobs(runs)` without a budget returns them. The runs
+allowlist; `source` stays, because it carries staging disclosures. The runs
 page and attached-analysis row surfaces may be shrunk to fewer rows; fact
 channels, completeness, progress, verdicts, coverage and recovery handles are
 protected. If the irreducible floor exceeds the budget, the floor is returned

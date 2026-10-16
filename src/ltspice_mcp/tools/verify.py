@@ -567,7 +567,7 @@ _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
         "difference: 'equivalent' holds only if it holds whichever copy is read."
     ),
     "properties": {
-        "ref": {"type": "string"},
+        "ref": _REF,
         "side": {"type": "string", "description": "'reference' or 'candidate'."},
         "key": {"type": "string", "description": "The parameter, lowercased."},
         "values": {

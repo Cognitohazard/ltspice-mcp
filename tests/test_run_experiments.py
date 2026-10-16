@@ -973,10 +973,9 @@ class TestIdempotency:
 
 @pytest.mark.asyncio
 class TestLeanReceipt:
-    """The default receipt is the answer channel: completed rows drop their
-    artifact paths (reachable via jobs(runs) or run_fields), non-completed
-    rows keep them (the failed row's log is its diagnostic), and the caller's
-    own attached-analysis request is echoed only under provenance."""
+    """The default receipt is the answer channel: every run row has the same
+    keys whatever its status, and the caller's own attached-analysis request
+    is echoed only under provenance."""
 
     async def test_produced_rows_keep_artifact_paths(
         self,
@@ -984,8 +983,9 @@ class TestLeanReceipt:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """A caller reads a run's log from its row. With the key left off, a
-        snippet reading it got an empty string and counted nothing in it."""
+        """A caller reads a run's log from its row. With the key left off a
+        produced row, a snippet reading it got an empty string and counted
+        nothing in it."""
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_rows.cir")
 
@@ -996,10 +996,10 @@ class TestLeanReceipt:
         (row,) = data["runs"]["items"]
         assert row["status"] == "produced"
         assert Path(row["raw"]).is_file() and Path(row["log"]).is_file()  # noqa: ASYNC240
-        assert "simulator_version" not in row
+        assert "simulator_version" in row
         assert row["assignments"] == {}
 
-    async def test_run_fields_still_fetch_artifact_paths(
+    async def test_run_fields_fetch_artifact_paths(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
@@ -1059,11 +1059,7 @@ class TestLeanReceipt:
         )
 
         (snapshot,) = captured
-        expected = receipts_mod.project_receipt_runs(
-            snapshot,
-            run_fields,
-            lean_default=True,
-        )
+        expected = receipts_mod.project_receipt_runs(snapshot, run_fields)
         assert data["runs"] == expected
 
     async def test_non_completed_rows_keep_artifact_path_keys(

@@ -1288,120 +1288,100 @@ class TestSetComponentValueBehavioralSource:
         assert "Value V=1\n" not in content
 
 
+_SCHMITT_ASY = (
+    "Version 4\n"
+    "SymbolType CELL\n"
+    "RECTANGLE Normal -32 -32 32 32\n"
+    "SYMATTR Prefix A\n"
+    "SYMATTR SpiceModel SCHMITT\n"
+    "PIN -32 0 NONE 0\n"
+    "PINATTR PinName IN\n"
+    "PINATTR SpiceOrder 1\n"
+    "PIN 32 0 NONE 0\n"
+    "PINATTR PinName OUT\n"
+    "PINATTR SpiceOrder 6\n"
+)
+
+
 class TestSetComponentValueParameterSlots:
     """A ``KEY=VALUE`` in a new value is set where the part already gives that
     key. spicelib looked only in SpiceLine and SpiceLine2, so a Schmitt
     trigger's thresholds in Value got a second copy in SpiceLine, and its
-    exported line named each threshold twice."""
+    exported line named each threshold twice; and adding a key rebuilt
+    SpiceLine from spicelib's own parse of it."""
 
-    _SCHMITT_ASY = (
-        "Version 4\n"
-        "SymbolType CELL\n"
-        "RECTANGLE Normal -32 -32 32 32\n"
-        "SYMATTR Prefix A\n"
-        "SYMATTR SpiceModel SCHMITT\n"
-        "PIN -32 0 NONE 0\n"
-        "PINATTR PinName IN\n"
-        "PINATTR SpiceOrder 1\n"
-        "PIN 32 0 NONE 0\n"
-        "PINATTR PinName OUT\n"
-        "PINATTR SpiceOrder 6\n"
+    @pytest.mark.parametrize(
+        ("symbol", "attributes", "value", "expected", "warnings"),
+        [
+            pytest.param(
+                "schmitt_like",
+                {"Value": "Vt=2 Vh=0.5 Vhigh=5"},
+                "vt=4.15 Vh=0.2",
+                {"Value": "Vt=4.15 Vh=0.2 Vhigh=5"},
+                [],
+                id="a_threshold_in_value_is_replaced_there",
+            ),
+            pytest.param(
+                "nmos4",
+                {"Value": "NMOS1", "Value2": "l=1u w=20u"},
+                "NMOS2 W=10u",
+                {"Value": "NMOS2", "Value2": "l=1u w=10u"},
+                [],
+                id="a_mosfet_width_in_value2_is_replaced_there",
+            ),
+            pytest.param(
+                "nmos4",
+                {"Value": "NMOS1", "Value2": "l=1u"},
+                "NMOS1 w=10u",
+                {"Value": "NMOS1", "Value2": "l=1u", "SpiceLine": "w=10u"},
+                [],
+                id="a_key_the_part_does_not_give_goes_to_spiceline",
+            ),
+            pytest.param(
+                "nmos4",
+                {"Value": "NMOS1", "SpiceLine": "m=2 ad=1e3"},
+                "NMOS1 w=10u",
+                {"Value": "NMOS1", "SpiceLine": "m=2 ad=1e3 w=10u"},
+                [],
+                id="a_new_key_leaves_the_rest_of_spiceline_as_written",
+            ),
+            pytest.param(
+                "schmitt_like",
+                {"Value": "Vt=2 Vh=0.5", "SpiceLine": "Vt=3"},
+                "Vt=4.15",
+                {"Value": "Vt=4.15 Vh=0.5", "SpiceLine": "Vt=4.15"},
+                ["A1 gives Vt 2 times (Value, SpiceLine); every copy was set to 4.15."],
+                id="copies_already_on_the_part_are_all_set_and_named",
+            ),
+        ],
     )
-
-    def _attributes(self, asc: Path, ref: str) -> dict[str, str]:
+    def test_set_where_the_part_gives_it(
+        self,
+        asc_state: SessionState,
+        work_dir: Path,
+        symbol: str,
+        attributes: dict[str, str],
+        value: str,
+        expected: dict[str, str],
+        warnings: list[str],
+    ):
         from spicelib import AscEditor
 
-        return dict(AscEditor(str(asc)).get_component(ref).attributes)
-
-    def test_a_threshold_in_value_is_replaced_there(self, asc_state: SessionState, work_dir: Path):
-        (work_dir / "schmitt_like.asy").write_text(
-            self._SCHMITT_ASY, encoding="utf-8", newline="\n"
-        )
+        (work_dir / "schmitt_like.asy").write_text(_SCHMITT_ASY, encoding="utf-8", newline="\n")
+        ref = "A1" if symbol == "schmitt_like" else "M1"
         asc = _write_sheet(
-            work_dir / "schmitt.asc",
-            "SYMBOL schmitt_like 100 100 R0",
-            "SYMATTR InstName A1",
-            "SYMATTR Value Vt=2 Vh=0.5 Vhigh=5",
+            work_dir / "slots.asc",
+            f"SYMBOL {symbol} 100 100 R0",
+            f"SYMATTR InstName {ref}",
+            *(f"SYMATTR {name} {text}" for name, text in attributes.items()),
         )
 
         result = apply_one(
-            asc_state,
-            asc,
-            {"op": "set_component_value", "reference": "A1", "value": "vt=4.15 Vh=0.2"},
+            asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value}
         )
 
-        attributes = self._attributes(asc, "A1")
-        assert attributes["Value"] == "Vt=4.15 Vh=0.2 Vhigh=5"
-        assert "SpiceLine" not in attributes
-        assert "warnings" not in result
-
-    def test_a_mosfet_width_in_value2_is_replaced_there(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        asc = _write_sheet(
-            work_dir / "mos.asc",
-            "SYMBOL nmos4 100 100 R0",
-            "SYMATTR InstName M1",
-            "SYMATTR Value NMOS1",
-            "SYMATTR Value2 l=1u w=20u",
-        )
-
-        apply_one(
-            asc_state,
-            asc,
-            {"op": "set_component_value", "reference": "M1", "value": "NMOS2 W=10u"},
-        )
-
-        attributes = self._attributes(asc, "M1")
-        assert attributes["Value"] == "NMOS2"
-        assert attributes["Value2"] == "l=1u w=10u"
-        assert "SpiceLine" not in attributes
-
-    def test_a_key_the_part_does_not_give_goes_to_spiceline(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        asc = _write_sheet(
-            work_dir / "mos_new.asc",
-            "SYMBOL nmos4 100 100 R0",
-            "SYMATTR InstName M1",
-            "SYMATTR Value NMOS1",
-            "SYMATTR Value2 l=1u",
-        )
-
-        apply_one(
-            asc_state,
-            asc,
-            {"op": "set_component_value", "reference": "M1", "value": "NMOS1 w=10u"},
-        )
-
-        attributes = self._attributes(asc, "M1")
-        assert attributes["Value2"] == "l=1u"
-        assert attributes["SpiceLine"] == "w=10u"
-
-    def test_copies_already_on_the_part_are_all_set_and_named(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        (work_dir / "schmitt_like.asy").write_text(
-            self._SCHMITT_ASY, encoding="utf-8", newline="\n"
-        )
-        asc = _write_sheet(
-            work_dir / "schmitt_twice.asc",
-            "SYMBOL schmitt_like 100 100 R0",
-            "SYMATTR InstName A1",
-            "SYMATTR Value Vt=2 Vh=0.5",
-            "SYMATTR SpiceLine Vt=3",
-        )
-
-        result = apply_one(
-            asc_state, asc, {"op": "set_component_value", "reference": "A1", "value": "Vt=4.15"}
-        )
-
-        attributes = self._attributes(asc, "A1")
-        assert attributes["Value"] == "Vt=4.15 Vh=0.5"
-        assert attributes["SpiceLine"] == "Vt=4.15"
-        assert result["warnings"] == [
-            "A1 gives Vt 2 times (Value, SpiceLine); every copy was set to 4.15."
-        ]
+        assert dict(AscEditor(str(asc)).get_component(ref).attributes) == expected
+        assert result.get("warnings", []) == warnings
 
 
 @pytest.mark.asyncio

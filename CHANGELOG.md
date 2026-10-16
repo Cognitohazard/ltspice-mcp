@@ -14,7 +14,10 @@ tool-surface changes.
   `SpiceLine` when the part already gave that key in `Value` or `Value2`, or
   in another case: a Schmitt trigger's thresholds, or a MOSFET's `w`, were then
   named twice in the export. The key is now set where the part gives it, and
-  a key found more than once is named in a warning.
+  a key found more than once is named in a warning. A key the part gives
+  nowhere is added to the end of `SpiceLine`, which is otherwise left as
+  written; before, adding one rewrote the rest of the line (`ad=1e3` became
+  `ad=1000.0`, and a `params:` marker was dropped).
 - `verify_circuit`'s equivalence compare kept one value per instance
   parameter, so a parameter given twice compared as one: two copies of a
   threshold that agreed reported `equivalent: true` with nothing to show for
@@ -22,11 +25,13 @@ tool-surface changes.
   holds it equal only where it would be whichever copy is read. The
   structural diff signs both copies, so a second copy is a change.
 - A run that produced results was listed in a `run_experiments` or
-  `jobs(status|wait)` receipt without its `raw` and `log` paths, which only
-  `jobs(runs)` and `run_fields` returned. Code reading a run's log from its
-  row got an empty string for the path and read no warnings from it, as if
-  the run had logged none. The receipt now keeps both paths on every row;
-  only `simulator_version` is still left off a produced row.
+  `jobs(status|wait)` receipt without its `raw` and `log` paths and its
+  `simulator_version`, which only `jobs(runs)` and `run_fields` returned, and
+  a caller's `budget` took the paths off such rows on `jobs(runs)` too. Code
+  reading a run's log from its row got an empty string for the path and read
+  no warnings from it, as if the run had logged none. Every run row now has
+  the same keys, whatever its status, on every surface and at every budget;
+  a budget shrinks the page instead, and `run_fields` still narrows a row.
 - An `inspect` net trace or components listing made while an `edit_schematic`
   call was in progress could show that edit's changes before they were
   committed, next to the digest of the file as it still was. Both now read
