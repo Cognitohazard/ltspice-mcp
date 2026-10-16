@@ -1,0 +1,7 @@
+* Voltage-controlled current source into a load
+* names: in vdd
+Vin in 0 AC 1
+G1 load vdd in 0 1m
+RL load 0 1k
+.op
+.end
