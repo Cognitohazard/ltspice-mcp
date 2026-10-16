@@ -28,6 +28,7 @@ from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code
 from tests.conftest import (
     LIVENESS_S,
     await_until,
+    identify,
     process_running,
     start_when,
     wait_until,
@@ -72,6 +73,18 @@ async def run(state: SessionState, code: str, **fields) -> dict:
     result = await handle_run_code(RunCodeInput(code=code, **fields), state)
     assert result.structured_content is not None
     return result.structured_content
+
+
+def worker_of(reply: dict) -> psutil.Process:
+    """The worker that sent ``reply``, by pid and start time.
+
+    Taken while the worker runs. The module's worker was not started by the
+    test that kills it, so ``process_running`` has no record of it, and once
+    it is gone Windows can give its pid to another process.
+    """
+    worker = identify(reply["worker_pid"])
+    assert worker is not None, reply
+    return worker
 
 
 # ---------------------------------------------------------------------------
@@ -246,18 +259,18 @@ class TestExecution:
 class TestLifetime:
     @pytest.mark.skipif(POSIX, reason="Windows kills and replaces a timed-out worker")
     async def test_windows_timeout_reports_timeout_and_restarts(self, state: SessionState):
-        before = (await run(state, "1"))["worker_pid"]
+        before = worker_of(await run(state, "1"))
         # timing: the snippet timeout under test
         reply = await run(state, "import time\ntime.sleep(60)", timeout_s=1)
         assert reply["status"] == "timeout", reply
         after = await run(state, "'ready'")
-        assert after["status"] == "ok"
-        assert after["worker_pid"] != before
+        assert after["status"] == "ok", after
+        assert worker_of(after) != before
         assert not process_running(before)
 
     @pytest.mark.skipif(POSIX, reason="Windows kills and replaces a cancelled worker")
     async def test_windows_cancellation_restarts_worker(self, state: SessionState):
-        before = (await run(state, "1"))["worker_pid"]
+        before = worker_of(await run(state, "1"))
         task = asyncio.create_task(run(state, "import time\ntime.sleep(60)"))
         await await_until(lambda: worker_for(state).running is not None)
         task.cancel()
@@ -265,8 +278,8 @@ class TestLifetime:
             await task
         await await_until(lambda: worker_for(state).running is None)
         after = await run(state, "'ready'")
-        assert after["status"] == "ok"
-        assert after["worker_pid"] != before
+        assert after["status"] == "ok", after
+        assert worker_of(after) != before
         assert not process_running(before)
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
