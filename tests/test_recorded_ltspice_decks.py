@@ -9,8 +9,10 @@ lint and arity rules read the same card and have to reach the same answer.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from ltspice_mcp.lib.encoding import (
@@ -22,6 +24,7 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
+from ltspice_mcp.lib.netlist_graph import compare_graphs
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
@@ -662,3 +665,119 @@ def test_ltspice_reads_a_lib_section_name_as_part_of_the_file_name(build: str):
         assert ".lib corners.lib tt" in log
     findings = lint_input("deck/lib_section")
     assert [f["rule_id"] for f in findings if f["severity"] == "error"] == ["lib-section-ltspice"]
+
+
+# --------------------------------------------------------------------------
+# Three-node transistors
+# --------------------------------------------------------------------------
+
+
+def waves(build: str, case_id: str, scratch: Path) -> dict[str, np.ndarray]:
+    """Every trace of a recorded run, by lower-cased name."""
+    raw = rec.decode(build, case_id, scratch).raw
+    return {name.lower(): np.asarray(raw.get_wave(name, 0)) for name in raw.get_trace_names()}
+
+
+def same_wave(a: np.ndarray, b: np.ndarray) -> bool:
+    return bool(np.allclose(a, b, rtol=1e-9, atol=0))
+
+
+def card_of(text: str, ref: str) -> str:
+    """The top-level card named ``ref``: the cards before the first ``.subckt``."""
+    top = re.split(r"(?im)^\.subckt", text, maxsplit=1)[0]
+    (card,) = [line for line in top.splitlines() if line.split()[:1] == [ref]]
+    return card
+
+
+def with_card(text: str, old: str, new: str) -> str:
+    lines = text.splitlines()
+    assert lines.count(old) == 1, old
+    return "\n".join(new if line == old else line for line in lines) + "\n"
+
+
+def moved_to(card: str, stage: str) -> str:
+    """A twin stage's card, renamed and rewired onto ``stage``'s nodes:
+    ``Q3 c3 b3 e3 e3 QN`` onto stage 1 is ``Q1 c1 b1 e1 e1 QN``."""
+    ref, *rest = card.split()
+    twin = ref[1:]
+    nodes = (re.sub(rf"^([a-z]+){twin}$", rf"\g<1>{stage}", token) for token in rest)
+    return " ".join((f"{ref[0]}{stage}", *nodes))
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_comparison_reads_a_three_node_q_card_as_ltspice_runs_it(build: str, tmp_path: Path):
+    """A three-node Q card compares equal to a four-node card exactly when
+    LTspice's run of the two is the same, which is with the substrate at
+    ground and not at the emitter or the collector: NPN, PNP, and inside a
+    subcircuit."""
+    case_id = "deck/bjt_three_node"
+    read = waves(build, case_id, tmp_path)
+    text = deck_text(case_id)
+    matched: list[str] = []
+    for stage, twins in (("1", "234"), ("5", "678")):
+        three = card_of(text, f"Q{stage}")
+        for twin in twins:
+            four = moved_to(card_of(text, f"Q{twin}"), stage)
+            same = all(same_wave(read[f"v({n}{twin})"], read[f"v({n}{stage})"]) for n in "cbe")
+            result = compare_graphs(text, with_card(text, three, four))
+            assert result.equivalent == same, (four, result.as_dict())
+            if same:
+                matched.append(four)
+    assert matched == ["Q1 c1 b1 e1 0 QN", "Q5 c5 b5 e5 0 QP"]
+
+    assert same_wave(read["v(c9)"], read["v(c10)"])
+    assert compare_graphs(text, with_card(text, "Q1 c b e QN", "Q1 c b e 0 QN")).equivalent
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_three_node_q_cards_match_the_export_of_three_pin_transistors(build: str):
+    """The export writes a three-pin transistor's substrate as 0, so a
+    reference that leaves it out describes the same sheet."""
+    export = rec.export_text(build, "export/boilerplate")
+    written: list[str] = []
+    for line in export.splitlines():
+        tokens = line.split()
+        if tokens[:1] and tokens[0][0] == "Q":
+            assert tokens[4] == "0", line
+            line = " ".join(tokens[:4] + tokens[5:])
+        written.append(line)
+    assert compare_graphs("\n".join(written) + "\n", export).equivalent
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_three_node_m_card_is_not_the_card_an_export_writes(build: str, tmp_path: Path):
+    """With a level-1 model LTspice 26 refuses a three-node M card and XVII
+    runs it with the bulk at ground, where the export puts the bulk at the
+    source. The comparison reports the arity and says what to write."""
+    case_id = "deck/mos_three_node"
+    if rec.generation(build) == "xvii":
+        read = waves(build, case_id, tmp_path)
+        for stage, at_source, at_ground in (("1", "2", "3"), ("4", "5", "6")):
+            assert same_wave(read[f"v(s{stage})"], read[f"v(s{at_ground})"])
+            assert not same_wave(read[f"v(s{stage})"], read[f"v(s{at_source})"])
+    else:
+        assert not ran(build, case_id)
+        log = read_spice_text(rec.recorded(build, f"{case_id}.log"))
+        assert log.count("Node or model name expected.") == 2
+        assert "M1 vdd gn s1 NM" in log
+        assert "M4 vss gp s4 PM" in log
+    text = deck_text(case_id)
+    result = compare_graphs(text, with_card(text, "M1 vdd gn s1 NM", "M1 vdd gn s1 s1 NM"))
+    assert not result.equivalent
+    (error,) = result.arity_errors
+    assert (error.ref, error.reference_arity, error.candidate_arity) == ("M1", 3, 4)
+    assert "Write the bulk as the fourth node, at the source" in error.detail
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_vdmos_card_runs_the_same_with_three_nodes_or_its_bulk_at_its_source(
+    build: str, tmp_path: Path
+):
+    """What the arity detail says of VDMOS: three nodes are the bulk at the
+    source, and a bulk anywhere else is refused."""
+    read = waves(build, "deck/vdmos_three_node", tmp_path)
+    for node in "dgs":
+        assert same_wave(read[f"v({node}1)"], read[f"v({node}2)"]), node
+    assert not ran(build, "deck/vdmos_bulk_elsewhere")
+    log = read_spice_text(rec.recorded(build, "deck/vdmos_bulk_elsewhere.log"))
+    assert "requires the source and bulk to be the same node" in log
