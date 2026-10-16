@@ -106,10 +106,14 @@ in an order that need not be their SpiceOrder. `inspect(kind="symbol")` lists
 each pin's `name` and `order`.
 
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols
-are 3-terminal — a MOSFET's bulk is tied to its source in the exported netlist,
-and a BJT has no separate substrate pin. When you need the body/substrate on
+are 3-terminal, and the export writes four nodes for them: a MOSFET's bulk at
+its source, a BJT's substrate at `0`. When you need the body/substrate on
 its own net (e.g. a non-source bulk bias), use the 4-terminal variants
 (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
+In a reference netlist for the `compare` check, write such a MOSFET with four
+nodes, `M1 d g s s NMOS_MOD`: LTspice does not read a three-node card with a
+level-1 model as the bulk at the source. A three-node `Q1 c b e QN` is the
+substrate at `0` and compares equal.
 
 ### MOSFET orientation conventions
 
