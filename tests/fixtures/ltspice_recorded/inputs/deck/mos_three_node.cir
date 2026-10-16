@@ -1,0 +1,25 @@
+* three-node M cards beside four-node ones: the bulk at the source, and at ground
+* Each transistor is a source follower driven at its gate, its source away
+* from ground: the body effect and the bulk capacitance make where the bulk
+* goes change the response. The PMOS stage runs below ground so that a bulk
+* at ground is reverse biased, as it is for the NMOS stage.
+.model NM NMOS (LEVEL=1 VTO=0.7 KP=100u GAMMA=0.5 PHI=0.6 CBS=1n CBD=1n)
+.model PM PMOS (LEVEL=1 VTO=-0.7 KP=50u GAMMA=0.5 PHI=0.6 CBS=1n CBD=1n)
+VDD vdd 0 5
+VSS vss 0 -5
+VGN gn 0 3 AC 1
+VGP gp 0 -3 AC 1
+M1 vdd gn s1 NM
+R1 s1 0 10k
+M2 vdd gn s2 s2 NM
+R2 s2 0 10k
+M3 vdd gn s3 0 NM
+R3 s3 0 10k
+M4 vss gp s4 PM
+R4 0 s4 10k
+M5 vss gp s5 s5 PM
+R5 0 s5 10k
+M6 vss gp s6 0 PM
+R6 0 s6 10k
+.ac dec 2 1k 10meg
+.end

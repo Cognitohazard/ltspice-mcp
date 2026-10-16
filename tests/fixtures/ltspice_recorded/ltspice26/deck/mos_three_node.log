@@ -1,0 +1,9 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\mos_three_node.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\mos_three_node.cir(12): Node or model name expected.
+M1 vdd gn s1 NM
+               ^
+C:\recording\mos_three_node.cir(18): Node or model name expected.
+M4 vss gp s4 PM
+               ^

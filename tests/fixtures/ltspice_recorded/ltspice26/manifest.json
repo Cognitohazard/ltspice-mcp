@@ -818,6 +818,39 @@
         ".raw"
       ]
     },
+    "deck/bjt_three_node": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/bjt_three_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/bjt_three_node.cir": "304a5c22d68c8d8e70cf977cf4206fca9a1ce75ba4c03db292de83287377b9bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/bjt_three_node.log": {
+          "bytes": 344,
+          "sha256": "d9efc3b01eb3b0ff2b07f7ba5bbb2a055f677155da7a4a4235dce76c5d8679d1"
+        },
+        "deck/bjt_three_node.raw": {
+          "bytes": 21856,
+          "sha256": "91292d122dcbb238b2e71b44ca2f6b5a73cd054542d35aff13300bbaafe8f5ec"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/bsource_p": {
       "behaviour": "deck-forms",
       "command": [
@@ -1807,6 +1840,33 @@
         ".raw"
       ]
     },
+    "deck/mos_three_node": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_three_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/mos_three_node.cir": "da285542c9d14ddc6ea21f9ff7170aaaad29591e202ea5c2d8740508b17d3237"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_three_node.log": {
+          "bytes": 303,
+          "sha256": "7914b15d8d22351d6e7e30fe260e89366edb95fa345e5d447f3e8a2c700ad650"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "deck/no_end": {
       "behaviour": "deck-structure",
       "command": [
@@ -2383,6 +2443,66 @@
         "deck/tran_zero_step.log": {
           "bytes": 347,
           "sha256": "258403148c74b1c5b316a34df338cceff40342ac540c2c6773968004bb9fe26d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/vdmos_bulk_elsewhere": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/vdmos_bulk_elsewhere.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/vdmos_bulk_elsewhere.cir": "4c85aec637aa1e2238e0469008a84990c18c0e5d7d5f1b6f17d4dce40802520c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/vdmos_bulk_elsewhere.log": {
+          "bytes": 256,
+          "sha256": "93d76caeb020f86422ae5bad54754a2a752524cf2d59c8a540fd99a97177c7ac"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/vdmos_three_node": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/vdmos_three_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/vdmos_three_node.cir": "21fb9769e89aea278f1e4cc1531d88002ff716bb97c4c65c9d0e7e31537bed2a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/vdmos_three_node.log": {
+          "bytes": 348,
+          "sha256": "0871765f519b84ff190b50fc8ca658c67c0d06430ba8ae2a2a29ef3e61aaa50d"
+        },
+        "deck/vdmos_three_node.raw": {
+          "bytes": 5618,
+          "sha256": "1abaf7b00725b50a0f7c14115ad40ff2762e0bf8dab7df64ce522e127bd2daed"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
