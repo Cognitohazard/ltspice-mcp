@@ -501,8 +501,7 @@ class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
     reported builds and raw dialects, and which a run can select; the named
     executables, whether the .asc exporter is available, job persistence, the
-    sandbox (allowed_paths, null when none is set), the configured limits, and
-    the linter version."""
+    sandbox, the configured limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
