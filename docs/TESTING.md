@@ -332,7 +332,7 @@ are each drawn through `edit_schematic` by scripted builds
 labels, and a `drawn` build, the readable drawing a person makes with the
 present ops. `tests/_build_benchmark.py` scores a build on equivalence with
 the netlist, on cost (calls, ops, refusals, the coordinates the caller wrote,
-reply size) and on the drawing (each sheet rule's findings, crossings, bends,
+the part origins it worked out from a pin, reply size) and on the drawing (each sheet rule's findings, crossings, bends,
 wire length, pins reached only by a label). The scores and the sheets are
 held to a record, so a change to how ops build shows as a diff.
 
@@ -345,7 +345,8 @@ held to a record, so a change to how ops build shows as a diff.
   change its entries.
 - **Judging a new op.** Write a third build of a circuit with it, drawing
   the same thing. If it helps the caller, the record shows fewer
-  coordinates, ops or refusals for the same drawing measures.
+  coordinates, origins worked out from a pin, ops or refusals for the same
+  drawing measures.
 - **A run with a model.** `uv run python scripts/build_benchmark.py score
   SHEET NETLIST` scores a sheet a model built, with the same functions;
   `table` prints the record. Such runs are paired as above.

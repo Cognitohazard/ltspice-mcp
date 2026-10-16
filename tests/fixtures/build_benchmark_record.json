@@ -4,6 +4,7 @@
    "calls": 1,
    "coordinates": 14,
    "ops": 17,
+   "origins_from_pins": 5,
    "refused": 0,
    "reply_bytes": 2528
   },
@@ -44,6 +45,7 @@
    "calls": 1,
    "coordinates": 10,
    "ops": 16,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 3019
   },
@@ -86,6 +88,7 @@
    "calls": 1,
    "coordinates": 24,
    "ops": 30,
+   "origins_from_pins": 8,
    "refused": 0,
    "reply_bytes": 3516
   },
@@ -126,6 +129,7 @@
    "calls": 1,
    "coordinates": 16,
    "ops": 30,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 6136
   },
@@ -166,6 +170,7 @@
    "calls": 1,
    "coordinates": 20,
    "ops": 21,
+   "origins_from_pins": 5,
    "refused": 0,
    "reply_bytes": 3245
   },
@@ -206,6 +211,7 @@
    "calls": 1,
    "coordinates": 10,
    "ops": 21,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 4156
   },
@@ -246,6 +252,7 @@
    "calls": 1,
    "coordinates": 104,
    "ops": 129,
+   "origins_from_pins": 51,
    "refused": 0,
    "reply_bytes": 10522
   },
@@ -284,6 +291,7 @@
    "calls": 1,
    "coordinates": 102,
    "ops": 129,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 11001
   },
@@ -324,6 +332,7 @@
    "calls": 1,
    "coordinates": 8,
    "ops": 10,
+   "origins_from_pins": 3,
    "refused": 0,
    "reply_bytes": 1613
   },
@@ -362,6 +371,7 @@
    "calls": 1,
    "coordinates": 6,
    "ops": 10,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 2587
   },
@@ -402,6 +412,7 @@
    "calls": 1,
    "coordinates": 10,
    "ops": 11,
+   "origins_from_pins": 3,
    "refused": 0,
    "reply_bytes": 1612
   },
@@ -440,6 +451,7 @@
    "calls": 1,
    "coordinates": 6,
    "ops": 10,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 2097
   },
@@ -482,6 +494,7 @@
    "calls": 1,
    "coordinates": 412,
    "ops": 414,
+   "origins_from_pins": 153,
    "refused": 0,
    "reply_bytes": 39810
   },
@@ -520,6 +533,7 @@
    "calls": 1,
    "coordinates": 306,
    "ops": 460,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 65970
   },
@@ -560,6 +574,7 @@
    "calls": 1,
    "coordinates": 32,
    "ops": 19,
+   "origins_from_pins": 6,
    "refused": 0,
    "reply_bytes": 2732
   },
@@ -598,6 +613,7 @@
    "calls": 1,
    "coordinates": 12,
    "ops": 21,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 4531
   },
@@ -638,6 +654,7 @@
    "calls": 1,
    "coordinates": 78,
    "ops": 58,
+   "origins_from_pins": 14,
    "refused": 0,
    "reply_bytes": 7963
   },
@@ -678,6 +695,7 @@
    "calls": 1,
    "coordinates": 28,
    "ops": 61,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 10257
   },
@@ -718,6 +736,7 @@
    "calls": 1,
    "coordinates": 8,
    "ops": 11,
+   "origins_from_pins": 3,
    "refused": 0,
    "reply_bytes": 1876
   },
@@ -756,6 +775,7 @@
    "calls": 1,
    "coordinates": 6,
    "ops": 11,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 2363
   },
@@ -796,6 +816,7 @@
    "calls": 1,
    "coordinates": 8,
    "ops": 11,
+   "origins_from_pins": 3,
    "refused": 0,
    "reply_bytes": 1873
   },
@@ -834,6 +855,7 @@
    "calls": 1,
    "coordinates": 6,
    "ops": 11,
+   "origins_from_pins": 0,
    "refused": 0,
    "reply_bytes": 2355
   },

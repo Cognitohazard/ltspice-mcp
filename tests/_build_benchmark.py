@@ -132,12 +132,19 @@ class Build:
     ``expected_findings`` is every finding the drawing is meant to have, by
     rule; any other finding fails the build. ``None`` leaves the findings to
     the record alone.
+
+    ``origins_from_pins`` is how many part origins the build worked out from
+    where one of the part's pins should go: the pin's offset at the part's
+    rotation looked up (`inspect(kind="symbol")` gives every rotation, for up
+    to 64 symbols in one call) and subtracted from the point. The ops do not
+    show it, since an origin is two numbers however it was found.
     """
 
     circuit: str
     style: str
     calls: tuple[tuple[Mapping[str, Any], ...], ...]
     expected_findings: Mapping[str, int] | None = None
+    origins_from_pins: int = 0
 
     @property
     def id(self) -> str:
@@ -350,7 +357,8 @@ def coordinates_written(op: Mapping[str, Any]) -> int:
 
 
 def cost(built: Built, working_dir: Path) -> dict[str, Any]:
-    """What the build cost the caller: calls, ops, refusals, coordinates, reply size.
+    """What the build cost the caller: calls, ops, refusals, coordinates, part
+    origins worked out from a pin, reply size.
 
     ``reply_bytes`` is the size of every reply as JSON with the working
     directory replaced by one fixed name, so it does not depend on where the
@@ -369,6 +377,7 @@ def cost(built: Built, working_dir: Path) -> dict[str, Any]:
             for reply in built.replies
         ),
         "coordinates": sum(coordinates_written(op) for op in ops),
+        "origins_from_pins": built.build.origins_from_pins,
         "reply_bytes": sum(len(text.encode("utf-8")) for text in replies),
     }
 

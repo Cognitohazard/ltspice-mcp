@@ -638,7 +638,9 @@ suite never runs a model. The plan, as reviewed:
      without case. Each part's value is compared with the text after the
      card's nodes, and each directive must be on the sheet.
    - *Cost.* Calls, ops, refused ops, and coordinates the caller wrote: two
-     for each part origin, waypoint, endpoint or label given as a point.
+     for each part origin, waypoint, endpoint or label given as a point. And
+     the part origins worked out from where a pin should go, which the
+     coordinates do not show.
      Reply bytes, with the working directory replaced and a fixed
      `view_limit`, are reported and not held to the record, since any
      change of wording moves them.
@@ -681,11 +683,17 @@ and step 6's capture of every sheet the suite commits.
 equivalent to their references with no refused op. What the record shows
 and what building it found:
 
-- A readable drawing costs the caller more arithmetic today: 78 coordinates
-  for the two-stage op amp drawn against 28 labelled, 32 against 12 for the
+- A readable drawing makes the caller write more coordinates: 78 for the
+  two-stage op amp drawn against 28 labelled, 32 against 12 for the
   Sallen-Key. It reaches far fewer pins only by a label (10 against 32 and 0
-  against 11). Place-by-pin and route-by-shape are measured against these
-  numbers.
+  against 11). Of the op amp's 78, 28 are part origins, which the labelled
+  build writes too; 40 are wire waypoints and wire ends given as points, 4
+  label points and 6 directive points. Route-by-shape is what could reduce
+  the 40. Place-by-pin would not change the count, since a pin's target is
+  two numbers as an origin is. What it saves is counted apart: the 14
+  origins worked out from a pin, each a lookup and a subtraction, since
+  `inspect(kind="symbol")` already gives every rotation's pins for up to 64
+  symbols in one call.
 - `wire_pins` will not end a wire at a free point, so a caller cannot draw a
   short stub to put a port label on; the drawings label a pin or end the
   stub on the route that uses it.
