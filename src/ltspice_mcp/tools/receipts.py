@@ -779,11 +779,12 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
-#: Run-row keys a lean receipt leaves out of a produced row. Its artifacts can
-#: be resolved by job/case identity, and the build that produced it is
-#: confirming detail; jobs(runs) and run_fields return all three. A failed row
-#: keeps them, its log path being how the caller inspects the failure.
-_LEAN_PRODUCED_OMITS = ("raw", "log", "simulator_version")
+#: Run-row keys a lean receipt leaves out of a produced row: the build that
+#: produced it is confirming detail, which jobs(runs) and run_fields return. A
+#: produced row keeps its raw and log paths. A caller reading a run's log from
+#: its row, with the key absent, read an empty string and parsed it as a run
+#: that logged nothing.
+_LEAN_PRODUCED_OMITS = ("simulator_version",)
 
 
 def _run_item(case: ExperimentCase) -> dict[str, Any]:

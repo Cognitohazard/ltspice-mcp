@@ -978,12 +978,14 @@ class TestLeanReceipt:
     rows keep them (the failed row's log is its diagnostic), and the caller's
     own attached-analysis request is echoed only under provenance."""
 
-    async def test_completed_rows_drop_artifact_paths(
+    async def test_produced_rows_keep_artifact_paths(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        """A caller reads a run's log from its row. With the key left off, a
+        snippet reading it got an empty string and counted nothing in it."""
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_rows.cir")
 
@@ -993,7 +995,8 @@ class TestLeanReceipt:
 
         (row,) = data["runs"]["items"]
         assert row["status"] == "produced"
-        assert "raw" not in row and "log" not in row
+        assert Path(row["raw"]).is_file() and Path(row["log"]).is_file()  # noqa: ASYNC240
+        assert "simulator_version" not in row
         assert row["assignments"] == {}
 
     async def test_run_fields_still_fetch_artifact_paths(

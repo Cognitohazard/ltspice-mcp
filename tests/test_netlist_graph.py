@@ -197,6 +197,51 @@ def test_retype_and_param_mismatch_are_distinct_channels() -> None:
     assert param.candidate_value == "2u"
 
 
+SCHMITT_ONCE = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2\n.end\n"
+
+
+def test_a_parameter_given_twice_alike_is_equivalent_and_reported() -> None:
+    """The two copies an edit left on a Schmitt trigger read the same value,
+    so the circuit compares equal; that the card names the threshold twice is
+    reported, where before nothing showed it."""
+    cand = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 vt=4.150\n.end\n"
+    result = compare_graphs(SCHMITT_ONCE, cand)
+    assert result.equivalent
+    assert [(d.ref, d.side, d.key, d.values) for d in result.duplicate_params] == [
+        ("A1", "candidate", "vt", ("4.15", "4.150"))
+    ]
+    assert result.as_dict()["duplicate_params"] == [
+        {"ref": "A1", "side": "candidate", "key": "vt", "values": ["4.15", "4.150"]}
+    ]
+
+
+def test_a_parameter_given_twice_differently_is_a_mismatch() -> None:
+    """Which copy a simulator reads is not modelled, so two copies that differ
+    compare equal to neither: the first copy matches the reference, the second
+    does not."""
+    cand = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=3\n.end\n"
+    result = compare_graphs(SCHMITT_ONCE, cand)
+    assert not result.equivalent
+    (param,) = result.param_mismatches
+    assert (param.key, param.reference_value, param.candidate_value) == ("vt", "4.15", "3")
+    assert [d.values for d in result.duplicate_params] == [("4.15", "3")]
+
+
+def test_the_same_copies_in_the_same_order_are_equivalent() -> None:
+    deck = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=1 Vt=2\n.end\n"
+    result = compare_graphs(deck, deck)
+    assert result.equivalent
+    assert [d.side for d in result.duplicate_params] == ["reference", "candidate"]
+
+
+def test_a_structural_diff_shows_a_second_copy_as_a_change() -> None:
+    from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
+
+    cand = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=4.15\n.end\n"
+    delta = structural_delta(read_deck(SCHMITT_ONCE), read_deck(cand))
+    assert [change["reference"] for change in delta["components_changed"]] == ["A1"]
+
+
 def test_type_letter_change_is_add_remove_not_retype() -> None:
     # A resistor replaced by a capacitor changes the reference (R1 -> C1): the
     # component identity changed, so it reads as removed + added, not a retype.

@@ -159,10 +159,12 @@ turn of the conversation, and measurement put the tool path at several times
 the cost of a hand-rolled shell table for identical numbers even with the
 opt-in reductions applied. Two consequences worth knowing:
 
-- A completed row drops its raw/log artifact paths (reachable through
-  `jobs(runs)` with `run_fields`), but a **non-completed** row keeps them:
-  failure entries carry only `{case_id, code, message}`, so the failed row's
-  log path is its diagnostic and belongs on the fact channel.
+- A produced row drops `simulator_version` (reachable through `jobs(runs)`
+  or `run_fields`) and keeps its raw and log paths. A caller reads a run's
+  log from its row: with the key left off, a snippet reading it got an empty
+  string and counted nothing in it. A row that did not produce keeps all
+  three, because failure entries carry only `{case_id, code, message}` and
+  the failed row's log path is its diagnostic.
 - An empty per-circuit lint entry says nothing and is dropped. A circuit absent
   from `lint` is clean; findings always emit.
 
@@ -674,15 +676,17 @@ the Xyce log banner (`Xyce Release 7.8.0-opensource`), the ngspice console
 banner (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when
 none of those exists (LTspice XVII, QSPICE). It is null when the output named none.
 It is recorded per case, so an executable replaced mid-job shows up as two
-builds. Like `raw` and `log`, the lean receipt drops it from produced rows;
-`jobs(runs)` and `run_fields` return it.
+builds. The lean receipt drops it from produced rows; `jobs(runs)` and
+`run_fields` return it.
 Its rendering is `items: [RunRecord]` — a row is an object with the same keys
 at every budget, however tight the response cap.
 
 Under a `budget`, receipts keep the common envelope and negotiate the shared
 trim -> answer -> shrink ladder. The trim rung empties the attached analysis's
 `source_hashes`, one identity row per run, by `analyze_results`' own rung-0
-allowlist; `source` stays, because it carries staging disclosures. The runs
+allowlist; `source` stays, because it carries staging disclosures. The answer
+rung takes the raw and log paths off produced rows, and the budget note says
+the presentation was reduced; `jobs(runs)` without a budget returns them. The runs
 page and attached-analysis row surfaces may be shrunk to fewer rows; fact
 channels, completeness, progress, verdicts, coverage and recovery handles are
 protected. If the irreducible floor exceeds the budget, the floor is returned
@@ -1440,6 +1444,15 @@ read is diffed as empty, so the delta still comes back, `equivalent` is null,
 and a warning names the deck that failed. Either way the call's outcome is
 `partial` and the reason is in the response.
 
+An instance that gives one parameter more than once is reported by
+`equivalence` as a fact, `duplicate_params` (the instance, the side, the key and
+every copy in card order). Which copy a simulator reads is not modelled, so the
+parameter compares equal only where it would whichever copy is read: the same
+copies in the same order on both sides, or one value in every copy. Anything
+else is a `param_mismatches` row naming a reference copy and a candidate copy
+that differ. Keeping one value per key hid a second copy an edit had added: two
+thresholds that happened to agree compared as one.
+
 Both modes compare netlists. An `.asc` under test is compared as its LTspice
 export, so an `.asc` reference is exported the same way — on a staged copy,
 never beside the caller's file — and without LTspice the compare fails instead
@@ -1455,7 +1468,8 @@ It leaves out what the netlister adds to every export — `.backanno`, the
 install-path `.lib …/cmp/standard.*`, and a parameterless default model such as
 `.model NMOS NMOS` while the reference declares no model of that name. A
 component's signature is its model or value plus its instance parameters,
-nodes excluded (equivalence is the mode that compares wiring).
+nodes excluded (equivalence is the mode that compares wiring); a parameter
+given twice signs both copies, so a second copy is a change.
 
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled,
@@ -2031,6 +2045,15 @@ Carried over from the pre-consolidation op models: exact-segment `remove_wire`,
 `cleanup_wires`, directive placement kinds, and literal-default removal
 matching with `regex:` as an opt-in prefix. `wire_pins` was once also spelled
 `connect`; that spelling is not accepted anywhere.
+
+`set_component_value` splits a trailing `KEY=VALUE` off the value it is given
+and sets it where the part already gives that key: in `Value`, `Value2`,
+`SpiceLine` or `SpiceLine2`, matched without regard to case, every copy found.
+A key the part gives nowhere goes to `SpiceLine`. A key found more than once is
+named in a warning. The schematic editor underneath looked only in
+`SpiceLine`, by exact spelling, so a Schmitt trigger's `Vt` in `Value` got a
+second copy (`docs/spicelib_bugs.md`, Bug 29). A behavioural source's value
+is one expression and replaces `Value` whole.
 
 ### A.4 Inspect queries
 

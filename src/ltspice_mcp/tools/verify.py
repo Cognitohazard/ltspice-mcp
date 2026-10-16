@@ -560,6 +560,25 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
     "required": ["name", "used", "ignored"],
 }
 
+_DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "An instance that gives one parameter more than once. A fact, not a "
+        "difference: 'equivalent' holds only if it holds whichever copy is read."
+    ),
+    "properties": {
+        "ref": {"type": "string"},
+        "side": {"type": "string", "description": "'reference' or 'candidate'."},
+        "key": {"type": "string", "description": "The parameter, lowercased."},
+        "values": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Every copy, in card order.",
+        },
+    },
+    "required": ["ref", "side", "key", "values"],
+}
+
 # One flat object over both compare modes rather than a nested oneOf: strict MCP
 # clients handle a plain properties map everywhere, and 'mode' says which subset
 # is populated. Only 'mode' and 'equivalent' are emitted by both modes.
@@ -576,7 +595,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "description": (
                 "'equivalence' populates the graph-comparison keys "
                 "(structurally_equivalent, added/removed/retyped, the mismatch lists, "
-                "the subckt facts); 'structural_diff' populates the components_*/"
+                "the subckt and parameter facts); 'structural_diff' populates the components_*/"
                 "directives_* delta."
             ),
         },
@@ -653,6 +672,11 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": _DUPLICATE_SUBCKT_SCHEMA,
             "description": "equivalence: subcircuits defined more than once.",
+        },
+        "duplicate_params": {
+            "type": "array",
+            "items": _DUPLICATE_PARAM_SCHEMA,
+            "description": "equivalence: instances that give a parameter more than once.",
         },
         **STRUCTURAL_DELTA_PROPS,
     },
