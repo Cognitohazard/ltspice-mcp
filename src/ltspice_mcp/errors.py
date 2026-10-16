@@ -102,7 +102,8 @@ class LTSpiceMCPError(Exception):
 
 
 class PathSecurityError(LTSpiceMCPError):
-    """Path resolves outside allowed directories."""
+    """A path was refused: it lies outside the sandbox (``allowed_paths``),
+    when one is set, or it cannot be resolved as written."""
 
     code = "path_denied"
 

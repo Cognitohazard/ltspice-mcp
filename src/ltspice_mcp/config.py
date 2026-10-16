@@ -2,7 +2,6 @@
 
 import logging
 import os
-import tempfile
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, field
@@ -101,12 +100,11 @@ def _validated_string_list(
     """Return *value* if it is a genuine list of strings, else warn and return None.
 
     Guards the list-of-strings TOML fields against the common mistake of writing
-    a bare scalar (``allowed_paths = "/home/me"`` instead of ``["/home/me"]``).
+    a bare scalar (``symbol_paths = "/home/me"`` instead of ``["/home/me"]``).
     A scalar string is iterable, so ``[Path(p) for p in value]`` would silently
     expand it character-wise into one-character Paths (including ``Path("/")``
-    for every slash) rather than failing — which, for a sandbox path list, would
-    widen the sandbox to the whole filesystem. Callers keep their default when
-    this returns None.
+    for every slash) rather than failing. Callers keep their default when this
+    returns None.
     """
     if isinstance(value, list) and all(isinstance(x, str) for x in value):
         return value
@@ -194,10 +192,17 @@ def _toml_ngbehavior(value: Any) -> Any:
     return value.strip() or _SKIP
 
 
-def _toml_path_list(field_name: str) -> Callable[[Any], Any]:
-    """Coercer for a TOML list-of-strings read as filesystem paths."""
+def _toml_path_list(field_name: str, *, one_path: bool = False) -> Callable[[Any], Any]:
+    """Coercer for a TOML list-of-strings read as filesystem paths.
+
+    With ``one_path`` a bare string is read as a list of that one path. The
+    sandbox reads its list this way: ignored, the slip would leave the server
+    with no sandbox at all, the opposite of what writing the key asked for.
+    """
 
     def coerce(value: Any) -> Any:
+        if one_path and isinstance(value, str):
+            return [Path(value)]
         paths = _validated_string_list(value, field_name)
         return _SKIP if paths is None else [Path(p) for p in paths]
 
@@ -413,7 +418,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         field="allowed_paths",
         section=SANDBOX_SECTION,
         key=SANDBOX_KEY,
-        from_toml=_toml_path_list(f"{SANDBOX_SECTION}.{SANDBOX_KEY}"),
+        from_toml=_toml_path_list(f"{SANDBOX_SECTION}.{SANDBOX_KEY}", one_path=True),
         env=SANDBOX_ENV,
         from_env=_env_path_list,
     ),
@@ -653,8 +658,12 @@ class ServerConfig:
     working_dir: Path = field(default_factory=Path.cwd)
     """Working directory for circuit files."""
 
-    allowed_paths: list[Path] = field(default_factory=list)
-    """Sandbox paths. Defaults to [working_dir] if empty."""
+    allowed_paths: list[Path] | None = None
+    """The sandbox: the directories every path a caller names must lie in.
+    ``None`` (unset, or an empty list) is no sandbox: a path is resolved
+    wherever it lands. ``[security] allowed_paths`` (a bare string there names
+    one directory), ``LTSPICE_MCP_ALLOWED_PATHS`` or
+    ``Api(allowed_paths=...)``."""
 
     max_parallel_sims: int = field(default_factory=lambda: min(os.cpu_count() or 4, 8))
     """Maximum concurrent simulations.
@@ -801,9 +810,9 @@ class ServerConfig:
     """Path that was resolved for the config file (set by load())."""
 
     def __post_init__(self) -> None:
-        """A config without allowed_paths gets the default sandbox."""
+        """An empty ``allowed_paths`` is no sandbox, the same as an unset one."""
         if not self.allowed_paths:
-            self.allowed_paths = default_allowed_paths(self.working_dir)
+            self.allowed_paths = None
 
     @classmethod
     def load(
@@ -887,29 +896,6 @@ class ServerConfig:
         return cls(**config_dict)
 
 
-def claude_scratch_root() -> Path | None:
-    """Where Claude Code keeps a session's scratch files. Its system prompt tells
-    an agent to write throwaway files there rather than in the working
-    directory, so a deck an agent authors lands outside a sandbox of ["."] and
-    every run of it costs a copy first.
-
-    On POSIX the root is ``<tempdir>/claude-<uid>``. On Windows it is
-    ``%TEMP%\\claude``, holding ``<project>\\<session>\\scratchpad`` for each
-    session; the temp directory is already per user there, so there is no uid
-    suffix. Any other platform gets nothing added."""
-    if os.name == "nt":
-        return Path(tempfile.gettempdir()) / "claude"
-    if os.name != "posix":
-        return None
-    return Path(tempfile.gettempdir()) / f"claude-{os.getuid()}"
-
-
-def default_allowed_paths(working_dir: Path) -> list[Path]:
-    """The sandbox a config without ``allowed_paths`` gets."""
-    scratch = claude_scratch_root()
-    return [working_dir] + ([scratch] if scratch else [])
-
-
 def _shown_default(tbl: Any, field_name: str, *, example: Any = MISSING) -> None:
     """Show ``field_name``'s setting in ``tbl`` as a comment, never as a live key.
 
@@ -989,11 +975,13 @@ def generate_default_config(path: Path) -> None:
 
     # Security section
     sec = table()
-    sec.add(comment("Paths accessible to the server (sandbox). Left unset, the default is the"))
-    sec.add(comment("working directory plus the Claude Code scratch directory, where an agent"))
-    sec.add(comment("writes its throwaway decks: <tempdir>/claude-<uid> on Linux and macOS,"))
-    sec.add(comment("%TEMP%\\claude on Windows. Set your own list to replace that default;"))
-    sec.add(comment("the server re-reads this list on the next call after you save the file:"))
+    sec.add(comment("Sandbox: the directories every path a tool is given must lie in. Unset"))
+    sec.add(comment("(the default), there is no sandbox and a path may name any file this"))
+    sec.add(comment("process can open. Set a list to confine the server to it; a relative"))
+    sec.add(comment("path is then taken from the list's first entry. run_code is not"))
+    sec.add(comment("confined by it: set [tools] run_code = false as well to keep a client"))
+    sec.add(comment("to these directories. The server re-reads this list on the next call"))
+    sec.add(comment("after you save the file:"))
     _shown_default(sec, "allowed_paths", example=["."])
     doc.add(SANDBOX_SECTION, sec)
     doc.add(nl())
@@ -1055,15 +1043,14 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(
         comment("in scope (loops over runs, numpy on samples). The snippet has the server's")
     )
+    tools_tbl.add(comment("own file and process authority, which allowed_paths does not confine:"))
     tools_tbl.add(
-        comment("own file and process authority, not the sandbox above: permission it in")
+        comment("permission it in your client the way you would a shell, and turn it off")
     )
     tools_tbl.add(
-        comment("your client the way you would a shell, and turn it off when the server is")
+        comment("when the server is reachable by more than one trusted client, for example")
     )
-    tools_tbl.add(
-        comment("reachable by more than one trusted client, for example through a proxy.")
-    )
+    tools_tbl.add(comment("through a proxy."))
     _shown_default(tools_tbl, "run_code")
     doc.add("tools", tools_tbl)
     doc.add(nl())

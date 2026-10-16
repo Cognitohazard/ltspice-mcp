@@ -24,7 +24,9 @@ the crossing or the worst corner, rather than the whole table. Each call is a
 fresh namespace around the same engine, so keep state on disk: a file, or a
 job you find again by its `request_id`. A snippet is bounded by `timeout_s`
 (60 s by default, 600 at most), and one runs at a time. It runs with the
-server process's own file and process authority, outside the path sandbox.
+server process's own file and process authority: a sandbox
+(`[security] allowed_paths`) applies to the paths `api` calls are given, not
+to the snippet's own code.
 
 **Your own Python:**
 
@@ -161,8 +163,8 @@ Importable from `ltspice_mcp.api`; arrays in, dicts out.
   data, not an exception: read `failures`, `observations` and `warnings`.
 - `ApiSessionError` (with `ApiClosedError`): a second `Api` in one process, a
   call after `close()`, or a call from a forked child.
-- A refused path raises the engine's path error, with a note naming the setting
-  that widens the sandbox.
+- A refused path raises the engine's path error, with a note on what to change:
+  the setting that holds the sandbox, when the path lies outside it.
 
 ## Controls that exist only on the wire
 

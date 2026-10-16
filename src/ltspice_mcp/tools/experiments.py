@@ -537,8 +537,8 @@ class RunExperimentsInput(ToolInput):
     allow_live_includes: bool = Field(
         default=False,
         description=(
-            "Let a .include/.lib that cannot be staged (outside the allowed "
-            "roots, or past the recursion depth) be read live at run time "
+            "Let a .include/.lib that cannot be staged (past the recursion "
+            "depth, or outside the sandbox when one is set) be read live at run time "
             "instead of failing that circuit. The job cannot then prove what "
             "those files held, so its request_id re-runs rather than replaying."
         ),
@@ -954,8 +954,9 @@ async def _prepare_circuit(
             compact_digests=compact_digests,
             # LTspice's own .asc netlister appends a .lib pointing into the
             # install's model library on every schematic with a MOSFET on it,
-            # so without this no transistor sheet stages under a default
-            # sandbox. Resolved per run from the simulator this job uses.
+            # so without this no transistor sheet stages under a sandbox that
+            # leaves the install out. Resolved per run from the simulator this
+            # job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
             cp1252_reader=cp1252_reader,
         )

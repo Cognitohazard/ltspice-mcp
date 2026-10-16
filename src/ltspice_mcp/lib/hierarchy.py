@@ -33,7 +33,7 @@ from ltspice_mcp.lib.hierarchy_expr import (
     references_sibling,
     scaled_geometry,
 )
-from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     Token,
@@ -380,13 +380,19 @@ def walk_active(
 
 def load_hierarchy(
     path: str,
-    allowed_roots: list[Path],
+    allowed_roots: list[Path] | None,
     profile: SemanticProfile,
     *,
     simulator_roots: Sequence[Path] = (),
+    relative_to: Path | None = None,
 ) -> Hierarchy:
-    """Capture bounded bytes and path/classification facts, then resolve purely."""
-    root = resolve_safe_path(path, allowed_roots)
+    """Capture bounded bytes and path/classification facts, then resolve purely.
+
+    ``allowed_roots`` are the directories every file read must lie in, None
+    for anywhere; ``simulator_roots`` widen them for the files the deck
+    reaches. A relative ``path`` is taken as ``resolve_safe_path`` takes it.
+    """
+    root = resolve_safe_path(path, allowed_roots, relative_to=relative_to)
     if root.suffix.casefold() not in NETLIST_SUFFIXES:
         raise NetlistError(
             f"hierarchy requires a {NETLIST_SUFFIX_TEXT} netlist; explicitly export .asc first"
@@ -398,7 +404,7 @@ def load_hierarchy(
         nonlocal total
         if source in files:
             return files[source]
-        checked = resolve_safe_path(str(source), allowed_roots + list(simulator_roots))
+        checked = resolve_safe_path(str(source), with_roots(allowed_roots, simulator_roots))
         with checked.open("rb") as stream:
             content = stream.read(MAX_BYTES - total + 1)
         total += len(content)

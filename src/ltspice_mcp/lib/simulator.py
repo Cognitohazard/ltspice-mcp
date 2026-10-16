@@ -418,8 +418,8 @@ def simulator_library_roots(simulator_class: type | None) -> list[Path]:
     is naming the simulator, not the user's filesystem. Staging therefore
     accepts and snapshots them without the sandbox being widened — LTspice's
     ``.asc`` netlister appends ``.lib <install>/lib/cmp/standard.mos`` to every
-    schematic carrying a MOSFET symbol, so under a default ``allowed_paths``
-    no transistor schematic could otherwise be staged at all.
+    schematic carrying a MOSFET symbol, so under an ``allowed_paths`` that
+    leaves the install out no transistor schematic could otherwise be staged.
 
     Resolution mirrors the symbol path's: on WSL the install lives behind
     ``%LOCALAPPDATA%`` (``%USERPROFILE%\\Documents`` for XVII) and only the

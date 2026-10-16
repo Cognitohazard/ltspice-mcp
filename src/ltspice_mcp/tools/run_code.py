@@ -13,8 +13,8 @@ timeout, worker exit and supervisor death stop ordinary descendants too;
 explicitly detached experiment owners leave that job before supervising work.
 
 Advertised only when ``[tools] run_code = true``: the snippet runs with the
-server process's own file and process authority, not inside
-``allowed_paths``, and turning that on is the operator's decision.
+server process's own file and process authority, which ``allowed_paths``
+does not confine, and turning that on is the operator's decision.
 """
 
 from __future__ import annotations
@@ -548,7 +548,7 @@ def worker_for(state: SessionState) -> CodeWorker:
     description=(
         "Run a Python snippet in a warm worker that holds this server's engine as "
         "`api`. The snippet has the server process's own file and process "
-        "authority, not the sandbox, so permission this tool like a shell. For "
+        "authority, which no sandbox confines, so permission this tool like a shell. For "
         "loops over many runs, numpy on samples, and compute-decide-compute; a "
         "single run or measurement is a tool call. Trace math is numpy on one "
         "step's traces, r.trace(name, step=k) on r.axis(step=k); "
