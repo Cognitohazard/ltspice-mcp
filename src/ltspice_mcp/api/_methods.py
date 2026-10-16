@@ -751,7 +751,7 @@ class ApiMethodsMixin(ABC):
         than per path field means every op, and every path field a future op
         adds, inherits it: they all pass through this one call.
 
-        A sandbox refusal gets the same guidance a tool call's does, as a note
+        A refused path gets the same guidance a tool call's does, as a note
         on the exception: a script, or a ``run_code`` snippet, sees it in the
         traceback, and the exception's type and message stay what they were.
         """

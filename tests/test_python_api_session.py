@@ -24,7 +24,7 @@ from ltspice_mcp.api import (
     ApiSessionError,
     ApiValidationError,
 )
-from ltspice_mcp.config import ServerConfig, default_allowed_paths
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.state import SessionState
 from tests.conftest import LIVENESS_S, wait_until
@@ -165,7 +165,7 @@ def test_api_explicit_config_path_uses_real_shared_bootstrap(
         assert api._state.config.config_path == config_path
         assert api._state.config.default_timeout == 17
         assert api._state.working_dir == working_dir
-        assert api._state.config.allowed_paths == default_allowed_paths(working_dir)
+        assert api._state.config.allowed_paths is None
     finally:
         api.close()
 
@@ -381,6 +381,26 @@ async def test_server_lifespan_and_api_are_mutually_exclusive(
                 pytest.fail("server lifespan entered despite the Api lease")
     finally:
         api.close()
+
+
+@pytest.mark.asyncio
+async def test_server_lifespan_puts_back_the_instructions_it_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The instructions name the session's simulators, and the Server outlives
+    the session, so a later session must not be served this one's."""
+
+    async def bootstrap(**kwargs: object) -> BootstrapResult:
+        del kwargs
+        config = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path], persist_jobs=False)
+        return _boot_result(SessionState.create(config, {}))
+
+    monkeypatch.setattr(server_module, "bootstrap_server_engine", bootstrap)
+    before = server_module.server.instructions
+    async with server_module.server_lifespan(server_module.server):
+        assert server_module.server.instructions != before
+    assert server_module.server.instructions == before
 
 
 @pytest.mark.asyncio
