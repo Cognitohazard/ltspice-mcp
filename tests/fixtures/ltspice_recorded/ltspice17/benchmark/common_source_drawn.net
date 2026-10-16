@@ -1,0 +1,13 @@
+* C:\recording\common_source_drawn.asc
+M1 out in N001 N001 NMOS_MOD
+RD vdd out 5k
+RS N001 0 500
+Vin in 0 SINE(1.5 0.1 1k)
+Vdd vdd 0 5
+.model NMOS NMOS
+.model PMOS PMOS
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.mos
+.model NMOS_MOD NMOS(Kp=200u Vto=1)
+.op
+.backanno
+.end

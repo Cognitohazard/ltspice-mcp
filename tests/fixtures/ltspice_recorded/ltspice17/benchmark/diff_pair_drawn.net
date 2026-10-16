@@ -1,0 +1,16 @@
+* C:\recording\diff_pair_drawn.asc
+M1 outn inp tail 0 NMOS_MOD
+M2 outp inn tail 0 NMOS_MOD
+Itail tail 0 200µ
+R1 vdd outn 10k
+R2 vdd outp 10k
+Vinp inp 0 SINE(2.5 10m 1k)
+Vinn inn 0 2.5
+Vdd vdd 0 5
+.model NMOS NMOS
+.model PMOS PMOS
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.mos
+.model NMOS_MOD NMOS(Kp=200u Vto=0.7)
+.tran 5m
+.backanno
+.end

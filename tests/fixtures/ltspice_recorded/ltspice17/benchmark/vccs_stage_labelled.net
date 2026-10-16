@@ -1,0 +1,7 @@
+* C:\recording\vccs_stage_labelled.asc
+G1 N001 vdd in 0 1m
+RL N001 0 1k
+Vin in 0 AC 1
+.op
+.backanno
+.end

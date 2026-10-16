@@ -29,9 +29,10 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib.connectivity import GROUND, build_on_wire_predicate, signature
+from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.netlist_graph import canon_ref, parse_netlist_graph
 from ltspice_mcp.lib.schematic_scene import scene_of_sheet, sheet_view
-from ltspice_mcp.lib.sheet import Sheet
+from ltspice_mcp.lib.sheet import Sheet, SheetPart
 from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
@@ -85,8 +86,12 @@ class Circuit:
 
 def circuit(name: str) -> Circuit:
     """The reference circuit ``name``, read from ``fixtures/build_benchmark/<name>.cir``."""
-    path = CORPUS / f"{name}.cir"
-    lines = path.read_text(encoding="ascii").splitlines()
+    return read_circuit(CORPUS / f"{name}.cir")
+
+
+def read_circuit(path: Path) -> Circuit:
+    """The reference circuit in the netlist at ``path``."""
+    lines = decode_spice_bytes(path.read_bytes()).splitlines()
     names: tuple[str, ...] = ()
     for line in lines:
         if line.startswith("* names:"):
@@ -108,7 +113,7 @@ def circuit(name: str) -> Circuit:
         for line in lines
         if line.startswith(".") and line.split()[0].lower() not in (".end", ".title")
     )
-    return Circuit(name, lines[0].removeprefix("*").strip(), names, tuple(cards), directives)
+    return Circuit(path.stem, lines[0].removeprefix("*").strip(), names, tuple(cards), directives)
 
 
 def circuits() -> list[str]:
@@ -197,34 +202,78 @@ def _reference_nets(reference: Circuit) -> dict[str, tuple[_Pin, ...]]:
     return {node: tuple(sorted(pins)) for node, pins in nets.items()}
 
 
-def _drawn_nets(sheet: Sheet, reference: Circuit) -> list[tuple[tuple[_Pin, ...], frozenset[str]]]:
+def netlisted(sheet: Sheet) -> list[tuple[frozenset[tuple[str, int]], frozenset[str]]]:
     """Each net the sheet draws, as LTspice would netlist it: its pins and its names.
 
-    A pin is its part's reference and its SpiceOrder, the order a netlist
-    lists a part's nodes in (the ``symbol-orientation`` recording). A part the
-    reference does not have keeps its symbol's prefix as its letter.
+    A pin is its part's reference, as `netlist_graph.canon_ref` spells it, and
+    its SpiceOrder, the order a netlist lists a part's nodes in (the
+    ``symbol-orientation`` recording). Names are in lower case.
+
+    A transistor drawn with three pins is exported with four nodes. A
+    MOSFET's fourth is its source's net when the source is connected, and a
+    net of its own when it is not; a bipolar transistor's is ground (the
+    ``build-benchmark-export`` and ``export-boilerplate`` recordings, on the
+    suite's ``nmos`` and LTspice's own symbols).
     """
-    letters = {}
     pins = []
+    implied: list[tuple[str, str]] = []
     for part in sheet.parts:
-        card = reference.card(part.reference)
-        prefix = part.symbol.file.attr("Prefix") if part.symbol else ""
-        letters[part.reference] = card.letter if card else prefix[:1].upper()
         for pin in sorted(part.pins, key=lambda p: p.order):
             assert pin.order > 0, (part.reference, pin)
             pins.append(((pin.x, pin.y), (part.reference, str(pin.order))))
-    nets = signature(
-        pins,
-        [((x, y), name) for x, y, name in sheet.labels],
-        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in sheet.wires],
-    )
-    return [
+        letter = _prefix(part)[:1]
+        if letter and letter in "MQ" and len(part.pins) == 3:
+            implied.append((canon_ref(part.reference), letter))
+    nets = [
         (
-            tuple(sorted(_pin(letters[ref], ref, int(order)) for ref, order in owners)),
+            {(canon_ref(ref), int(order)) for ref, order in owners},
             frozenset(name.lower() for name in names),
         )
-        for owners, names in nets
+        for owners, names in signature(
+            pins,
+            [((x, y), name) for x, y, name in sheet.labels],
+            [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in sheet.wires],
+        )
     ]
+    for ref, letter in implied:
+        if letter == "Q":
+            ground = next((net for net in nets if GROUND in net[1]), None)
+            if ground is None:
+                nets.append(({(ref, 4)}, frozenset({GROUND})))
+            else:
+                ground[0].add((ref, 4))
+            continue
+        source = next(net for net in nets if (ref, 3) in net[0])
+        if source[0] == {(ref, 3)} and not source[1]:
+            nets.append(({(ref, 4)}, frozenset()))
+        else:
+            source[0].add((ref, 4))
+    return [(frozenset(pins), names) for pins, names in nets]
+
+
+def _prefix(part: SheetPart) -> str:
+    return (part.symbol.file.attr("Prefix") if part.symbol else "").upper()
+
+
+def _drawn_nets(sheet: Sheet, reference: Circuit) -> list[tuple[tuple[_Pin, ...], frozenset[str]]]:
+    """`netlisted`, with the two ends of a resistor, capacitor or inductor one
+    role. A part the reference does not have keeps its symbol's prefix as its
+    letter. A transistor's fourth node, which the export adds to one drawn with
+    three pins, is left out where the reference's card writes three."""
+    letters = {}
+    implied = set()
+    for part in sheet.parts:
+        ref = canon_ref(part.reference)
+        card = reference.card(part.reference)
+        letters[ref] = card.letter if card else _prefix(part)[:1]
+        if card is not None and len(card.nodes) == len(part.pins) == 3:
+            implied.add((ref, 4))
+    drawn = []
+    for pins, names in netlisted(sheet):
+        kept = [pin for pin in pins if pin not in implied]
+        if kept:
+            drawn.append((tuple(sorted(_pin(letters[r], r, o) for r, o in kept)), names))
+    return drawn
 
 
 def equivalence(sheet: Sheet, reference: Circuit) -> dict[str, Any]:

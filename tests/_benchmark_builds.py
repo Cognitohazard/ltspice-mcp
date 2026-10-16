@@ -228,11 +228,14 @@ class Drawing:
         self.reference = circuit(name)
         self.ops: list[dict[str, Any]] = []
 
-    def part(self, ref: str, rotation: str, pin: str, at: Point) -> Placed:
-        """Place ``ref`` turned by ``rotation`` so that its pin ``pin`` lands on ``at``."""
+    def part(
+        self, ref: str, rotation: str, pin: str, at: Point, symbol: str | None = None
+    ) -> Placed:
+        """Place ``ref`` turned by ``rotation`` so that its pin ``pin`` lands on ``at``,
+        drawn with ``symbol`` or the one `symbol_of` gives."""
         card = self.reference.card(ref)
         assert card is not None, ref
-        symbol = symbol_of(card, self.reference)
+        symbol = symbol or symbol_of(card, self.reference)
         _order, px, py = _pins(symbol)[pin]
         dx, dy = place_point(px, py, 0, 0, rotation)
         x, y = at[0] - dx, at[1] - dy
@@ -315,7 +318,7 @@ def _rectifier() -> Build:
 
 def _common_source() -> Build:
     d = Drawing("common_source")
-    m1 = d.part("M1", "R0", "G", (272, 320))
+    m1 = d.part("M1", "R0", "G", (272, 320), symbol="nmos")
     d.part("RD", "R0", "2", (m1["D"][0], m1["D"][1] - 48))
     rs = d.part("RS", "R0", "1", (m1["S"][0], m1["S"][1] + 48))
     d.part("Vin", "R0", "+", (176, 320))

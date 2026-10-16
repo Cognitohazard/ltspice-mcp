@@ -1,0 +1,10 @@
+* C:\recording\sallen_key_labelled.asc
+Vin in 0 AC 1
+R1 in a 10k
+R2 a b 10k
+C1 a out 10n
+C2 b 0 10n
+E1 out 0 b out 1e5
+.ac dec 20 10 100k
+.backanno
+.end
