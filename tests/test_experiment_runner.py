@@ -400,13 +400,16 @@ class TestLogopinfoInjection:
         # pins — an idempotent replay compares against exactly these.
         assert staged.read_bytes() == staged_bytes
         assert sha256_file(staged) == case.deck_sha256
-        # The augmented copy is per-case scratch, gone once spicelib staged it.
-        assert not run_deck.exists()
 
         token = next(iter(callbacks))
         callbacks[token](_success(work_dir, token))
         assert await job_done(state_no_sim, receipt.job)
         assert receipt.job.completeness.produced == 1
+        # The augmented copy is per-case scratch, removed on the launching
+        # thread once submit returns. The case runs only after that thread has
+        # returned, so by the time the job is done the copy is gone; checked
+        # any earlier, the removal may not have happened yet.
+        assert not run_deck.exists()
 
     async def test_non_ltspice_case_is_submitted_unmodified(
         self,
