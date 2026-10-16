@@ -5,10 +5,17 @@ Every build in `tests/_benchmark_builds.py` is drawn on a blank sheet through
 commit with no refused op, draw the reference circuit with every part,
 directive and pin, and have exactly the findings it states. Its scores and the
 digest of its sheet after each call are held to
-`fixtures/build_benchmark_record.json`: the digest of the final sheet is what
-the present engine builds, which step 6 of `docs/design/schematic_engine.md`
-must build again. A change made on purpose changes the record in the same
-commit; record it again with `LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1`.
+`fixtures/build_benchmark_record.json`, and its final sheet, kept under
+`fixtures/ltspice_recorded/inputs/benchmark/`, byte for byte: that is what the
+present engine builds, which step 6 of `docs/design/schematic_engine.md` must
+build again. A change made on purpose changes the record and the sheets in the
+same commit; record them again with `LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1`,
+then record LTspice's export of the sheets again (`docs/TESTING.md`).
+
+The kept sheets are inputs of the LTspice recordings, which hold what both
+builds export from each. The scorer's reading of a sheet's nets is held to
+that export, and the export to the reference circuit, so the offline
+equivalence is evidenced on every sheet of the benchmark.
 
 Like the other records, it reads the suite's symbols alone, so it is the same
 on every machine.
@@ -23,28 +30,36 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.lib.netlist_graph import canon_net, canon_ref, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.sheet import Sheet, editor_symbol_resolver, read_sheet
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
 from tests._benchmark_builds import builds
 from tests._build_benchmark import (
+    CORPUS,
     Build,
     Built,
+    Card,
+    Circuit,
     circuit,
     coordinates_written,
     cost,
     drawing,
     equivalence,
     finding_counts,
+    netlisted,
     run_build,
 )
 from tests._proposal_record import write_record
 from tests._schematic_fixtures import TESTS
+from tests.ltspice_recorder import INPUTS
 from tests.test_circuit_asc import BUILD_ARCHETYPES
 
 _RECORD = TESTS / "fixtures" / "build_benchmark_record.json"
 _RECORDING = os.environ.get("LTSPICE_MCP_RECORD_BUILD_BENCHMARK") == "1"
 _SYMBOLS = TESTS / "fixtures" / "symbols"
+_SHEETS = INPUTS / "benchmark"
 
 BUILDS = builds()
 
@@ -75,10 +90,11 @@ def _assert_built(built: Built, said: dict[str, Any]) -> None:
     assert equivalent["equivalent"], equivalent
     assert equivalent["values_differ"] == [], equivalent
     assert equivalent["directives_missing"] == [], equivalent
-    # Every pin of every part is on a wire or a label.
+    # Every pin of every part is on a wire or a label, as the editor counts
+    # them and as the sheet places them.
     wiring = built.replies[-1]["wiring"]
-    reference = circuit(build.circuit)
-    assert wiring["pins_total"] == sum(len(card.nodes) for card in reference.cards), wiring
+    sheet = read_sheet(built.path.read_bytes(), editor_symbol_resolver(built.path))
+    assert wiring["pins_total"] == sum(len(part.pins) for part in sheet.parts), wiring
     assert wiring["pins_wired"] + wiring["pins_label_only"] == wiring["pins_total"], wiring
     if build.expected_findings is not None:
         assert said["findings"] == dict(build.expected_findings), said["findings"]
@@ -98,11 +114,14 @@ def _without_reply_size(said: dict[str, Any]) -> dict[str, Any]:
 @pytest.mark.skipif(not _RECORDING, reason="set LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1 to record")
 async def test_record_the_builds(asc_state: SessionState, work_dir: Path):
     record = {}
+    for old in _SHEETS.glob("*.asc"):
+        old.unlink()
     for build in BUILDS:
         built = await run_build(asc_state, build, work_dir)
         said = score(built, work_dir)
         _assert_built(built, said)
         record[build.id] = said
+        (_SHEETS / built.path.name).write_bytes(built.path.read_bytes())
     write_record(_RECORD, record)
 
 
@@ -115,11 +134,23 @@ async def test_a_build_is_what_the_record_says(
     said = score(built, work_dir)
     _assert_built(built, said)
     assert _without_reply_size(said) == _without_reply_size(_recorded()[build.id])
+    assert built.path.read_bytes() == (_SHEETS / built.path.name).read_bytes()
 
 
 @pytest.mark.skipif(_RECORDING, reason="recording")
-def test_the_record_is_of_the_builds():
-    assert sorted(_recorded()) == sorted(build.id for build in BUILDS)
+def test_the_record_and_the_kept_sheets_are_of_the_builds():
+    ids = sorted(build.id for build in BUILDS)
+    assert sorted(_recorded()) == ids
+    assert sorted(path.stem for path in _SHEETS.glob("*.asc")) == ids
+
+
+def test_the_symbols_beside_the_kept_sheets_are_the_suites():
+    """The recordings were made with these beside the sheets; they must be
+    the symbols the builds were drawn with."""
+    copies = sorted(_SHEETS.glob("*.asy"))
+    assert copies
+    for copy in copies:
+        assert copy.read_bytes() == (_SYMBOLS / copy.name).read_bytes(), copy.name
 
 
 @pytest.mark.skipif(_RECORDING, reason="recording")
@@ -242,6 +273,22 @@ class TestEquivalence:
         assert said["values_differ"] == ["R1: '2k' drawn, '1k' in the reference"]
         assert said["directives_missing"] == [".ac dec 20 10 1meg"]
 
+    @pytest.mark.parametrize("nodes", [("d", "g", "s"), ("d", "g", "s", "s")])
+    def test_a_three_pin_mosfet_is_a_card_of_three_nodes_or_of_four(self, nodes):
+        """The export writes the source again as the bulk; a reference may or may not."""
+        sheet = _sheet(
+            "SYMBOL nmos 0 0 R0",
+            "SYMATTR InstName M1",
+            "SYMATTR Value N",
+            "FLAG 0 -96 d",
+            "FLAG -48 0 g",
+            "FLAG 0 96 s",
+        )
+        reference = Circuit("m", "m", (), (Card("M1", "M", nodes, "N"),), ())
+        assert equivalence(sheet, reference)["equivalent"]
+        wrong = Circuit("m", "m", (), (Card("M1", "M", ("d", "g", "s", "g"), "N"),), ())
+        assert not equivalence(sheet, wrong)["equivalent"]
+
 
 class TestDrawing:
     def test_a_crossing_is_two_wires_through_each_other_with_nothing_there(self):
@@ -289,3 +336,70 @@ def test_coordinates_written_count_what_locates_something():
     )
     assert coordinates_written({"op": "add_net_label", "net": "n", "pin": "R1.1"}) == 0
     assert coordinates_written({"op": "add_net_label", "net": "n", "x": 0, "y": 0}) == 2
+
+
+# ---------------------------------------------------------------------------
+# The scorer and LTspice's netlister
+# ---------------------------------------------------------------------------
+
+_EXPORTS = rec.cases_of("build-benchmark-export")
+
+
+def test_every_kept_sheet_is_exported_in_the_recordings():
+    assert sorted(case_id.removeprefix("benchmark/") for case_id in _EXPORTS) == sorted(
+        build.id for build in BUILDS
+    )
+
+
+def _exported(build: str, case_id: str) -> dict[str, set[tuple[str, int]]]:
+    """The pins LTspice put on each node of a recorded export, by node name."""
+    nodes: dict[str, set[tuple[str, int]]] = {}
+    for component in parse_netlist_graph(rec.recorded(build, f"{case_id}.net")).components:
+        for order, node in enumerate(component.nodes, start=1):
+            nodes.setdefault(node, set()).add((canon_ref(component.ref), order))
+    return nodes
+
+
+def _netlisted(build: str, case_id: str, folder: Path) -> list[tuple[frozenset, frozenset]]:
+    staged = rec.stage_sheet(build, case_id, folder)
+    return netlisted(read_sheet(staged.read_bytes(), SymbolResolver(local_dir=folder)))
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(_EXPORTS)))
+def test_the_scorer_nets_a_sheet_as_ltspice_does(build: str, case_id: str, tmp_path: Path):
+    """Pin for pin in SpiceOrder, and each named net under its name."""
+    exported = _exported(build, case_id)
+    mine = _netlisted(build, case_id, tmp_path)
+    assert {pins for pins, _names in mine} == {frozenset(pins) for pins in exported.values()}
+    for pins, names in mine:
+        node = next(node for node, on in exported.items() if on == pins)
+        assert not names or node in {canon_net(name) for name in names}, (node, names)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_three_pin_transistor_is_netted_with_the_fourth_node_ltspice_gives_it(
+    build: str, tmp_path: Path
+):
+    """On a sheet where every pin is unconnected: a MOSFET's fourth node is a
+    net of its own and a bipolar transistor's is ground. The sheet's other
+    parts are left out, since a junction FET's symbol is not in the manifest."""
+    transistors = {"m1", "m2", "q1", "q2"}
+    exported = {
+        frozenset(pins)
+        for pins in _exported(build, "export/boilerplate").values()
+        if {ref for ref, _order in pins} <= transistors
+    }
+    mine = {
+        pins
+        for pins, _names in _netlisted(build, "export/boilerplate", tmp_path)
+        if {ref for ref, _order in pins} <= transistors
+    }
+    assert mine == exported
+    assert frozenset({("q1", 4), ("q2", 4)}) in mine
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(_EXPORTS)))
+def test_what_ltspice_exports_is_the_reference_circuit(build: str, case_id: str):
+    reference = case_id.removeprefix("benchmark/").rsplit("_", 1)[0]
+    comparison = compare_graphs(CORPUS / f"{reference}.cir", rec.recorded(build, f"{case_id}.net"))
+    assert comparison.equivalent, comparison

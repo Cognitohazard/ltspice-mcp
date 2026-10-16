@@ -251,21 +251,21 @@
    },
    "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": {
     "reference": "M1",
-    "sheet": "fixtures/nmos4_mirrored_quarter_turns.asc",
+    "sheet": "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc",
     "warnings": [
-     "wires left at old pin coordinates with no connection: (144,112), (192,112), (240,112). Re-route or delete these wires."
+     "wires left at old pin coordinates with no connection: (320,224), (320,416), (272,320). Re-route or delete these wires."
     ],
-    "x": 224,
-    "y": 16
+    "x": 96,
+    "y": 176
    },
    "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": {
-    "reference": "R1",
-    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc",
+    "reference": "M1",
+    "sheet": "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc",
     "warnings": [
-     "wires left at old pin coordinates with no connection: (96,96), (96,192). Re-route or delete these wires."
+     "wires left at old pin coordinates with no connection: (320,224), (272,320). Re-route or delete these wires."
     ],
     "x": 320,
-    "y": 240
+    "y": 512
    },
    "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": {
     "reference": "R2",
@@ -552,6 +552,568 @@
     "sha256": "3ca25a0f4d03113b915c171491770fe7aad85fe9eb76b6c48133abfe4d9bfb8a",
     "shapes": {
      "moved": 66
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc": {
+   "labels": {
+    "proposals": 130,
+    "sha256": "82a3afaefb26e18c8f33913b9ff7577a5f97f25b4fc9102e19d8ace7a0a0083a",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 11,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 11,
+     "placed [ground; 1 at the point, 1 named]": 14,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 3,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 33,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 14,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 14,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 28
+    }
+   },
+   "moves": {
+    "proposals": 233,
+    "sha256": "cb29f331d070b383186d544fadc5b5f06926a3d27a818e8679b9145b1351d284",
+    "shapes": {
+     "moved": 57,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 57,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 6,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 113
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/common_source_labelled.asc": {
+   "labels": {
+    "proposals": 100,
+    "sha256": "d6e008983d53a5b6f202486d047e513211e24a835a9832f11b87097851c1c5b9",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 16,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 16,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 32,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 8,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 221,
+    "sha256": "52c1eabf45ac667925dc8a28a344b3eaa1393f40506936bcd5a377026b256e50",
+    "shapes": {
+     "moved": 90,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 53,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 78
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_drawn.asc": {
+   "labels": {
+    "proposals": 408,
+    "sha256": "601b589ad03ac17d334ce6ca6ba0021b5416748fa03b2bd4346d18575f2aa7b6",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 12,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 12,
+     "placed [ground; 1 at the point, 1 named]": 38,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 6,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 72,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 38,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 38,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 190
+    }
+   },
+   "moves": {
+    "proposals": 588,
+    "sha256": "ec575114de11857e1938f955b5c6de2580e8b2945a761497622d31b5cfaaabda",
+    "shapes": {
+     "moved": 86,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 212,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 19,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 271
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_labelled.asc": {
+   "labels": {
+    "proposals": 328,
+    "sha256": "15a1fb4beef769af3856e61a83122abc0cd6b8c474ac6ac3e3fea7edc17ef92a",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 12,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 12,
+     "placed [ground; 1 at the point, 1 named]": 28,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 6,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 72,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 28,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 28,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 140
+    }
+   },
+   "moves": {
+    "proposals": 386,
+    "sha256": "a4abcd768905ae5a50f3d5370bd1e100007810df02b55799869e5e999237fc78",
+    "shapes": {
+     "moved": 386
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_drawn.asc": {
+   "labels": {
+    "proposals": 180,
+    "sha256": "0548613d54796b31ded1e6f1864d09a99f29fe4b526803b9ac9eba78b825d9c0",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 25,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 3,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 30,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 25,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 25,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 50
+    }
+   },
+   "moves": {
+    "proposals": 425,
+    "sha256": "87924e20d46b0d1cc4a19d2809159f93b1f4fa625870b29319f9e39d248f6db5",
+    "shapes": {
+     "moved": 83,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 214,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 128
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_labelled.asc": {
+   "labels": {
+    "proposals": 145,
+    "sha256": "c6c2c67ec7471750a4400f9f6a3b2d493539079d66bc12f606528918ccc9dade",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 18,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 3,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 30,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 18,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 18,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 36
+    }
+   },
+   "moves": {
+    "proposals": 367,
+    "sha256": "a6ea8fbbdc5180a76df8cd0bdbce2dad7e408c567239a336d5e18497652e971f",
+    "shapes": {
+     "moved": 367
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/r2r_ladder_drawn.asc": {
+   "labels": {
+    "proposals": 311,
+    "sha256": "d44fcc6b743b3ec56194c98a8f813cb24032c0e773b40a75600ceeebc4b40b27",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 26,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 26,
+     "placed [ground; 1 at the point, 1 named]": 1,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 249,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 5,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 1
+    }
+   },
+   "moves": {
+    "proposals": 585,
+    "sha256": "c16ad6d9862ae5923b9caa25b1d88c0a0e0834a81e5d08659ab9d8cc377a43f2",
+    "shapes": {
+     "moved": 4,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 287,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 294
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/r2r_ladder_labelled.asc": {
+   "labels": {
+    "proposals": 312,
+    "sha256": "4bf5936b75421c7ec52fbbaefede6ff9d52f8a46858cdd428e8afc4860fe80b4",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 26,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 26,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 249,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "proposals": 593,
+    "sha256": "0665d3e8e162abc7f970948ac7488cac6c74578998871ab9c42a80b52b50b66f",
+    "shapes": {
+     "moved": 19,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 277,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 297
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/rc_lowpass_drawn.asc": {
+   "labels": {
+    "proposals": 60,
+    "sha256": "1dc55b9767af2e49fe933182c28f46a109a27ef5830ad2f6de05e04ecd158e24",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 10,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 8,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 10,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 10,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 10
+    }
+   },
+   "moves": {
+    "proposals": 73,
+    "sha256": "e10c5af0e7ec31443e4d4c4aa7c81024c4bdd437c1b84ed1a9c5639a5f8a2fb0",
+    "shapes": {
+     "moved": 11,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 22,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 40
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/rc_lowpass_labelled.asc": {
+   "labels": {
+    "proposals": 52,
+    "sha256": "ec22ed2bd7e3f093e44a3eaa46e858142530a27afe453eede807abab547f8693",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 8,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 8,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 69,
+    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "shapes": {
+     "moved": 69
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/rectifier_drawn.asc": {
+   "labels": {
+    "proposals": 60,
+    "sha256": "7119edf7734cd92d7f53c606fd33fc7a314f524b5fa05f22d4fcca6ccef0a466",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 10,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 8,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 10,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 10,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 10
+    }
+   },
+   "moves": {
+    "proposals": 73,
+    "sha256": "f620f5fb57d9fa052a620d837f40baddbd810d5ca6cf093e826f4d0c1a1f7564",
+    "shapes": {
+     "moved": 11,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 22,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 40
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/rectifier_labelled.asc": {
+   "labels": {
+    "proposals": 42,
+    "sha256": "27ee321e5f4793d22a9c8027e8faa3b74b926ed8b925752bb88a0f54e9c93aa3",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 9,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 9,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 9,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 67,
+    "sha256": "e957d4a7b68ec8b2bca91c59de90bdec1f408554ed665a64666e44304e6598f1",
+    "shapes": {
+     "moved": 29,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 38
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_drawn.asc": {
+   "labels": {
+    "proposals": 519,
+    "sha256": "2c9910e35f51cbcc690dec08df38de880a9e3d5afadde022539a5e15a2ab1d62",
+    "shapes": {
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 470,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 41
+    }
+   },
+   "moves": {
+    "proposals": 599,
+    "sha256": "517aa269f1c9a4ae9a744ee8ec8f577b02671cd9447bc25447de04ef868d0d9b",
+    "shapes": {
+     "moved": 3,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 184,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 412
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_labelled.asc": {
+   "labels": {
+    "proposals": 593,
+    "sha256": "5f7be7ed6e6650743f3f78caea49ccb019a6d8e58b9342585418e90be9f1c165",
+    "shapes": {
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 190,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 10,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 392
+    }
+   },
+   "moves": {
+    "proposals": 600,
+    "sha256": "1b677f0d23ceaa67078718b04a5e4af1bede3066d403595ec531aa071f9133b9",
+    "shapes": {
+     "moved": 600
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_drawn.asc": {
+   "labels": {
+    "proposals": 196,
+    "sha256": "d9a99a4af206ddb74aca915a713df7e6bdd1bf659e7a2c8df9abc7b76979b6b4",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 24,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 24,
+     "placed [ground; 1 at the point, 1 named]": 24,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 48,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 24,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 24,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 24
+    }
+   },
+   "moves": {
+    "proposals": 313,
+    "sha256": "3d693864a4736f7165d246e46cce05114b2269edbe6111067bab18c93fe2ada2",
+    "shapes": {
+     "moved": 14,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 79,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 134,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 86
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_labelled.asc": {
+   "labels": {
+    "proposals": 174,
+    "sha256": "0354d1c50d54958fd6fb6fa4970a3e538b886980a0ff40308243ed17d8655ecc",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 6,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 6,
+     "placed [ground; 1 at the point, 1 named]": 22,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 4,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 24,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 22,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 22,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 66
+    }
+   },
+   "moves": {
+    "proposals": 376,
+    "sha256": "443160d4234e789810eb73cee6841ca029dab4c01d4b1f2ce6736246bafd0e4b",
+    "shapes": {
+     "moved": 376
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_drawn.asc": {
+   "labels": {
+    "proposals": 425,
+    "sha256": "50b3dafb1923e33175952e5d5c1db9de4168477225ae4ac6f0432752e27d6459",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 29,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 31,
+     "placed [ground; 1 at the point, 1 named]": 29,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 5,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 149,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 30,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 31,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 119
+    }
+   },
+   "moves": {
+    "proposals": 586,
+    "sha256": "ad396b4f957d87242030daddc9fc683def63b9e6c533d0022e5d6b02c12deb2f",
+    "shapes": {
+     "moved": 91,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 152,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 235,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 108
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_labelled.asc": {
+   "labels": {
+    "proposals": 445,
+    "sha256": "b135035159997dc8711696c172188d821a6cb8d3d4c0dffaa43c9f846b12af2b",
+    "shapes": {
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 5,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 120,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 46,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 274
+    }
+   },
+   "moves": {
+    "proposals": 583,
+    "sha256": "eb0a543320ac9e3fb0b68d1383729f0bfcd5090346acdd64aab3d126c9dc2e04",
+    "shapes": {
+     "moved": 583
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_drawn.asc": {
+   "labels": {
+    "proposals": 76,
+    "sha256": "c097066e6bb60d2e3639fbac120a9fc8dc2fdabef1c18acf585d7c1fdbec5dbd",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 11,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 11,
+     "placed [ground; 1 at the point, 1 named]": 7,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 22,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 7,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 7,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 7
+    }
+   },
+   "moves": {
+    "proposals": 117,
+    "sha256": "ca3ac89e6ba894189083ff84c8cf6f6b63bbe616347d5bc579358489c33882d0",
+    "shapes": {
+     "moved": 13,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 46,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 58
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_labelled.asc": {
+   "labels": {
+    "proposals": 72,
+    "sha256": "2499e424db0dfdc743ed907d58d3557b7c0bac24c3b1b632471f2b362b1e4902",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 11,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 11,
+     "placed [ground; 1 at the point, 1 named]": 6,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 22,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 6,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 6
+    }
+   },
+   "moves": {
+    "proposals": 113,
+    "sha256": "36f27520a511ed192cea94e6b3cb85052966fcb6bf66f8e28a37feecbea2f58d",
+    "shapes": {
+     "moved": 41,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 72
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/vcvs_stage_drawn.asc": {
+   "labels": {
+    "proposals": 76,
+    "sha256": "52c528f6cfc6ee582d297e59ecc5b526de22199a725b84080cd5bdb6d7dce338",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 11,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 11,
+     "placed [ground; 1 at the point, 1 named]": 7,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 22,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 7,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 7,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 7
+    }
+   },
+   "moves": {
+    "proposals": 117,
+    "sha256": "0a500f2130ad5da5f1b33f2cb72fcb4fb10ffee771f4ae7b5ed3aed0edd28d0f",
+    "shapes": {
+     "moved": 13,
+     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 46,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 58
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/benchmark/vcvs_stage_labelled.asc": {
+   "labels": {
+    "proposals": 72,
+    "sha256": "9c84dea9ff05bb245731d3ce5536bd99d9a316e02ff1e970017fbd287db511c9",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 11,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 11,
+     "placed [ground; 1 at the point, 1 named]": 6,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already elsewhere; 1 at the point, 0 named]": 22,
+     "placed: '\u2026' already labels a net at (#,#); the netlist merges the two into one net (this is correct \u2014 a valid way to tie distant nets). Only a later wire_pins(net='\u2026') is ambiguous with duplicate labels \u2014 connect to a component pin (PIN) instead. [a name already here; 1 at the point, 1 named]": 6,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 6
+    }
+   },
+   "moves": {
+    "proposals": 113,
+    "sha256": "9e5fe9eb62fa3b97ed175ab4373d21e9d4f23402fda99cd45d9eabc125afe48e",
+    "shapes": {
+     "moved": 42,
+     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 71
     }
    }
   },

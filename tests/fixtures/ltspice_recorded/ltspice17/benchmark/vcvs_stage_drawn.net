@@ -1,0 +1,7 @@
+* C:\recording\vcvs_stage_drawn.asc
+E1 N001 0 in 0 2
+Vin in 0 AC 1
+RL out N001 10k
+.ac dec 10 1 1meg
+.backanno
+.end

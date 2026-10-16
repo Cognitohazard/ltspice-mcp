@@ -112,7 +112,7 @@ that is not built until the rule below has been met for it.
 | Open any sheet and keep every record of it | no: an unmodelled record is fatal, `DATAFLAG` is dropped | kicad-sch-api | 0 |
 | An edit leaves untouched records' bytes and order alone | no, the file is regrouped | kicad-sch-api | 0 |
 | An edit that only changes the drawing is shown to leave the circuit unchanged | no | not seen elsewhere | 0 |
-| A measured build benchmark | builds at scale are tested for completeness, not scored | none published | 0 |
+| A measured build benchmark | yes: `tests/test_build_benchmark.py` | none published | 0 |
 | Readability facts: crossings, bends, lengths, off-grid, alignment of named groups | no | eda-agent (crossings) | 1 |
 | Render: junction dots, text alignment, every visible attribute | partial | xuio (native capture) | 1 |
 | What changed between two revisions, as geometry | no | not seen elsewhere | shown first |
@@ -198,9 +198,9 @@ Each requirement names the capabilities that force it.
 11. **A benchmark.** Fixed netlists built through the tools, scored on
     equivalence, calls, refusals and the readability facts. *Forced by:* the
     need to tell whether a new op helps. The removed `occupancy` view was
-    decided by a measurement; this makes that the routine. It grows out of
-    `tests/test_ops_at_scale.py`, which already builds every archetype and
-    a 51-part ladder in one call and checks that each is complete.
+    decided by a measurement; this makes that the routine. It grew out of
+    the test that built every archetype and a 51-part ladder in one call and
+    checked that each was complete.
 12. **A sheet names its children.** A block symbol resolves to its sheet
     through the library, and nothing reads a child unless asked to. *Forced
     by:* blocks, and by what exists today: spicelib loads a block's sheet
@@ -676,6 +676,32 @@ suite never runs a model. The plan, as reviewed:
 
 Not in this step: running a model, readability facts as a server feature,
 and step 6's capture of every sheet the suite commits.
+
+*Done.* Eleven circuits, each with a `labelled` and a `drawn` build, all
+equivalent to their references with no refused op. What the record shows
+and what building it found:
+
+- A readable drawing costs the caller more arithmetic today: 78 coordinates
+  for the two-stage op amp drawn against 28 labelled, 32 against 12 for the
+  Sallen-Key. It reaches far fewer pins only by a label (10 against 32 and 0
+  against 11). Place-by-pin and route-by-shape are measured against these
+  numbers.
+- `wire_pins` will not end a wire at a free point, so a caller cannot draw a
+  short stub to put a port label on; the drawings label a pin or end the
+  stub on the route that uses it.
+- LTspice exports a transistor drawn with three pins with four nodes: a
+  MOSFET's fourth is its source's net, or a net of its own when the source
+  is unconnected, and a bipolar transistor's is ground. The scorer nets
+  sheets that way, held to the recordings; a reference may write the card
+  either way. Whether `netlist_graph`'s comparison should treat a
+  three-node card as the four-node one needs a recording of how LTspice
+  reads such a card.
+- Nothing measures text: two parts' value texts drawn over each other, or
+  a label's text across a part, pass every measure. That is the render
+  fidelity row of section 2.
+- The measures count what the drawings do, and no drawing yet has a
+  crossing or a four-way junction. Both are pinned by small sheets in the
+  test.
 
 ## 7. Decisions
 

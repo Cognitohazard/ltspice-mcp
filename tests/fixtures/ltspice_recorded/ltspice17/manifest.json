@@ -1,6 +1,820 @@
 {
   "build": "ltspice17",
   "cases": {
+    "benchmark/common_source_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/common_source_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/common_source_drawn.asc": "58d235ff0701aa0c081f3b48f79aa0dd9c74fb601ef80fb14bb8dabcb9eedbe9",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/common_source_drawn.net": {
+          "bytes": 298,
+          "sha256": "3565e8a2fd5d2604f0815f3840e2a6c4b22a4b6c5a02e5f145ff07930c62c32d"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/common_source_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/common_source_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/common_source_labelled.asc": "7ae31635e8cea0d69901ee32586bc3864d2aabc8ba41aaf0551ac1ef60df8c93",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/common_source_labelled.net": {
+          "bytes": 303,
+          "sha256": "6c13353171094402c7804ceb4675faa24f47ba1b335c1947e108a3230d3176e4"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/diff_pair_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/diff_pair_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diff_pair_drawn.asc": "c88321afee254ed6fcafabc866ec10d1d1d9bebd3f821d62fb7c72ec043d7c5a",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/diff_pair_drawn.net": {
+          "bytes": 370,
+          "sha256": "95c0f018270d94144da74c126143a9fc3cc6877cd14a332a83af88e93407e4bf"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/diff_pair_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/diff_pair_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diff_pair_labelled.asc": "40fef114bf33284bcf994ee6720cc2b87158a7bbb32129ecb39e662390f09257",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/diff_pair_labelled.net": {
+          "bytes": 373,
+          "sha256": "0a74eb2df7a5ee82a2e926886aaa4a55fbbb4aae7dc2273f36e900068348205c"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/nmos_mirror_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/nmos_mirror_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/nmos_mirror_drawn.asc": "c4456e2cf09211f6f0e2a6ee7c5fae685f2e8650301e2d35c1686245485fbffc",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/nmos_mirror_drawn.net": {
+          "bytes": 298,
+          "sha256": "c5058a38c16c43bba8fdf2492fa2d282e4d157ab4bfdea31aa0bf1829c7d21dd"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/nmos_mirror_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/nmos_mirror_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/nmos_mirror_labelled.asc": "eb8729a9d0120934d5b14d8f4383248fc7302cd8202119f189db780ffebac353",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/nmos_mirror_labelled.net": {
+          "bytes": 301,
+          "sha256": "8838c00133fcab414b3e98218ff4bf480eaf8221c3ab397922d3c3d70322e852"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/r2r_ladder_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/r2r_ladder_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/r2r_ladder_drawn.asc": "fc625f04186d5657ed1f331f499cc2abe06bd9e3c13cd4000dac6b8732d5aabb",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/r2r_ladder_drawn.net": {
+          "bytes": 925,
+          "sha256": "a10d9ceb5dea0675aa4b30de27ae16a499d64e2028098fd29e934e10246bd995"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/r2r_ladder_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/r2r_ladder_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/r2r_ladder_labelled.asc": "d9a4b93f219dda17134843bed0ae7a2d47d3d63a9019474f4ceaaa3aa5ac7364",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/r2r_ladder_labelled.net": {
+          "bytes": 928,
+          "sha256": "f8d6f2f51dad0d2bb2a27f6e9277d252c3deab087c38157f18f9f23461d57a09"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rc_lowpass_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/rc_lowpass_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rc_lowpass_drawn.asc": "30187c8ba89a435a2574ea11e0d3dd7a32f90ed3b34f514c28cd0346ada8ee6a",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rc_lowpass_drawn.net": {
+          "bytes": 117,
+          "sha256": "bd9bc65072b94d00685e3c5623dd52ff7991a011db664a1e89bf958561e15e57"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rc_lowpass_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/rc_lowpass_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rc_lowpass_labelled.asc": "0f1a1580d1511acfc1b1cbe01f0c77bdf7ff6cae7d45d48f7428cb384679d6e9",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rc_lowpass_labelled.net": {
+          "bytes": 120,
+          "sha256": "6da88c88e9530d7ebe881469ab5959fb515bcc6d90710ab1596c67fc4dbae2b1"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rectifier_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/rectifier_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rectifier_drawn.asc": "bc541fe802ebe82ec61face1d4e1ceb6f252e0aad6c95d0fc2bd756920a70a5e",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rectifier_drawn.net": {
+          "bytes": 215,
+          "sha256": "13b9db49129acb5a7e6c44d4e3b3ef68bb16d8fd8050c1ed8ef910fe0552dec5"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rectifier_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/rectifier_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/rectifier_labelled.asc": "304d87107f8eb92912a7d4dbfb0dcde7f8f3ee979d66932e8112ca8796a91853",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rectifier_labelled.net": {
+          "bytes": 220,
+          "sha256": "0079a79fbd8a18b86b97481f422211fd60e0fceb894bc12e291b4afbae96b98b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rlc_line_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/rlc_line_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/rlc_line_drawn.asc": "39532e94ee94df0bce6d5943acce4ca3e6380bf11645f7cb301083128242d26b",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rlc_line_drawn.net": {
+          "bytes": 2616,
+          "sha256": "5f3d5f6ada6058a8b8928d8a4afdf8b5505e881de222400f9f84fef6e0603e90"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/rlc_line_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/rlc_line_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/rlc_line_labelled.asc": "409d011ef1cb8cf96cab5416eb5e92b2366a4c0e2b4940e02373bb40bb943acd",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/rlc_line_labelled.net": {
+          "bytes": 2399,
+          "sha256": "e77d83dd5b9d9f15e8558dbbfd3d115b3e51408f0a3275fae3a747f8e1057144"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/sallen_key_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/sallen_key_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/sallen_key_drawn.asc": "be3ddd9ade1b3d25a3b29cc801f339c8ba8a9b34b9869fa21ca334cb0f9f0458",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/sallen_key_drawn.net": {
+          "bytes": 178,
+          "sha256": "201e4b55257fdd06b3101e03d1dc34690aec6abf0542a9d65a074ad61b84cb8d"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/sallen_key_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/sallen_key_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/sallen_key_labelled.asc": "f2159bc2175c6aaa03f83154bdcd8d0e163fc91b6e339a14d0da0d36ced3b919",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/sallen_key_labelled.net": {
+          "bytes": 163,
+          "sha256": "a0f0a44ece5bc5579199c384b117877e7778d658e4a654db577563db1ddad7c7"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/two_stage_opamp_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/two_stage_opamp_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/two_stage_opamp_drawn.asc": "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/two_stage_opamp_drawn.net": {
+          "bytes": 590,
+          "sha256": "8e1ce7dc71db87d046cd50cb15ab44eb6d8f7edab7da8f1a6edb5a8fb5685dc4"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/two_stage_opamp_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/two_stage_opamp_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/two_stage_opamp_labelled.asc": "adcad5f63545894caf1b80b1147decf2e98040f0fb78edd2914bbaa5c8217925",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/two_stage_opamp_labelled.net": {
+          "bytes": 569,
+          "sha256": "3f6555e38ebfff01e90755b9b1873b2143cb768b4ee8391c33a645530cee4440"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vccs_stage_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/vccs_stage_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vccs_stage_drawn.asc": "3a3d6c642e235a27980faf5535c1337e410433856bed474c39aef8c8610602b0",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vccs_stage_drawn.net": {
+          "bytes": 109,
+          "sha256": "d74e0b027d85e866d031a010521bd17f9b3618eb699e0c1efdaee4dafdecd932"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vccs_stage_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/vccs_stage_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vccs_stage_labelled.asc": "b15548d3f45f2da383410c4c57b81e7e50ccdb09310fdc84500adea2f47ebd9d",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vccs_stage_labelled.net": {
+          "bytes": 112,
+          "sha256": "325beaa07ba7bc314ce51292c96d64de191697a6480f1ae10c490de419210210"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vcvs_stage_drawn": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/vcvs_stage_drawn.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vcvs_stage_drawn.asc": "84b639fea906822922e1dd63a37747c22a91ebf5a43817f1a67a56a956e038c3",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vcvs_stage_drawn.net": {
+          "bytes": 123,
+          "sha256": "004d21ae51e3c8bcefeeb2e2700cfd149d942c42720382c1b96c84b1bbc08b6c"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "benchmark/vcvs_stage_labelled": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/vcvs_stage_labelled.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/vcvs_stage_labelled.asc": "51fd79e309dd2fc11c13d1e5fa3beae051b0c3c6a3a1599c9154e985aeaee063",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/vcvs_stage_labelled.net": {
+          "bytes": 126,
+          "sha256": "ae83ba808146ffcec7aea84491d777c46c4ae29bfaf65f27558cc163b2b955c3"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/bus_label": {
       "behaviour": "bus-labels",
       "command": [
