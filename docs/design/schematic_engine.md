@@ -600,8 +600,82 @@ what must hold before the next one starts.
    that set its symbol paths and cache move to the library; `docs/DESIGN.md`,
    `CLAUDE.md`, `mcp_surface.md` and the guide are brought in line.
 
-The benchmark (requirement 11) is built alongside steps 1 to 3, against the
-present engine, so that it has a baseline before any op changes.
+The benchmark (requirement 11) is built against the present engine, so that
+it has a baseline before any op changes, and lands before step 6. It serves
+three purposes: the bytes the present engine builds, which step 6's gate
+compares with; a model-free way to tell whether a new op helps, by building
+the same drawing with it and comparing; and a scorer that a comparison run
+with a model, outside the suite, applies to the sheet the model built. The
+suite never runs a model. The plan, as reviewed:
+
+1. **Corpus.** Reference netlists under `tests/fixtures/build_benchmark/`,
+   using only symbols the suite holds, so the benchmark runs without
+   LTspice: the four archetypes and the 51-part R-2R ladder of
+   `tests/test_ops_at_scale.py`, an RC low-pass, an NMOS current mirror, a
+   differential pair, a two-stage op amp, a Sallen-Key low-pass with a
+   controlled source as its amplifier, and a 150-part RLC line. Each file's
+   header lists the nodes a drawing must name; nothing is inferred from a
+   node's spelling. A `pmos4` symbol is added to the suite's symbols with
+   the pins both builds' manifests record.
+2. **Builds.** Each circuit has scripted builds: Python that computes
+   `edit_schematic` calls on a blank sheet, as a caller would in `run_code`.
+   A `labelled` build places parts with no layout and joins pins by labels,
+   except where two pins line up; `test_ops_at_scale.py`'s builds are these,
+   and the file is folded into the benchmark with its checks and its link to
+   `BUILD_ARCHETYPES`. A `drawn` build is the drawing a person would make
+   with the present ops: signal left to right, supplies above, ground
+   below, matched parts mirrored, wires between parts, and labels for
+   supplies, ground and ports. A new op gets a third build of the same
+   drawing.
+3. **Scorer** (`tests/_build_benchmark.py`, reading the built file through
+   `lib/sheet.py`):
+   - *Equivalence.* The sheet's `connectivity.signature`, with each pin
+     keyed by its reference and SpiceOrder, against the reference cards,
+     whose i-th node is the pin of SpiceOrder i. A resistor, capacitor or
+     inductor drawn either way round is the same circuit, as in
+     `netlist_graph`'s comparison. The reference's ground spellings fold to
+     `0`; on the sheet only the label `0` is ground. Names are compared
+     without case. Each part's value is compared with the text after the
+     card's nodes, and each directive must be on the sheet.
+   - *Cost.* Calls, ops, refused ops, and coordinates the caller wrote: two
+     for each part origin, waypoint, endpoint or label given as a point.
+     Reply bytes, with the working directory replaced and a fixed
+     `view_limit`, are reported and not held to the record, since any
+     change of wording moves them.
+   - *Drawing.* Each sheet rule's count of findings, and measures the rules
+     do not have, each a definition of this benchmark: a crossing, where
+     two wires meet at a point inside both with no pin or label there; a
+     four-way junction, a point with four wire arms (`build_wire_counter`);
+     a bend, a point with two wire arms not in line and no pin or label;
+     wire length in steps of 16; wire segments; points off the 16 grid;
+     pins reached only by a label, as the reply's `wiring` counts them,
+     with ground apart; and the drawing's extent. These stay in test code
+     and do not define the readability facts of section 2.
+4. **Record.** `tests/fixtures/build_benchmark_record.json` keeps every
+   score but reply bytes, and the digest of the sheet after each call. Each
+   build's final sheet is kept whole, as an input of the LTspice
+   recordings (item 5), and compared byte for byte: that is the baseline
+   step 6's gate needs. `LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1` records both
+   again. Every build must also commit with no refused op, be equivalent,
+   and have every part, directive and pin present; each build states the
+   findings it expects; and every `drawn` build reaches fewer pins only by
+   a label than its `labelled` build, which shows the measures tell the
+   two apart. Like the other records, it runs on the suite's symbols alone.
+5. **LTspice's netlister.** Each final sheet is an input of a new behaviour
+   in the recordings, exported by both builds with the suite's symbols
+   beside it. A hermetic test holds the scorer's signature of each sheet to
+   the cards both builds exported, pin for pin in SpiceOrder, and the
+   export to the reference through `netlist_graph`'s comparison. The
+   offline equivalence is then evidenced on the corpus on every run. The
+   sheets join the corpus of the four existing records, as every `.asc`
+   under `tests/` does.
+6. **Report.** `scripts/build_benchmark.py table` prints the record, one
+   row per circuit and build; `score <sheet> <netlist>` scores any sheet,
+   for a run with a model, and says which symbol library it read, since a
+   sheet built on LTspice's own symbols is not comparable with the record.
+
+Not in this step: running a model, readability facts as a server feature,
+and step 6's capture of every sheet the suite commits.
 
 ## 7. Decisions
 
