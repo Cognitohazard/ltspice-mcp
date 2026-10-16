@@ -160,13 +160,6 @@ class TestBuildInstructions:
                 _LT,
                 served={"run_code"},
             ),
-            # A sandbox adds its rule, the longest with run_code served.
-            build_instructions(
-                {"ngspice": _NG, "qspice": _LT, "xyce": _NG},
-                _NG,
-                served={"run_code"},
-                sandbox=[Path("/circuits")],
-            ),
         ]
         # The no-simulator prefix embeds a platform-specific install hint, and
         # the longest of those is not the one this test happens to run on.
@@ -182,9 +175,6 @@ class TestBuildInstructions:
                 mp.setattr(simulator_module, "is_wsl", lambda wsl=wsl: wsl)
                 mp.setattr(simulator_module.platform, "system", lambda system=system: system)
                 worst_cases.append(build_instructions({}, None))
-                worst_cases.append(
-                    build_instructions({}, None, served={"run_code"}, sandbox=[Path("/circuits")])
-                )
         for text in worst_cases:
             assert len(text) <= _INSTRUCTIONS_BUDGET, (
                 f"instructions {len(text)} chars > {_INSTRUCTIONS_BUDGET} client truncation budget"

@@ -42,7 +42,7 @@ class TestAllowedPathsShape:
 
 
 class TestSymbolPathsShape:
-    """[schematic] symbol_paths shares the allowed_paths guard."""
+    """[schematic] symbol_paths rejects a bare string; it is not read as one path."""
 
     @pytest.fixture(autouse=True)
     def no_symbol_path_override(self, monkeypatch: pytest.MonkeyPatch):

@@ -266,7 +266,7 @@ def stage_deck(
     stands_at = authored.parent / source.name if exported else source
     confined = allowed_roots is not None
     allowed = _resolved_roots(allowed_roots) if confined else [stands_at.parent]
-    roots = allowed + _resolved_roots(list(simulator_roots), required=False)
+    roots = allowed + _resolved_roots(simulator_roots)
     # Authored files are checked against ``allowed`` alone — a prefix of
     # ``roots``, so the index means the same thing in both — which is what
     # keeps the simulator's library a place references may POINT, never a
@@ -365,14 +365,12 @@ def stage_deck(
             for reference in scan_include_references(parsed.cards, anchor, depth=depth):
                 target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
-                target_root = (
-                    _containing_root(target_resolved, roots)
-                    if target_resolved is not None
-                    else None
-                )
-                if target_root is None and target_resolved is not None and not confined:
-                    roots.append(target_resolved.parent)
-                    target_root = len(roots) - 1
+                target_root = None
+                if target_resolved is not None:
+                    target_root = _containing_root(target_resolved, roots)
+                    if target_root is None and not confined:
+                        roots.append(target_resolved.parent)
+                        target_root = len(roots) - 1
                 reason = _unstaged_reason(
                     target,
                     target_resolved,
@@ -659,11 +657,7 @@ def verify_staged_manifest(manifest: list[ManifestEntry]) -> list[dict[str, Any]
     return observations
 
 
-def _resolved_roots(roots: list[Path], *, required: bool = True) -> list[Path]:
-    if not roots:
-        if required:
-            raise DeckStagingError("include_unstaged", "No allowed roots are configured")
-        return []
+def _resolved_roots(roots: Sequence[Path]) -> list[Path]:
     resolved = []
     for root in roots:
         try:

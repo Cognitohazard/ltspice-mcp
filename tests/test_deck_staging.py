@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,35 @@ class TestManifestWalk:
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
             stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+    def test_with_no_sandbox_every_file_the_deck_reaches_is_staged(self, tmp_path: Path):
+        """A library beside the deck's folder, one reached through it, and one
+        named by an absolute path are all copied and hashed, and the staged
+        deck reads the copies."""
+        models = tmp_path / "models"
+        top = _write(models / "top.lib", ".include sub.inc\n")
+        sub = _write(models / "sub.inc", ".model D D\n")
+        other = _write(tmp_path / "vendor" / "other.inc", ".param x=1\n")
+        deck = _write(
+            tmp_path / "bench" / "deck.cir",
+            f'V1 a 0 1\n.include ../models/top.lib\n.include "{other}"\n.op\n.end\n',
+        )
+
+        staged = stage_deck(deck, tmp_path / "stage", None, origin=deck)
+
+        by_source = {entry.path: entry for entry in staged.manifest}
+        for source in (deck, top, sub, other):
+            entry = by_source[source.resolve()]
+            assert entry.staged and not entry.live, source
+            assert entry.sha256 == hashlib.sha256(source.read_bytes()).hexdigest(), source
+            assert entry.staged_path is not None and entry.staged_path.is_file(), source
+        # The deck's copy is rewritten to read the copies; the libraries are not.
+        for source in (top, sub, other):
+            staged_path = by_source[source.resolve()].staged_path
+            assert staged_path is not None and staged_path.read_bytes() == source.read_bytes()
+        assert not staged.observations
+        text = staged.staged_deck.read_text(encoding="utf-8")
+        assert str(models) not in text and str(other) not in text
 
     def test_allow_live_include_marks_manifest_and_observation(self, tmp_path: Path):
         root = tmp_path / "root"

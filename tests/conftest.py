@@ -1188,23 +1188,20 @@ def project_dir(work_dir: Path) -> Path:
 
 
 @pytest.fixture
-def config(work_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> ServerConfig:
+def config(work_dir: Path) -> ServerConfig:
     """ServerConfig pointing at tmp working directory, sandboxed to it.
 
-    The sandbox is in the config file as well as here: a session re-reads its
-    sandbox from that file whenever the file changes, and the first tool call
-    writes a default config where there is none, which sets no sandbox. The
-    file is kept out of the working directory, whose contents tests inspect.
+    Its config file is one nothing writes (``write_config`` off, and outside
+    the working directory, whose contents tests inspect): a session re-reads
+    its sandbox from that file whenever the file changes, so the sandbox stays
+    the one given here.
     """
-    config_path = tmp_path_factory.mktemp("config") / "ltspice-mcp.toml"
-    config_path.write_text(
-        f"[security]\nallowed_paths = ['{work_dir.as_posix()}']\n", encoding="utf-8"
-    )
     return ServerConfig(
         working_dir=work_dir,
         allowed_paths=[work_dir],
         log_level="DEBUG",
-        config_path=config_path,
+        config_path=work_dir.parent / f"{work_dir.name}.ltspice-mcp.toml",
+        write_config=False,
     )
 
 
