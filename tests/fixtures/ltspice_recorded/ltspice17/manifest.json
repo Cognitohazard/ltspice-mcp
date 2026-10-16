@@ -1632,6 +1632,39 @@
         ".raw"
       ]
     },
+    "deck/bjt_three_node": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/bjt_three_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/bjt_three_node.cir": "304a5c22d68c8d8e70cf977cf4206fca9a1ce75ba4c03db292de83287377b9bd"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/bjt_three_node.log": {
+          "bytes": 450,
+          "sha256": "8868b065fe46254203c92f9a1588ca9846a973702e044a4000683e40a89e3551"
+        },
+        "deck/bjt_three_node.raw": {
+          "bytes": 21888,
+          "sha256": "bdb7b9bc0cedf9cf44adabc4428c143d0a6fdc613ed19c4fe319d07b9f5deb90"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/bsource_p": {
       "behaviour": "deck-forms",
       "command": [
@@ -2617,6 +2650,39 @@
         ".raw"
       ]
     },
+    "deck/mos_three_node": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_three_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_three_node.cir": "da285542c9d14ddc6ea21f9ff7170aaaad29591e202ea5c2d8740508b17d3237"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_three_node.log": {
+          "bytes": 426,
+          "sha256": "13d3fb2e1ac8d4cf4d1fd444dc012f6b55c8a60f398230719004dc08dd4e1b52"
+        },
+        "deck/mos_three_node.raw": {
+          "bytes": 9262,
+          "sha256": "64c44e6c94aab8f14c05e66349a215b6c8c6bc0d7e830d07bcdf479877faca86"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/no_end": {
       "behaviour": "deck-structure",
       "command": [
@@ -3202,6 +3268,66 @@
         "deck/tran_zero_step.log": {
           "bytes": 372,
           "sha256": "d1903a7cf79fd10e93062b7c5b6d24576998212ea3b5d6c328716128d133818f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/vdmos_bulk_elsewhere": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/vdmos_bulk_elsewhere.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/vdmos_bulk_elsewhere.cir": "4c85aec637aa1e2238e0469008a84990c18c0e5d7d5f1b6f17d4dce40802520c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/vdmos_bulk_elsewhere.log": {
+          "bytes": 350,
+          "sha256": "96337f2f2b435edb247ecbb050e8f1c1d0b2af915f18e011020365f73f70702e"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/vdmos_three_node": {
+      "behaviour": "three-node-transistors",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/vdmos_three_node.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/vdmos_three_node.cir": "21fb9769e89aea278f1e4cc1531d88002ff716bb97c4c65c9d0e7e31537bed2a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/vdmos_three_node.log": {
+          "bytes": 439,
+          "sha256": "f0d0d617a6122134befa3ff494d3ddf82fe769251f24bf3a67cf5756eb57064b"
+        },
+        "deck/vdmos_three_node.raw": {
+          "bytes": 5750,
+          "sha256": "76f715dc180f0fac88474d403be6e7ca7a57c646639f92c4ba106f7bcda3a1fd"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

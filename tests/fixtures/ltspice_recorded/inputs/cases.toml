@@ -299,6 +299,21 @@ model = ["lib/deck_staging.py", "lib/lint_rules.py", "lib/runner_base.py"]
 inputs = ["deck/lib_section.cir", "deck/include_relative.cir"]
 extra = ["deck/corners.lib", "deck/models.inc"]
 
+[behaviour.three-node-transistors]
+summary = "How a transistor card with three nodes is read, against the four nodes an export writes for a three-pin symbol: an M card's bulk (level 1 and VDMOS) and a Q card's substrate."
+model = ["lib/netlist_graph.py", "assets/guide/schematics.md"]
+# Each deck holds a three-node card, the four-node card an export would write
+# for it (bulk at the source, substrate at ground), and one with that node
+# elsewhere. The raw shows which of the two the three-node card ran as. A
+# VDMOS card whose bulk is not its source is refused, so it has a deck of its
+# own.
+inputs = [
+    "deck/mos_three_node.cir",
+    "deck/bjt_three_node.cir",
+    "deck/vdmos_three_node.cir",
+    "deck/vdmos_bulk_elsewhere.cir",
+]
+
 # ---------------------------------------------------------------- raw files
 
 [behaviour.raw-transient]
