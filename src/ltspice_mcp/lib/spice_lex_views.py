@@ -632,6 +632,20 @@ class InstanceLine:
         self._model_token = None
         self._param_tokens.clear()
 
+    def param_pairs(self) -> list[tuple[str, str]]:
+        """Every ``key=value`` on the card as it now reads, in order, a key the
+        card names twice listed twice. ``params`` keeps one value per key, so
+        it cannot say that a card gives a parameter more than once."""
+        pairs: list[tuple[str, str]] = []
+        for tok in tokenize_body(self.card.body)[1:]:
+            if tok.kind == TokenKind.COMMENT_TRAIL:
+                break
+            if tok.kind == TokenKind.KEY_VALUE:
+                assert tok.key is not None
+                assert tok.value is not None
+                pairs.append((tok.key, tok.value))
+        return pairs
+
     def get_param(self, key: str) -> str | None:
         """Case-insensitive parameter read, matching the CI semantics of
         ``set_param``/``remove_param``. ``params`` preserves source casing

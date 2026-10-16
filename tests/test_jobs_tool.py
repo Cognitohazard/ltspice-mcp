@@ -1055,7 +1055,8 @@ class TestReceiptSnapshotCoherence:
         lean = project_receipt_runs(snapshot, None, lean_default=True)
 
         assert set(projected["items"][0]) == {"case_id", "assignments"}
-        assert "raw" not in lean["items"][0] and "log" not in lean["items"][0]
+        assert "raw" in lean["items"][0] and "log" in lean["items"][0]
+        assert "simulator_version" not in lean["items"][0]
         assert snapshot.runs_by_key == original
         assert "raw" in next(iter(snapshot.runs_by_key.values()))
 
