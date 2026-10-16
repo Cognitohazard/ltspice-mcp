@@ -202,8 +202,16 @@ class Symbol(_Record):
         return self.attr("InstName") or ""
 
     def attr(self, name: str) -> str | None:
-        """The value of attribute ``name``, or ``None`` when the symbol has no such line."""
-        return next((value for key, value in self.attrs if key == name), None)
+        """The value of attribute ``name``, or ``None`` when the symbol has no such line.
+
+        A repeated attribute reads as its last line, as spicelib's editor and a
+        symbol file (``SymbolFile.attr``) read one.
+        """
+        return next((value for key, value in reversed(self.attrs) if key == name), None)
+
+    def attributes(self) -> dict[str, str]:
+        """Every attribute by name, each the last of its name, in file order."""
+        return dict(self.attrs)
 
     def with_attr(self, name: str, value: str) -> Symbol:
         """A copy with attribute ``name`` set: replaced where it is, else added last."""
@@ -622,8 +630,17 @@ def parse_asc(data: bytes) -> AscDocument:
         text, encoding = decode_spice_bytes_strictly(data)
     except UnicodeError as exc:
         raise NetlistError(f"the sheet is not readable text: {exc}") from exc
+    return parse_asc_text(text, encoding, bom_of(data))
+
+
+def parse_asc_text(text: str, encoding: str = "utf-8", bom: bytes = b"") -> AscDocument:
+    """Read a sheet already decoded to ``text``.
+
+    ``encoding`` and ``bom`` say how the document is written back; they do not
+    change how it reads.
+    """
     lines = _LINE.findall(text)
     endings = Counter(line[len(_body(line)) :] for line in lines)
     endings.pop("", None)
     newline = endings.most_common(1)[0][0] if endings else "\n"
-    return AscDocument(tuple(_read(lines)), encoding=encoding, bom=bom_of(data), newline=newline)
+    return AscDocument(tuple(_read(lines)), encoding=encoding, bom=bom, newline=newline)

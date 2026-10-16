@@ -36,13 +36,14 @@ from ltspice_mcp.lib.runner_base import (
     inject_ngspice_control_write as inject_ngspice_control_write,
 )
 from ltspice_mcp.lib.schematic_renderer import render_svg
-from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
+from ltspice_mcp.lib.schematic_scene import Scene, default_stock_paths
 from ltspice_mcp.lib.sheet_findings import RULES as SHEET_RULES
 from ltspice_mcp.lib.simulator import (
     family_refusal,
     no_simulator_message,
     simulator_family,
 )
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._schema import (
     ToolInput,

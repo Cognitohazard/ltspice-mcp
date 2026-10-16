@@ -1294,3 +1294,161 @@ async def test_symbol_reports_what_an_instance_netlists_with(
         "Description": "Schmitt trigger buffer",
     }
     assert data["description"] == "Schmitt trigger buffer"
+
+
+class TestAReadDuringAnEdit:
+    """An edit changes the schematic editor it holds before it commits, and
+    awaits its findings and its commit on the way. A read of the sheet in that
+    window reads the file, not the edit in progress."""
+
+    @staticmethod
+    async def _while_an_edit_waits(
+        state: SessionState,
+        sheet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        query: dict,
+        ops: list[dict] | None = None,
+    ) -> dict:
+        import threading
+
+        from ltspice_mcp.tools import schematic_edit
+        from tests._asc_ops import apply_ops, inspect_one
+        from tests.conftest import LIVENESS_S
+
+        reached, release = threading.Event(), threading.Event()
+        original = schematic_edit._findings_before_and_after  # pyright: ignore[reportPrivateUsage]
+
+        def held(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+            reached.set()
+            assert release.wait(LIVENESS_S)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(schematic_edit, "_findings_before_and_after", held)
+
+        async def edit() -> dict:
+            edits = ops or [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"}]
+            return await apply_ops(state, sheet, edits)
+
+        async def read() -> dict:
+            try:
+                assert await asyncio.to_thread(reached.wait, LIVENESS_S)
+                return await inspect_one(state, query)
+            finally:
+                release.set()
+
+        edited, read_back = await asyncio.gather(edit(), read())
+        assert edited["commit_state"] == "committed"
+        return read_back
+
+    async def test_a_net_trace_shows_the_file(
+        self, asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests._asc_ops import build_sheet
+
+        add = {"op": "add_component", "symbol": "res", "y": 100}
+        await build_sheet(
+            asc_state,
+            "mid_edit",
+            [{**add, "reference": "R1", "x": 100}, {**add, "reference": "R2", "x": 300}],
+        )
+        sheet = work_dir / "mid_edit.asc"
+        traced = await self._while_an_edit_waits(
+            asc_state, sheet, monkeypatch, {"kind": "net", "path": str(sheet), "at": "R1.1"}
+        )
+        assert [pin["reference"] for pin in traced["pins"]] == ["R1"]
+
+    async def test_a_component_listing_shows_the_file(
+        self, asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests._asc_ops import build_sheet
+
+        add = {"op": "add_component", "symbol": "res", "y": 100}
+        await build_sheet(
+            asc_state,
+            "mid_edit_parts",
+            [{**add, "reference": "R1", "x": 100}, {**add, "reference": "R2", "x": 300}],
+        )
+        sheet = work_dir / "mid_edit_parts.asc"
+        listed = await self._while_an_edit_waits(
+            asc_state,
+            sheet,
+            monkeypatch,
+            {"kind": "components", "path": str(sheet)},
+            [{**add, "reference": "R3", "x": 500}],
+        )
+        assert [row["reference"] for row in listed["components"]] == ["R1", "R2"]
+
+
+class TestAComponentListing:
+    async def test_its_attributes_are_the_parts_own_attribute_lines(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        """A WINDOW line places a part's text; it is not one of its attributes."""
+        from tests._asc_ops import inspect_one
+
+        sheet = work_dir / "windows.asc"
+        sheet.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL res 96 96 R0\nWINDOW 0 36 40 Left 2\n"
+            "WINDOW 3 36 76 Left 2\nSYMATTR InstName R1\nSYMATTR Value 1k\n"
+            "SYMATTR SpiceLine tol=5\n",
+            encoding="utf-8",
+        )
+        listed = await inspect_one(asc_state, {"kind": "components", "path": str(sheet)})
+        assert listed["components"] == [
+            {"reference": "R1", "value": "1k", "attributes": {"SpiceLine": "tol=5"}}
+        ]
+
+    async def test_two_parts_of_one_reference_are_both_listed(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        from tests._asc_ops import inspect_one
+
+        sheet = work_dir / "twice.asc"
+        sheet.write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL res 96 96 R0\nSYMATTR InstName R1\n"
+            "SYMATTR Value 1k\nSYMBOL res 300 96 R0\nSYMATTR InstName R1\nSYMATTR Value 2k\n",
+            encoding="utf-8",
+        )
+        listed = await inspect_one(
+            asc_state, {"kind": "components", "path": str(sheet), "detail": "full"}
+        )
+        assert [
+            (row["reference"], row["value"], row["position"]) for row in listed["components"]
+        ] == [
+            ("R1", "1k", {"x": 96, "y": 96}),
+            ("R1", "2k", {"x": 300, "y": 96}),
+        ]
+
+
+class TestASheetReadOncePerCall:
+    async def test_every_query_of_a_call_on_one_sheet_reads_it_once(
+        self, asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing symbol is looked for through the whole library each time a
+        sheet is read, so a call of many queries reads its sheet once."""
+        from tests._asc_ops import build_sheet
+
+        add = {"op": "add_component", "symbol": "res", "y": 100}
+        await build_sheet(
+            asc_state,
+            "read_once",
+            [{**add, "reference": "R1", "x": 100}, {**add, "reference": "R2", "x": 300}],
+        )
+        sheet = str(work_dir / "read_once.asc")
+        reads: list[Path] = []
+        original = insp.read_sheet_file
+
+        def counted(path: Path) -> typing.Any:
+            reads.append(path)
+            return original(path)
+
+        monkeypatch.setattr(insp, "read_sheet_file", counted)
+        queries = [{"kind": "components", "path": sheet}]
+        queries += [{"kind": "net", "path": sheet, "at": at} for at in ("R1.1", "R1.2", "R2.1")]
+        reply = await handle_inspect(InspectInput.model_validate({"queries": queries}), asc_state)
+        assert reply.structured_content is not None
+        assert reply.structured_content["ok_count"] == 4
+        assert len(reads) == 1
+        # A later call reads it again: nothing is kept between calls.
+        await handle_inspect(InspectInput.model_validate({"queries": queries[:1]}), asc_state)
+        assert len(reads) == 2

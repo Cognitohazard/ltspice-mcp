@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
-from spicelib import AscEditor, SpiceEditor
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
 from ltspice_mcp.lib import recent
@@ -52,7 +51,6 @@ from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-Editor = AscEditor | SpiceEditor
 T = TypeVar("T")
 
 
@@ -988,83 +986,6 @@ _CONVERGENCE_FLAG_SUBSTRINGS: tuple[str, ...] = (
 # — a 400-run Monte Carlo where most runs trip a gmin/source-stepping marker
 # would re-ship ~400 near-identical objects per poll.
 _CONVERGENCE_STRUCTURED_CAP = 25
-
-
-def asc_component_value(editor: AscEditor, ref: str) -> str:
-    """Return a component's primary value from its ``Value`` SYMATTR only.
-
-    Spicelib's ``editor.get_component_value`` concatenates ``Value`` and
-    ``Value2`` into a single space-separated string, which then collides
-    with the ``attributes: {Value2: ...}`` map that downstream tools also
-    surface. Read ``Value`` alone here and let ``Value2`` stay in
-    the attributes map without duplication.
-    """
-    comp = editor.components.get(ref)
-    if comp is None:
-        # Fall back to spicelib's lookup so the "component not found"
-        # error path is spicelib's own.
-        return editor.get_component_value(ref)
-    val = (comp.attributes or {}).get("Value", "")
-    return str(val) if val is not None else ""
-
-
-def asc_component_attributes(comp: Any) -> dict[str, str]:
-    """Non-default SYMATTRs of an .asc component as a plain string dict.
-
-    Filters ``Value``/``InstName`` (surfaced separately) and empty values.
-    spicelib stores some attribute values as ``Text`` records rather than
-    strings — those are not JSON-serializable and violate the string-typed
-    output schemas, so coerce every value to its payload string.
-    """
-    return {
-        k: str(getattr(v, "text", v))
-        for k, v in (comp.attributes or {}).items()
-        if k not in ("Value", "InstName") and v
-    }
-
-
-def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
-    """Extract structured schematic data from an ``AscEditor``."""
-    components = editor.get_components()
-    comp_data = []
-    for ref in components:
-        value = asc_component_value(editor, ref)
-        pos, rot = editor.get_component_position(ref)
-        rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
-        # Surface non-default SYMATTRs (e.g., SpiceLine, SpiceModel) so
-        # callers don't need a per-component component_info round-trip.
-        attrs = asc_component_attributes(editor.components[ref])
-        entry = {"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str}
-        if attrs:
-            entry["attributes"] = attrs
-        comp_data.append(entry)
-
-    label_data = [
-        {"text": lbl.text, "x": int(lbl.coord.X), "y": int(lbl.coord.Y)} for lbl in editor.labels
-    ]
-    directive_data = [directive.text for directive in editor.directives]
-
-    # Surface each wire segment's endpoints so callers can target a specific
-    # wire for removal (the edit_schematic remove_wire op) without re-deriving it.
-    wire_data = [
-        {
-            "x1": int(w.V1.X),
-            "y1": int(w.V1.Y),
-            "x2": int(w.V2.X),
-            "y2": int(w.V2.Y),
-        }
-        for w in editor.wires
-    ]
-
-    return {
-        "file": str(file_path),
-        "type": "asc",
-        "components": comp_data,
-        "labels": label_data,
-        "wires": wire_data,
-        "wire_count": len(editor.wires),
-        "directives": directive_data,
-    }
 
 
 def extract_netlist_info(file_path: Path) -> dict[str, Any]:

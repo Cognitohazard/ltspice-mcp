@@ -87,11 +87,11 @@ opaque, checksummed ``cursor``; a ``.asc`` ``net`` pages two collections — pin
 and wire-vertex coordinates — under that one cursor, each advancing by its own
 offset, so paging until ``next_cursor`` is null reaches every row of both.
 
-Concurrency discipline (see the contract in ``tools/_base.py``): cached
-``AscEditor`` access (the ``.asc`` net and component paths) stays on the event
-loop; only immutable parsing (netlist lexing, ``.asy`` and ``.lib`` parses,
-symbol-directory walks) is offloaded to a worker thread. Every response is built
-in the handler coroutine.
+Concurrency discipline (see the contract in ``tools/_base.py``): reading and
+parsing (an ``.asc`` read into a ``sheet.Sheet``, netlist lexing, ``.asy`` and
+``.lib`` parses, symbol-directory walks) runs in a worker thread. An ``.asc`` is
+read once per call, however many of its queries ask about it
+(``_sheet_of_file``). Every response is built in the handler coroutine.
 """
 
 from __future__ import annotations
@@ -102,6 +102,7 @@ import hashlib
 import sys
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias, overload
@@ -131,6 +132,7 @@ from ltspice_mcp.lib import (
     services,
     simulator_docs,
 )
+from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
@@ -139,7 +141,6 @@ from ltspice_mcp.lib.connectivity import (
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
-from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
@@ -158,17 +159,13 @@ from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
-    get_asc_editor,
     named_labels,
-    net_partition,
     netlist_card_value,
-    placed_geometry,
     require_asc,
-    resolve_pin,
-    wire_segments_of,
     wires_of_one_net,
 )
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
+from ltspice_mcp.lib.schematic_scene import default_stock_paths
+from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -185,6 +182,7 @@ from ltspice_mcp.lib.simulator_build import (
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
@@ -228,6 +226,32 @@ class TraceNetInput(ToolInput):
         default=None,
         description=FORMAT_DESCRIPTION,
     )
+
+
+#: The sheets one ``inspect`` call has read, by path and file stamp, each with
+#: the digest of the bytes it was read from: the queries of one call on one sheet
+#: read and parse it once. ``handle_inspect`` sets it for the call; with none
+#: set, every read is a fresh one.
+_SHEETS_READ: ContextVar[dict[tuple[str, object], tuple[Sheet, str]] | None] = ContextVar(
+    "_SHEETS_READ", default=None
+)
+
+
+async def _sheet_of_file(path: Path) -> tuple[Sheet, str]:
+    """The sheet at ``path`` and the SHA-256 of the bytes it was read from.
+
+    Read from the file, never from the editor an edit in progress may be
+    changing, and off the event loop. The digest is the edit token
+    ``edit_schematic`` takes as ``expected_sha256``, of exactly the bytes the
+    answer describes.
+    """
+    memo = _SHEETS_READ.get()
+    if memo is None:
+        return await asyncio.to_thread(read_sheet_file, path)
+    key = (str(path), await asyncio.to_thread(stamps.file_stamp, str(path)))
+    if key not in memo:
+        memo[key] = await asyncio.to_thread(read_sheet_file, path)
+    return memo[key]
 
 
 @declare_output_schema(
@@ -281,21 +305,22 @@ class TraceNetInput(ToolInput):
     }
 )
 async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.CallToolResult:
-    """Trace every pin/label/wire vertex on the net at a pin, label, or (x,y)."""
+    """Trace every pin/label/wire vertex on the net at a pin, label, or (x,y).
+
+    The sheet is read from the file, never from the editor an edit in progress
+    may be changing, so a trace shows what the file holds.
+    """
     asc_path = safe_path(args.path, state)
     require_asc(asc_path)
-    editor = get_asc_editor(asc_path, state)
+    sheet, _digest = await _sheet_of_file(asc_path)
 
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
-        # normal case on label-wired schematics (one FLAG per pin).
-        # resolve_pin refuses ambiguous net labels, but trace_net's own
-        # name-merge step below absorbs duplicates, so just seed from any
+        # normal case on label-wired schematics (one FLAG per pin). The trace's
+        # own name-merge step below absorbs duplicates, so seed from any
         # matching label coordinate (lowest, for determinism).
         net_name = args.pin[4:]
-        matches = sorted(
-            (int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels if lbl.text == net_name
-        )
+        matches = sorted((x, y) for x, y, name in sheet.labels if name == net_name)
         if not matches:
             raise NetlistError(
                 f"Net label '{net_name}' not found in schematic. Add it with the "
@@ -304,13 +329,14 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             )
         x, y = matches[0]
     elif args.pin is not None:
-        x, y = resolve_pin(args.pin, editor)
+        x, y = sheet.pin_at(args.pin)
     elif args.x is not None and args.y is not None:
         x, y = args.x, args.y
     else:
         raise NetlistError("inspect(kind='net') needs either 'pin' or both 'x' and 'y'.")
 
-    part = net_partition(editor)
+    part = sheet.partition()
+    wires = list(sheet.wires)
     start = (x, y)
 
     # The physical partition connects by wire only; LTspice also makes FLAGs
@@ -324,9 +350,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         # No pin, label or wire end sits here. A point on a wire's interior is
         # still on that wire's net, since LTspice joins anything placed there,
         # so trace from the wire's end and say so.
-        through = wires_of_one_net(
-            start, wire_segments_of(editor), net_of, "Trace from an end of the wire you mean."
-        )
+        through = wires_of_one_net(start, wires, net_of, "Trace from an end of the wire you mean.")
         if not through:
             raise NetlistError(
                 f"Nothing found at ({x},{y}): no component pin, net label or wire "
@@ -354,11 +378,14 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     # LTspice will actually netlist. Surface each dropped segment on this net as
     # a fact (not a verdict) — the model decides whether the tie was intended.
     net_segments = [
-        s
-        for s in wire_segments_of(editor)
-        if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
+        s for s in wires if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
     ]
-    warnings = [
+    warnings = sheet.unread_notes(
+        "this trace",
+        "anything it connects is not followed",
+        "anything they connect is not followed",
+    )
+    warnings += [
         f"{d['ref']}.{d['pins'][0]} and {d['ref']}.{d['pins'][1]} are joined by a "
         f"wire between two pins of the same component; LTspice drops that wire from "
         f"the netlist, so this connection may not exist in simulation. Reroute the "
@@ -397,9 +424,6 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         lines.append(f"  WARNING: {w}")
     return format_response("\n".join(lines), data, args.format)
 
-
-# The .asc net and component paths share lib/schematic_ops.py's cached editor —
-# the same object an edit mutates, so a read never sees a stale sheet.
 
 # Fixed server-side page size for the paginated kinds. The A.5 query specs list
 # a cursor but no caller-facing limit knob, so the page is a server constant.
@@ -1366,21 +1390,6 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
     return at
 
 
-async def _asc_digest(path: Path) -> str:
-    """The sheet's SHA-256 — the edit token ``edit_schematic`` takes as
-    ``expected_sha256``.
-
-    Read tools are where a caller gets it alongside the content it describes;
-    ``edit_schematic``'s own refusals also report the target's current digest,
-    so a caller who edits without reading first still recovers in one retry.
-    Taken BEFORE the rows are read, so the digest can never be
-    newer than the content reported alongside it — a token from the future
-    would let an edit made against stale rows commit, while a stale token only
-    conflicts, which is the safe direction.
-    """
-    return await asyncio.to_thread(sha256_file, path)
-
-
 def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     """Classify a resolved circuit ``path`` as an ``.asc`` schematic or a netlist.
 
@@ -1477,9 +1486,8 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
             "page": _page_meta(page, "members"),
         }
 
-    # .asc: geometric trace via trace_net internals. The cached AscEditor is
-    # touched only on the event loop, so this runs inline (never offloaded).
-    digest = await _asc_digest(path)
+    # .asc: a geometric trace of the sheet as the file holds it.
+    _sheet, digest = await _sheet_of_file(path)
     trace_input = _trace_input_for(q.path, q.at)
     trace = await handle_trace_net(trace_input, state)
     tdata = trace.structured_content or {}
@@ -1595,31 +1603,28 @@ def _components_netlist_payload(
     return rows, _lex_warnings(lexed)
 
 
-def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict[str, Any]]:
-    """Build per-component detail for a page of .asc references (editor on loop)."""
-    rows: list[dict[str, Any]] = []
-    for ref in refs:
-        try:
-            value = services.asc_component_value(editor, ref)
-        except Exception:
-            value = "<unparseable>"
-        entry: dict[str, Any] = {"reference": ref, "value": value}
-        comp = editor.components.get(ref)
-        if comp is not None:
-            attrs = services.asc_component_attributes(comp)
-            if attrs:
-                entry["attributes"] = attrs
-            if detail == "full":
-                pos, erot = editor.get_component_position(ref)
-                entry["symbol"] = comp.symbol
-                entry["position"] = {"x": pos.X, "y": pos.Y}
-                entry["rotation"] = erot.name if erot else "R0"
-                geom = placed_geometry(editor, ref)
-                if geom is not None:
-                    entry["pins"] = geom["pins"]
-                    entry["bounding_box"] = geom["bounding_box"]
-        rows.append(entry)
-    return rows
+def _component_row(part: SheetPart, detail: str) -> dict[str, Any]:
+    """One part of a sheet as the components listing shows it.
+
+    ``attributes`` holds the part's ``SYMATTR`` lines other than its name and
+    value, each the last of its name, and only those with a value.
+    """
+    row: dict[str, Any] = {"reference": part.reference, "value": part.attribute("Value") or ""}
+    attributes = {
+        name: value
+        for name, value in part.record.attributes().items()
+        if name not in ("Value", "InstName") and value
+    }
+    if attributes:
+        row["attributes"] = attributes
+    if detail == "full":
+        row["symbol"] = part.symbol_name
+        row["position"] = {"x": part.at[0], "y": part.at[1]}
+        row["rotation"] = part.rotation
+        if part.box is not None:
+            row["pins"] = [pin.as_dict() for pin in part.pins]
+            row["bounding_box"] = part.box.to_origin_size_dict()
+    return row
 
 
 async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
@@ -1634,19 +1639,16 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     lex_notes: list[str] = []
 
     if _route_circuit_kind(path, "components") == "asc":
-        digest = await _asc_digest(path)
-        # Cached editor + component reads stay on the event loop.
-        editor = get_asc_editor(path, state)
-        try:
-            refs = sorted(editor.get_components())
-        except Exception as exc:
-            raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        # Filtered here as in the netlist branch: spicelib's prefix filter reads
-        # its argument as a set of case-sensitive first letters (docs/spicelib_bugs.md).
+        sheet, digest = await _sheet_of_file(path)
+        # By reference; two parts of one reference both listed, in file order.
+        parts = sorted(sheet.parts, key=lambda part: part.reference)
         if prefix is not None:
-            refs = [ref for ref in refs if matches_prefix(ref, prefix)]
-        page = _paginate(refs, "components", identity, q.cursor, [path], view)
-        rows = _components_asc_page(editor, page["items"], detail)
+            parts = [part for part in parts if matches_prefix(part.reference, prefix)]
+        page = _paginate(parts, "components", identity, q.cursor, [path], view)
+        rows = [_component_row(part, detail) for part in page["items"]]
+        lex_notes = sheet.unread_notes(
+            "this listing", "a part it holds is not listed", "a part they hold is not listed"
+        )
     else:
         try:
             text = await asyncio.to_thread(read_spice_text, path)
@@ -2670,11 +2672,15 @@ INSPECT_DESCRIPTION = (
 )
 async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:
     """Answer a batch of read-only queries with per-item success/failure isolation."""
-    budget = resolve_response_budget(args.budget, state)
-    if budget.tokens is None:
-        results = await _run_queries(args, state, _View())
-        return format_response(_summary_text(results), inspect_envelope(results))
-    return await _negotiate_inspect(args, state, budget)
+    reading = _SHEETS_READ.set({})
+    try:
+        budget = resolve_response_budget(args.budget, state)
+        if budget.tokens is None:
+            results = await _run_queries(args, state, _View())
+            return format_response(_summary_text(results), inspect_envelope(results))
+        return await _negotiate_inspect(args, state, budget)
+    finally:
+        _SHEETS_READ.reset(reading)
 
 
 async def _run_queries(

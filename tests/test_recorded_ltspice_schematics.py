@@ -37,13 +37,13 @@ from ltspice_mcp.lib.schematic_ops import (
     trace_nets,
     wire_segments_of,
 )
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene, sheet_view
+from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
 from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.simulator import _in_generation
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
-from ltspice_mcp.lib.symbol_library import find_symbol
+from ltspice_mcp.lib.symbol_library import SymbolResolver, find_symbol
 from tests import _ltspice_recorded as rec
 from tests._asc_ops import apply_ops, sha_of, sheet_findings
 from tests.conftest import FIXTURES_DIR
