@@ -50,6 +50,21 @@ tool-surface changes.
   took on that net and its name. Such a crossing is now a contact like any
   other, refused onto another net and reported as a junction on the route's
   own.
+- `add_net_label` placed a ground flag at a crossing of two named nets
+  without a warning. A label at a crossing joins both wires (the
+  `label_at_crossing` recording), so the flag shorted the two nets together
+  and to ground. A named label or a pin at the same point was already
+  refused; ground skipped that check. It is now refused, and the error names
+  the point and the two nets. A label at a crossing where at most one wire is
+  named is still placed, now with a warning that it joins two nets. Grounding
+  a net that has a name is unchanged.
+- `verify_circuit` and `edit_schematic` reported a wire as passing through a
+  part's body whenever it ended on a pin inside the part's body box. About 4%
+  of LTspice's stock symbols have such a pin (a frame drawn one unit outside
+  its pin column, a pin on the slanted side of a triangle). A wire that ends
+  on such a pin and exits the box through the nearer edge along its own axis
+  is no longer reported; one that crosses the body or ends inside it still
+  is. On LTspice's 4,366 example sheets, findings drop from 1,440 to 136.
 - `add_component` and `move_component` could short two named nets and say
   nothing. A pin on the point where two wires cross joins them (the
   `pin_at_crossing` recording), and a part placed or moved so that a pin
@@ -844,9 +859,14 @@ recording that showed it.
   is outside the sandbox. A plot of the sheet's results that LTspice already
   has open would go on showing the run it read, so it is closed and opened
   again with the new one (`reopened: true`); traces added to it by hand are
-  not kept. A sheet LTspice had open before it had any results has to be
-  closed there once, and the reply says so. A run of a netlist opens on its
-  own, as before.
+  not kept. A sheet that LTspice opened before it had results is closed and
+  reopened too (`sheet_reopened: true`), but only when LTspice's copy matches
+  the file. For a sheet the server edited while it was open, LTspice asks
+  whether to save changes; the server checks the copy again and answers No
+  only if it still matches. A sheet with unsaved changes stays open, and the
+  run opens as a separate plot (`tied: false`). A netlist's run opens as a
+  separate plot, and is also closed and reopened if it was already open.
+  Nothing is closed while LTspice is showing a dialog.
 - The server is also published as `osic-mcp` (open-source IC), a third alias
   beside `circuit-mcp` and `ngspice-mcp`: the same program at the same version.
 
@@ -1077,6 +1097,21 @@ recording that showed it.
 
 ### Changed
 
+- `wire_pins` no longer warns about routes over 400 units ("Long wire run
+  ..."). The threshold was arbitrary: 29% of LTspice's own example sheets have
+  a wire that long. The guide's wiring section now gives the measured
+  distribution of wire lengths.
+- `edit_schematic` no longer reports three conditions twice. A route through
+  a part, a part overlapping another, and a label touching nothing were each
+  reported as an op warning (`op 3 (wire_pins): Wire at y=252 crosses R4
+  bounding box ...`, `Overlaps R1 bounding box`, a floating-label note) and
+  again as a sheet finding. The op warnings are removed; the sheet findings in
+  `warnings` remain, and match what `verify_circuit` reports. Two
+  consequences. Findings describe the sheet after the whole batch, so a label
+  that a later op wires up, or an overlap a later op removes, is no longer
+  reported. And a route through a part is judged by the part's body box,
+  including the parts the route ends on; the op warning used the box with
+  pins and skipped those parts.
 - `edit_schematic` and `verify_circuit` now report one list of sheet findings.
   Each told a caller things the other did not: an edit never said that a part
   it placed overlapped another's box as a finding of the sheet, that a wire ran

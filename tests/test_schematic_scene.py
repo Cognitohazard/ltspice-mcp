@@ -34,9 +34,11 @@ from ltspice_mcp.lib.schematic_scene import (
     parse_symbol,
     resolve_flag_placement,
     scene_of_text,
+    sheet_view,
     text_extent,
     wire_directions_at,
 )
+from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
 )
@@ -621,6 +623,43 @@ class TestSceneOfText:
         asc = _write(tmp_path / "s.asc", _asc_with_box2("R0"))
         (part,) = build_scene(asc, SymbolResolver(local_dir=tmp_path)).symbols
         assert [(pin.name, pin.x, pin.y) for pin in part.pins] == [("A", 0, 8), ("B", 32, 8)]
+
+
+# A frame drawn one unit outside its two pins, as many of LTspice's own
+# symbols of an integrated circuit are.
+_FRAMED_ASY = """\
+Version 4
+SymbolType CELL
+RECTANGLE Normal -1 -16 65 48
+PIN 0 16 LEFT 8
+PINATTR PinName IN
+PINATTR SpiceOrder 1
+PIN 64 16 RIGHT 8
+PINATTR PinName OUT
+PINATTR SpiceOrder 2
+"""
+
+
+class TestAPinInsideWhatItsPartDraws:
+    """A wire to it has a stretch inside the part's body, and is not for that
+    a wire through the part."""
+
+    def through(self, tmp_path: Path, wires: str) -> list[tuple[tuple[int, int], ...]]:
+        _write(tmp_path / "framed.asy", _FRAMED_ASY)
+        text = f"Version 4\nSHEET 1 880 680\n{wires}SYMBOL framed 96 96 R0\nSYMATTR InstName U1\n"
+        view = sheet_view(
+            scene_of_text(text, tmp_path / "s.asc", SymbolResolver(local_dir=tmp_path))
+        )
+        (part,) = view.parts
+        assert part.body is not None
+        assert all(part.body.strictly_contains(x, y) for _name, x, y in part.pins)
+        return [found.points for found in findings(view, ["wire_through_symbol"])]
+
+    def test_a_wire_out_from_each_pin(self, tmp_path: Path) -> None:
+        assert self.through(tmp_path, "WIRE 96 112 32 112\nWIRE 224 112 160 112\n") == []
+
+    def test_a_wire_from_one_pin_across_the_part(self, tmp_path: Path) -> None:
+        assert self.through(tmp_path, "WIRE 96 112 224 112\n") == [((96, 112), (224, 112))]
 
 
 class TestEditorSymbolResolver:

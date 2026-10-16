@@ -277,6 +277,74 @@ def net_members(part: NetPartition, net_of: Callable[[Point], Point], net: Point
     return {c for root, coords in part.members.items() if net_of(root) == net for c in coords}
 
 
+#: The name of ground. It is a label like any other to the partition, and no
+#: name at all when asking whether two *named* nets are joined.
+GROUND = "0"
+
+
+class Joined(NamedTuple):
+    """What a pin or a label put on a point of a sheet would make one node."""
+
+    #: The nets among them that carry a name, each as its names, ground left out.
+    #: Two or more is two named nets made one: a short.
+    named: tuple[frozenset[str], ...]
+    #: How many separate nets the wires through the point were: more than one
+    #: where wires cross and nothing has joined them.
+    wired: int
+
+
+class NamedNets:
+    """A sheet's nets with the names each carries, for asking what a point would join.
+
+    Made once from a partition of the sheet as it is, without the thing about
+    to be placed; ``joined_at`` is then asked of each point. Nets are the
+    label-folded ones, so nets that share a name, and nets that each carry a
+    ground flag, are already one net here.
+    """
+
+    def __init__(self, part: NetPartition) -> None:
+        self._part = part
+        self._net_of = label_folded_nets(part)
+        self._names: dict[Point, set[str]] = defaultdict(set)
+        for coord, texts in part.label_texts.items():
+            self._names[self._net_of(coord)].update(text for text in texts if text != GROUND)
+
+    def joined_at(
+        self,
+        on_wires: Iterable[Point],
+        at: Point | None = None,
+        name: str | None = None,
+    ) -> Joined:
+        """What something put on a point would make one node.
+
+        ``on_wires`` is a point of each wire the place lies on. A pin or a label
+        there joins every one of them, both wires where two cross (the
+        ``pin_at_crossing`` and ``label_at_crossing`` recordings).
+
+        ``at`` is the place itself, given when what already sits there is
+        joined too: a label is one node with a pin or a label on its point. A
+        place the sheet has nothing on reads as an unnamed net of its own.
+
+        ``name`` is a net name the thing carries, which makes it one node with
+        every net already of that name. Ground is not given as one. Nets that
+        each carry a ground flag are one net already, and a net with a name may
+        be grounded whatever else is: that is what a ground flag is for, and no
+        join of the flag's own making.
+        """
+        wired = {self._net_of(point) for point in on_wires}
+        nets = set(wired)
+        if at is not None:
+            nets.add(self._net_of(at))
+        if name is not None:
+            nets.update(
+                self._net_of(coord)
+                for coord, texts in self._part.label_texts.items()
+                if name in texts
+            )
+        named = tuple(frozenset(self._names[net]) for net in sorted(nets) if self._names[net])
+        return Joined(named, len(wired))
+
+
 def _merge_collinear_runs(
     segments: list[tuple[int, int, int, int]],
     node_coords: set[tuple[int, int]],

@@ -421,10 +421,10 @@ what must hold before the next one starts.
        unchanged, on any net the batch touched, which on a rail is every
        loose end and repeated wire of the rail, listed again on every batch
        that connects to it.
-     - An op's own advisory and a finding of the sheet already say one thing
-       twice today, for a label placed on nothing. Overlap and a wire through
-       a part will be said twice the same way until the next part turns the
-       ops' checks into rules.
+     - An op's own advisory and a finding of the sheet said one thing twice,
+       for a label placed on nothing, a part over another and a route through
+       a part. The next part ends that: the op's sentence goes and the finding
+       stays.
      - Nothing is said of the extent of a part whose symbol is not found.
        The checker drew it as a placeholder and judged overlaps and crossings
        by the placeholder's box, which is not the part's; with one list that
@@ -469,7 +469,60 @@ what must hold before the next one starts.
        for advice, and the guide names what is usual instead; and placing or
        moving a part is checked for the one way it can join two named nets,
        a pin landing where two wires cross. *The last is done*
-       (`schematic_ops._pins_on_crossings`); the other two are not.
+       (`schematic_ops._pins_on_crossings`). *The first is done too,* by the
+       sheet rule itself: a rule that does not read the op is the same check
+       at every moment (section 8), so the route rule is gone and what an
+       edit reports of the finished sheet says it. On the record's 11,283
+       proposals no route crossed a part's box without crossing what it
+       draws, so nothing the op said goes unsaid; 154 answers lost the
+       advisory and nothing else changed. The same holds for a part placed
+       or moved over another (`symbol_overlap`) and a label on nothing
+       (`dangling_label`), whose op sentences went with it. A fact of a
+       moment inside the batch is no longer said: a label placed before its
+       wire, an overlap a later op undoes. And a route asked for again that
+       is already drawn through a part is counted with what was there
+       before, the batch having drawn nothing. Before the sheet rule became
+       the one voice it was made right about a part's own pins (section 7).
+       *The second is done:* the planner says nothing of a route's length.
+       On LTspice's 4,366 example sheets half the 183,408 wire segments are
+       32 units or less, nine in ten 192 or less, and 2.8 in a hundred over
+       400, with at least one that long on 29 sheets in a hundred, so the
+       advisory would have been given on nearly a third of LTspice's own
+       work. The guide gives that spread. No measurement takes the
+       advisory's place (section 8): the record lost it from 300 answers and
+       nothing else changed.
+     - The label op's refusal and what placing or moving a part joins are
+       held by a record of their own before they are moved
+       (`tests/fixtures/label_and_move_record.json`): what `add_net_label`
+       answers to 5,700 proposals and `move_component` to 6,900 on the
+       sheets of the suite, each put through the op itself. A label's
+       recorded answer says what was at the point (how many nets met there
+       and how many carried a name), because the op words three different
+       joins alike. The suite had no crossing with fewer than two named
+       wires, so a sheet with each kind of crossing was added for it.
+     - The record showed a join made without a word, and it is closed: a
+       label put where two nets cross. Ground was left out of the label
+       op's refusal altogether, so a ground flag on a crossing of two named
+       nets shorted them; and a label of any name on a crossing with at
+       most one named wire joined the two and said nothing, where a pin
+       there has its join said. Ground is refused between two named nets
+       now, and the join is said otherwise. Ground still joins nothing by
+       name: a net with a name may be grounded whatever else is, that being
+       what the flag was asked for. The record changed for the answers at a
+       point where two nets met and for no other, and holds that no label
+       is placed at such a point in silence.
+     - What the label op and the pin check work out is now one function of
+       plain data, `connectivity.NamedNets.joined_at`: the named nets a pin
+       or a label put on a point would make one node, and how many nets the
+       wires through the point were. The two ops collect the sheet from the
+       editor, ask it, and word the answer; the pin check still works the
+       sheet's nets out only for a pin that sits on more than one wire. Both
+       records are unchanged by it. The answers have no rule ids and no
+       registry yet, on purpose: a net given a second name and two named
+       nets joined are one fact of a transition (section 8), the route
+       planner holds the same fact in its own two checks, and the three
+       become one rule when an op is a function of the sheet (step 6), where
+       the nets before and after are both at hand.
    - *What ran.* The list of rules that ran, added to both replies; and, if
      wanted, a caller's limits and waivers, which are new arguments and need
      the published size of both tools raised on purpose. *The list is done:*
@@ -530,6 +583,23 @@ Taken:
   pin drawn apart from the body, the box reaches out to it over the whole
   side, and an ordinary wire to a nearer pin on that side would be through
   it.
+- A wire out from a pin that lies inside its part's body is not through the
+  part. A pin can lie inside the box of what its part draws: in LTspice's own
+  library 297 symbols of 6,678 have one, most of them a frame drawn a unit
+  outside its column of pins, the rest a pin on the slanted side of a triangle
+  or a box made larger by something drawn apart. Every wire to such a pin has
+  a stretch inside the box, and on LTspice's 4,366 example sheets that was
+  1,343 of the 1,440 wires the rule reported. The stretch is the connection
+  when the wire ends on the pin and runs level or upright from it out of the
+  box by the nearer of the two edges on its line; by the farther edge it is
+  the wire running back across the body, which is what the rule is for. On
+  those sheets this separates every wire drawn out of a body from such a pin
+  from the 39 that end inside one, which stay reported with the 97 that
+  involve no such pin. The nearest edge of all four was tried and is worse:
+  it reports 14 of the wires people drew, each out by the nearer edge on its
+  own line from a pin deep in a large box. What is left over is the box
+  being coarser than what is drawn, and would take the drawing itself to
+  judge.
 - A part's box, for overlap, includes its pins. It is the box `inspect` and
   `add_component` already give a caller to plan with, so a finding is judged
   against the box the caller was shown. The choice is a small one: in the
@@ -638,6 +708,10 @@ a maintainer need to know about it; what it does stays a function.
   number of the server's own is a bare magnitude, the weakest ground the
   project's rule on result trust allows; the guide says what limits are
   usual, and each layout practice there names the rule that measures it.
+  A route's length is the one measure left unreported on purpose. The
+  caller gave the route's points and can add them up, and a length said of
+  every route is a line a route on every build, for a number that is no
+  fault at any size. A limit a caller sets would be the place for it.
 - **What an edit is told.** As now: a finding that is new, any change to it
   making it new, or one that names a part or a point the batch named, by
   any of the parts and points the finding names. An edit can change a
