@@ -43,6 +43,7 @@ from ltspice_mcp.lib.connectivity import (
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.spice_lex import SpiceLexError, TokenKind, tokenize_body
 
 Point = tuple[int, int]
 Family = Literal["electrical", "structural", "drawing"]
@@ -88,6 +89,15 @@ _RULES = (
         check="export",
         provenance="same-instance-wire",
         severity="warning",
+    ),
+    Rule(
+        "duplicate_parameter",
+        "electrical",
+        "part",
+        "A part that gives one parameter more than once across Value, Value2, "
+        "SpiceLine and SpiceLine2, which LTspice writes onto one netlist line.",
+        check="quality",
+        provenance="export-attributes",
     ),
     Rule(
         "floating_pin",
@@ -214,6 +224,9 @@ class Part:
     #: Why a symbol that was found cannot be used, as words that follow its
     #: name (``FoundSymbol.problem``); the part is then ``missing`` too.
     problem: str = ""
+    #: The attributes LTspice writes onto the part's netlist line after its
+    #: value, as ``(name, text)`` in that order (``sheet.PARAMETER_ATTRIBUTES``).
+    parameters: tuple[tuple[str, str], ...] = ()
 
     @property
     def name(self) -> str:
@@ -334,6 +347,38 @@ def _dropped_wires(ix: _Index) -> list[Finding]:
                 points=((x1, y1), (x2, y2)),
             )
         )
+    return found
+
+
+@_finds("duplicate_parameter")
+def _duplicate_parameters(ix: _Index) -> list[Finding]:
+    found: list[Finding] = []
+    for part in ix.view.parts:
+        copies: dict[str, list[str]] = {}
+        for attribute, text in part.parameters:
+            try:
+                tokens = tokenize_body(text)
+            except SpiceLexError:
+                continue
+            for tok in tokens:
+                if tok.kind == TokenKind.KEY_VALUE and tok.key:
+                    copies.setdefault(tok.key.lower(), []).append(
+                        f"{tok.key}={tok.value} in {attribute}"
+                    )
+        for key, given in copies.items():
+            if len(given) < 2:
+                continue
+            found.append(
+                Finding(
+                    "duplicate_parameter",
+                    f"{part.name} gives {key} {len(given)} times: {'; '.join(given)}. "
+                    "LTspice writes every copy onto the part's line, and which one it "
+                    "reads is not known here",
+                    refs=(part.name,),
+                    points=(part.at,) if part.at is not None else (),
+                    facts={"parameter": key, "copies": tuple(given)},
+                )
+            )
     return found
 
 
@@ -661,6 +706,8 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``dropped_wire``: a wire LTspice leaves out of the netlist because its
       two ends land on pins of one part
       (``connectivity.same_instance_dropped_segments``).
+    - ``duplicate_parameter``: a part giving one parameter, in any case, more
+      than once across the attributes LTspice writes onto its line.
     - ``floating_pin``: a pin connected to nothing (:func:`floating_pins`).
     - ``dangling_wire_end``: a wire end on no pin, no label and no other wire.
     - ``dangling_label``: a label that is on no wire and at no pin.

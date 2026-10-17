@@ -1076,6 +1076,74 @@ class TestParamCard:
         assert "Vdd=3.3" in text
 
 
+class TestInstanceLineRepeatedParameter:
+    """A card that gives a parameter twice keeps both copies through every
+    edit. Setting one copy left the other at its old value, and a re-render
+    from the one-value-per-key dict dropped the earlier copies, so a run of a
+    variation simulated a part nobody had written; which copy a simulator
+    reads is not recorded here."""
+
+    @pytest.mark.parametrize(
+        ("deck", "key", "value", "expected"),
+        [
+            pytest.param(
+                "M1 d g s b NMOS w=1u w=2u\n",
+                "W",
+                "3u",
+                "M1 d g s b NMOS w=3u w=3u\n",
+                id="same_spelling",
+            ),
+            pytest.param(
+                "X1 a b sub Vt=2 vt=3\n",
+                "VT",
+                "4",
+                "X1 a b sub Vt=4 vt=4\n",
+                id="two_spellings",
+            ),
+            pytest.param(
+                "M1 d g s b NMOS w=1u w=2u\n",
+                "l",
+                "1u",
+                "M1 d g s b NMOS w=1u w=2u l=1u\n",
+                id="a_new_key_keeps_both_copies",
+            ),
+            pytest.param(
+                "R1 a b R=1k R=1k\n",
+                None,
+                "2k",
+                "R1 a b R=2k R=2k\n",
+                id="a_keyed_value",
+            ),
+        ],
+    )
+    def test_an_edit_writes_every_copy(
+        self, deck: str, key: str | None, value: str, expected: str
+    ) -> None:
+        cards = lex(deck).cards
+        view = InstanceLine.from_card(cards[0])
+        if key is None:
+            view.set_value(value)
+        else:
+            view.set_param(key, value)
+        assert emit(cards) == expected
+        assert view.param_pairs() == InstanceLine.from_card(cards[0]).param_pairs()
+
+    def test_removing_a_parameter_removes_every_copy(self) -> None:
+        cards = lex("M1 d g s b NMOS w=1u l=1u W=2u\n").cards
+        view = InstanceLine.from_card(cards[0])
+        view.remove_param("w")
+        assert emit(cards) == "M1 d g s b NMOS l=1u\n"
+        assert view.params == {"l": "1u"}
+
+    def test_a_nested_target_sets_every_copy(self) -> None:
+        from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
+
+        cards = lex("M1 d g s b NMOS w=1u w=2u\n").cards
+        edit = InstanceEdit(instance=("M1",), attribute="parameter", parameter="w", value="5u")
+        apply_edit(cards[0], edit)
+        assert emit(cards) == "M1 d g s b NMOS w=5u w=5u\n"
+
+
 class TestInstanceLine:
     def test_resistor(self) -> None:
         card = lex("R1 n1 n2 1k\n").cards[0]

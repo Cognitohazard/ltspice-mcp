@@ -781,7 +781,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # checks gained when the sheet rules became one list for both tools: a
     # dangling label and a wire drawn twice, a label inside a part and stacked
     # directives. They are named for the reason the others are. Measured 5,165 with all three.
-    "verify_circuit": 5170,
+    # Raised by about 55 characters for a parameter given twice, which the
+    # quality check now reports on a netlist and on a sheet: an edit that set
+    # one copy left the other behind, and nothing but a reference compare
+    # showed it. Named for the reason the others are. Measured 5,223.
+    "verify_circuit": 5230,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

@@ -524,6 +524,22 @@ async def test_components_full_netlist(netlist: Path, state_no_sim: SessionState
     assert by_ref["X1"]["model"] == "ubuf"
 
 
+async def test_components_full_netlist_lists_a_repeated_parameter(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """``params`` holds one value per key, so a card naming a parameter twice
+    read as naming it once; the copies are listed beside it."""
+    deck = work_dir / "twice.cir"
+    deck.write_text("M1 d g 0 0 NMOS w=1u l=1u W=2u\n.end\n")
+
+    (res,) = await _run(
+        state_no_sim, [{"kind": "components", "path": str(deck), "detail": "full"}]
+    )
+
+    (row,) = res["data"]["components"]
+    assert row["repeated_params"] == {"w": ["w=1u", "W=2u"]}
+
+
 async def test_components_full_asc(asc_file: Path, asc_state: SessionState):
     (res,) = await _run(
         asc_state, [{"kind": "components", "path": str(asc_file), "detail": "full"}]
