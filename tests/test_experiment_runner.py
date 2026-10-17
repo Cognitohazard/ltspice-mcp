@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from spicelib.simulators.ltspice_simulator import LTspice
 
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -28,6 +27,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import OwnerLiveness
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
 from tests.conftest import (
     LIVENESS_S,
     await_until,
@@ -377,9 +377,10 @@ class TestLogopinfoInjection:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        # An LTspice that needs the option, whichever one this machine has.
         runner = ExperimentRunner(
             asyncio.get_running_loop(),
-            LTspice,
+            rec.launcher("ltspice26"),
             work_dir,
             max_parallel=1,
         )
