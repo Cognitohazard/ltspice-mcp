@@ -57,6 +57,22 @@ def generation(build: str) -> str:
     return manifest(build)["generation"]
 
 
+def launcher(build: str) -> type:
+    """spicelib's LTspice class, launching the executable ``build`` was recorded
+    with, by its file name.
+
+    The server tells LTspice builds apart by that name alone
+    (``simulator_build.predates_logopinfo``), so the folder is made up and
+    nothing is run. A test that uses this does the same on every machine; one
+    that uses spicelib's class as imported gets whichever LTspice spicelib
+    found installed.
+    """
+    from spicelib.simulators.ltspice_simulator import LTspice
+
+    executable = manifest(build)["executable"]["name"]
+    return type(LTspice.__name__, (LTspice,), {"spice_exe": [f"C:/install/{executable}"]})
+
+
 def recorded(build: str, name: str) -> Path:
     """One recorded file: ``recorded("ltspice26", "raw/tran.log")``."""
     return FIXTURES / build / name
