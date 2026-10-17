@@ -43,7 +43,7 @@ from ltspice_mcp.lib.connectivity import (
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.geometry import BBox
-from ltspice_mcp.lib.spice_lex import SpiceLexError, TokenKind, tokenize_body
+from ltspice_mcp.lib.spice_lex import copies_by_name, key_value_tokens
 
 Point = tuple[int, int]
 Family = Literal["electrical", "structural", "drawing"]
@@ -224,8 +224,8 @@ class Part:
     #: Why a symbol that was found cannot be used, as words that follow its
     #: name (``FoundSymbol.problem``); the part is then ``missing`` too.
     problem: str = ""
-    #: The attributes LTspice writes onto the part's netlist line after its
-    #: value, as ``(name, text)`` in that order (``sheet.PARAMETER_ATTRIBUTES``).
+    #: The attributes whose text LTspice writes onto the part's netlist line,
+    #: as ``(name, text)`` in that order (``sheet.PARAMETER_ATTRIBUTES``).
     parameters: tuple[tuple[str, str], ...] = ()
 
     @property
@@ -354,17 +354,11 @@ def _dropped_wires(ix: _Index) -> list[Finding]:
 def _duplicate_parameters(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for part in ix.view.parts:
-        copies: dict[str, list[str]] = {}
-        for attribute, text in part.parameters:
-            try:
-                tokens = tokenize_body(text)
-            except SpiceLexError:
-                continue
-            for tok in tokens:
-                if tok.kind == TokenKind.KEY_VALUE and tok.key:
-                    copies.setdefault(tok.key.lower(), []).append(
-                        f"{tok.key}={tok.value} in {attribute}"
-                    )
+        copies = copies_by_name(
+            (tok.key or "", f"{tok.key}={tok.value} in {attribute}")
+            for attribute, text in part.parameters
+            for tok in key_value_tokens(text)
+        )
         for key, given in copies.items():
             if len(given) < 2:
                 continue

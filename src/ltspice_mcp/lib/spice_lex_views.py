@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from ltspice_mcp.lib.format import format_spice_value as _format_value
@@ -27,6 +27,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     Token,
     TokenKind,
+    copies_by_name,
     strip_matching_quotes,
     tokenize_body,
 )
@@ -424,7 +425,6 @@ class InstanceLine:
     nodes: list[str]
     model: str | None
     value: str | None
-    params: dict[str, str] = field(default_factory=dict)
     _model_token: Token | None = None
     _value_param_key: str | None = None
     # A subckt call's ``params:`` keyword as written, put back in front of the
@@ -435,11 +435,12 @@ class InstanceLine:
     # tail. None when there are no nodes or their offsets are synthesized.
     _node_span: tuple[int, int] | None = None
     # The parameters as the card gives them, in order, a key given twice
-    # listed twice: what the mutators edit and a re-render writes. ``params``
-    # is derived from it. ``_kv_tokens`` holds each pair's token while its
-    # offset is still good, for an in-place edit, else None.
+    # listed twice: what the mutators edit and a re-render writes, and what
+    # ``params`` is read from. ``_kv_tokens`` holds the pairs' tokens, one
+    # each, while their offsets are still good for an in-place edit; after a
+    # re-render or a node edit it is None.
     _pairs: list[tuple[str, str]] = field(default_factory=list)
-    _kv_tokens: list[Token | None] = field(default_factory=list)
+    _kv_tokens: list[Token] | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -574,13 +575,12 @@ class InstanceLine:
             nodes=nodes,
             model=model,
             value=value,
-            params=params,
             _model_token=model_token,
             _value_param_key=value_param_key,
             _params_marker=params_marker,
             _node_span=node_span,
             _pairs=pairs,
-            _kv_tokens=list[Token | None](kv_tokens),
+            _kv_tokens=kv_tokens,
         )
 
     def set_model(self, name: str) -> None:
@@ -637,13 +637,26 @@ class InstanceLine:
         # subsequent edit on this view re-renders canonically instead of
         # writing at a wrong offset.
         self._model_token = None
-        self._kv_tokens = [None] * len(self._pairs)
+        self._kv_tokens = None
+
+    @property
+    def params(self) -> dict[str, str]:
+        """The parameters by name as written, one value each: a key the card
+        gives twice in one spelling reads as its last copy. ``param_pairs``
+        has every copy."""
+        return dict(self._pairs)
 
     def param_pairs(self) -> list[tuple[str, str]]:
         """Every ``key=value`` on the card as it now reads, in order, a key the
         card names twice listed twice. ``params`` keeps one value per key, so
         it cannot say that a card gives a parameter more than once."""
         return list(self._pairs)
+
+    def repeated_params(self) -> dict[str, list[str]]:
+        """Each parameter the card gives more than once, by its case-folded
+        name, with every copy as ``key=value`` in card order."""
+        copies = copies_by_name((k, f"{k}={v}") for k, v in self._pairs)
+        return {name: given for name, given in copies.items() if len(given) > 1}
 
     def get_param(self, key: str) -> str | None:
         """Case-insensitive parameter read, matching the CI semantics of
@@ -665,16 +678,14 @@ class InstanceLine:
         its parameters with every copy kept.
         """
         new = _format_value(value)
-        copies = [i for i, (k, _) in enumerate(self._pairs) if k.lower() == key.lower()]
+        name = key.casefold()
+        copies = [i for i, (k, _) in enumerate(self._pairs) if k.casefold() == name]
         if not copies:
             self._pairs.append((key, new))
-            self._kv_tokens.append(None)
-            self._sync_params()
             self._canonical_rerender()
             return
         for i in copies:
             self._pairs[i] = (self._pairs[i][0], new)
-        self._sync_params()
         try:
             for i in reversed(copies):
                 self._replace_kv_token(i, new)
@@ -683,49 +694,30 @@ class InstanceLine:
 
     def remove_param(self, key: str) -> None:
         """Remove every copy of a parameter (no-op if absent)."""
-        kept = [
-            (pair, tok)
-            for pair, tok in zip(self._pairs, self._kv_tokens, strict=True)
-            if pair[0].lower() != key.lower()
-        ]
-        if len(kept) == len(self._pairs):
-            return
-        self._pairs = [pair for pair, _ in kept]
-        self._kv_tokens = [tok for _, tok in kept]
-        self._sync_params()
-        self._canonical_rerender()
-
-    def _sync_params(self) -> None:
-        """Derive ``params`` from the pairs, in the same dict object."""
-        self.params.clear()
-        self.params.update(self._pairs)
+        name = key.casefold()
+        kept = [pair for pair in self._pairs if pair[0].casefold() != name]
+        if len(kept) < len(self._pairs):
+            self._pairs = kept
+            self._canonical_rerender()
 
     def _replace_kv_token(self, index: int, new_value: str) -> None:
         """Replace one parameter's text in place and shift the tokens past it.
 
-        Raises ``ValueError`` when the token's offset is no longer known or its
-        span cannot be replaced in place.
+        Raises ``ValueError`` when the offsets are no longer known or the span
+        cannot be replaced in place.
         """
-        tok = self._kv_tokens[index]
-        if tok is None or tok.body_offset < 0:
+        tokens = self._kv_tokens
+        if tokens is None or tokens[index].body_offset < 0:
             raise ValueError("no in-place span for this parameter")
+        tok = tokens[index]
         new_text = f"{tok.key}={new_value}"
         old_body_end = tok.body_end
         delta = len(new_text) - tok.body_length
         self.card.replace_span(tok.body_offset, old_body_end, new_text)
-        self._kv_tokens = [
-            Token(
-                kind=TokenKind.KEY_VALUE,
-                text=new_text,
-                key=tok.key,
-                value=new_value,
-                body_offset=tok.body_offset,
-                body_length=len(new_text),
-            )
-            if i == index
-            else _shift_single_token(other, old_body_end, delta)
-            for i, other in enumerate(self._kv_tokens)
-        ]
+        self._kv_tokens = _shift_tokens(tokens, old_body_end, delta)
+        self._kv_tokens[index] = replace(
+            tok, text=new_text, value=new_value, body_length=len(new_text)
+        )
         self._model_token = _shift_single_token(self._model_token, old_body_end, delta)
 
     def _update_slot_in_place(self, new_text: str) -> None:
@@ -746,9 +738,8 @@ class InstanceLine:
                     body_offset=tok.body_offset,
                     body_length=len(new_text),
                 )
-                self._kv_tokens = [
-                    _shift_single_token(other, old_body_end, delta) for other in self._kv_tokens
-                ]
+                if self._kv_tokens is not None:
+                    self._kv_tokens = _shift_tokens(self._kv_tokens, old_body_end, delta)
                 return
             except ValueError:
                 pass
@@ -771,7 +762,7 @@ class InstanceLine:
         body = " ".join(parts)
         self.card.replace_body(body)
         self._model_token = None
-        self._kv_tokens = [None] * len(self._pairs)
+        self._kv_tokens = None
 
     def display_value(self) -> str:
         """Single-string projection for display: model name for M/Q/J/X,
@@ -1162,6 +1153,16 @@ def _shift_cached_param_tokens(
                 body_offset=tok.body_offset + delta,
                 body_length=tok.body_length,
             )
+
+
+def _shift_tokens(tokens: list[Token], edit_old_end: int, delta: int) -> list[Token]:
+    """``tokens`` with every one at or past ``edit_old_end`` moved by ``delta``."""
+    return [
+        replace(tok, body_offset=tok.body_offset + delta)
+        if delta and tok.body_offset >= edit_old_end
+        else tok
+        for tok in tokens
+    ]
 
 
 def _shift_single_token(tok: Token | None, edit_old_end: int, delta: int) -> Token | None:

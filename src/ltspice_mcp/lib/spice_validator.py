@@ -33,6 +33,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     MeasCard,
     SubcktCard,
     body_has_stray_kv_remnant,
+    read_instance,
 )
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
@@ -1350,30 +1351,22 @@ def validate_netlist_duplicate_params(cards: list[SpiceCard]) -> list[dict[str, 
     SPICE reads a parameter name in any case, so ``w=1u W=2u`` gives ``w``
     twice. Which copy a simulator reads is not known here, so each issue states
     the copies and nothing about their effect; the caller attaches severity.
-    A card the typed view cannot read is left to the arity check.
+    A card that cannot be read is reported unparseable elsewhere, and a card
+    with fewer than two ``=`` cannot give a key twice.
     """
     issues: list[dict[str, object]] = []
     for card in cards:
-        if card.kind != "instance":
+        if card.kind != "instance" or card.body.count("=") < 2:
             continue
-        try:
-            view = InstanceLine.from_card(card)
-        except SpiceLexError:
+        view = read_instance(card)
+        if view is None:
             continue
-        copies: dict[str, list[str]] = {}
-        for key, value in view.param_pairs():
-            copies.setdefault(key.lower(), []).append(f"{key}={value}")
-        for key, given in copies.items():
-            if len(given) < 2:
-                continue
+        for key, given in view.repeated_params().items():
             issues.append(
                 {
                     "line": card.line_start,
                     "directive": _card_directive(card),
-                    "message": (
-                        f"{view.ref} gives the parameter {key} {len(given)} times: "
-                        f"{', '.join(given)}."
-                    ),
+                    "message": f"{view.ref} gives {key} {len(given)} times: {', '.join(given)}.",
                     "suggestion": "Which copy the simulator reads is not known here; keep one.",
                 }
             )

@@ -1133,6 +1133,32 @@ class TestExportedAttributes:
         assert (cards["m1"].model, cards["m1"].params) == ("NMOS", {"l": "1u", "w": "10u"})
         assert (cards["r1"].value, cards["r1"].params) == ("1k", {"tol": "1", "pwr": "0.1"})
 
+    def test_a_parts_parameter_attributes_are_the_parameters_on_its_line(self, build: str):
+        """``sheet.PARAMETER_ATTRIBUTES``, read off the sheet in their order, give
+        every ``key=value`` LTspice wrote on the part's line, and in that order:
+        what the sheet's ``duplicate_parameter`` rule counts copies across."""
+        from ltspice_mcp.lib.sheet import read_sheet_text
+        from ltspice_mcp.lib.spice_lex import key_value_tokens
+
+        sheet_path = INPUTS / "export" / "attributes.asc"
+        sheet = read_sheet_text(
+            read_spice_text_with_encoding(sheet_path)[0],
+            SymbolResolver(local_dir=sheet_path.parent),
+        )
+        cards = self.cards(build)
+        for part in sheet.parts:
+            given = [
+                (tok.key, tok.value)
+                for _attribute, text in part.parameters
+                for tok in key_value_tokens(text)
+            ]
+            line = next(
+                cards[name]
+                for name in (canon_ref(part.reference), "x" + canon_ref(part.reference))
+                if name in cards
+            )
+            assert given == line.param_pairs(), part.reference
+
 
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_sheet_directives_reach_the_netlist_as_the_cards_staging_reads(build: str):

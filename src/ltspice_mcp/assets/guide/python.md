@@ -114,9 +114,15 @@ For logs without RAW:
 
 ```python
 meas = api.measurements(log_path="result.log")  # log_path XOR job_id
-facts = api.inspect(queries=[{
-    "kind": "results", "path": "result.log", "view": "native_tables",
-}])
+facts = api.inspect(
+    queries=[
+        {
+            "kind": "results",
+            "path": "result.log",
+            "view": "native_tables",
+        }
+    ]
+)
 measured = api.analyze_results(
     sources=[{"log_path": "result.log", "label": "imported"}],
     recipes=[{"metric": "measurements", "key": "meas"}],

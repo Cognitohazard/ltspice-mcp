@@ -1303,6 +1303,17 @@ _SCHMITT_ASY = (
 )
 
 
+def _schmitt_symbol(work_dir: Path) -> None:
+    """A Schmitt-trigger-like A-device symbol beside the sheets in ``work_dir``."""
+    (work_dir / "schmitt_like.asy").write_text(_SCHMITT_ASY, encoding="utf-8", newline="\n")
+
+
+def _attributes(asc: Path, ref: str) -> dict[str, str]:
+    from spicelib import AscEditor
+
+    return dict(AscEditor(str(asc)).get_component(ref).attributes)
+
+
 class TestSetComponentValueParameterSlots:
     """A ``KEY=VALUE`` in a new value is set where the part already gives that
     key. spicelib looked only in SpiceLine and SpiceLine2, so a Schmitt
@@ -1341,13 +1352,6 @@ class TestSetComponentValueParameterSlots:
                 {"Value": "NMOS1", "SpiceLine": "m=2 ad=1e3 w=10u"},
                 id="a_new_key_leaves_the_rest_of_spiceline_as_written",
             ),
-            pytest.param(
-                "schmitt_like",
-                {"Value": "Vt=2 Vh=0.5", "SpiceLine": "Vt=3"},
-                "Vt=4.15",
-                {"Value": "Vt=4.15 Vh=0.5", "SpiceLine": "Vt=4.15"},
-                id="copies_already_on_the_part_are_all_set",
-            ),
         ],
     )
     def test_set_where_the_part_gives_it(
@@ -1359,9 +1363,7 @@ class TestSetComponentValueParameterSlots:
         value: str,
         expected: dict[str, str],
     ):
-        from spicelib import AscEditor
-
-        (work_dir / "schmitt_like.asy").write_text(_SCHMITT_ASY, encoding="utf-8", newline="\n")
+        _schmitt_symbol(work_dir)
         ref = "A1" if symbol == "schmitt_like" else "M1"
         asc = _write_sheet(
             work_dir / "slots.asc",
@@ -1374,16 +1376,16 @@ class TestSetComponentValueParameterSlots:
             asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value}
         )
 
-        assert dict(AscEditor(str(asc)).get_component(ref).attributes) == expected
+        assert _attributes(asc, ref) == expected
         assert "warnings" not in result
 
-    async def test_an_edit_of_a_part_giving_a_key_twice_says_so(
+    async def test_an_edit_of_a_part_giving_a_key_twice_sets_both_and_says_so(
         self, asc_state: SessionState, work_dir: Path
     ):
         """The copies are set alike, and the reply names the part as one that
         gives the key twice: the sheet's finding, since the edit named it."""
-        (work_dir / "schmitt_like.asy").write_text(_SCHMITT_ASY, encoding="utf-8", newline="\n")
-        _write_sheet(
+        _schmitt_symbol(work_dir)
+        asc = _write_sheet(
             work_dir / "twice.asc",
             "SYMBOL schmitt_like 100 100 R0",
             "SYMATTR InstName A1",
@@ -1398,6 +1400,7 @@ class TestSetComponentValueParameterSlots:
         )
 
         assert data["commit_state"] == "committed", data
+        assert _attributes(asc, "A1") == {"Value": "Vt=4.15 Vh=0.5", "SpiceLine": "Vt=4.15"}
         assert any(
             "A1 gives vt 2 times: Vt=4.15 in Value; Vt=4.15 in SpiceLine." in warning
             for warning in data["warnings"]

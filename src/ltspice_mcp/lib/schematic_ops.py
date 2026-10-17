@@ -113,7 +113,13 @@ from ltspice_mcp.lib.routing import (
 )
 from ltspice_mcp.lib.sheet import PARAMETER_ATTRIBUTES, PlacedPin, find_pin
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    TokenKind,
+    key_value_tokens,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
@@ -577,14 +583,8 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
 def _replace_param(text: str, key: str, value: str) -> tuple[str, int]:
     """``text`` with every ``KEY=VALUE`` copy of ``key`` (in any case) set to
     ``value``, keeping its spelling of the key, and how many copies there were."""
-    try:
-        tokens = tokenize_body(text)
-    except SpiceLexError:
-        return text, 0
     copies = [
-        tok
-        for tok in tokens
-        if tok.kind == TokenKind.KEY_VALUE and (tok.key or "").casefold() == key.casefold()
+        tok for tok in key_value_tokens(text) if (tok.key or "").casefold() == key.casefold()
     ]
     for tok in reversed(copies):
         text = f"{text[: tok.body_offset]}{tok.key}={value}{text[tok.body_end :]}"

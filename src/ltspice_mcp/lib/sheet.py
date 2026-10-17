@@ -62,9 +62,10 @@ class PlacedPin:
         }
 
 
-#: The attributes whose text LTspice writes onto a part's netlist line after
-#: its value, in the order it writes them (recorded: ``export-attributes``).
-#: A ``KEY=VALUE`` in any of them is a parameter of the part.
+#: The attributes whose text LTspice writes onto a part's netlist line, in the
+#: order it writes them, after the nodes and any SpiceModel (recorded:
+#: ``export-attributes``). A ``KEY=VALUE`` in any of them is a parameter of
+#: the part.
 PARAMETER_ATTRIBUTES = ("Value", "Value2", "SpiceLine", "SpiceLine2")
 
 
