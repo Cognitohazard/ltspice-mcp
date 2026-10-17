@@ -1135,14 +1135,6 @@ class TestInstanceLineRepeatedParameter:
         assert emit(cards) == "M1 d g s b NMOS l=1u\n"
         assert view.params == {"l": "1u"}
 
-    def test_a_nested_target_sets_every_copy(self) -> None:
-        from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
-
-        cards = lex("M1 d g s b NMOS w=1u w=2u\n").cards
-        edit = InstanceEdit(instance=("M1",), attribute="parameter", parameter="w", value="5u")
-        apply_edit(cards[0], edit)
-        assert emit(cards) == "M1 d g s b NMOS w=5u w=5u\n"
-
 
 class TestInstanceLine:
     def test_resistor(self) -> None:

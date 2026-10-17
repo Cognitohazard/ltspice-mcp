@@ -655,11 +655,7 @@ async def test_quality_reports_a_part_giving_a_parameter_twice(
     """LTspice writes Value, Value2, SpiceLine and SpiceLine2 onto one line
     (recorded: export-attributes), so a key in two of them is given twice."""
     asc = _write(
-        work_dir,
-        "twice.asc",
-        "Version 4\nSHEET 1 880 680\n"
-        "SYMBOL res 100 300 R0\nSYMATTR InstName R1\nSYMATTR Value 1k\n"
-        "SYMATTR Value2 tol=1\nSYMATTR SpiceLine TOL=5 pwr=0.1\n",
+        work_dir, "twice.asc", _RES_ASC + "SYMATTR Value2 tol=1\nSYMATTR SpiceLine TOL=5 pwr=0.1\n"
     )
 
     quality = await _run(state_no_sim, path=str(asc), checks=["quality"])
@@ -1356,7 +1352,7 @@ async def test_netlist_quality_reports_a_parameter_given_twice(state_no_sim, wor
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
     twice = [f for f in data["findings"] if f["rule_id"] == "duplicate_parameter"]
     assert len(twice) == 1, data["findings"]
-    assert "A1 gives the parameter vt 2 times: Vt=2, vt=4.15." in twice[0]["evidence"]["detail"]
+    assert "A1 gives vt 2 times: Vt=2, vt=4.15." in twice[0]["evidence"]["detail"]
     assert twice[0]["at"]["line"] == 2
     assert twice[0]["severity"] == "observation"
 

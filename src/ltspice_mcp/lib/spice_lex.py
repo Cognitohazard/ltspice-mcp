@@ -25,10 +25,10 @@ but ``LexResult.warnings`` carries diagnostics.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeVar
 
 #: Directive heads whose first argument is a file path.
 INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
@@ -158,6 +158,20 @@ class Token:
 _BARE_TERMINATORS: frozenset[str] = frozenset(" \t\r\n={}(),\"';$")
 
 
+_T = TypeVar("_T")
+
+
+def copies_by_name(items: Iterable[tuple[str, _T]]) -> dict[str, list[_T]]:
+    """Each parameter name, case-folded as SPICE reads it, with what is given
+    for it in order: a name given twice has two entries. The one rule for what
+    counts as a parameter given more than once, which every reader that
+    reports one shares."""
+    copies: dict[str, list[_T]] = {}
+    for name, item in items:
+        copies.setdefault(name.casefold(), []).append(item)
+    return copies
+
+
 def tokenize_body(body: str) -> list[Token]:
     """Tokenize a merged card body into classified tokens.
 
@@ -172,6 +186,16 @@ def tokenize_body(body: str) -> list[Token]:
     """
     atoms = list(_iter_atoms(body))
     return list(_merge_key_values(atoms, body))
+
+
+def key_value_tokens(text: str) -> list[Token]:
+    """The ``KEY=VALUE`` tokens of ``text`` in order, or none when it does not
+    lex: what a part's attribute or a card body gives as parameters."""
+    try:
+        tokens = tokenize_body(text)
+    except SpiceLexError:
+        return []
+    return [tok for tok in tokens if tok.kind == TokenKind.KEY_VALUE and tok.key]
 
 
 # Internal atom alias for the equals sentinel. Passed through to callers

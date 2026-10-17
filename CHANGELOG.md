@@ -10,12 +10,13 @@ tool-surface changes.
 
 ### Fixed
 
-- A run's variations, nested instance targets, Monte Carlo draws and
-  mismatch rewrites set only one copy of a parameter a netlist card gave
+- A run's component assignments, random component draws and mismatch
+  rewrite set only one copy of a parameter a netlist instance card gave
   twice, and any edit that rebuilt the card dropped its earlier copies: `R1 in
   out R=1k R=1k` varied to `2k` was simulated as `R=1k R=2k`, with nothing to
   say so. Every copy is now set, a rebuilt card keeps them all, and removing a
-  parameter removes every copy.
+  parameter removes every copy. A `.model` card that repeats a parameter is
+  still edited one copy at a time.
 - `set_component_value` on a schematic part wrote a `KEY=VALUE` into
   `SpiceLine` when the part already gave that key in `Value` or `Value2`, or
   in another case: a Schmitt trigger's thresholds, or a MOSFET's `w`, were then
