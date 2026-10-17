@@ -635,8 +635,8 @@ class TestCardEditPrimitives:
         view.set_param("VTO", 0.715)
         view.set_param("KP", 95e-6)
         # The cached model card now reflects both edits — the second
-        # set_param relied on _shift_cached_param_tokens to keep KP's
-        # body_offset aligned after the VTO length change.
+        # set_param relies on the parameter offsets being shifted to keep
+        # KP's body_offset aligned after the VTO length change.
         from ltspice_mcp.lib.spice_lex import emit
 
         text = emit(cards)

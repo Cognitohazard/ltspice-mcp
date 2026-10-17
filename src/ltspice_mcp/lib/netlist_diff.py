@@ -155,8 +155,9 @@ def parse_directive(card: SpiceCard) -> Directive | None:
     try:
         if card.kind == "model":
             model = ModelCard.from_card(card)
+            # Every copy of a parameter given twice, so a second copy is a change.
             params = sorted(
-                (f"{k}={_canonical_value(v)}" for k, v in model.params.items()), key=str.casefold
+                (f"{k}={_canonical_value(v)}" for k, v in model.param_pairs()), key=str.casefold
             )
             words = [head, model.name, model.type, *params]
             return Directive(comparable(" ".join(words)), text, model=model.name.casefold())

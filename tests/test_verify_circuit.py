@@ -1357,6 +1357,24 @@ async def test_netlist_quality_reports_a_parameter_given_twice(state_no_sim, wor
     assert twice[0]["severity"] == "observation"
 
 
+async def test_netlist_quality_reports_a_model_or_subcircuit_giving_a_parameter_twice(
+    state_no_sim, work_dir
+):
+    deck = _write(
+        work_dir,
+        "model_twice.cir",
+        "V1 d 0 1\nM1 d d 0 0 NM\nX1 d 0 amp\n"
+        ".model NM NMOS(VTO=0.7 KP=100u vto=0.8)\n"
+        ".subckt amp a b PARAMS: g=1 G=2\nR1 a b {g}\n.ends amp\n.op\n.end\n",
+    )
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    details = [
+        f["evidence"]["detail"] for f in data["findings"] if f["rule_id"] == "duplicate_parameter"
+    ]
+    assert any("NM gives vto 2 times: VTO=0.7, vto=0.8." in d for d in details), details
+    assert any("amp gives g 2 times: g=1, G=2." in d for d in details), details
+
+
 async def test_netlist_quality_silent_on_a_clean_deck(state_no_sim, work_dir):
     deck = _write(work_dir, "clean.cir", _BASE)
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
