@@ -61,7 +61,7 @@ Read it before guessing an argument. From a shell, without starting the engine:
   `runs["items"]` (`case_id`, `assignments`, and a `status` of `"produced"`
   when the case ran), `failures`, `observations`, and the `analysis` block
   when you attached `analyze`.
-- `wait=False` returns the receipt at once; `api.wait(job_id, timeout=None)`
+- `wait=False` returns the receipt at once; `api.wait(job_id, timeout_s=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with
   `timed_out: true`; the job keeps running.
 - Ctrl-C during a wait raises `ApiInterrupted` carrying the receipt and job id;

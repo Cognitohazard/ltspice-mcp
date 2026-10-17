@@ -683,9 +683,8 @@ def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, i
 def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tuple[int, int]]:
     """Union of pin coordinates for every component except ``exclude_ref``.
 
-    Used by remove/move handlers to filter orphaned-wire warnings: a wire
-    endpoint that coincides with another component's pin isn't actually
-    orphaned, it's that component's wire.
+    Used by remove_component's wire cleanup: a wire ending on another
+    component's pin is that component's wire, and stays.
     """
     coords: set[tuple[int, int]] = set()
     for ref in editor.get_components():
@@ -1069,6 +1068,19 @@ grid cell until its anchor is free keeps them readable. Only exact-anchor
 collisions move — no font-metric guesswork, so no false shifts."""
 
 
+def _text_record_body(text: str) -> str:
+    """``text`` as a TEXT record holds it: each line break as a ``\\n`` escape.
+
+    LTspice's on-disk TEXT record is one physical line; embedded newlines are
+    stored as literal "\\n" escapes (LTspice's own multi-line text convention).
+    A raw newline would split the record and corrupt the file — the downstream
+    symptom is an unrelated-looking "Primitive not supported" parse error. Text
+    already in that form is returned unchanged, so a removal matches whether the
+    caller gives the line breaks or the escapes the file holds.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+
+
 def _append_asc_text(
     editor: AscEditor,
     text: str,
@@ -1093,12 +1105,7 @@ def _append_asc_text(
     step it down one grid cell at a time until it's free, so stacked directives
     don't render on top of each other.
     """
-    # LTspice's on-disk TEXT record is one physical line; embedded newlines
-    # are stored as literal "\n" escapes (LTspice's own multi-line text
-    # convention). A raw newline would split the record and corrupt the file
-    # — the downstream symptom is an unrelated-looking "Primitive not
-    # supported" parse error.
-    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    text = _text_record_body(text)
     px = x if x is not None else default_x
     py = y if y is not None else default_y
     occupied = {(int(d.coord.X), int(d.coord.Y)) for d in editor.directives}
@@ -1129,10 +1136,11 @@ def _remove_exact_directive(editor, instruction: str) -> bool:
     directives = getattr(editor, "directives", None)
     if directives is None:
         return bool(editor.remove_instruction(instruction))
+    body = _text_record_body(instruction)
     for idx, d in enumerate(directives):
         dtype = getattr(d, "type", None)
         dtext = getattr(d, "text", None)
-        if dtype == TextTypeEnum.DIRECTIVE and dtext == instruction:
+        if dtype == TextTypeEnum.DIRECTIVE and dtext == body:
             del directives[idx]
             return True
     return False
@@ -1168,8 +1176,8 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
         comment_hit = _strip_matching_comments(editor, compiled)
         if not (directive_hit or comment_hit):
             raise NetlistError(
-                f"No directive or comment matched regex {pattern!r}. "
-                "Use inspect(kind='components') to see what's actually in the file."
+                f"No directive or comment matched regex {pattern!r}. It is matched "
+                "against each TEXT line's text, where a line break is a \\n escape."
             )
         return "directive(s)/comment(s)"
 
@@ -1179,7 +1187,9 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
         raise NetlistError(
             f"No directive or comment matched {instruction!r} exactly. "
             "Match is literal by default — pass 'regex:<pattern>' for regex "
-            "matching, or copy the line verbatim from inspect(kind='components')."
+            "matching, or copy the text of the sheet's TEXT line, after its '!' "
+            "(directive) or ';' (comment); a line break may be given as a newline "
+            "or as the \\n escape the file holds."
         )
     return "directive"
 
@@ -1196,13 +1206,15 @@ def _strip_matching_comments(editor, matcher) -> bool:
     directives = getattr(editor, "directives", None)
     if directives is None:
         return False
+    if isinstance(matcher, str):
+        matcher = _text_record_body(matcher.strip())
     keep = []
     for entry in directives:
         body = getattr(entry, "text", None)
         entry_kind = getattr(entry, "type", None)
         if entry_kind == TextTypeEnum.COMMENT and isinstance(body, str):
             if isinstance(matcher, str):
-                if body.strip() == matcher.strip():
+                if body.strip() == matcher:
                     continue
             else:
                 if matcher.search(body):
@@ -1217,19 +1229,6 @@ def _strip_matching_comments(editor, matcher) -> bool:
 # ---------------------------------------------------------------------------
 # Handlers — schematic-only operations (.asc only)
 # ---------------------------------------------------------------------------
-
-
-def _orphaned_wire_coords(editor: AscEditor, target_only_pins: set[tuple[int, int]]) -> list[str]:
-    """``(x,y)`` strings for wires still ending on a removed/moved component's
-    former pins (its pins minus other components' pins). Shared by the standalone
-    handlers and the edit_schematic ops; call AFTER the mutation."""
-    orphaned: list[str] = []
-    for w in editor.wires:
-        for coord in ((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))):
-            label = f"({coord[0]},{coord[1]})"
-            if coord in target_only_pins and label not in orphaned:
-                orphaned.append(label)
-    return orphaned
 
 
 def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
@@ -1301,30 +1300,6 @@ def _pins_on_crossings(
             "that were separate nets; a pin on a crossing joins them."
         )
     return said
-
-
-def _move_component_warnings(
-    editor: AscEditor,
-    reference: str,
-    old_pin_coords: set[tuple[int, int]],
-    other_pins: set[tuple[int, int]],
-) -> list[str]:
-    """The wires a just-moved component left behind at its old pins.
-
-    ``old_pin_coords`` and ``other_pins`` must be captured BEFORE the move;
-    call this AFTER ``set_component_position``. Where the part now overlaps
-    another is not said here: the finished sheet's own rule says it.
-    """
-    # Pins that the move abandoned (no longer this component's, not a neighbour's)
-    # but that still have a wire ending on them are orphaned by the move.
-    abandoned_pins = old_pin_coords - _component_pin_coords(editor, reference) - other_pins
-    orphaned = _orphaned_wire_coords(editor, abandoned_pins) if abandoned_pins else []
-    if not orphaned:
-        return []
-    return [
-        f"wires left at old pin coordinates with no connection: {', '.join(orphaned)}. "
-        "Re-route or delete these wires."
-    ]
 
 
 def _placed_component_data(
@@ -2170,16 +2145,11 @@ def apply_op_inplace(
         )
         editor.remove_component(op.reference)
         rm_result: dict[str, object] = {"op": "remove_component", "reference": op.reference}
+        # A wire it leaves on nothing is the finished sheet's to say
+        # (dangling_wire_end), so a later op of the batch that removes or
+        # reconnects it leaves nothing said.
         if op.cleanup_wires and target_only:
             rm_result["deleted_wires"] = _drop_wires_at(editor, target_only)
-        elif target_only:
-            # Same orphaned-wire warning the standalone handler surfaces.
-            orphaned = _orphaned_wire_coords(editor, target_only)
-            if orphaned:
-                rm_result["warnings"] = [
-                    f"orphaned wires remain at: {', '.join(orphaned)}. "
-                    "Re-run with cleanup_wires=true to delete them."
-                ]
         return rm_result
 
     if isinstance(op, OpMoveComponent):
@@ -2191,7 +2161,6 @@ def apply_op_inplace(
             else editor.get_component_position(op.reference)[1]
         )
         old_pins = _component_pin_coords(editor, op.reference)
-        other_pins = _other_components_pin_coords(editor, op.reference)
         moved_symbol = editor.components[op.reference].symbol
         moved_info = symbol_info_for(editor, moved_symbol) if moved_symbol else None
         joined = (
@@ -2205,12 +2174,12 @@ def apply_op_inplace(
             if moved_info is not None
             else []
         )
+        # Wires left at its old pins are the finished sheet's to say
+        # (dangling_wire_end), as for remove_component.
         editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
-        mv_warnings = _move_component_warnings(editor, op.reference, old_pins, other_pins)
-        mv_warnings.extend(joined)
         mv_result: dict[str, object] = {"op": "move_component", "reference": op.reference}
-        if mv_warnings:
-            mv_result["warnings"] = mv_warnings
+        if joined:
+            mv_result["warnings"] = joined
         return mv_result
 
     if isinstance(op, OpAddNetLabel):

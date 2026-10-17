@@ -1715,6 +1715,7 @@ class ExperimentRunner(RunnerBase):
             experiment_store.case_raw_path(job, case),
             dialect_for_simulator_name(job.simulator),
             code="partial_progress",
+            raw_kept=_keeps_stopped_artifacts(job),
         )
 
     @staticmethod
@@ -2004,7 +2005,7 @@ class ExperimentRunner(RunnerBase):
 
     def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
         """Best-effort removal of a killed case's exact heavy-artifact paths."""
-        if job.recovery is not None:
+        if _keeps_stopped_artifacts(job):
             return
         raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
         run_suffix = ".cir" if case.native_statistics else case.staged_deck.suffix or ".net"
@@ -2023,6 +2024,11 @@ class ExperimentRunner(RunnerBase):
         for path in paths:
             with contextlib.suppress(OSError):
                 path.unlink()
+
+
+def _keeps_stopped_artifacts(job: ExperimentJob) -> bool:
+    """Whether a stopped case's run files stay on disk: a recoverable job's do."""
+    return job.recovery is not None
 
 
 def _stop_bound(execution: _Execution, reason: StopReason) -> tuple[str, dict[str, Any]]:
@@ -2106,15 +2112,17 @@ def _progress_observation(
     *,
     code: Literal["partial_progress", "run_progress"],
     running_s: float | None = None,
+    raw_kept: bool = False,
 ) -> dict[str, Any] | None:
     """One case's progress fact, read from its raw.
 
-    ``partial_progress`` for a case that was stopped, ``run_progress`` for one
-    still running, which also carries ``running_s``. A case with no raw on
-    disk says so rather than going quiet, and the detail names the case
-    because a receipt merges every case's observations into one job-level
-    list. A read that fails is logged and returns None: neither a case's
-    outcome nor a status call may depend on it.
+    ``partial_progress`` for a case that was stopped, which also carries
+    ``raw_kept``, whether that raw stays on disk once the case's run files are
+    removed; ``run_progress`` for one still running, which also carries
+    ``running_s``. A case with no raw on disk says so rather than going quiet,
+    and the detail names the case because a receipt merges every case's
+    observations into one job-level list. A read that fails is logged and
+    returns None: neither a case's outcome nor a status call may depend on it.
     """
     try:
         fields, reached = _raw_progress(raw, dialect)
@@ -2124,6 +2132,14 @@ def _progress_observation(
     evidence: dict[str, Any] = {"case_id": case_id, "run_index": run_index}
     if code == "partial_progress":
         detail = f"Case {case_id} was stopped after its simulator wrote {reached}."
+        raw_kept = raw_kept and fields["raw_present"]
+        if fields["raw_present"]:
+            detail += (
+                " The raw is kept, because the job is recoverable."
+                if raw_kept
+                else " The raw is removed with the case's other run files."
+            )
+        evidence["raw_kept"] = raw_kept
     else:
         elapsed = (
             f"has been running for {running_s:.0f}s" if running_s is not None else "is running"
