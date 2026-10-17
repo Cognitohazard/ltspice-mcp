@@ -30,7 +30,7 @@ as both builds write every sheet, unless the sheet uses another.
 This module reads no symbol file and knows no geometry beyond the numbers on
 each line. Nothing in it depends on the event loop. The schematic editor does
 not write through it yet: ``edit_schematic`` still commits through spicelib's
-editor (``docs/design/schematic_engine.md``, section 6).
+editor.
 """
 
 from __future__ import annotations

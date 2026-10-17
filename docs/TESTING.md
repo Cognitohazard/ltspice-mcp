@@ -1,549 +1,184 @@
-# Testing & quality practice
+# Testing
 
-This document records how the project tests and, more importantly, a class
-of bug the tests kept missing and the mechanisms added to catch it. Read it
-before adding a tool, an op, or a test campaign.
-
-## The bugs this addresses
-
-Two defects shipped despite a long run of adversarial stress passes against a
-live server:
-
-- a netlist→schematic converter that was unusable for active circuits (it
-  silently dropped every transistor / controlled source, so an active circuit
-  could not even start); and
-- the schematic editor had no way to remove a wire or a net label — you could
-  add both, but not undo either.
-
-Neither is a wrong-output bug. Both are **absence-class** defects: a capability
-that is missing, or unusable for an input class the tests never fed it. They
-survived because a stress pass exercises code that exists, and a missing
-capability has no code to exercise. You cannot exercise a tool that does not
-exist, and a tool that quietly skips an input class looks correct on every
-input outside that class.
-
-The deeper cause was how the evaluation was run: it started from the tool
-list and drove the tools through a plausible workflow ("here are the tools,
-does a reasonable sequence work?"). Three biases followed from that:
-
-- **Passive-input bias.** The circuit batteries were almost entirely R/C/V.
-  An active device was never pushed through the build or convert workflow, so
-  the converter's active-device blindness never triggered.
-- **Additive bias.** Every workflow built something up; none took anything
-  apart. No test needed removal, so nobody noticed it was missing.
-- **Self-grading.** The same agent that built a tool also chose the test
-  circuit and judged the result — and chose inputs that showcased what it had
-  built.
-
-## What each instrument can and cannot catch
-
-|test method|detects|does not detect|
-|-|-|-|
-|stress pass / workflow tests|wrong behavior in code that runs|a missing capability, or one unusable for an input class the tests never feed it|
-|unit / contract tests|wrong behavior in a unit|whether the tool set as a whole can complete a user task|
-|ground-truth numeric checks|silently-wrong numbers|missing capability|
-
-The mechanisms below exist to cover the third column.
-
-## The four mechanisms
-
-### 1. Inverse-operation closure (mechanical)
-
-`tests/test_dispatch.py::TestOpInverseClosure`. The schematic-editing op surface
-must be **closed under inversion**: for every op that mutates the `.asc`, an
-inverse op exists (or it is self-inverse). It checks that an undo capability
-exists, not that state round-trips byte-for-byte (e.g.
-`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore). Each op in the `SchematicOp` union is either
-paired with an inverse op that exists, or declared self-inverse (re-applying it
-with the prior arguments reverts it). The pairing table forces the decision: a
-new `add_*` / `wire_pins` / `create` op with no entry fails the test, so a
-one-way mutation ships only as a reviewed decision, not by accident. Had this
-check existed earlier, it would have caught `add_net_label` shipping without
-`remove_net_label` and `wire_pins` without `remove_wire`. Building the table
-also turned up one missing inverse (`add_directive` had no `remove_directive`
-op), which was added with the check.
-
-The standalone mutating tools live outside the op union, so a companion guard
-(`tests/test_dispatch.py::TestMutatingToolsAreReversible`) requires every
-non-read-only registered tool to declare a reversal path, or to be an explicitly
-accepted one-way mutation (see *Accepted one-way mutations* below). A new
-standalone mutate tool added with no entry fails the test the same way.
-
-### 2. Archetype build battery (input distribution)
-
-`tests/test_circuit_asc.py::TestArchetypeBuildCoverage` and the active-device
-end-to-end test in `tests/test_ngspice_e2e.py`. Every workflow that claims to
-handle "a circuit" must be exercised against each canonical device class, not
-just passives:
-
-- passive (R / C / V)
-- two-terminal active (diode)
-- three-terminal active (MOSFET / BJT)
-- four-terminal controlled source (VCVS / VCCS)
-
-The build battery places and wires each class through the real build path; the
-ngspice test simulates an active circuit (a saturated NPN switch) end to end and
-asserts physical ground truth (the collector is pulled to saturation, proving
-the device conducts). An unusable-for-a-class regression now fails on the next
-run instead of after it ships. Keep the archetype set; add to it when a new
-device class becomes supported, and do not remove active-device coverage.
-
-### 3. Task-down coverage pass (discipline)
-
-Path-walking asks "does what exists work?" Coverage asks "does what exists let
-me finish the job?" Only the second can find a missing capability.
-Periodically, list the **user tasks** (build a circuit, edit one, **fix a
-mistake**, analyze a result, convert between forms) and for each walk the
-*minimal tool sequence*, asking at every step whether the step is possible.
-The removal gap was an impossible step ("undo a misplaced label") that no
-happy-path walk attempted, because a happy path never needs to undo anything.
-Start from what a user needs to accomplish, not from the tool list.
-
-### 4. Blind-artifact judging (part discipline, part regression test)
-
-The agent that builds an artifact is not the sole judge of its quality. This has
-two halves, and only the second is automated — keep them distinct.
-
-- **The discipline (not automated).** Feed the **artifact alone** — the `.asc`,
-  the plot, the netlist, with no build narrative — to an independent reviewer
-  (a person, or a separate model) against a rubric. This came out of the
-  plot-evaluation work: leaving the title and filename on a plot leaked the
-  expected answer into the vision evaluation and inflated its scores;
-  stripping them corrected it. There is no automated blind
-  grader in the suite; this is a review step you run by hand.
-- **The code-backed piece.** `tests/test_circuit_asc.py::TestSchematicReadability`
-  is a deterministic artifact-readback regression: it reads the built `.asc` back
-  from disk and asserts the result is actually wired (real `WIRE` records, net
-  labels only on the terminal nets) rather than connected only through net
-  labels, judged on the artifact rather than on the sequence of calls that
-  produced it. It is not a
-  blind reviewer; it is a fixed assertion that encodes one rubric item.
-
-## Accepted one-way mutations
-
-Closure under inversion is the rule for the schematic op surface. A few
-tool-level mutations are *not* paired, and are recorded here so they
-are not mistaken for the absence-class bug above:
-
-- File creation (`edit_schematic` with `base: "blank"`; formerly the
-  `create_netlist` / `create_schematic` tools) has no delete pair; removing a
-  file is a native filesystem operation, intentionally out of scope for a
-  circuit editor.
-- The pre-0.6.0 `configure_sweep` / `configure_montecarlo` tools created a
-  persisted config with no delete-config tool. A delete tool had low value (a
-  stale config is inert). The question is moot now: sweeps are
-  `run_experiments` variations.
-
-These are decisions, not oversights. If one stops being acceptable, add it to
-mechanism 1 or 2.
-
-## The practice that was already working
-
-### Shared rules and asynchronous checkpoints
-
-When changing a shared rule, search for the behavior as well as the helper's
-name. Call references cannot find a copied bucket list, a hand-written path
-join, or a second header check. Identify every consumer before editing, and
-exercise the changed case through each distinct output path. A parser test
-does not establish that filtering, unit reporting and scalar reads preserve
-what the parser returned. Include a counterexample where a fallback would
-disagree with explicit metadata, such as a voltage-shaped name typed as an
-impedance.
-
-For asynchronous tests, wait for the checkpoint the assertion needs.
-An in-memory status change does not establish that its disk write completed.
-Do not mutate an object still owned by a running coordinator to simulate a
-different process. Use a separately loaded record, and control the relevant
-write or completion boundary with events when testing an interleaving. Test
-both orders deliberately; extending sleeps or accepting a successful rerun
-does not fix the race. A load test can reveal additional failures, but it is
-not a substitute for a deterministic regression of a known interleaving.
-
-That rule was written down and then broken, and each break lost only on the
-Windows runner, one per run. These now carry it:
-
-- **Work the server starts has an owner that can say when it is done.**
-  `BackgroundTasks` (`lib/background.py`) holds every task the server starts
-  without awaiting it, and `ExperimentRunner.settled(job)` and
-  `SessionState.settled()` wait until none is left, counting work started
-  while they wait. A test asserting on what that work produced awaits
-  `settled`, not the disappearance of a file the work also touches. Nothing
-  outside the process is waited on: a simulator's exit, a fake's callback or
-  another process still needs its own event or handshake.
-- **The rules are checked.** `tests/test_test_hygiene.py` fails on a direct
-  task spawn in the source with no recorded owner, and on the test-side
-  patterns every past race used. A line that must break a rule carries a
-  `# timing: <reason>` comment saying why. A wait's timeout is
-  `LIVENESS_S` (`tests/conftest.py`), a cap on a hang, never a claim about
-  how fast the runner is, including a wait handed to `asyncio.to_thread`.
-  The same holds for any short bound a test hands the code under test,
-  however it is spelled: an argument, a setting patched in, a deadline, a
-  timer (`test_every_wait_is_capped_at_the_liveness_bound` lists the cases
-  the check reads). A reason says why nothing has to finish inside the bound
-  ("the peer holds the lock until released"); one saying the work is quick
-  enough to fit is the claim the rule removes, and such a test is
-  restructured as below.
-- **Fake work that must outlast a budget is held, not slept.** A stand-in
-  for slow work blocks on an event the test sets once the call has returned,
-  or runs until the call's own deadline has passed; a sleep sized past the
-  budget guesses at it. Everything else inside the budget is made instant
-  first (a source loaded beforehand under `settled_stamps`, say), because
-  the half of such a test that has to fit inside the budget is the half that
-  fails on a slow runner.
-- **A deadline under test passes when the test says so.** Where what has to
-  fit inside the budget cannot be made instant (a process that must start and
-  start another before there is a tree to reap), the call is given
-  `LIVENESS_S`, the test waits for that state by its own handshake, and then
-  moves the clock the deadline is read against past it
-  (`parser_deadline_passed`, `tests/conftest.py`). Where the clock is an
-  event-loop timer the code starts itself when it calls a method (a run
-  timeout, a job deadline's watch, a snippet's timeout), `start_when` holds
-  that call until the state exists, so the bound counts from there and what
-  it does once it runs out is the real code. A one-second parse deadline
-  that a decoder had to start inside lost on the Windows runner exactly this
-  way: the call ended before the decoder had written its marker, and the test
-  found no process to check.
-- **Races lose on Linux first.** `--jitter-seed=N` (`tests/schedule_jitter.py`)
-  delays thread-to-loop hand-offs and process starts and fires timers up to
-  15.6 ms early, as Windows does, with delays drawn from the seed and the
-  test's id. The CI jitter leg and the release gate run seeds 1 and 2. A
-  failure prints the seed; it usually reproduces under it, though the seed
-  cannot fix the operating system's own scheduling.
-- **Whether a repeated read starts a parser process depends on the clock.**
-  A source's stat stamp is trusted only once its times are older than a
-  timestamp tick, so with the real clock a test re-reading a file it just
-  wrote may or may not reach a worker. A test that counts parser requests, or
-  asserts on a worker's reply, pins the answer with the `settled_stamps` or
-  `unsettled_stamps` fixture (`tests/conftest.py`).
-
-### Existing coverage
-
-The following practices were already sound. They are kept, and everything
-above assumes them:
-
-- **Real-path tests.** Tests drive actual code paths — `tests/test_e2e.py`
-  launches the real server over stdio and speaks the client protocol, and the
-  rest go through config and startup rather than constructing state by hand.
-  Substitution is confined to a few named seams, and the suite does use
-  `monkeypatch` for them:
-  - **The simulator subprocess boundary.** `fake_simulator` and
-    `recorded_fixture_simulator` (`tests/conftest.py`) replace
-    `ExperimentRunner.submit_netlist` — the one call that spawns a simulator.
-    The first hands back a minimal artifact pair on a controllable delay (that
-    delay is what catches a caller who printed a receipt for a job still in
-    flight); the second copies a recorded real-LTspice `.raw`/`.log` pair in,
-    so an analysis stage parses genuine simulator output.
-  - **Platform and environment seams.** WSL detection and path conversion
-    (`lib/wsl.py`), simulator detection at bootstrap, desktop browser launch
-    (`lib/desktop.py`), and the optional cairosvg raster backend — so one
-    machine can exercise every platform branch.
-  - **Timeouts and clocks.** The shutdown cancel timeout and bounds like it
-    are dropped to fractions of a second, so a bound can be shown to fire
-    inside the suite instead of only being asserted about. Two clocks are
-    moved in place of a bound: the one a source's stat stamp settles against
-    (`parser_service._now_ns`) and the one the parser's supervisor reads a
-    call's deadline against (`parser_process._deadline_clock`). `start_when`
-    holds the method a bound's own timer starts in
-    (`ExperimentRunner._await_case`, `ExperimentRunner._deadline_watch`,
-    `CodeWorker._await_reply`) until the state a test reads exists.
-
-  What is *not* substituted: handlers, the response path, the SPICE lexer and
-  validator, the `.raw`/`.log` parsers, symbol and schematic geometry, and the
-  job registry and store. A test for any of those runs the real thing.
-- **Ground-truth-first numeric validation.** Numeric results are checked against
-  closed-form expected values, not "it didn't crash."
-- **Recorded-real fixtures.** Real simulator `.raw` / `.log` output is captured
-  under `tests/fixtures/` so dialect and parse seams run against true output
-  offline (see `tests/conftest.py`). For LTspice the recordings are a system
-  of their own, with a recorder and an inventory: see *Recorded LTspice
-  behaviour* below.
-- **Tiered live tests.** `tests/test_ngspice_e2e.py` runs whenever `ngspice` is
-  on PATH (so it runs in CI); `tests/test_e2e.py` runs un-gated in degraded
-  mode; `tests/test_ltspice_integration.py` and the build comparison in
-  `tests/test_ltspice_recorder.py` are opt-in via an environment flag.
-- **Drift guards.** `tests/test_doc_drift.py` checks documented tool counts and
-  names against the registry; `tests/test_guide_delivery.py` pins the guide's
-  structure (the section list is the files present, the index lists every
-  section under its kind, every pointer to a section resolves) and that its
-  doors serve one text; `tests/test_skill_docs.py` keeps the plugin to the one
-  skill that points at the guide.
-
-See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
-`docs/DESIGN.md` for the architecture and the end-to-end verification recipe.
-
-## Measuring what cannot be run enough times
-
-Some questions about the product are only fully posed by a long, expensive
-run: a two-hour sizing project driven by a model, judged on the final design.
-Such runs are too costly and too noisy to repeat until an average clears the
-noise floor, and the model's own variance (how much it thinks, which path it
-takes) dwarfs most product-caused differences. Treat these as a class and
-answer them with instruments that do not need repetition.
-
-- **Detect patterns; do not estimate means.** Estimating a mean over long runs
-  is what is unaffordable. Detecting a named failure is not: a silently wrong
-  number, a stale artifact replayed as fresh, a cancel that reports success
-  while the run continues. Each of those was a finding at one occurrence. So
-  pre-register the patterns that would count, judge live, and stop a run once
-  its pattern is established rather than letting it finish for a score.
-- **Decompose, then check the decomposition.** A long task is thinking plus a
-  sequence of the short steps a scripted session samples (run, measure, edit,
-  sweep, verify, decide). A fix at the step level carries over. What does not
-  carry over is the class of failure that only exists at length: context
-  growth, state drift across dozens of edits, the agent losing a decision it
-  made an hour earlier, accumulated tool results crowding the window. Keep
-  that list explicit. A restricted test finds general problems only where it
-  samples the failure modes of the long task, so each scale-only class needs
-  a probe of its own.
-- **Prefer model-free instruments for scale.** Bytes per tool result, listing
-  and instruction size, growth per step: deterministic, one run, attributable
-  to the product. Transcript replay: record one long session once, then
-  replay its tool-call sequence against a new tree with no model in the loop;
-  any output difference is a product change, and a person judges whether it
-  would have moved the agent. Long edit batteries: many edits on one sheet,
-  then a coherence check, with no model at all.
-- **Pair the comparisons that do use a model.** Same day, same client, same
-  model and effort, arms alternating, two or more sessions a side, read
-  against the within-arm spread rather than the means. Cost is comparable
-  only within a day: the client's prompt size and cache warmth move it more
-  than the product does. When the spread exceeds the delta, stop measuring
-  cost and look at deterministic proxies; that is how one cost gap between
-  two trees became a one-line description fix.
-- **Run the full task once, as a falsifier.** One long session per release,
-  blind judged, against a pre-registered list of what would count as a
-  failure. It cannot say "ten percent better". It can say nothing on the
-  list happened, or name what did.
-
-The scripted designer session (a stream of small concrete requests over one
-working schematic, scored per request on correctness, geometry legality,
-cost and turns) is the workload this project uses for the paired
-comparisons. It represents the step plane a long project decomposes into,
-and holds the thinking plane constant; it does not represent authoring from
-a blank sheet, topology choice, or long-horizon context growth, which need
-the instruments above.
-
-### The schematic build benchmark
-
-Authoring from a blank sheet has a model-free instrument of its own:
-`tests/test_build_benchmark.py`. Eleven reference netlists
-(`tests/fixtures/build_benchmark/`, from a 3-part filter to a 153-part line)
-are each drawn through `edit_schematic` by scripted builds
-(`tests/_benchmark_builds.py`): a `labelled` build, parts on a grid joined by
-labels, and a `drawn` build, the readable drawing a person makes with the
-present ops. `tests/_build_benchmark.py` scores a build on equivalence with
-the netlist, on cost (calls, ops, refusals, the coordinates the caller wrote,
-the part origins it worked out from a pin, reply size) and on the drawing (each sheet rule's findings, crossings, bends,
-wire length, pins reached only by a label). The scores and the sheets are
-held to a record, so a change to how ops build shows as a diff.
-
-- **Re-recording.** `LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1` writes
-  `tests/fixtures/build_benchmark_record.json` and the built sheets, which
-  are inputs of the LTspice recordings
-  (`tests/fixtures/ltspice_recorded/inputs/benchmark/`). A changed sheet needs
-  its export recorded again (`--only 'benchmark/*'`, *Recording again*
-  below), and the four records that read every sheet under `tests/` gain or
-  change its entries.
-- **Judging a new op.** Write a third build of a circuit with it, drawing
-  the same thing. If it helps the caller, the record shows fewer
-  coordinates, origins worked out from a pin, ops or refusals for the same
-  drawing measures.
-- **A run with a model.** `uv run python scripts/build_benchmark.py score
-  SHEET NETLIST` scores a sheet a model built, with the same functions;
-  `table` prints the record. Such runs are paired as above.
-
-The equivalence is the sheet's nets read offline, so it is held to LTspice:
-both builds' export of every benchmark sheet is recorded
-(`build-benchmark-export`), and the scorer must net each sheet as the export
-does, pin for pin. That is how it learned that LTspice exports a transistor
-drawn with three pins with four nodes.
+This document covers the checks to run before a push or a release, the LTspice
+recordings and other committed records the suite checks against, and test
+conventions. The standard `pytest`, `ruff` and `pyright` commands are in
+`CLAUDE.md`; the architecture is in `docs/DESIGN.md`.
 
 ## Privacy checks before pushing
 
-Enable the repository hooks once per clone with
-`git config core.hooksPath .githooks`. The pre-push hook checks commit messages,
-annotated tag messages, filenames and each file revision being introduced,
-including content added in one commit and removed in a later one. It checks
-the receiving remote's current refs for new branches and refuses to proceed
-when the required history cannot be inspected. Unrelated remote refs absent
-locally contribute no exclusions; they do not require an extra fetch. Findings
-name their category and location without printing the matched private value.
+Enable the repository hooks once per clone:
 
-Run `uv run python scripts/privacy_scan.py tracked` to check the tracked working
-tree, or `uv run python scripts/privacy_scan.py local` to preview unpublished
-history against local remote-tracking refs. The release gate runs both checks.
-The local preview uses the last fetched refs; the pre-push check verifies the
-actual destination. The tracked-file test uses the same scanner, including
-both UTF-16 byte orders for simulator artifacts.
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-push hook checks commit messages, annotated tag messages, filenames and
+each file revision the push introduces, including content added in one commit
+and removed in a later one. For a new branch it compares against the receiving
+remote's current refs, and it refuses the push when it cannot read the history
+it needs. Each finding names its category and location and does not print the
+matched value.
+
+To check without pushing:
+
+```bash
+uv run python scripts/privacy_scan.py tracked   # the tracked working tree
+uv run python scripts/privacy_scan.py local     # unpublished history against local remote-tracking refs
+```
+
+`local` uses the last fetched refs; the pre-push hook checks the actual
+destination. The release gate runs both commands. The tracked-file test uses
+the same scanner, which reads simulator artifacts in both UTF-16 byte orders.
 
 ## Platforms and the release gate
 
-The suite is developed on WSL2 and gated on Linux CI, but the users run
-Windows natively, and neither host reproduces it: a Linux container on a
-WSL2 box inherits the WSL kernel signature, so `is_wsl()` is true there and
-every WSL branch is taken. The 0.6.0 release found the whole class at once:
-dozens of Windows-only failures, among them a text-mode `os.open` that broke
-the revision guard, a `/mnt` drive mapping applied on Windows, a `SIGKILL`
-that does not exist there, and two races that only Windows' file semantics
-expose. The same release then found the runner shapes one push at a time:
-a checkout with line-ending conversion on, a second Windows interpreter, a
-container without an init process, and finally the publisher's own metadata
-checker, which lags the build backend's default metadata version. Seven red
-runs in a row, each fixing the last failure and finding the next.
+The suite is developed on WSL2 and gated on Linux CI, but most users run
+Windows natively, which neither host reproduces. A Linux container on a WSL2
+machine inherits the WSL kernel signature, so `is_wsl()` is true there and
+every WSL branch runs.
 
-The lesson is not "push earlier"; holding the push was deliberate. It is
-that a push must confirm a result, not test a guess. So the release gate is
-a matrix of every shape the runners and the users have, run locally before
-the push, and `scripts/release_gate.sh` runs it:
+The release gate, `scripts/release_gate.sh`, runs the suite locally before a
+push in each configuration the CI runners and the users have:
 
-| shape | why it exists |
+| configuration | reason |
 |-|-|
-| Linux, serially | CI runs the suite on one xdist worker per core; the serial run keeps the one-process order covered, where state a test leaves behind reaches every later test |
-| Linux with WSL detection forced off (`scripts/nonwsl_plugin.py`) | Linux CI is not WSL; this box is, so the non-WSL branch is otherwise never executed here |
-| Linux under schedule jitter, seeds 1 and 2 (`tests/schedule_jitter.py`) | races in the suite used to lose only on the Windows runner, one per run; delaying thread hand-offs and process starts, and firing timers early as Windows does, makes them lose here first. CI runs the same two seeds |
-| Ubuntu container, non-root, `--init` | a fresh machine with ngspice and libcairo2; `--init` because a container whose PID 1 is `bash` never reaps a killed child, and a zombie still answers `os.kill(pid, 0)` |
-| Windows native, Python 3.12 and 3.13, checkout with conversion on | the primary platform, both supported interpreters (3.13 changed `Path.resolve` on a NUL byte), and the bytes a runner with `core.autocrlf=true` sees |
-| the publisher's own metadata check | the PyPI action's bundled `twine` rejected a metadata version the build backend had started emitting by default, after the build job's own newer `twine` had passed it |
+| Linux, serially | CI runs one xdist worker per core; a serial run puts every test in one process, so state a test leaves behind reaches every later test |
+| Linux with WSL detection forced off (`scripts/nonwsl_plugin.py`) | Linux CI is not WSL; on a WSL2 machine the non-WSL branches otherwise never run |
+| Linux under schedule jitter, seeds 1 and 2 (`--jitter-seed=N`, `tests/schedule_jitter.py`) | delays thread hand-offs and process starts and fires timers early, as Windows does, so a race fails on Linux too. CI runs the same two seeds. A failure under a seed usually reproduces under the same seed; `--jitter-seed=random` picks a seed and prints it |
+| Ubuntu container, non-root, `--init` | a fresh machine with ngspice and libcairo2. `--init` is needed because a container whose PID 1 is `bash` never reaps a killed child, and `os.kill(pid, 0)` succeeds on a zombie |
+| Windows native, Python 3.12 and 3.13, checkout with line-ending conversion on | the primary platform; both supported interpreters (3.13 changed how `Path.resolve` handles a NUL byte); and the files as a checkout with `core.autocrlf=true` writes them |
+| the publisher's own metadata check | the PyPI action's bundled `twine` can reject a metadata version the build backend emits by default |
 
-One Windows shape is not in the matrix, because no runner has it: a machine
-whose code page is not cp1252. Text read or written without a named encoding
-is in the machine's code page there, cp936 on a Simplified Chinese install
-and cp932 on a Japanese one. A test that read a UTF-8 source file that way,
-and one that wrote a log holding a degree sign that way, passed on every
-runner and failed on such a machine. Name the encoding in every text read and
-write, in a test as in the source; `PYTHONWARNDEFAULTENCODING=1` makes Python
-warn at each place that does not.
+The matrix has no Windows machine whose code page is not cp1252, because no
+runner has one. On such a machine, text read or written without a named
+encoding uses its code page: cp936 on a Simplified Chinese install, cp932 on a
+Japanese one. Name the encoding in every text read and write, in tests and in
+the source; `PYTHONWARNDEFAULTENCODING=1` makes Python warn at each one that
+does not.
 
-The Windows shape needs a clone on a Windows disk with the Windows-side `uv`
-on PATH; point `LTSPICE_MCP_WINDOWS_CLONE` at its WSL path. Without it the
-script says SKIP, loudly, rather than passing by omission. The container
-shape clones the local `master`, so it tests the last commit.
+The Windows run needs a clone on a Windows disk and the Windows `uv` on PATH;
+set `LTSPICE_MCP_WINDOWS_CLONE` to the clone's WSL path. Without it the script
+reports SKIP, not a pass. The container run clones the local `master`, so it
+tests that branch's last commit.
 
 The native Windows integration tier also needs:
 
 - LTspice installed, `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`, and
   `LTSPICE_MCP_SYMBOL_PATHS` pointing to its symbol directory.
-- For the comparison with the recordings (*Recorded LTspice behaviour*), each
-  build to compare, started once so that it has a settings file: the current
-  build and LTspice XVII in their standard install locations, or named in
-  `LTSPICE_MCP_RECORDER_EXES`. A build that is missing is skipped by name.
-- The console build of ngspice available as `ngspice.exe` on PATH, with its
-  accompanying DLLs available. The GUI executable does not provide the console
-  output these tests inspect.
+- For the comparison with the recordings (*Recorded LTspice behaviour*): the
+  current build and LTspice XVII, each in its standard install location or
+  named in `LTSPICE_MCP_RECORDER_EXES`, and each started once so that it has a
+  settings file. A missing build is skipped, and the skip names it.
+- The console build of ngspice on PATH as `ngspice.exe`, with its DLLs. The GUI
+  executable does not write the console output these tests read.
 - The `raster` extra and native Cairo DLLs with their dependencies. For a
   portable installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
 
-With those prerequisites configured in the test shell, run
-`uv run --locked --extra raster --python 3.12 pytest tests/ -v -ra` and repeat
-with Python 3.13 in a separate environment. Read the skip reasons: a green run
-without these dependencies does not validate simulation or PNG rendering.
-Worker timeout, cancellation and descendant cleanup tests require no simulator
-and run in the ordinary suite.
+With those set in the test shell, run
 
-Parser containment currently admits Linux and native Windows. macOS remains
-refused before the supervisor writes control files or launches a process; the
-bootstrap also refuses before reading its admission gate or importing a decoder.
-`test_parser_process.py` checks both entry points. Its portable platform-string
-checks establish refusal behavior only. The `test_native_macos_bootstrap_*`
-checks use an actual macOS interpreter and otherwise skip; even a native pass
-there establishes refusal, not a working macOS parser backend.
+```bash
+uv run --locked --extra raster --python 3.12 pytest tests/ -v -ra
+```
 
-Enabling macOS requires native proof of the configured hard memory bound before
-decoder import and cleanup after deadline, repeated cancellation and owner
-death, including attempted child-process escape. Linux or Windows checks do
-not establish these macOS guarantees.
+and repeat with Python 3.13 in a separate environment. Read the skip reasons:
+a passing run without these dependencies has not tested simulation or PNG
+rendering. Worker timeout, cancellation and descendant cleanup tests need no
+simulator and run in the ordinary suite.
 
-The optional Sky130 integration tests use `LTSPICE_MCP_TEST_PDK_ROOT` to
-locate a `sky130A` root containing `libs.ref` and `libs.tech`.
-`TestOpenPdkDevice` in `test_subckt_mismatch.py` checks parameter forwarding and
-an exact per-instance threshold shift. `test_nested_targeting.py` exercises
-nested edits and operating-point reads against real devices.
-`test_native_experiments.py` requires the pinned model acquisition named by
-`sky130-e6f9c887-ngspice-v1`; it checks all four statistical modes against direct
-ngspice runs, sample replay, included-device edits, input drift, cancellation
-and persisted provenance. These numerical tests need console ngspice. The model
-files are supplied separately; they are not bundled with the server. Native
-experiments require the matching profile's model files at runtime too.
+Parser containment runs on Linux and native Windows. On macOS the supervisor
+refuses before it writes control files or starts a process, and the bootstrap
+refuses before it reads its admission gate or imports a decoder;
+`test_parser_process.py` checks both. Its portable platform-string checks test
+only the refusal. The `test_native_macos_bootstrap_*` checks need a native macOS
+interpreter and skip elsewhere; a pass there also shows only the refusal, not a
+working macOS parser. Supporting macOS needs native tests there of the hard
+memory bound before decoder import, and of cleanup after a deadline, repeated
+cancellation and owner death, including a child process that tries to escape.
 
-Two practices follow. A test that depends on a POSIX facility skips on
-Windows with the reason (symlinks need a privilege; `wslpath` does not
-exist), never fails. A fixture that must be byte-exact is written with
-`newline="\n"` and read with `encoding="utf-8"`, because the platform
-newline and codec differ there; and `.gitattributes` turns conversion off for
-the whole repository, so a checkout holds the committed bytes everywhere.
+The optional Sky130 integration tests find a `sky130A` root containing
+`libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
+console ngspice. `TestOpenPdkDevice` in `test_subckt_mismatch.py` checks
+parameter forwarding and an exact per-instance threshold shift.
+`test_nested_targeting.py` tests nested edits and operating-point reads on real
+devices. `test_native_experiments.py` needs the pinned model acquisition
+`sky130-e6f9c887-ngspice-v1`; it checks all four statistical modes against
+direct ngspice runs, sample replay, included-device edits, input drift,
+cancellation and persisted provenance. The model files are not bundled with
+the server; native experiments also need the matching profile's model files at
+runtime.
 
-The upload step itself has no local proxy. The publish workflow can be
-dispatched by hand against TestPyPI with an explicit version, which
-exercises trusted publishing and the metadata check without spending a
-release tag.
+A test that depends on a POSIX facility skips on Windows with the reason
+(symlinks need a privilege; `wslpath` does not exist); it does not fail. Write
+a fixture that must be byte-exact with `newline="\n"` and read it with
+`encoding="utf-8"`, because the platform newline and codec differ on Windows.
+`.gitattributes` turns line-ending conversion off for the whole repository, so
+a checkout has the committed bytes on every platform.
+
+The upload step has no local check. To test trusted publishing and the
+metadata check without a release tag, dispatch the publish workflow by hand
+against TestPyPI with an explicit version.
 
 ## Recorded LTspice behaviour
 
-Development and CI run on Linux, where there is no LTspice. For a long time
-"correct" therefore meant "matches what we believe LTspice does", and a test
-written from the same belief protects the belief. The M90 and M270 symbol
-placements were swapped, and the tests' expected pin positions had been worked
-out by hand from the swapped table, so the suite defended the bug until a
-user's own export disagreed. Whether LTspice XVII reads a micro sign stored as
-UTF-8 was inferred, never observed.
+Development and CI run on Linux, where there is no LTspice, so the suite checks
+the server against files LTspice wrote.
 
-**The rule: every LTspice behaviour the server models has a recording behind
-it, from the current build and from LTspice XVII, or a written reason it
-cannot have one.** When code comes to encode "LTspice does X", add an input
-that makes LTspice show X, record it, and write the test against the
-recording. An expected value derived by hand from the assumption under test
-is not evidence for it.
+**Every LTspice behaviour the server models has a recording from the current
+build and from LTspice XVII, or a written reason it cannot have one.** When
+code newly encodes "LTspice does X", add an input that makes LTspice do X,
+record it, and test against the recording. An expected value derived by hand
+from the assumption under test is not evidence for it.
 
 ### What is where
 
-Everything is under `tests/fixtures/ltspice_recorded/`.
+All files are under `tests/fixtures/ltspice_recorded/`.
 
-- `inputs/` holds the decks and sheets, kept minimal so the fixtures stay
-  small, and `inputs/cases.toml`, which is the inventory. Each
-  `[behaviour.<key>]` table names a behaviour, the code that models it, and
-  the inputs that record it. A sheet is exported with `-netlist`; anything
-  else is run with `-Run -b`. A `plot` case runs a sheet in LTspice's window
-  instead, the way the person it is handed to does (*Plot settings* below),
-  and a `save` case opens a sheet there and saves it (*Saved sheets* below).
-  A behaviour with no input says why: `evidence` when the manifest records
-  it some other way, `unrecordable` when nothing can.
-- `ltspice26/` and `ltspice17/` hold what each build wrote, one file per
-  output, and a `manifest.json`: the executable's digest, size and version,
-  the build as its own output names it, the build's defaults for the settings
-  the recorder neutralises, facts about its library (where it is, how each
-  `standard.*` file is encoded, the pins of the stock symbols), and per case
-  the command line, the digest of every input, the exit code, what was
-  written, and the text of any message box the build stopped on.
+- `inputs/` holds the decks and sheets, kept small, and the inventory
+  `inputs/cases.toml`. Each `[behaviour.<key>]` table names a behaviour, the
+  code that models it, and the inputs that record it. A sheet is exported with
+  `-netlist`; anything else is run with `-Run -b`. A `plot` case runs a sheet
+  in LTspice's window instead (*Plot settings* below), and a `save` case opens
+  a sheet there and saves it (*Saved sheets* below). A behaviour with no input
+  gives the reason: `evidence` when the manifest records it another way,
+  `unrecordable` when it cannot be recorded.
+- `ltspice26/` and `ltspice17/` hold each build's output, one file per output,
+  and a `manifest.json` with the executable's digest, size and version; the
+  build name its own output reports; the build's defaults for the settings the
+  recorder removes; facts about its library (its location, the encoding of each
+  `standard.*` file, the pins of the stock symbols); and, per case, the command
+  line, the digest of every input, the exit code, the files written, and the
+  text of any message box the build stopped on.
 
 The directory is named for the build's major version; XVII is 17.
 
 ### What reads the recordings
 
-These run everywhere, with no LTspice:
+These tests run on any machine, without LTspice:
 
-|test module|holds the server to|
+|test module|checks|
 |-|-|
-|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, how an export is spelled and encoded, and what a data label, a bus tap, a bus label, an empty line and an unknown keyword do to one|
-|`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms lint and arity accept or refuse, what a deck means where simulators differ, and how a three-node transistor card is read|
-|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trig inside them, Fourier and device operating-point blocks, and how a failed run is classified|
-|`test_recorded_ltspice_sheet_save.py`|the sheet each build writes when it saves one: its line endings, encoding and record order, and that the lossless document reads it, writes it back byte for byte, and spells a record as the build does|
-|`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (its encoding and line ends, the pane order, the Log line) and what each build shows for one the server wrote|
-|`test_build_benchmark.py`|the build benchmark's reading of a sheet's nets, pin for pin, on every sheet it builds, the fourth node of a transistor drawn with three pins, and that each export is the benchmark's reference circuit|
-|`test_ltspice_recorder.py`|the recorder itself, and the tree: every listed file present with its recorded digest, every input the one that was run, every behaviour recorded on every build or explained|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, an export's spelling and encoding, and the effect on an export of a data label, a bus tap, a bus label, an empty line and an unknown keyword|
+|`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms that lint and arity checks accept or refuse, how a deck is interpreted where simulators differ, and how a three-node transistor card is read|
+|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_sheet_save.py`|the sheet each build writes on save (line endings, encoding, record order), and that `asc_document` reads it, writes it back byte-identical, and formats a record as the build does|
+|`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
+|`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
+|`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
-They go through the code a live result goes through: the contained decoder,
-the schematic editor, the lexer. A sheet is staged with the symbols LTspice
-resolved, the build's own stock symbols being rebuilt from the pins the
-manifest recorded.
+They read the recordings through the same code as a live result: the contained
+decoder, the schematic editor, the lexer. A sheet is staged with the symbols
+LTspice resolved; the build's stock symbols are rebuilt from the pins in the
+manifest.
 
-A difference between the server and a recording is a finding. Fix the server
-if the fix is small, with the recording as the regression test, which must
-fail before the fix. Otherwise pin what LTspice does and what the server does
-side by side in the test, under a name that says so
+A difference between the server and a recording is a finding. If the fix is
+small, fix the server, with the recording as the regression test (it must fail
+before the fix). Otherwise pin LTspice's behaviour and the server's side by
+side in the test, under a name that states the difference
 (`READ_AS_CP1252_BY_THE_SERVER_ONLY` in `test_recorded_ltspice_decks.py`;
 `EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR` and
 `JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY` in
-`test_recorded_ltspice_schematics.py`), so the gap is written down where the
-next person will find it.
+`test_recorded_ltspice_schematics.py`).
 
 ### Recording again
 
@@ -554,314 +189,320 @@ uv run python scripts/record_ltspice_fixtures.py
 ```
 
 With no argument it records every build it finds in the standard install
-locations; pass executables to choose, `LTSPICE_MCP_RECORDER_EXES` to name
-builds installed elsewhere, `--only 'raw/*'` to record some cases and keep the
-rest, and `--check` to record into a temporary directory and print the
-differences from what is committed. Recording the same build twice gives the
-same bytes, so `git diff` after a re-record shows exactly what LTspice now
-does differently.
+locations. Pass executables to choose builds; set `LTSPICE_MCP_RECORDER_EXES`
+to name builds installed elsewhere; pass `--only 'raw/*'` to re-record matching
+cases and keep the rest; pass `--check` to record into a temporary directory
+and print the differences from the committed files. Re-recording the same build
+is byte-identical, so `git diff` after a re-record shows what changed in
+LTspice's behaviour.
 
-What makes that true, and what a recording must never carry:
+The recorder keeps a recording reproducible and free of personal data:
 
 - **No settings of the person recording.** Each case runs against a copy of
-  the build's settings file with the keys that change a result removed, so
-  the build is on its own defaults; a case sets one back when it is the
-  point (`ini = { NoGreekMus = "true" }`). The keys are `BEHAVIOUR_KEYS` in
-  `tests/ltspice_recorder.py`. The build must have been started once, so
+  the build's settings file with the keys that change a result
+  (`BEHAVIOUR_KEYS` in `tests/ltspice_recorder.py`) removed, so the build uses
+  its defaults. A case that tests a setting sets it
+  (`ini = { NoGreekMus = "true" }`). The build must have been started once so
   that it has a settings file to copy.
 - **No path, name, date or duration.** The run directory, the home directory,
-  dates, elapsed times and the thread count are rewritten to fixed values, in
-  the file's own encoding, a raw's samples untouched. The recorder then
-  refuses to finish if a user name, a host name or a local path survived.
-  A path is looked for as each build spells it: LTspice 26 in UTF-8, and
-  LTspice XVII in cp1252 on a machine of any code page, with a question mark
-  for each character cp1252 lacks (so a home folder named in Chinese reaches
-  an XVII export as `C:\Users\??`). The machine's own code page is searched
-  too.
-- **No person.** LTspice opens a window even for a batch run and takes the
-  keyboard focus for as long as it lasts, and it answers some inputs with a
-  message box that waits for OK. On the desktop someone is working at, a
-  stray key press answers it and the run looks as if it had ended by itself.
-  The recorder starts LTspice on a desktop of its own, where it cannot take
-  focus and nobody can answer; a build that stops to ask is recorded as
-  having done so, with what it asked. The launch is the server's own
-  (`lib/hidden_desktop.py`), which is why the LTspice integration tier no
-  longer takes the keyboard either: watching for an LTspice window on the
-  desktop the tests run on is one of its tests
-  (`test_ltspice_integration.py::TestWindowStaysOffTheDesktop`).
+  dates, elapsed times and the thread count are replaced with fixed values in
+  the file's own encoding; a raw file's samples are not changed. The recorder
+  fails if a user name, host name or local path remains. It searches for a path
+  in each build's encoding: UTF-8 for LTspice 26, and cp1252 for LTspice XVII
+  on a machine of any code page, with a question mark for each character
+  cp1252 lacks (a home folder named in Chinese appears in an XVII export as
+  `C:\Users\??`). It also searches in the machine's own code page.
+- **No interaction.** LTspice opens a window even for a batch run, takes the
+  keyboard focus while it runs, and on some inputs shows a message box that
+  waits for OK. The recorder starts LTspice on a separate desktop with the
+  server's launch (`lib/hidden_desktop.py`), where it cannot take focus and
+  nobody can answer a box; when a build stops on a message box, the recording
+  notes that it stopped and keeps the box's text. The LTspice integration tier
+  uses the same launch, and
+  `test_ltspice_integration.py::TestWindowStaysOffTheDesktop` checks that no
+  LTspice window appears on the desktop the tests run on.
 
-Things about the command line that cost an afternoon each: `-ini <file>` goes
-after the input (given first, LTspice 26 exits 0 having run nothing and XVII
-opens its window); the settings copy is never empty (a build that starts on
-an empty one behaves as on first launch, and XVII then runs its updater);
-`-ascii` is ignored when a settings file is also named, and when the deck's
-own file name contains "ascii".
+Command-line details:
+
+- `-ini <file>` goes after the input. Given before it, LTspice 26 exits 0
+  without running anything and XVII opens its window.
+- The settings copy is never empty. A build started on an empty one behaves as
+  on first launch, and XVII then runs its updater.
+- `-ascii` is ignored when a settings file is also named, and when the deck's
+  file name contains "ascii".
 
 ### Plot settings
 
-LTspice writes a plot settings file (`.plt`) only from its waveform window,
-so a `plot` case drives the window (`ltspice_recorder.drive_plot`). It runs
-an RC sheet with `-Run`, as a person opening it does, and finds the waveform
-window of the sheet's raw file. Its `steps` are sent as the window's own menu
-commands, each by the id the build's menu resource gives its label (Add trace,
-Add Plot Pane Below Active Pane), read from the executable rather than from
-the running window. A trace is typed into the Add Traces dialog. The case ends
-with the File menu's Save Plot Settings, which writes `<sheet>.plt`. A case
-with a `plot` input puts that file beside the sheet first and saves straight
-away, so what the build writes is what it read. Commands go to the waveform
-window's own frame: after a run the schematic window can be the active one,
-and its Save saves the sheet. A dialog the case did not open is a box the
-build stopped on and is recorded as one, with no `.plt` kept. A window that
-does none of this in the timeout fails the recording.
+LTspice writes a plot settings file (`.plt`) only from its waveform window, so
+a `plot` case drives that window (`ltspice_recorder.drive_plot`). It runs an RC
+sheet with `-Run`, as opening it by hand does, and finds the waveform window of
+the sheet's raw file. The case's `steps` are sent as the window's menu commands
+(Add trace, Add Plot Pane Below Active Pane), each by the command id the
+build's menu resource assigns to its label, read from the executable. A trace
+is typed into the Add Traces dialog. The case ends with File > Save Plot
+Settings, which writes `<sheet>.plt`. A case with a `plot` input first puts
+that file beside the sheet and saves immediately, so the saved file shows what
+the build read from it. Commands are sent to the waveform window's frame,
+because after a run the schematic window can be active, and its Save saves the
+sheet. A dialog the case did not open is recorded as a message box the build
+stopped on, and no `.plt` is kept. If the window completes none of these steps
+within the timeout, the recording fails.
 
-The plot cases were first recorded under Wine 11, on the same executables as
-the rest of the recording (the digests match the manifest's), and then again
-on Windows with
-`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`.
-Every file came out on Windows byte for byte as it had under Wine, on both
-builds; the committed entries are the ones from Windows. An entry recorded
-under Wine says so in `host`, and one recorded on Windows has no `host`. A
-partial recording like that keeps the library facts the rest of the recording
-was made with, and says so when the machine's own differ: a Wine prefix has
-the library the installer unpacked, not the one the committed manifest
-describes. It keeps the settings defaults on record too, and adds any a run
-writes back that it has none for.
+The committed plot entries were recorded on Windows with
+`uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`, and are
+byte-identical to an earlier recording of the same executables under Wine 11.
+An entry recorded under Wine records that in `host`; an entry recorded on
+Windows has no `host`. A partial recording keeps the library facts and settings
+defaults of the rest of the recording, reports when this machine's differ, and
+adds any default a run writes back that the manifest lacks.
 
-One setting of the person at the window reaches a plot settings file: the
-waveform window's grid, the `grid` key of the settings file, which a key
-press turns on and the build then remembers. With it on, each build writes a
-`GridStyle` line in every pane it makes, and ranges whichever Y axis has fewer
-divisions out to as many as the other has: the phase axis of an AC pane
-(`plot/ac_grid_on`), the left axis of a transient pane with a trace on each
-side (`plot/math_grid`). A pane read from a file keeps the line the file had
-and takes none from the setting (`plot/read_grid`, `plot/read_two_panes_grid`).
-Four of XVII's plot files came out that way
-on a machine where XVII's grid had been left on, which looked like a
-difference between Wine and Windows and was not one. The recorder now removes
-the key, so each build is on its default, which is off; XVII writes that
-default back, and the manifest holds it.
+One user setting affects a plot settings file: the waveform window's grid (the
+`grid` key of the settings file). With the grid on, each build writes a
+`GridStyle` line in every pane it creates and extends the Y axis with fewer
+divisions to match the other (`plot/ac_grid_on`, `plot/math_grid`). A pane read
+from a file keeps the file's line (`plot/read_grid`,
+`plot/read_two_panes_grid`). The recorder removes the key, so each build uses
+its default, off.
 
-Every other committed case was recorded again under Wine (`--check`) to see
-what the host changes. On LTspice 26 every file came out as committed but
-those of the two cases that run on the recording user's own settings, which
-differ by design. On XVII each log ended without the blank line that follows
-the matrix compiler report. Two of XVII's logs, `log/meas_trig` and
-`log/meas_trig_radian`, had been committed in that form, recorded before an
-entry named its host; they are now as Windows writes them, with the line.
-Neither touches a plot case, whose recording is the build's own serialisation
-of the file. Under Wine a desktop of the recorder's own is made but the
-windows on it cannot be listed, so the recorder launches on Wine's display
-instead and looks for a box, or the waveform window, among the windows of the
-process it started there. That is how the box XVII stops on for the two
-sheets with a byte order mark is recorded under Wine as it is on Windows.
+Under Wine, the windows on the recorder's separate desktop cannot be listed, so
+the recorder launches on Wine's display and searches the started process's
+windows for a message box or the waveform window. Re-recorded under Wine with
+`--check`, LTspice 26's files match the committed ones except for the two cases
+that run on the recording user's own settings, which differ by design; XVII's
+logs lack the blank line after the matrix compiler report.
 
 ### Saved sheets
 
-A build writes a sheet only from its window, so a `save` case drives it
-(`ltspice_recorder.drive_save`). The build is started on the sheet alone,
-the schematic window's own Save is sent to it by the id the build's menu
-gives it, and the case ends when the file has been written and holds still.
-Nothing on the sheet is changed first: the point is the bytes a build writes
-for a sheet it read. A sheet the build stops on a box for is recorded as
-that box, with no sheet kept.
+A build writes a sheet only from its window, so a `save` case drives the window
+(`ltspice_recorder.drive_save`). The recorder starts the build with only the
+sheet, sends the schematic window's Save by its menu command id, and ends the
+case when the file has been written and stops changing. The sheet is not
+edited first. If the build stops on a message box, the box is recorded and no
+sheet is kept.
 
-These are the only sheets in the suite that LTspice wrote, and both builds
-agree on all of it but the first line. The line endings are LF, whatever the
-sheet had. The text is 8-bit: a UTF-16 sheet is saved as 8-bit text, and
-bytes that are UTF-8 are kept as the bytes they are, never read as UTF-8.
-The kinds come in one order (wires, flags each with its port line, symbols,
-text, drawn lines, the other shapes); wires are put in an order of the
-build's own, and everything else keeps the order it had. LTspice 26 writes
-`Version 4.1` over a sheet that said 4. Neither build opens a sheet that
-starts with a byte order mark. They were recorded on Windows, so their
-manifest entries have no `host`.
+These are the only sheets in the suite written by LTspice. Both builds write
+the same, except for the sheet's first line:
+
+- Line endings are LF, whatever the sheet had.
+- The text is 8-bit: a UTF-16 sheet is saved as 8-bit text, and UTF-8 bytes
+  are kept as they are, not decoded.
+- Records are grouped by kind in a fixed order (wires, flags each with its
+  port line, symbols, text, drawn lines, other shapes). The build reorders
+  wires by its own rule; other records keep their order.
+- LTspice 26 writes `Version 4.1` for a sheet that had `Version 4`.
+- Neither build opens a sheet that starts with a byte order mark.
+
+They were recorded on Windows, so their manifest entries have no `host`.
 
 ### An open window and the bridge
 
-`edit_schematic` keeps a sheet that is open in an LTspice window in step with
-its file, through the MCP bridge LTspice has shipped since 26.1
-(`lib/ltspice_bridge.py`, `lib/ltspice_window.py`). What that models is
-recorded too, by a recorder of its own, because it needs a window and the main
-one runs a build once per input:
+`edit_schematic` keeps a sheet open in an LTspice window in sync with its file
+through the MCP bridge that LTspice ships from 26.1 (`lib/ltspice_bridge.py`,
+`lib/ltspice_window.py`). Recording it needs an open window, so the bridge has
+its own recorder:
 
 ```bash
 uv run python scripts/record_ltspice_bridge.py
 ```
 
-It starts LTspice with its window on a desktop of its own and talks to it with
-the server's own client, whose bridge runs on the server's desktop, another
-one: every recording is also of a bridge reaching a window on a desktop it is
-not on, as it does a person's. It opens each sheet in
-`tests/fixtures/ltspice_bridge_recorded/inputs/`, and writes under
-`ltspice26/` the window's copy of each (`sheets/`), every call it made and the
-answer (`conversation.json`), and a manifest of digests. The two behaviours are
-listed in `cases.toml` with that tree as their `evidence`. LTspice XVII has no
-bridge, so there is one generation here.
+It starts LTspice with its window on a separate desktop and connects with the
+server's client, whose bridge runs on another desktop, so every recording also
+tests a bridge reaching a window on a different desktop. It opens each sheet in
+`tests/fixtures/ltspice_bridge_recorded/inputs/` and writes under `ltspice26/`
+the window's copy of each sheet (`sheets/`), every call and its reply
+(`conversation.json`), and a manifest of digests. `cases.toml` lists these
+behaviours with that tree as their `evidence`. LTspice XVII has no bridge, so
+only LTspice 26 is recorded here.
 
-Two things read it. `test_ltspice_bridge.py` holds `sheet_content` to the
-recorded pairs: a sheet LTspice only opened must compare equal to its file,
-though the text differs. It also replays the recorded conversation against
-`tests/fake_ltspice_bridge.py`, the stand-in the rest of the suite runs, so a
-test that passes against the stand-in passes for a recorded reason. The pairs
-are what showed that comparing text would not do: of 700 of LTspice's own
-example sheets read back through the bridge, 79 came back as written. A new
-way LTspice rewrites a sheet on opening it goes in as an input here, not as a
-rule worked out by hand; the text-grid rule was first written from one example
-and was wrong for a negative coordinate.
+`test_ltspice_bridge.py` checks `sheet_content` against the recorded pairs: a
+sheet LTspice only opened must compare equal to its file even when the text
+differs (of 700 of the example sheets LTspice ships, read back through the
+bridge, 79 came back unchanged). It also replays the recorded conversation
+against `tests/fake_ltspice_bridge.py`, the fake bridge the rest of the suite
+uses.
+When LTspice is found to rewrite a sheet in a new way on opening it, add an
+input here; do not write the rule by hand.
 
-The manifest also notes the reference documents the install holds, by file
-name and front matter key, which is what `lib/simulator_docs.py` reads; the
-documents themselves are the vendor's and are not recorded. The opt-in tier
-checks that the documents read from the install are the ones LTspice's own
-server lists.
+The manifest also lists the install's reference documents by file name and
+front matter key, the fields `lib/simulator_docs.py` reads; the documents
+belong to the vendor and are not recorded. The opt-in tier checks that the
+documents read from the install match the list LTspice's own server reports.
 
-Which traces a pane draws is recorded by having the pane save its plot
-settings, which lists them. The recorder writes plot settings beside results,
-opens the results, and reads back what the pane saves. The pane draws the
-traces named; if the results are opened again while the pane is open, it keeps
-its old traces; after it is closed and reopened, it draws the new ones
-(`plot-settings-on-open`). This is why `plot_waveform(in_ltspice=true)` closes
-and reopens a pane. The opt-in tier uses the same check on the traces the
-reply names.
+The recording also covers:
 
-The recorder also closes sheets from outside, as the server does to make
-LTspice look for a sheet's results again (`sheet-closed-from-outside`). An
-unchanged sheet closes without a question, its plot closes with it, and after
-reopening it finds results added beside it in the meantime. For a sheet the
-bridge has written to, LTspice asks whether to save first, even when it
-matches the file. The recording keeps the box's text and records that the
-window takes no input while the box is up, that the bridge still answers, that
-Cancel leaves the sheet open as it was, and that No closes it without writing
-the file.
+- **Which traces a pane draws** (`plot-settings-on-open`). The recorder writes
+  plot settings beside a results file, opens the results, and reads back the
+  plot settings the pane saves. The pane draws the named traces. If the
+  results are opened again while the pane is open, it keeps its old traces;
+  closed and reopened, it draws the new ones, which is why
+  `plot_waveform(in_ltspice=true)` closes and reopens a pane. The opt-in tier
+  checks the traces the reply names the same way.
+- **A sheet closed from outside** (`sheet-closed-from-outside`), which the
+  server does to make LTspice look for a sheet's results again. An unchanged
+  sheet closes without a prompt, its plot closes with it, and once reopened it
+  finds results added beside it in the meantime. For a sheet the bridge has
+  written to, LTspice asks whether to save, even when the sheet matches the
+  file. The recording keeps the box's text and records that the window accepts
+  no input while the box is up, that the bridge still responds, that Cancel
+  leaves the sheet open unchanged, and that No closes it without writing the
+  file.
+- **Whether a plot is tied to its sheet** (`plot-tied-to-sheet`), so that
+  clicking a net plots it. The recorder posts a grid of clicks over the sheet's
+  view and reads the plot's traces before and after. A plot opened by the
+  sheet's Visible Traces command changes; a plot the bridge opens, by the
+  results file's path or the sheet's, does not. A run made in the window also
+  ties its plot; this was seen in a window capture and is not recorded.
+- **The sheet menu's Visible Traces item.** LTspice disables it for a sheet
+  with no associated results; the server uses this to decide which sheet to
+  reopen before sending the command.
+- **The Visible Traces command**, which `plot_waveform(in_ltspice=true)` sends
+  for a run of a sheet (`lib/ltspice_frame.py`). The recorder queries the
+  window's frame directly and records that panes are titled with their files'
+  names; that the command does not open results put beside a sheet that was
+  already open; that it opens, without a prompt, results that were beside the
+  sheet when it was opened; and that with those results open it shows a
+  dialog, whose title is recorded. A results pane keeps the data it read when
+  its file is replaced; told to close, it closes without a prompt and saves no
+  plot settings, with or without a trace added by hand; reopened from the
+  sheet, it shows the file's current content. The manifest records the command
+  id the build's sheet menu assigns to the label. `tests/test_ltspice_frame.py`
+  checks `FakeFrame`, the frame the handler tests use, against these facts.
+  Seen in two window captures but not recorded: with no pane of the results
+  open, the command reads the file's current content.
+- **Which copy a run in the window simulates.** The recorder runs the sheet
+  with one resistor value in the window and another in the file, and records
+  which value the netlist beside the sheet has, and that the sheet file was not
+  written.
+- **Undo after a replaced copy.** Replacing the window's copy adds one step to
+  its undo history. The recorder posted Ctrl+Z to the sheet's view on the
+  hidden desktop, with the Control key set down in that window's key state
+  (`AttachThreadInput`, then `SetKeyboardState`), and read the window's copy
+  back through the bridge. After two sheets were pushed in turn, one Ctrl+Z
+  restored the first, a second restored the sheet as opened, and Ctrl+Shift+Z
+  restored the first again; the file was never written.
+- **LTspice started with no window open** (`ltspice_windows.start_in_view`),
+  which the server does when a caller asks to show something in LTspice. The
+  recorder starts LTspice the same way, with no document, and records that the
+  bridge finds a window with no document open and none in front; `FakeStart`,
+  the start the handler tests use, is checked against that. No test starts
+  LTspice on the visible desktop: the opt-in tier starts it on a separate
+  desktop, and the in-view start is tested only for the command line and flags
+  it passes to Windows.
 
-Whether LTspice ties a plot to a sheet, so that clicking a net plots it, is
-recorded the same way: the recorder posts a grid of clicks over the sheet's
-view and reads the plot's traces before and after (`plot-tied-to-sheet`). A
-plot opened by the sheet's Visible Traces command changes; one the bridge
-opens, by the results file's path or by the sheet's, does not. That a run
-made in the window ties its plot was first seen by capturing the window and
-is not in the recording. The first round of this looked only at the bridge's
-ways of opening a file and concluded that only a run in the window ties a
-plot; a person pressing the toolbar button showed otherwise.
+One behaviour is not recorded: given a document containing a NUL character,
+LTspice 26.1.1 stops responding permanently. The client refuses to send such
+text (`replace_design_text`), and the test checks that it is never sent.
 
-The recording also keeps the state of the sheet menu's Visible Traces item:
-LTspice turns it off for a sheet that knows of no results, which is how the
-server tells a sheet to reopen from one to send the command to.
+The bridge recording also holds LTspice's own reading of results files. The
+recorder passes every results file in the main recordings' `raw` group, from
+both builds, to LTspice's reader and keeps each reply under `reader/`.
+`tests/test_ltspice_reader_agreement.py` checks the server's decoder against
+these replies on any machine, without LTspice: every sample to the last bit, a
+stepped run split at the same points, and the same parameter values per step.
+When a results file in the main recordings is added or re-recorded, run the
+bridge recorder again on Windows with LTspice 26.1 or later; until then one
+test fails and names the script.
 
-What that command does is recorded, since `plot_waveform(in_ltspice=true)`
-sends it for a run of a sheet (`lib/ltspice_frame.py`). The bridge recorder
-asks the window's frame directly, from the desktop it runs on to the one the
-window is on: the frame's panes are titled with their files' names; results
-put beside a sheet that was already open are not opened by the command;
-results beside a sheet when it is opened are, with nothing asked on the way;
-and with them open the same command shows a dialog, whose title is recorded.
-It also records what lets the server close such a pane to show a newer run:
-a results pane goes on holding what it read when its file is replaced (the
-bridge says which results the pane in front holds, and the two files differ
-in precision); told to close, it closes and nothing is asked, with a trace
-added by hand or without, and no plot settings are saved; and opened again
-from the sheet it holds the file as it is now.
-The manifest notes the number the build's sheet menu gives the command's
-label. `tests/test_ltspice_frame.py` holds `FakeFrame`, the frame the handler
-tests run, to those facts. Looked at and not recorded: that the file is read
-when the command is given with no pane of it open, so that results replaced
-since a run in that window, or since the sheet was opened, are the ones drawn
-(two captures, the replaced results being of another resistor value). What a run in the window
-simulates is recorded: the recorder makes its run with the window holding one
-resistor value and the file another, and notes which the netlist beside the
-sheet carries, and that the sheet was not written.
-
-A third is what makes replacing a window's copy safe to do unasked: the
-replaced sheet is one step of the window's undo history. Undo is a key press,
-which the bridge has no call for, so it was posted to the sheet's view on the
-hidden desktop, with the Control key down in that window's own key state
-(`AttachThreadInput`, then `SetKeyboardState`), and the window's copy read
-back through the bridge. After two sheets pushed one after the other, one
-Ctrl+Z gave back the first, a second the sheet as opened, and Ctrl+Shift+Z the
-first again, with the file never written.
-
-A fourth observation is behind a refusal. Handed a document with a NUL
-character in it, LTspice 26.1.1 stops answering for good, which in a window is
-every document a person has open; it was seen by pushing a UTF-16 sheet read as
-an 8-bit one. The client refuses to send such text (`replace_design_text`), so
-there is nothing to record: the test is that it is never sent.
-
-The server starts LTspice itself in one case: for a caller asked to show
-something in it when no window is open (`ltspice_windows.start_in_view`). The
-recorder starts one the same way, with no document, and notes that the bridge
-finds it as a window with nothing open and nothing in front; `FakeStart`, the
-start the handler tests use, is held to that. No test starts LTspice where it
-can be seen: the opt-in tier's start is on a desktop of its own, and the start
-in view is tested for the command line and flags it asks Windows for.
-
-The same recording holds what LTspice's own reader says of a results file.
-The bridge can be asked to read one, which is LTspice reading its own format,
-and the server's reader is one this project keeps up itself. So the recorder
-hands LTspice's reader every results file in the main recordings' `raw` group,
-those XVII wrote as well as LTspice 26's own, and keeps each reply under
-`reader/`. `tests/test_ltspice_reader_agreement.py` holds the server's decoder
-to them on any machine: every sample to its last bit, a stepped run divided at
-the same points, the same parameter values a step. It needs no LTspice to
-run. It does need the bridge recorder run again, on Windows with LTspice 26.1
-or later, whenever a results file in the main recordings is added or recorded
-again; until then one test fails and names the script.
-
-The two readers agree on what every file holds. They present five kinds of
-file differently, and the tests pin what LTspice's says of each:
+The two readers agree on every file's content. They present five kinds of file
+differently, and the tests pin LTspice's reading of each:
 
 - XVII stores some time points of a compressed transient with the sign set.
-  LTspice 26's reader returns them negative; the server returns plain time.
-- A transient saved from a later start (`.tran 0 2m 1m`) comes back from
-  LTspice's reader starting at zero; the server adds the header's `Offset`.
-- LTspice's reader refuses a file of one point (an operating point, a
-  transfer function); the server reads it.
-- A stepped operating point is one sweep to LTspice's reader, with the
-  stepped parameter for its axis; the server keeps a point a step.
-- A run stopped part way is read by LTspice's reader as far as its header's
-  point count, which can lag the samples; the server's decoder refuses a file
-  whose header and samples disagree, and reports how far the run got
-  another way.
+  LTspice 26's reader returns them negative; the server returns the time with
+  the sign cleared.
+- A transient saved from a later start time (`.tran 0 2m 1m`) starts at zero in
+  LTspice's reader; the server adds the header's `Offset`.
+- LTspice's reader refuses a file of one point (an operating point, a transfer
+  function); the server reads it.
+- LTspice's reader reads a stepped operating point as one sweep with the
+  stepped parameter as its axis; the server keeps one point per step.
+- LTspice's reader reads a run stopped part way up to its header's point count,
+  which can lag the samples; the server's decoder refuses a file whose header
+  and samples disagree, and reports how far the run got by other means.
 
-Other bridges may be running on the machine, each with a hidden LTspice of
-its own that comes and goes as windows open and close: an assistant session
-with LTspice's own server registered has one. A recording keeps only the
-LTspice the recorder started, so those do not reach it.
+Other bridges may be running on the machine, each with its own hidden LTspice
+that starts and exits as windows open and close (an assistant session with
+LTspice's own MCP server registered runs one). A recording includes only the
+LTspice the recorder started.
 
-The bridge can start an LTspice of its own, and one thing about that is not
-in the recording because the recording is made with the launch disabled. The
-opt-in tier has it: `TestSheetOpenInAWindow` starts the bridge with nothing to
-stop the launch and checks that the LTspice it starts has its windows on the
-server's desktop, none on the desktop the test runs on, and is gone when the
-session closes.
+The recording disables the bridge's own LTspice launch. The opt-in tier tests
+that launch: `TestSheetOpenInAWindow` starts the bridge without blocking the
+launch and checks that the LTspice it starts has its windows on the server's
+desktop, none on the test's desktop, and exits when the session closes.
 
 ### The opt-in tier
 
 With `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`,
 `test_ltspice_recorder.py::test_an_installed_build_still_behaves_as_recorded`
-records each installed build again, a group of cases at a time, and compares
-the result with what is committed. A build of a newer major version than any
-recorded stands in for the newest recording of its generation, so a release
-that changes behaviour fails there by name. A build that is not installed
-skips with that reason; it never fails for it. Text files are compared as
-bytes, raw files by header and by samples to a part in a million (a solver's
-last bits depend on the processor), and a run stopped part way only by its
-header.
+re-records each installed build, one group of cases at a time, and compares the
+result with the committed files. A build with a newer major version than any
+recorded one is compared with the newest recording of its generation, so a
+release that changes behaviour fails this test, which names the build. A build
+that is not installed is skipped with that reason, not failed. Text files are
+compared as bytes; raw files by header and by samples to one part in a million
+(a solver's last bits depend on the processor); a run stopped part way by its
+header only.
 
-When it fails, look at the difference before recording over it: either
-LTspice changed, in which case the model may need to follow, or the recorder
-missed something that varies. A path, a date or a duration belongs in the
-scrubber. A file that comes out differently for another person on the same
-build is a setting of theirs, and its key belongs in `BEHAVIOUR_KEYS` (the
-waveform grid was one, *Plot settings* above).
+When it fails, read the difference before re-recording: either LTspice changed
+and the server's model may need to change, or the recorder missed something
+that varies. Add a path, date or duration to the scrubber (`Scrubber` in
+`tests/ltspice_recorder.py`). A file that differs for another person on the
+same build comes from one of their settings; add its key to `BEHAVIOUR_KEYS`
+(the waveform grid was one, *Plot settings* above).
+
+## Re-recording the suite's records
+
+Several tests check the code against a committed JSON record of its answers on
+every sheet in the suite. A difference is either a regression or an intended
+change; for an intended change, re-record the file in the same commit, so
+`git diff` shows what changed. Each record uses only the suite's own symbols,
+so it is the same on every machine. To re-record one, run its test module with
+its variable set to `1`, for example:
+
+```bash
+LTSPICE_MCP_RECORD_SHEET_FINDINGS=1 uv run pytest tests/test_sheet_findings_snapshot.py
+```
+
+|variable|test module|record|
+|-|-|-|
+|`LTSPICE_MCP_RECORD_SHEET_FINDINGS`|`tests/test_sheet_findings_snapshot.py`|`tests/fixtures/sheet_findings.json`: the findings `edit_schematic` and `verify_circuit` each report for every `.asc` under `tests/`|
+|`LTSPICE_MCP_RECORD_ROUTE_PLANNER`|`tests/test_route_planner_record.py`|`tests/fixtures/route_planner_record.json`: the `wire_pins` route planner's results for a fixed set of proposals on every sheet|
+|`LTSPICE_MCP_RECORD_LABELS_AND_MOVES`|`tests/test_label_and_move_record.py`|`tests/fixtures/label_and_move_record.json`: the `add_net_label` and `move_component` results for a fixed set of proposals on every sheet|
+|`LTSPICE_MCP_RECORD_INSPECT_SHEETS`|`tests/test_inspect_sheet_record.py`|`tests/fixtures/inspect_sheet_record.json`: the `inspect(kind="net")` and `inspect(kind="components")` replies for every sheet|
+|`LTSPICE_MCP_RECORD_BUILD_BENCHMARK`|`tests/test_build_benchmark.py`|`tests/fixtures/build_benchmark_record.json` and the built sheets (below)|
+
+### The schematic build benchmark
+
+`tests/test_build_benchmark.py` draws eleven reference netlists
+(`tests/fixtures/build_benchmark/`) through `edit_schematic` with the scripted
+builds in `tests/_benchmark_builds.py`, and `tests/_build_benchmark.py` scores
+each build on equivalence with the netlist, on cost (calls, ops, refusals,
+coordinates written, reply size) and on the drawing (each sheet rule's
+findings, crossings, bends, wire length, pins reached only by a label). The
+test checks the scores and the built sheets against the record.
+
+`LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1` writes the record and the sheets. The
+sheets are stored under `tests/fixtures/ltspice_recorded/inputs/benchmark/` as
+inputs of the LTspice recordings, so a changed sheet needs its export
+re-recorded (`--only 'benchmark/*'`, *Recording again* above), and the four
+records above that read every sheet under `tests/` gain or change entries for
+it. To evaluate a new op, add a build that uses it to draw an existing
+benchmark circuit, and compare its cost with the other builds in the record.
+
+To print the record, or to score a sheet built outside the benchmark with the
+same functions:
+
+```bash
+uv run python scripts/build_benchmark.py table
+uv run python scripts/build_benchmark.py score SHEET.asc NETLIST.cir
+```
 
 ## Conventions
 
-- **Behavior-named test files.** Tests are named for the behavior they cover,
-  never for a test campaign, date, or version. A regression found in a test
-  campaign goes in the existing behavior module it belongs to; its origin goes
-  in a docstring or comment, not the filename.
-- **Plain-language findings.** Shipped code, docstrings, commit messages, and
-  this doc describe a bug by its actual behavior in plain technical terms — no
-  internal severity codes, codenames, or pass numbers (those stay in the
-  internal backlog).
+- **Behavior-named test files.** Name a test file for the behavior it covers,
+  never for a test campaign, date or version. Put a regression found in a test
+  campaign in the existing module for its behavior, and note its origin in a
+  docstring or comment, not the filename.
+- **Plain-language findings.** Shipped code, docstrings, commit messages and
+  this doc describe a bug by its actual behavior in plain technical terms, with
+  no internal severity codes, codenames or pass numbers.
 - **Tables** use minimal separators (`|-|-|`); no box-drawing characters.

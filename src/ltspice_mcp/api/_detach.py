@@ -6,8 +6,8 @@ blocks until that process reports a durable receipt — or dies, or runs out of
 time trying.
 
 Nothing here writes a job record. The owner does, so the record's `owner_pid`
-names a live supervising process from its first byte; see
-`docs/design/python_api.md` §11 for why that ordering and not the other one.
+names a live supervising process from its first byte (`docs/design/python_api.md`
+§11).
 """
 
 from __future__ import annotations

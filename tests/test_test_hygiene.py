@@ -3,8 +3,7 @@
 Every race the suite has hit had the same shape: a test waited on something
 other than what it then asserted — a file disappearing, a fixed sleep, a
 timeout sized for the machine it was written on — and lost on a slower
-runner. ``docs/TESTING.md`` said so for weeks before the next one was
-written. These checks make the rules mechanical.
+runner. These checks make the rules mechanical.
 
 Source side: every task the server starts has an owner that can await it.
 A direct ``create_task``/``ensure_future`` outside ``BackgroundTasks`` must be
