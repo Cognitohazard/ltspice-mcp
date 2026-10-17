@@ -10,11 +10,25 @@ tool-surface changes.
 
 ### Fixed
 
+- A run that edited a netlist card giving a parameter twice set only one
+  copy, and any edit that rebuilt the card dropped its earlier copies, with
+  nothing to say so:
+  - an instance card, through component assignments, random component draws
+    and the mismatch rewrite: `R1 in out R=1k R=1k` varied to `2k` was
+    simulated as `R=1k R=2k`;
+  - a `.model` card, through random model draws and mismatch variants: every
+    edit of a parenthesised model and every rename rebuilt the card, so a
+    draw of `KP` on `NMOS(VTO=0.7 KP=100u VTO=0.8)` also dropped `VTO=0.7`;
+  - a `.subckt` opener's defaults, which the mismatch rewrite adds to.
+
+  Every copy is now set, a rebuilt card keeps them all, and removing a
+  parameter removes every copy.
 - `set_component_value` on a schematic part wrote a `KEY=VALUE` into
   `SpiceLine` when the part already gave that key in `Value` or `Value2`, or
   in another case: a Schmitt trigger's thresholds, or a MOSFET's `w`, were then
-  named twice in the export. The key is now set where the part gives it, and
-  a key found more than once is named in a warning. A key the part gives
+  named twice in the export. The key is now set where the part gives it,
+  every copy of it alike, and the sheet's `duplicate_parameter` finding names
+  a part that gives one more than once. A key the part gives
   nowhere is added to the end of `SpiceLine`, which is otherwise left as
   written; before, adding one rewrote the rest of the line (`ad=1e3` became
   `ad=1000.0`, and a `params:` marker was dropped).
@@ -793,6 +807,17 @@ recording that showed it.
 
 ### Added
 
+- A `duplicate_parameter` finding, from `verify_circuit`'s quality check and
+  on every `edit_schematic` reply. On a netlist it names an instance,
+  `.model` or `.subckt` card that gives one parameter more than once, in any
+  case; on a schematic, a part
+  that gives one more than once across `Value`, `Value2`, `SpiceLine` and
+  `SpiceLine2`, which LTspice writes onto the one netlist line. Which copy
+  LTspice reads is not recorded, so the finding states the copies and claims
+  nothing about their effect. Before, only an equivalence compare against a
+  reference netlist showed a repeated parameter. `inspect`'s full component
+  listing of a netlist also lists such a key's copies, under
+  `repeated_params`.
 - `edit_schematic` and `verify_circuit` say which sheet rules ran. `rules_run`
   in each reply names every rule that ran with how many findings it had, zero
   included, so that no findings of a kind is told from that kind not having

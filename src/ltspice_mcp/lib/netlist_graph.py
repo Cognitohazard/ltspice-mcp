@@ -91,6 +91,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     cards_from_path,
+    copies_by_name,
     iter_by_kind,
     lex,
 )
@@ -235,7 +236,7 @@ class DuplicateSubckt:
 class DuplicateParam:
     """An instance that gives one parameter more than once on its card.
 
-    ``key`` is lowercased, as SPICE reads it; ``values`` are the copies in card
+    ``key`` is case-folded, as SPICE reads it; ``values`` are the copies in card
     order. Which copy a simulator uses is not modelled here, so the comparison
     holds an instance equal only where it is equal whichever copy is read.
     """
@@ -1073,7 +1074,7 @@ def compare_graphs(
                 result.duplicate_subckts.append(dup)
     for side, flat in (("reference", ref_flat), ("candidate", cand_flat)):
         for comp in flat.components:
-            for key, values in _param_copies(comp).items():
+            for key, values in copies_by_name(comp.params).items():
                 if len(values) > 1:
                     result.duplicate_params.append(
                         DuplicateParam(ref=comp.ref, side=side, key=key, values=tuple(values))
@@ -1375,7 +1376,7 @@ def _diff_matched_pair(
         result.value_mismatches.append(
             ValueDiff(ref=rc.ref, reference_value=rc.value, candidate_value=cc.value)
         )
-    rparams, cparams = _param_copies(rc), _param_copies(cc)
+    rparams, cparams = copies_by_name(rc.params), copies_by_name(cc.params)
     for pkey in sorted(rparams.keys() | cparams.keys()):
         differ = _disagreement(rparams.get(pkey, []), cparams.get(pkey, []), rtol)
         if differ is not None:
@@ -1384,14 +1385,6 @@ def _diff_matched_pair(
                     ref=rc.ref, key=pkey, reference_value=differ[0], candidate_value=differ[1]
                 )
             )
-
-
-def _param_copies(comp: FlatComponent) -> dict[str, list[str]]:
-    """Each parameter's values in card order, keyed by its lowercased name."""
-    copies: dict[str, list[str]] = {}
-    for key, value in comp.params:
-        copies.setdefault(key.lower(), []).append(value)
-    return copies
 
 
 def _disagreement(

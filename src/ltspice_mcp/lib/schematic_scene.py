@@ -427,6 +427,8 @@ class PlacedSymbol:
     graphics: list[Graphic] = field(default_factory=list)
     pins: list[DrawPin] = field(default_factory=list)
     texts: list[DrawText] = field(default_factory=list)
+    #: The part's parameter attributes, ``SheetPart.parameters``.
+    parameters: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -591,6 +593,7 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
             resolved_path=part.symbol.path if part.symbol is not None else None,
             missing=True,
             problem=part.symbol.problem if part.symbol is not None else "",
+            parameters=part.parameters,
         )
         placed.graphics.append(
             DrawRect(placeholder.x1, placeholder.y1, placeholder.x2, placeholder.y2)
@@ -619,6 +622,7 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
         missing=False,
         box=part.box,
         body=part.body,
+        parameters=part.parameters,
     )
     for x1, y1, x2, y2 in drawing.lines:
         placed.graphics.append(
@@ -883,6 +887,7 @@ def sheet_view(scene: Scene) -> SheetView:
                 texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
                 missing=sym.missing,
                 problem=sym.problem,
+                parameters=sym.parameters,
             )
             for sym in scene.symbols
         ),

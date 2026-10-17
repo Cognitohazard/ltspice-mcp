@@ -1597,7 +1597,11 @@ def _components_netlist_payload(
             if line is not None:
                 entry["nodes"] = list(line.nodes)
                 entry["model"] = line.model
-                entry["params"] = dict(line.params)
+                entry["params"] = line.params
+                # ``params`` holds one value per key; a key the card gives
+                # more than once is listed with every copy, in card order.
+                if repeated := line.repeated_params():
+                    entry["repeated_params"] = repeated
         rows.append(entry)
     rows.sort(key=lambda r: r["reference"])
     return rows, _lex_warnings(lexed)

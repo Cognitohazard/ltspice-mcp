@@ -111,9 +111,15 @@ from ltspice_mcp.lib.routing import (
     segment_text,
     wires_through,
 )
-from ltspice_mcp.lib.sheet import PlacedPin, find_pin
+from ltspice_mcp.lib.sheet import PARAMETER_ATTRIBUTES, PlacedPin, find_pin
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    TokenKind,
+    key_value_tokens,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
@@ -517,7 +523,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str, element: str) -> list[str]:
+def _apply_component_value(editor, reference: str, value: str, element: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -527,7 +533,7 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     LTspice may parse either way. To DWIM, we split off any ``KEY=VALUE``
     tokens and set each where the part already gives it
     (:func:`_set_instance_params`), keeping the model/value field for
-    ``set_component_value``. Returns the edit's warnings.
+    ``set_component_value``.
 
     Token-based split via ``spice_lex.tokenize_body``: params are the
     ``KEY_VALUE`` tokens and the head is the rest of the value as written
@@ -545,7 +551,7 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     # behind a success message.
     if element == "B" or "=" not in value:
         _set_or_create_value(editor, reference, value)
-        return []
+        return
     try:
         tokens = tokenize_body(value)
     except SpiceLexError as e:
@@ -570,31 +576,22 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     head = " ".join(part for part in head_parts if part)
     if head:
         _set_or_create_value(editor, reference, head)
-    return _set_instance_params(editor, reference, params) if params else []
-
-
-#: The attributes a placed part's ``KEY=VALUE`` parameters are written in.
-_PARAMETER_SLOTS = ("Value", "Value2", "SpiceLine", "SpiceLine2")
+    if params:
+        _set_instance_params(editor, reference, params)
 
 
 def _replace_param(text: str, key: str, value: str) -> tuple[str, int]:
     """``text`` with every ``KEY=VALUE`` copy of ``key`` (in any case) set to
     ``value``, keeping its spelling of the key, and how many copies there were."""
-    try:
-        tokens = tokenize_body(text)
-    except SpiceLexError:
-        return text, 0
     copies = [
-        tok
-        for tok in tokens
-        if tok.kind == TokenKind.KEY_VALUE and (tok.key or "").casefold() == key.casefold()
+        tok for tok in key_value_tokens(text) if (tok.key or "").casefold() == key.casefold()
     ]
     for tok in reversed(copies):
         text = f"{text[: tok.body_offset]}{tok.key}={value}{text[tok.body_end :]}"
     return text, len(copies)
 
 
-def _set_instance_params(editor, reference: str, params: dict[str, str]) -> list[str]:
+def _set_instance_params(editor, reference: str, params: dict[str, str]) -> None:
     """Set each parameter where the part already gives it, else add it to
     SpiceLine.
 
@@ -603,29 +600,23 @@ def _set_instance_params(editor, reference: str, params: dict[str, str]) -> list
     (a Schmitt trigger's ``Vt``, a MOSFET's ``w``) got a second copy in
     SpiceLine. It also rebuilds SpiceLine from its own parse when it adds a
     key, rewriting the rest of the line. So nothing here goes through it: SPICE
-    reads a name in any case, every copy found is set, so copies already on the
-    part come to agree, and the warning says where they are.
+    reads a name in any case, and every copy found is set, so copies already on
+    the part come to agree. That the part gives a key more than once is the
+    sheet's ``duplicate_parameter`` finding to say.
     """
     attributes = editor.get_component(reference).attributes
-    warnings: list[str] = []
     for key, value in params.items():
-        found: list[str] = []
-        for slot in _PARAMETER_SLOTS:
+        found = False
+        for slot in PARAMETER_ATTRIBUTES:
             text, copies = _replace_param(attributes.get(slot, ""), key, value)
             if copies:
                 editor.set_component_attribute(reference, slot, text)
-                found.extend([slot] * copies)
+                found = True
         if not found:
             line = attributes.get("SpiceLine", "").strip()
             editor.set_component_attribute(
                 reference, "SpiceLine", f"{line} {key}={value}" if line else f"{key}={value}"
             )
-        elif len(found) > 1:
-            warnings.append(
-                f"{reference} gives {key} {len(found)} times ({', '.join(found)}); "
-                f"every copy was set to {value}."
-            )
-    return warnings
 
 
 # Each editor's symbols, resolved once per request: get_asc_editor hands every
@@ -2147,14 +2138,10 @@ def apply_op_inplace(
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
-        warnings = _apply_component_value(
-            editor, op.reference, op.value, element_class(editor, op.reference)
-        )
+        _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result = {"op": "set_component_value", "reference": op.reference, "value": op.value}
         if lint:
-            warnings.insert(0, lint)
-        if warnings:
-            result["warnings"] = warnings
+            result["warnings"] = [lint]
         return result
 
     if isinstance(op, OpSetComponentAttribute):

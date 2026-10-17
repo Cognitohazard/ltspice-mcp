@@ -573,7 +573,7 @@ class TestCanonicalThenSpanEdits:
         cards = lex(".MODEL FOO NMOS(VTO=0.7 KP=100u)\n").cards
         view = ModelCard.from_card(cards[0])
         # Adding a new param triggers _canonical_rerender — body_layout
-        # collapses, _param_tokens is cleared.
+        # collapses and the parameter offsets are dropped.
         view.set_param("LEVEL", "1")
         # A subsequent edit must still work; views go through canonical
         # again (no cached tokens after clear) but the result must be
@@ -1074,6 +1074,136 @@ class TestParamCard:
         view.set_value(3.3)
         text = emit(cards)
         assert "Vdd=3.3" in text
+
+
+class TestInstanceLineRepeatedParameter:
+    """A card that gives a parameter twice keeps both copies through every
+    edit. Setting one copy left the other at its old value, and a re-render
+    from the one-value-per-key dict dropped the earlier copies, so a run of a
+    variation simulated a part nobody had written; which copy a simulator
+    reads is not recorded here."""
+
+    @pytest.mark.parametrize(
+        ("deck", "key", "value", "expected"),
+        [
+            pytest.param(
+                "M1 d g s b NMOS w=1u w=2u\n",
+                "W",
+                "3u",
+                "M1 d g s b NMOS w=3u w=3u\n",
+                id="same_spelling",
+            ),
+            pytest.param(
+                "X1 a b sub Vt=2 vt=3\n",
+                "VT",
+                "4",
+                "X1 a b sub Vt=4 vt=4\n",
+                id="two_spellings",
+            ),
+            pytest.param(
+                "M1 d g s b NMOS w=1u w=2u\n",
+                "l",
+                "1u",
+                "M1 d g s b NMOS w=1u w=2u l=1u\n",
+                id="a_new_key_keeps_both_copies",
+            ),
+            pytest.param(
+                "R1 a b R=1k R=1k\n",
+                None,
+                "2k",
+                "R1 a b R=2k R=2k\n",
+                id="a_keyed_value",
+            ),
+        ],
+    )
+    def test_an_edit_writes_every_copy(
+        self, deck: str, key: str | None, value: str, expected: str
+    ) -> None:
+        cards = lex(deck).cards
+        view = InstanceLine.from_card(cards[0])
+        if key is None:
+            view.set_value(value)
+        else:
+            view.set_param(key, value)
+        assert emit(cards) == expected
+        assert view.param_pairs() == InstanceLine.from_card(cards[0]).param_pairs()
+
+    def test_removing_a_parameter_removes_every_copy(self) -> None:
+        cards = lex("M1 d g s b NMOS w=1u l=1u W=2u\n").cards
+        view = InstanceLine.from_card(cards[0])
+        view.remove_param("w")
+        assert emit(cards) == "M1 d g s b NMOS l=1u\n"
+        assert view.params == {"l": "1u"}
+
+
+class TestModelAndSubcktRepeatedParameter:
+    """A ``.MODEL`` card or a ``.SUBCKT`` opener that gives a parameter twice
+    keeps both copies through every edit. Before, an edit set one copy, and
+    any edit that rendered the card again (every edit of a parenthesised
+    model, a rename, every subcircuit default) dropped the earlier copies."""
+
+    @pytest.mark.parametrize(
+        ("deck", "edit", "expected"),
+        [
+            pytest.param(
+                ".model D1 D IS=1e-14 IS=2e-14\n",
+                lambda view: view.set_param("is", "3e-14"),
+                ".model D1 D IS=3e-14 IS=3e-14\n",
+                id="set_in_place",
+            ),
+            pytest.param(
+                ".MODEL NM NMOS(VTO=0.7 vto=0.8)\n",
+                lambda view: view.set_param("Vto", "0.75"),
+                ".MODEL NM NMOS(VTO=0.75 vto=0.75)\n",
+                id="set_in_parentheses",
+            ),
+            pytest.param(
+                ".MODEL NM NMOS(VTO=0.7 KP=100u VTO=0.8)\n",
+                lambda view: view.set_param("KP", "90u"),
+                ".MODEL NM NMOS(VTO=0.7 KP=90u VTO=0.8)\n",
+                id="an_edit_of_another_key_keeps_both",
+            ),
+            pytest.param(
+                ".MODEL NM NMOS(VTO=0.7 VTO=0.8)\n",
+                lambda view: view.set_name("NM_1"),
+                ".MODEL NM_1 NMOS(VTO=0.7 VTO=0.8)\n",
+                id="a_rename_keeps_both",
+            ),
+            pytest.param(
+                ".MODEL NM NMOS(VTO=0.7 KP=1 vto=0.8)\n",
+                lambda view: view.remove_param("vto"),
+                ".MODEL NM NMOS(KP=1)\n",
+                id="a_removal_removes_both",
+            ),
+        ],
+    )
+    def test_a_model_card(self, deck: str, edit, expected: str) -> None:
+        cards = lex(deck).cards
+        edit(ModelCard.from_card(cards[0]))
+        assert emit(cards) == expected
+
+    @pytest.mark.parametrize(
+        ("defaults", "key", "expected"),
+        [
+            ("g=1 G=2", "G", "g=3 G=3"),
+            ("g=1 g=2", "h", "g=1 g=2 h=3"),
+        ],
+        ids=["set", "a_new_default_keeps_both"],
+    )
+    def test_a_subcircuit_default(self, defaults: str, key: str, expected: str) -> None:
+        cards = lex(f".SUBCKT amp a b PARAMS: {defaults}\n.ENDS amp\n").cards
+        SubcktCard.from_card(cards[0]).set_param_default(key, "3")
+        assert emit(cards).splitlines()[0] == f".SUBCKT amp a b PARAMS: {expected}"
+
+    def test_a_mismatch_variant_of_a_model_keeps_both_copies(self) -> None:
+        from ltspice_mcp.lib.montecarlo import render_variant_model_card
+
+        text = render_variant_model_card(
+            ".MODEL NM NMOS(VTO=0.7 KP=1e-4 VTO=0.7)\n", "NM_M1", {"KP": 2e-4}
+        )
+        view = ModelCard.from_card(lex(text).cards[0])
+        assert view.name == "NM_M1"
+        assert [v for k, v in view.param_pairs() if k == "VTO"] == ["0.7", "0.7"]
 
 
 class TestInstanceLine:
