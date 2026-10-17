@@ -55,8 +55,8 @@ class PulseResponseOutput(TypedDict):
     ``quality`` carries machine-readable codes a consumer can gate on without
     parsing the free-text ``warnings`` (e.g. ``net_step_small_vs_swing``,
     ``levels_bootstrapped_from_boundary``). Each code names an *input condition or
-    computation-provenance fact*, never a result verdict — see the repo-wide
-    "Result trust: report facts, do not rate them" in CLAUDE.md.
+    computation-provenance fact*, never a result verdict — see
+    ``lib/result_observations.py``.
     """
 
     direction: CrossingDirection

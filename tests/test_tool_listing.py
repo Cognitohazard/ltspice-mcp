@@ -148,10 +148,8 @@ class TestEveryToolCarriesADisplayTitle:
         )
 
     def test_compact_is_materially_smaller_than_full(self):
-        """What the mode is for. docs/design/mcp_surface.md claims roughly 45%
-        off, and the measured ratio is about 0.55; the bound sits just above it
-        so that losing a large part of the saving fails here rather than
-        quietly halving what the mode is worth."""
+        """The measured ratio is about 0.55; the bound sits just above it, so
+        losing a large part of the saving fails here."""
 
         def total(listing: ToolListing) -> int:
             return sum(

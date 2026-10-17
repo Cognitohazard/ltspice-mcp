@@ -32,10 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _DOC_COUNT_FILES: dict[str, dict[int, str]] = {
     "README.md": {},
     "CLAUDE.md": {},
-    "docs/DESIGN.md": {
-        9: "the tool count of another project in the comparison table",
-        15: "the tool-selection threshold quoted from MCP guidance",
-    },
+    "docs/DESIGN.md": {},
     # The alias packages' PyPI pages, published from these files on each release.
     "packaging/aliases/circuit-mcp/README.md": {},
     "packaging/aliases/ngspice-mcp/README.md": {},

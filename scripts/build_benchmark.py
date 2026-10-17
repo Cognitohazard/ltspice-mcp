@@ -10,7 +10,7 @@ rules, for a sheet a model built: the netlist's ``* names:`` line lists the
 nodes a drawing must name. The sheet's symbols are found where the schematic
 editor finds them on this machine, which is printed, since a sheet drawn with
 LTspice's own symbols is not comparable with the record, drawn with the
-suite's. The design is in `docs/design/schematic_engine.md`, section 6.
+suite's.
 """
 
 from __future__ import annotations

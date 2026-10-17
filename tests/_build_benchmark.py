@@ -1,6 +1,5 @@
 """The schematic build benchmark: reference circuits, builds of them, and their scores.
 
-The design is in `docs/design/schematic_engine.md`, section 6 (the benchmark).
 A circuit is a reference netlist under ``fixtures/build_benchmark``. A build is
 a list of `edit_schematic` calls that draws one on a blank sheet. A build is
 scored on three things, all read from the sheet it wrote and the replies it
