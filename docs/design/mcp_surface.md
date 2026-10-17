@@ -465,8 +465,8 @@ for QSPICE's or Xyce's measure output; read those quantities from the waveform
 **Run timeout.** A case has no time limit unless one is set:
 `execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
 the server (`limits.run_timeout_s` in `inspect(kind="capabilities")`, `null`
-when unset). No default is imposed. A timeout deletes the partial result, and
-no fixed number fits both a millisecond `.op` and an hour-long switching
+when unset). No default is imposed. A timeout deletes the partial result
+(unless the job is recoverable), and no fixed number fits both a millisecond `.op` and an hour-long switching
 transient; the caller knows which it submitted, and a running job reports each
 case's progress (below), which is what shows a stuck one. `[simulation] timeout`
 (`limits.export_timeout_s`) bounds LTspice netlist export only.
@@ -645,8 +645,10 @@ exits. A kill whose exit is confirmed (in the grace period or later) is
 followed by one `partial_progress` observation for that case. It is read from
 the partial raw before cleanup deletes it, because neither simulator records
 progress anywhere else a killed run keeps. Its evidence is `{case_id, run_index,
-raw_present, points, last_axis_value}` plus, when a raw was read, `{raw_bytes,
-header_complete, plot, axis, stepped?}`. `points` counts complete records from
+raw_present, raw_kept, points, last_axis_value}` plus, when a raw was read,
+`{raw_bytes, header_complete, plot, axis, stepped?}`. `raw_present` says a raw
+was there when it was read, and `raw_kept` whether it stays: only a recoverable
+job keeps a stopped case's run files. `points` counts complete records from
 the file's length, not from its `No. Points` header: ngspice leaves that header
 at 0 until a plot ends, and LTspice's lags the data. `last_axis_value` is in
 deck coordinates. `run_timeout`, `job_deadline` and `kill_unconfirmed` rows carry
