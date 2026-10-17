@@ -31,6 +31,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     ELEMENT_SPECS,
     InstanceLine,
     MeasCard,
+    ModelCard,
     SubcktCard,
     body_has_stray_kv_remnant,
     read_instance,
@@ -1346,27 +1347,39 @@ def list_rules() -> list[dict[str, object]]:
 
 
 def validate_netlist_duplicate_params(cards: list[SpiceCard]) -> list[dict[str, object]]:
-    """Flag instance cards that give one parameter more than once.
+    """Flag instance, ``.MODEL`` and ``.SUBCKT`` cards that give one parameter
+    more than once.
 
     SPICE reads a parameter name in any case, so ``w=1u W=2u`` gives ``w``
     twice. Which copy a simulator reads is not known here, so each issue states
     the copies and nothing about their effect; the caller attaches severity.
-    A card that cannot be read is reported unparseable elsewhere, and a card
-    with fewer than two ``=`` cannot give a key twice.
+    A card that cannot be read is reported elsewhere, and a card with fewer
+    than two ``=`` cannot give a name twice.
     """
     issues: list[dict[str, object]] = []
     for card in cards:
-        if card.kind != "instance" or card.body.count("=") < 2:
+        if card.body.count("=") < 2:
             continue
-        view = read_instance(card)
-        if view is None:
+        repeated: dict[str, list[str]]
+        if card.kind == "instance":
+            view = read_instance(card)
+            if view is None:
+                continue
+            subject, repeated = view.ref, view.repeated_params()
+        elif card.kind in ("model", "subckt"):
+            try:
+                other = (ModelCard if card.kind == "model" else SubcktCard).from_card(card)
+            except SpiceLexError:
+                continue
+            subject, repeated = other.name, other.repeated_params()
+        else:
             continue
-        for key, given in view.repeated_params().items():
+        for key, given in repeated.items():
             issues.append(
                 {
                     "line": card.line_start,
                     "directive": _card_directive(card),
-                    "message": f"{view.ref} gives {key} {len(given)} times: {', '.join(given)}.",
+                    "message": f"{subject} gives {key} {len(given)} times: {', '.join(given)}.",
                     "suggestion": "Which copy the simulator reads is not known here; keep one.",
                 }
             )

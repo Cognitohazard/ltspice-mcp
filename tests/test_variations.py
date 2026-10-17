@@ -219,6 +219,35 @@ class TestAssignExpansion:
 
         assert "R1 in out R=2k R=2k" in variants[0].text
 
+    def test_a_model_parameter_given_twice_is_drawn_into_both_copies(self, tmp_path: Path):
+        import math
+        import re
+
+        path = tmp_path / "model_twice.cir"
+        text = (
+            "V1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
+            ".model NM NMOS(VTO=0.7 KP=100u VTO=0.7)\n.op\n.end\n"
+        )
+        circuit = CircuitDeck("model-twice", path, text)
+        variation = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 3,
+                "rules": [{"rule": "model", "target": "NM", "param": "VTO", "tolerance": 0.1}],
+            }
+        )
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "staged"
+        )
+
+        copies = re.findall(r"VTO=([^\s)]+)", case.text)
+        assert len(copies) == 2 and copies[0] == copies[1] != "0.7", case.text
+        assert math.isclose(
+            float(copies[0]), case.assignments["random:model:NM.VTO"], rel_tol=1e-9
+        )
+
     def test_model_swap_accepts_model_names(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")
         variation = AssignVariation(
