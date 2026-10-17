@@ -598,7 +598,7 @@ NEUTRAL_COMPILER_REPORT = " (timing-dependent)"
 _RAW_MARKERS = tuple(f"\n{word}:\n" for word in ("Binary", "Values"))
 
 
-def _path_pattern(path: str) -> re.Pattern[str]:
+def path_pattern(path: str) -> re.Pattern[str]:
     """``path`` in any spelling a tool echoes it: either separator, any case."""
     parts = [part for part in re.split(r"[\\/]+", path) if part]
     return re.compile(r"[\\/]+".join(re.escape(part) for part in parts), re.IGNORECASE)
@@ -663,7 +663,7 @@ class Scrubber:
                     separator = "/" if "/" in match.group(0) else "\\"
                     return neutral.replace("\\", separator)
 
-                text = _path_pattern(spelled).sub(replace, text)
+                text = path_pattern(spelled).sub(replace, text)
         text = _DATE.sub(rf"\g<1>{NEUTRAL_DATE}", text)
         text = _ELAPSED.sub(r"\g<1>0.000\2", text)
         text = _THREADS.sub(r"\g<1>1", text)
