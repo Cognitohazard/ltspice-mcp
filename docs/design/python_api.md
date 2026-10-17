@@ -202,9 +202,10 @@ Ctrl-C; it settles either to a pre-submit failure or to a durable receipt.
 - Ctrl-C cancels only the current wait task. The job keeps running, and the API
   raises `ApiInterrupted` (a `KeyboardInterrupt`) **carrying the receipt and
   job id**, so the handle is never lost.
-- `api.wait(job_id, timeout=None)` is the public wait. On timeout it returns
-  the current `jobs(wait)` snapshot with `timed_out: true` and leaves the job
-  running.
+- `api.wait(job_id, timeout_s=None)` is the public wait, its timeout spelled
+  as `jobs(wait)` spells it (`timeout=` is the older spelling, still accepted).
+  On timeout it returns the current `jobs(wait)` snapshot with `timed_out: true`
+  and leaves the job running.
 - `wait=False` returns the submission receipt immediately, annotated with the
   process-owned-job observation.
 - `wait=False, detach=True` submits from a spawned per-job owner instead, so

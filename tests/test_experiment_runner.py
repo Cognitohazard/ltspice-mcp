@@ -1175,6 +1175,9 @@ class TestStoppedCaseRecord:
         assert evidence["points"] == 4
         assert evidence["last_axis_value"] == pytest.approx(3e-6)
         assert case.case_id in progress[0]["detail"]
+        # The raw was there when it was read, and the record says it is gone.
+        assert evidence["raw_kept"] is False
+        assert "The raw is removed" in progress[0]["detail"]
         assert not await asyncio.to_thread(raw.exists)
 
     async def test_no_raw_on_disk_is_reported_as_such(
@@ -1192,6 +1195,7 @@ class TestStoppedCaseRecord:
         ]
         assert len(progress) == 1
         assert progress[0]["evidence"]["raw_present"] is False
+        assert progress[0]["evidence"]["raw_kept"] is False
         assert progress[0]["evidence"]["points"] == 0
 
     async def test_server_default_bounds_a_request_that_sets_no_timeout(

@@ -1664,7 +1664,7 @@ class TestAddNetLabelJoins:
 
 @pytest.mark.asyncio
 class TestRemoveComponentNoFalseOrphans:
-    """remove_component flags a wire left on a removed pin only when no other
+    """A wire left on a removed pin is said to hang only when no other
     component still owns that pin."""
 
     async def test_other_component_pin_not_flagged(self, asc_state: SessionState):
@@ -1681,16 +1681,15 @@ class TestRemoveComponentNoFalseOrphans:
             ],
         )
         remove = {"op": "remove_component"}
+        loose = "Wire end at (200,248) meets no pin, net label, or other wire"
         shared = await apply_ops(asc_state, "orphans.asc", [{**remove, "reference": "R3"}])
         assert shared["commit_state"] == "committed"
-        assert [w for w in shared["warnings"] if "orphaned" in w] == []
+        assert loose not in shared["warnings"]
 
         alone = await apply_ops(asc_state, "orphans.asc", [{**remove, "reference": "R1"}])
         assert alone["commit_state"] == "committed"
-        assert [w for w in alone["warnings"] if "orphaned" in w] == [
-            "op 0 (remove_component): orphaned wires remain at: (200,248). "
-            "Re-run with cleanup_wires=true to delete them."
-        ]
+        assert loose in alone["warnings"]
+        assert not [w for w in alone["warnings"] if w.startswith("op ")]
 
 
 @pytest.mark.asyncio
@@ -2000,6 +1999,34 @@ class TestRemoveWireAndNetLabelOps:
         read2 = _sheet_facts(asc_state, "rm_dir.asc")
         assert not any(".tran 1m" in d for d in read2["directives"])
 
+    @pytest.mark.parametrize("kind", ["directive", "comment"])
+    @pytest.mark.parametrize("newline", ["\n", "\r\n", "\\n"])
+    async def test_remove_directive_matches_the_text_it_was_added_with(
+        self, asc_state: SessionState, work_dir: Path, kind: str, newline: str
+    ):
+        # A TEXT record holds a line break as a "\n" escape, so the text a
+        # caller added on two lines is removed by that same text, with either
+        # line ending, or by the escape the file holds.
+        blank_sheet_file(asc_state, "rm_multi")
+        text = ".param a=1\n.param b=2" if kind == "directive" else "first line\nsecond line"
+        batch_view(
+            asc_state,
+            _sheet("rm_multi.asc"),
+            [{"op": "add_directive", "instruction": text, "kind": kind}],
+            stop_on_error=True,
+        )
+        assert text.replace("\n", "\\n") in _sheet("rm_multi.asc").read_text(encoding="utf-8")
+
+        data = batch_view(
+            asc_state,
+            _sheet("rm_multi.asc"),
+            [{"op": "remove_directive", "instruction": text.replace("\n", newline)}],
+            stop_on_error=True,
+        )
+        assert data["failed_count"] == 0, data["results"]
+        assert data["saved"] is True
+        assert "TEXT" not in _sheet("rm_multi.asc").read_text(encoding="utf-8")
+
     async def test_remove_directive_no_match_raises(self, asc_state: SessionState, work_dir: Path):
 
         blank_sheet_file(asc_state, "rm_dir_nomatch")
@@ -2161,9 +2188,8 @@ class TestAddNetLabelOpValidation:
 
 @pytest.mark.asyncio
 class TestMoveRemoveOpWarnings:
-    """The move/remove ops are the public path now; they must surface the same
-    bbox-overlap and orphaned-wire warnings the standalone handlers did (these
-    are NOT recovered by the batch's end-of-run post_op_warnings)."""
+    """What a move or a removal leaves on the sheet (a part over another, a
+    wire on nothing) is the finished sheet's to say, never the op's."""
 
     async def _build_pair(self, asc_state: SessionState, name: str):
 
@@ -2215,20 +2241,20 @@ class TestMoveRemoveOpWarnings:
             [{"op": "move_component", "reference": "R1", "x": 600, "y": 200}],
             stop_on_error=True,
         )
-        op = res["results"][0]
-        assert any("old pin" in w for w in op.get("warnings", []))
+        assert "warnings" not in res["results"][0]
+        assert _loose_wire_ends(res) == [(200, 248)]
 
     async def test_remove_orphan_warning_then_cleanup_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "rm_orphan")
-        # Remove without cleanup: the wire left on R1's former pin is flagged.
+        # Remove without cleanup: the wire left on R1's former pin is a finding.
         res = batch_view(
             asc_state,
             _sheet("rm_orphan.asc"),
             [{"op": "remove_component", "reference": "R1"}],
             stop_on_error=True,
         )
-        op = res["results"][0]
-        assert any("orphaned" in w for w in op.get("warnings", []))
+        assert "warnings" not in res["results"][0]
+        assert _loose_wire_ends(res) == [(200, 248)]
 
     async def test_remove_cleanup_reports_deleted_via_op(self, asc_state: SessionState):
         await self._build_pair(asc_state, "rm_clean")
@@ -2243,6 +2269,16 @@ class TestMoveRemoveOpWarnings:
         op = res["results"][0]
         assert op["deleted_wires"] >= 1
         assert "warnings" not in op
+        assert _loose_wire_ends(res) == []
+
+
+def _loose_wire_ends(view: dict) -> list[tuple[int, int]]:
+    """Where the finished sheet has a wire end on nothing."""
+    return [
+        (row["x"], row["y"])
+        for row in view.get("validation_warnings", [])
+        if row["kind"] == "dangling_wire_end"
+    ]
 
 
 class TestMidSegmentLabelDetected:

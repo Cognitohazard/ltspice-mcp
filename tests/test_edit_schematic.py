@@ -1066,6 +1066,33 @@ async def test_an_edit_reports_what_it_drew_badly(asc_state):
     assert data["preexisting"]["findings"] == 1
 
 
+@pytest.mark.parametrize("op", ["remove_component", "move_component"])
+async def test_a_wire_a_later_op_removes_is_not_said_to_hang(asc_state, op):
+    """A wire left on a part's former pin is judged on the finished sheet, so
+    one the batch goes on to remove is mentioned nowhere in the reply."""
+    await _build_blank(
+        asc_state,
+        "left-then-removed",
+        [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 200, "y": 200},
+            {"op": "add_component", "reference": "R2", "symbol": "res", "x": 200, "y": 400},
+            {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
+        ],
+    )
+    first = {"op": op, "reference": "R1"}
+    if op == "move_component":
+        first.update(x=600, y=200)
+    data = await apply_ops(
+        asc_state,
+        "left-then-removed.asc",
+        [first, {"op": "remove_wire", "pin": "R2.1"}],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    # The parts are left with no wire, and their pins are rightly said to float.
+    assert [w for w in data["warnings"] if not w.startswith("Floating pin: ")] == []
+
+
 # R1 and R3 with R4 standing between their top pins, level with them.
 _ACROSS_R4_OPS: list[dict] = [
     _CROWDED_OPS[0],
