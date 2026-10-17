@@ -153,7 +153,8 @@ either in a failure before anything was submitted or in a durable receipt.
 - Ctrl-C cancels only the current wait. The job keeps running, and the API
   raises `ApiInterrupted` (a `KeyboardInterrupt`) **carrying the receipt and
   job id**, so the caller keeps the handle.
-- `api.wait(job_id, timeout=None)` waits for a job. On timeout it returns
+- `api.wait(job_id, timeout_s=None)` waits for a job (`timeout=` is the older
+  spelling, still accepted). On timeout it returns
   the current `jobs(wait)` snapshot with `timed_out: true` and leaves the job
   running.
 - `wait=False` returns the submission receipt immediately, with the

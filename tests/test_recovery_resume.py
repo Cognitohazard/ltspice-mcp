@@ -161,6 +161,60 @@ async def test_committed_noop_replays_without_available_simulator(failed_campaig
         )
 
 
+async def test_a_stopped_recoverable_case_keeps_its_raw(work_dir, monkeypatch):
+    """A recoverable job keeps a stopped case's run files, and its progress says so."""
+    (work_dir / "divider.cir").write_text(_DECK, encoding="utf-8")
+    state = _state(work_dir)
+    launched = asyncio.Event()
+    callbacks = {}
+    raws = {}
+
+    def held_submission(self, netlist, run_filename, callback, **kwargs):
+        token = Path(run_filename).stem
+        callbacks[token] = callback
+        raws[token] = (self.output_folder / run_filename).with_suffix(".raw")
+        self.loop.call_soon_threadsafe(launched.set)
+        return object()
+
+    async def confirmed_kill(self, token):
+        raws[token].write_bytes(b"what a killed run had written")
+        callbacks.pop(token)(RunOutcome("", "", 0, "Stopped by test simulator"))
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", held_submission)
+    monkeypatch.setattr(ExperimentRunner, "_kill_case", confirmed_kill)
+    result = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": "kept-raw",
+                "circuits": [{"path": "divider.cir"}],
+                "execution": {"recoverable": True, "wait_s": 0},
+                "lint": "off",
+            }
+        ),
+        state,
+    )
+    assert not result.is_error, result.structured_content
+    data = result.structured_content
+    assert data is not None
+    job = state.all_jobs[data["job_id"]]
+    try:
+        await asyncio.wait_for(launched.wait(), LIVENESS_S)
+        runner = state.runners.get_experiment_runner_for(job)
+        assert runner is not None
+        await runner.cancel(job, control_token=job.control_token)
+        await runner.settled(job)
+
+        [progress] = [o for o in job.cases[0].observations if o["code"] == "partial_progress"]
+        assert progress["evidence"]["raw_present"] is True
+        assert progress["evidence"]["raw_kept"] is True
+        assert "The raw is kept" in progress["detail"]
+        [raw] = raws.values()
+        assert await asyncio.to_thread(raw.exists)
+    finally:
+        await state.job_registry.cancel_running(state.runners, state)
+        await state.job_registry.drain_pending()
+
+
 @pytest.mark.parametrize("stop", ["job_deadline", "cancelled", "run_timeout"])
 async def test_stopped_attempt_selection_uses_recorded_reason(work_dir, monkeypatch, stop):
     """Exercise coordinator stop transitions before selecting a linked retry."""

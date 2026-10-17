@@ -10,6 +10,23 @@ tool-surface changes.
 
 ### Fixed
 
+- `edit_schematic`'s `remove_directive` did not find a directive or comment
+  of more than one line given as the text it was added with. A sheet holds
+  each line break as a `\n` escape, and the text given was compared with the
+  escapes as they were; only a `regex:` pattern found it. A line break may now
+  be given as a newline, with either line ending, or as the escape. The
+  refusal no longer sends the caller to `inspect(kind="components")`, which
+  does not list a sheet's directives.
+- `remove_component` and `move_component` warned about a wire left on a
+  former pin even when a later op of the same batch removed or reconnected
+  it. A wire left on nothing is now said only by the finished sheet's
+  `dangling_wire_end` finding, which the reply lists when the batch made it.
+  The ops' own warnings are gone; they also flagged a wire that still met
+  another wire or a label there.
+- A stopped case's `partial_progress` observation said `raw_present: true`
+  of a raw the server then removed. Its evidence now also has `raw_kept`,
+  whether the raw stays on disk (only a recoverable job keeps a stopped
+  case's run files), and its detail says which.
 - A run that edited a netlist card giving a parameter twice set only one
   copy, and any edit that rebuilt the card dropped its earlier copies, with
   nothing to say so:
@@ -1153,6 +1170,8 @@ recording that showed it.
 
 ### Changed
 
+- `Api.wait` takes its timeout as `timeout_s`, as `jobs(action="wait")` does.
+  `timeout=` is still accepted; giving both is refused.
 - `inspect(kind="net")` and `inspect(kind="components")` on an `.asc` read the
   file instead of the schematic editor `edit_schematic` uses. They now answer
   on sheets the editor cannot open (a bus tap, a blank line, an unknown

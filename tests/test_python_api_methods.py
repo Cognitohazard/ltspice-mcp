@@ -393,6 +393,17 @@ def test_wait_timeout_returns_snapshot_and_leaves_job_running(
     assert state_no_sim.all_jobs[job.job_id].status == "queued"
 
 
+def test_wait_takes_the_timeout_the_jobs_tool_takes(state_no_sim: SessionState) -> None:
+    """``jobs(action="wait")`` spells it ``timeout_s``; passing that name to
+    ``api.wait`` raised a TypeError. Both spellings work, and not both at once."""
+    api = SyncApi(state_no_sim)
+    job = make_experiment_job(state_no_sim, job_id="exp-waiting", count=1, status="queued")
+
+    assert api.wait(job.job_id, timeout_s=0)["timed_out"] is True
+    with pytest.raises(ValueError, match="not both"):
+        api.wait(job.job_id, timeout_s=0, timeout=0)
+
+
 def _inspect_page_item(
     index: int,
     kind: str,

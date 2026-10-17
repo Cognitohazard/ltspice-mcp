@@ -319,8 +319,6 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
         ),
         ("moves", ("moved: PIN at (#,#) is on a point where # wires cross",)),
         ("moves", ("a pin on a crossing joins them. | PIN at (#,#) is on a point where",)),
-        ("moves", ("wires left at old pin coordinates", "a pin on a crossing joins them")),
-        ("moves", ("moved: wires left at old pin coordinates",)),
     ],
 )
 def test_the_record_asks_enough_to_hold_every_answer(op: str, said: tuple[str, ...]):

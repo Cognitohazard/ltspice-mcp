@@ -373,7 +373,8 @@ those quantities from the waveform (`value`, `signal_stats`) instead.
 **Run timeout.** A case has no time limit unless one is set:
 `execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
 the server (`limits.run_timeout_s` in `inspect(kind="capabilities")`, `null`
-when unset). A timeout deletes the partial result. A running job reports each
+when unset). A timeout deletes the partial result, unless the job is
+recoverable. A running job reports each
 case's progress (below), which shows when a case is stuck.
 `[simulation] timeout` (`limits.export_timeout_s`) bounds only LTspice netlist
 export.
@@ -530,9 +531,11 @@ evidence `{stop_reason, run_timeout_s | job_deadline_s, kill_grace_s}`, and
 the case's concurrency permit stays reserved until the process exits. When the
 exit is confirmed, within the grace or later, one `partial_progress`
 observation follows for that case, read from the partial raw before cleanup
-deletes it. Its evidence is `{case_id, run_index, raw_present, points,
-last_axis_value}`, plus `{raw_bytes, header_complete, plot, axis, stepped?}`
-when a raw was read. `points` counts complete records from the file length,
+deletes it. Its evidence is `{case_id, run_index, raw_present, raw_kept,
+points, last_axis_value}`, plus `{raw_bytes, header_complete, plot, axis,
+stepped?}` when a raw was read. `raw_present` says whether a raw was there
+when it was read, and `raw_kept` whether it stays: only a recoverable job keeps
+a stopped case's run files. `points` counts complete records from the file length,
 not from the `No. Points` header, which ngspice leaves at 0 until a plot ends
 and which lags the data on LTspice. `last_axis_value` is in deck coordinates.
 `run_timeout`, `job_deadline` and `kill_unconfirmed` rows carry a recovery
