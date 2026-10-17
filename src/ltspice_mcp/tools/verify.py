@@ -124,6 +124,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
+    validate_netlist_duplicate_params,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -569,7 +570,7 @@ _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
     "properties": {
         "ref": _REF,
         "side": {"type": "string", "description": "'reference' or 'candidate'."},
-        "key": {"type": "string", "description": "The parameter, lowercased."},
+        "key": {"type": "string", "description": "The parameter, case-folded."},
         "values": {
             "type": "array",
             "items": {"type": "string"},
@@ -892,14 +893,14 @@ VERIFY_DESCRIPTION = (
     "netlist: SPICE syntax, directive and element arity, non-ASCII "
     "value suffixes such as µ, and connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
-    "declares, nets with no DC path to ground. For an .asc: symbol "
+    "declares, nets with no DC path to ground, a parameter given twice. For an .asc: symbol "
     "and pin resolution, the authoritative LTspice netlist export (which silently "
     "drops wires the file appears to contain), geometric layout facts (overlapping "
     "bodies, wires through a body, floating pins, dangling wire ends and labels, a "
     "wire drawn twice), and quality facts (net connected only by label stubs with "
     "no drawn wire; text or a label anchored inside a symbol; stacked directives; "
-    "a byte order mark LTspice rejects). Supply 'compare' to graph-compare "
-    "against a known-good "
+    "a part giving a parameter twice; a byte order mark LTspice rejects). Supply "
+    "'compare' to graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
     "Every fixable finding carries its location and subject. in_ltspice also "
     "opens the file in the user's LTspice window."
@@ -1287,8 +1288,8 @@ def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, A
     ]
 
 
-# The connectivity rules the netlist quality check runs, with the severity this
-# tool attaches to each. Severity names an input condition, never a verdict:
+# The rules the netlist quality check runs, with the severity this tool
+# attaches to each. Severity names an input condition, never a verdict:
 #
 # ``dangling_node`` is legal SPICE — bias fragments and deliberately
 # unterminated test decks leave nodes open on purpose — so it is a fact the
@@ -1298,17 +1299,21 @@ def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, A
 # The other two are real discrepancies between what the deck says and what it
 # can compute: a directive naming something no element declares resolves to
 # nothing, and a net with no DC path to ground has no defined operating point.
+#
+# ``duplicate_parameter`` is a fact too: an instance giving a parameter twice
+# is read by the simulator one way or another, and which is not known here.
 _NETLIST_QUALITY_RULES: tuple[tuple[str, str, Any], ...] = (
     ("dangling_node", "observation", validate_netlist_dangling_nodes),
     ("undefined_reference", "warning", validate_netlist_directive_refs),
     ("floating_net", "warning", validate_netlist_bias_topology),
+    ("duplicate_parameter", "observation", validate_netlist_duplicate_params),
 )
 
 
 def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, Any]]:
-    """Connectivity findings over a lexed netlist: nodes wired to one terminal,
-    directives naming something that exists nowhere, and nets with no DC path
-    to ground."""
+    """Quality findings over a lexed netlist: nodes wired to one terminal,
+    directives naming something that exists nowhere, nets with no DC path to
+    ground, and instances giving a parameter more than once."""
     findings: list[dict[str, Any]] = []
     for rule_id, severity, validate in _NETLIST_QUALITY_RULES:
         findings.extend(

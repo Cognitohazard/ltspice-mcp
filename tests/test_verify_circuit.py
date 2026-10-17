@@ -641,11 +641,32 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
         "wire_through_symbol": 0,
     }
     assert quality["rules_run"] == {
+        "duplicate_parameter": 0,
         "label_over_component": 1,
         "text_in_symbol_body": 0,
         "stacked_directive": 1,
         "label_island": 0,
     }
+
+
+async def test_quality_reports_a_part_giving_a_parameter_twice(
+    state_no_sim, work_dir, asc_symbols
+):
+    """LTspice writes Value, Value2, SpiceLine and SpiceLine2 onto one line
+    (recorded: export-attributes), so a key in two of them is given twice."""
+    asc = _write(
+        work_dir, "twice.asc", _RES_ASC + "SYMATTR Value2 tol=1\nSYMATTR SpiceLine TOL=5 pwr=0.1\n"
+    )
+
+    quality = await _run(state_no_sim, path=str(asc), checks=["quality"])
+
+    (twice,) = [f for f in quality["findings"] if f["rule_id"] == "duplicate_parameter"]
+    assert twice["subject"] == "R1"
+    assert twice["severity"] == "observation"
+    assert twice["evidence"]["detail"].startswith(
+        "R1 gives tol 2 times: tol=1 in Value2; TOL=5 in SpiceLine."
+    )
+    assert quality["rules_run"]["duplicate_parameter"] == 1
 
 
 async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
@@ -1318,6 +1339,40 @@ async def test_netlist_quality_reports_a_net_with_no_dc_path_to_ground(state_no_
     assert "mid" in floating[0]["evidence"]["detail"]
     assert floating[0]["severity"] == "warning"
     assert data["outcome"] == "partial"
+
+
+async def test_netlist_quality_reports_a_parameter_given_twice(state_no_sim, work_dir):
+    """An instance that names a parameter twice is a fact a reference compare
+    used to be the only way to see."""
+    deck = _write(
+        work_dir,
+        "twice.cir",
+        "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=2 Vh=0.5 vt=4.15\nR1 out 0 1k\n.op\n.end\n",
+    )
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    twice = [f for f in data["findings"] if f["rule_id"] == "duplicate_parameter"]
+    assert len(twice) == 1, data["findings"]
+    assert "A1 gives vt 2 times: Vt=2, vt=4.15." in twice[0]["evidence"]["detail"]
+    assert twice[0]["at"]["line"] == 2
+    assert twice[0]["severity"] == "observation"
+
+
+async def test_netlist_quality_reports_a_model_or_subcircuit_giving_a_parameter_twice(
+    state_no_sim, work_dir
+):
+    deck = _write(
+        work_dir,
+        "model_twice.cir",
+        "V1 d 0 1\nM1 d d 0 0 NM\nX1 d 0 amp\n"
+        ".model NM NMOS(VTO=0.7 KP=100u vto=0.8)\n"
+        ".subckt amp a b PARAMS: g=1 G=2\nR1 a b {g}\n.ends amp\n.op\n.end\n",
+    )
+    data = await _run(state_no_sim, path=str(deck), checks=["quality"])
+    details = [
+        f["evidence"]["detail"] for f in data["findings"] if f["rule_id"] == "duplicate_parameter"
+    ]
+    assert any("NM gives vto 2 times: VTO=0.7, vto=0.8." in d for d in details), details
+    assert any("amp gives g 2 times: g=1, G=2." in d for d in details), details
 
 
 async def test_netlist_quality_silent_on_a_clean_deck(state_no_sim, work_dir):

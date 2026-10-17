@@ -240,14 +240,16 @@ def test_the_same_copies_in_the_same_order_are_equivalent() -> None:
         (SCHMITT_ONCE, "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=4.15\n.end\n"),
         # The keyed value is the signature's head; its second copy still signs.
         ("R1 a 0 R=1k\n.end\n", "R1 a 0 R=1k R=1k\n.end\n"),
+        (".model NM NMOS(VTO=0.7)\n.end\n", ".model NM NMOS(VTO=0.7 VTO=0.7)\n.end\n"),
     ],
-    ids=["a_parameter", "a_keyed_value"],
+    ids=["a_parameter", "a_keyed_value", "a_model_parameter"],
 )
 def test_a_structural_diff_shows_a_second_copy_as_a_change(once: str, twice: str) -> None:
     from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
 
     delta = structural_delta(read_deck(once), read_deck(twice))
-    assert len(delta["components_changed"]) == 1
+    changes = delta["components_changed"] + delta["directives_added"]
+    assert len(changes) == 1, delta
 
 
 def test_type_letter_change_is_add_remove_not_retype() -> None:

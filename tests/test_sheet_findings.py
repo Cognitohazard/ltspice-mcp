@@ -54,6 +54,7 @@ class TestTheRegistry:
             == (
                 "unresolved_symbol",
                 "dropped_wire",
+                "duplicate_parameter",
                 "floating_pin",
                 "dangling_wire_end",
                 "dangling_label",
@@ -88,6 +89,7 @@ class TestTheRegistry:
                 "wire_through_symbol",
             },
             "quality": {
+                "duplicate_parameter",
                 "label_over_component",
                 "text_in_symbol_body",
                 "stacked_directive",
@@ -326,6 +328,29 @@ class TestWhatLtspiceLeavesOut:
             wires=((0, 0, 0, 96),),
         )
         assert only(view, "dropped_wire") == []
+
+
+class TestAParameterGivenTwice:
+    """LTspice writes Value, Value2, SpiceLine and SpiceLine2 onto one line
+    (recorded: export-attributes), so a key in two of them is in it twice."""
+
+    def test_across_two_attributes_in_any_case(self) -> None:
+        view = SheetView(
+            parts=(
+                Part(
+                    "A1", at=(0, 0), parameters=(("Value", "Vt=2 Vh=0.5"), ("SpiceLine", "vt=3"))
+                ),
+            )
+        )
+        (found,) = only(view, "duplicate_parameter")
+        assert (found.refs, found.points) == (("A1",), ((0, 0),))
+        assert found.facts == {"parameter": "vt", "copies": ("Vt=2 in Value", "vt=3 in SpiceLine")}
+
+    def test_once_each_is_nothing(self) -> None:
+        view = SheetView(
+            parts=(Part("M1", parameters=(("Value", "NMOS"), ("Value2", "l=1u w=1u"))),)
+        )
+        assert only(view, "duplicate_parameter") == []
 
 
 #: A part that draws a frame one unit outside its two columns of pins, as many
