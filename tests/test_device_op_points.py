@@ -10,8 +10,6 @@ path's own injection in test_experiment_runner.py.
 
 from pathlib import Path
 
-from spicelib.simulators.ltspice_simulator import LTspice
-
 from ltspice_mcp.lib.log_parser import read_device_op_points
 from ltspice_mcp.lib.metrics import (
     dev_instance as _dev_instance,
@@ -23,6 +21,7 @@ from ltspice_mcp.lib.metrics import (
     filter_operating_point as _filter_operating_point,
 )
 from ltspice_mcp.tools._base import inject_logopinfo
+from tests import _ltspice_recorded as rec
 
 # A trimmed real LTspice .op log (LTspice 26.x) with the logopinfo block.
 _LOG_WITH_BLOCK = """\
@@ -82,6 +81,12 @@ class _NotLTspice:
     """Stand-in for a non-LTspice simulator class."""
 
 
+# An LTspice that needs the option, named by the executable in the LTspice 26
+# recording, so these tests pass whichever LTspice is installed. The rule for
+# each build is checked against its recording in test_recorded_ltspice_results.py.
+LTSPICE_26 = rec.launcher("ltspice26")
+
+
 class TestInjectLogopinfo:
     _DECK = (
         "* cs stage\n"
@@ -99,7 +104,7 @@ class TestInjectLogopinfo:
 
     def test_injects_before_end_for_ltspice_op(self, tmp_path: Path):
         src = self._write(tmp_path, self._DECK)
-        run = inject_logopinfo(src, LTspice, "job1")
+        run = inject_logopinfo(src, LTSPICE_26, "job1")
         assert run != src
         out = run.read_text()
         assert ".options logopinfo" in out
@@ -112,8 +117,8 @@ class TestInjectLogopinfo:
         # augmented file — otherwise a later run overwrites the deck the earlier
         # queued job has yet to read. The job_id stamp keeps them distinct.
         src = self._write(tmp_path, self._DECK)
-        a = inject_logopinfo(src, LTspice, "jobA")
-        b = inject_logopinfo(src, LTspice, "jobB")
+        a = inject_logopinfo(src, LTSPICE_26, "jobA")
+        b = inject_logopinfo(src, LTSPICE_26, "jobB")
         assert a != b
         assert a.exists() and b.exists()
         assert "jobA" in a.name and "jobB" in b.name
@@ -121,20 +126,20 @@ class TestInjectLogopinfo:
     def test_noop_when_already_present(self, tmp_path: Path):
         deck = self._DECK.replace(".op\n", ".options logopinfo\n.op\n")
         src = self._write(tmp_path, deck)
-        assert inject_logopinfo(src, LTspice, "job1") == src
+        assert inject_logopinfo(src, LTSPICE_26, "job1") == src
 
     def test_noop_without_op_directive(self, tmp_path: Path):
         # .tran (no .op) produces no op-point block, so don't inject.
         deck = self._DECK.replace(".op\n", ".tran 1m\n")
         src = self._write(tmp_path, deck)
-        assert inject_logopinfo(src, LTspice, "job1") == src
+        assert inject_logopinfo(src, LTSPICE_26, "job1") == src
 
     def test_dot_options_alone_does_not_trigger(self, tmp_path: Path):
         # ``.op\b`` must not match ``.options`` — a deck with .options but no .op
         # is not an op-point run.
         deck = self._DECK.replace(".op\n", ".options reltol=1e-4\n.tran 1m\n")
         src = self._write(tmp_path, deck)
-        assert inject_logopinfo(src, LTspice, "job1") == src
+        assert inject_logopinfo(src, LTSPICE_26, "job1") == src
 
     def test_noop_for_non_ltspice(self, tmp_path: Path):
         src = self._write(tmp_path, self._DECK)
@@ -143,7 +148,7 @@ class TestInjectLogopinfo:
     def test_injects_with_existing_other_options(self, tmp_path: Path):
         deck = self._DECK.replace(".op\n", ".options reltol=1e-4\n.op\n")
         src = self._write(tmp_path, deck)
-        run = inject_logopinfo(src, LTspice, "job1")
+        run = inject_logopinfo(src, LTSPICE_26, "job1")
         assert run != src
         assert ".options logopinfo" in run.read_text()
 

@@ -831,15 +831,11 @@ class TestDeviceOperatingPoints:
         """The server adds ``.options logopinfo`` to an ``.op`` deck so that the
         block is printed. On XVII that turns a deck that runs into one that
         does not, and the block is printed without it."""
-        from spicelib.simulators.ltspice_simulator import LTspice
-
         from ltspice_mcp.lib.runner_base import inject_logopinfo
 
-        executable = rec.manifest(build)["executable"]["name"]
-        launcher = type("Launcher", (LTspice,), {"spice_exe": [f"C:/install/{executable}"]})
         deck = tmp_path / "deck.cir"
         deck.write_bytes((INPUTS / "raw/op.cir").read_bytes())
-        run = inject_logopinfo(deck, launcher, "job")
+        run = inject_logopinfo(deck, rec.launcher(build), "job")
         if rec.generation(build) == "xvii":
             assert run == deck
         else:
