@@ -1007,16 +1007,29 @@ class ApiMethodsMixin(ABC):
                 raise ApiCallError(data["error"]["message"], payload=data) from exc
         return _with_warnings(handoff.receipt, dropped)
 
-    def wait(self, job_id: str, timeout: float | None = None) -> dict[str, Any]:
-        """Wait for a job, returning a complete snapshot on terminality or timeout."""
+    def wait(
+        self,
+        job_id: str,
+        timeout_s: float | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Wait for a job, returning a complete snapshot on terminality or timeout.
+
+        ``timeout_s`` is spelled as ``jobs(action="wait")`` spells it; ``timeout``
+        is the older spelling, still accepted. None waits until the job ends.
+        """
         self._check_process_and_thread()
         if not isinstance(job_id, str) or not job_id:
             raise ValueError("job_id must be a non-empty string")
+        if timeout is not None and timeout_s is not None:
+            raise ValueError("give timeout_s or timeout, not both")
+        timeout = timeout_s if timeout is None else timeout
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
-                raise ValueError("timeout must be a non-negative number or None")
+                raise ValueError("timeout_s must be a non-negative number or None")
             if timeout < 0:
-                raise ValueError("timeout must be a non-negative number or None")
+                raise ValueError("timeout_s must be a non-negative number or None")
 
         started = time.monotonic()
         while True:

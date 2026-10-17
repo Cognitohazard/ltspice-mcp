@@ -240,63 +240,6 @@
     "x": 96,
     "y": 656
    },
-   "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#), (#,#). Re-route or delete these wires.": {
-    "reference": "M1",
-    "sheet": "fixtures/nmos4_mirrored_quarter_turns.asc",
-    "warnings": [
-     "wires left at old pin coordinates with no connection: (224,64), (144,112), (192,112), (240,112). Re-route or delete these wires."
-    ],
-    "x": 224,
-    "y": -32
-   },
-   "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": {
-    "reference": "M1",
-    "sheet": "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc",
-    "warnings": [
-     "wires left at old pin coordinates with no connection: (320,224), (320,416), (272,320). Re-route or delete these wires."
-    ],
-    "x": 96,
-    "y": 176
-   },
-   "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": {
-    "reference": "M1",
-    "sheet": "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc",
-    "warnings": [
-     "wires left at old pin coordinates with no connection: (320,224), (272,320). Re-route or delete these wires."
-    ],
-    "x": 320,
-    "y": 512
-   },
-   "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": {
-    "reference": "R2",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "warnings": [
-     "wires left at old pin coordinates with no connection: (800,96). Re-route or delete these wires."
-    ],
-    "x": 400,
-    "y": 448
-   },
-   "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": {
-    "reference": "R2",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "warnings": [
-     "wires left at old pin coordinates with no connection: (800,96). Re-route or delete these wires.",
-     "R2.1 at (96,400) is on a point where 2 wires cross that were separate nets; a pin on a crossing joins them."
-    ],
-    "x": 96,
-    "y": 448
-   },
-   "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": {
-    "reference": "R2",
-    "sheet": "fixtures/crossings/every_kind.asc",
-    "warnings": [
-     "wires left at old pin coordinates with no connection: (800,96). Re-route or delete these wires.",
-     "R2.1 at (96,608) is on a point where 2 wires cross that were separate nets; a pin on a crossing joins them.",
-     "R2.2 at (96,704) is on a point where 2 wires cross that were separate nets; a pin on a crossing joins them."
-    ],
-    "x": 96,
-    "y": 656
-   },
    "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": {
     "reference": "R1",
     "refused": "Refused to move R1: R1.1 would land at (96,96), where wires of nets that each carry a name cross (['a']; ['b']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.",
@@ -361,14 +304,11 @@
    },
    "moves": {
     "proposals": 168,
-    "sha256": "9683db31a8c12db1e4ba491402b40a76ab5f31796256ae74603953f1a79cb68f",
+    "sha256": "b9f0aa322daa5dc831027ead47646159371073edfe72abc51b465f7d475140dd",
     "shapes": {
-     "moved": 70,
-     "moved: PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": 10,
-     "moved: PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": 2,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 66,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": 10,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": 2,
+     "moved": 136,
+     "moved: PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": 20,
+     "moved: PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them. | PIN at (#,#) is on a point where # wires cross that were separate nets; a pin on a crossing joins them.": 4,
      "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 8
     }
    }
@@ -574,12 +514,9 @@
    },
    "moves": {
     "proposals": 233,
-    "sha256": "cb29f331d070b383186d544fadc5b5f06926a3d27a818e8679b9145b1351d284",
+    "sha256": "154810b85da7a1dedf49bdd0e3361920e77dda8eba731f61502ca898acf8c520",
     "shapes": {
-     "moved": 57,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 57,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 6,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 113
+     "moved": 233
     }
    }
   },
@@ -602,11 +539,9 @@
    },
    "moves": {
     "proposals": 221,
-    "sha256": "52c1eabf45ac667925dc8a28a344b3eaa1393f40506936bcd5a377026b256e50",
+    "sha256": "d2b0571878a5e929f5b86d9b8a8bea8b63f4ebb2e51fa221f2d16161fa7cec79",
     "shapes": {
-     "moved": 90,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 53,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 78
+     "moved": 221
     }
    }
   },
@@ -629,12 +564,9 @@
    },
    "moves": {
     "proposals": 588,
-    "sha256": "ec575114de11857e1938f955b5c6de2580e8b2945a761497622d31b5cfaaabda",
+    "sha256": "082037474c9b70b726b19a44b3b8fbad08ad7e17e459b253b468cd5da15fdba4",
     "shapes": {
-     "moved": 86,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 212,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 19,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 271
+     "moved": 588
     }
    }
   },
@@ -682,11 +614,9 @@
    },
    "moves": {
     "proposals": 425,
-    "sha256": "87924e20d46b0d1cc4a19d2809159f93b1f4fa625870b29319f9e39d248f6db5",
+    "sha256": "4d6e96a73611c07f7f8197bce2451f3e840446b97d5c39cbb23cecbc548efb0d",
     "shapes": {
-     "moved": 83,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 214,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 128
+     "moved": 425
     }
    }
   },
@@ -733,11 +663,9 @@
    },
    "moves": {
     "proposals": 585,
-    "sha256": "c16ad6d9862ae5923b9caa25b1d88c0a0e0834a81e5d08659ab9d8cc377a43f2",
+    "sha256": "fcdbe330d84aaf5ebcfc8fe37939b5f60743f0aa5156dc46056c800ec2e15bd8",
     "shapes": {
-     "moved": 4,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 287,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 294
+     "moved": 585
     }
    }
   },
@@ -759,11 +687,9 @@
    },
    "moves": {
     "proposals": 593,
-    "sha256": "0665d3e8e162abc7f970948ac7488cac6c74578998871ab9c42a80b52b50b66f",
+    "sha256": "faec1ed2cb8d84b7d5f5fe0dfd676927c034ff7399f9fb52b15227081c823760",
     "shapes": {
-     "moved": 19,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 277,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 297
+     "moved": 593
     }
    }
   },
@@ -786,11 +712,9 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "e10c5af0e7ec31443e4d4c4aa7c81024c4bdd437c1b84ed1a9c5639a5f8a2fb0",
+    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
     "shapes": {
-     "moved": 11,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 22,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 40
+     "moved": 73
     }
    }
   },
@@ -838,11 +762,9 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "f620f5fb57d9fa052a620d837f40baddbd810d5ca6cf093e826f4d0c1a1f7564",
+    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
     "shapes": {
-     "moved": 11,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 22,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 40
+     "moved": 73
     }
    }
   },
@@ -864,10 +786,9 @@
    },
    "moves": {
     "proposals": 67,
-    "sha256": "e957d4a7b68ec8b2bca91c59de90bdec1f408554ed665a64666e44304e6598f1",
+    "sha256": "15a3be6188c61d0b7c0da10fd791c80ae40f8edd153c9ca31869e2b3a77bb310",
     "shapes": {
-     "moved": 29,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 38
+     "moved": 67
     }
    }
   },
@@ -884,11 +805,9 @@
    },
    "moves": {
     "proposals": 599,
-    "sha256": "517aa269f1c9a4ae9a744ee8ec8f577b02671cd9447bc25447de04ef868d0d9b",
+    "sha256": "a0c7b5fc80859455db1683556916ae3f936f052edac7d2c87ba8bfab055c041b",
     "shapes": {
-     "moved": 3,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 184,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 412
+     "moved": 599
     }
    }
   },
@@ -930,12 +849,9 @@
    },
    "moves": {
     "proposals": 313,
-    "sha256": "3d693864a4736f7165d246e46cce05114b2269edbe6111067bab18c93fe2ada2",
+    "sha256": "507d0b3adcde75d3621c1d91058b9248a761f72dc24dc3d1918ff56e4ee355a9",
     "shapes": {
-     "moved": 14,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 79,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 134,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 86
+     "moved": 313
     }
    }
   },
@@ -983,12 +899,9 @@
    },
    "moves": {
     "proposals": 586,
-    "sha256": "ad396b4f957d87242030daddc9fc683def63b9e6c533d0022e5d6b02c12deb2f",
+    "sha256": "f203a9aceaff5b32aebe669f65c90d147cbd9f972e8ea3b13fdda66e25e5b717",
     "shapes": {
-     "moved": 91,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 152,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 235,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 108
+     "moved": 586
     }
    }
   },
@@ -1030,11 +943,9 @@
    },
    "moves": {
     "proposals": 117,
-    "sha256": "ca3ac89e6ba894189083ff84c8cf6f6b63bbe616347d5bc579358489c33882d0",
+    "sha256": "b7a1076de89d7c9dbf94fbe27b17681708ab7b1bf70c3da70a99bc722ed76870",
     "shapes": {
-     "moved": 13,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 46,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 58
+     "moved": 117
     }
    }
   },
@@ -1057,10 +968,9 @@
    },
    "moves": {
     "proposals": 113,
-    "sha256": "36f27520a511ed192cea94e6b3cb85052966fcb6bf66f8e28a37feecbea2f58d",
+    "sha256": "0373f845c6129f2f6251077bcbbc89cef54269106290ab7b42c92e65b1ac58f6",
     "shapes": {
-     "moved": 41,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 72
+     "moved": 113
     }
    }
   },
@@ -1083,11 +993,9 @@
    },
    "moves": {
     "proposals": 117,
-    "sha256": "0a500f2130ad5da5f1b33f2cb72fcb4fb10ffee771f4ae7b5ed3aed0edd28d0f",
+    "sha256": "b7a1076de89d7c9dbf94fbe27b17681708ab7b1bf70c3da70a99bc722ed76870",
     "shapes": {
-     "moved": 13,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 46,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 58
+     "moved": 117
     }
    }
   },
@@ -1110,10 +1018,9 @@
    },
    "moves": {
     "proposals": 113,
-    "sha256": "9e5fe9eb62fa3b97ed175ab4373d21e9d4f23402fda99cd45d9eabc125afe48e",
+    "sha256": "0373f845c6129f2f6251077bcbbc89cef54269106290ab7b42c92e65b1ac58f6",
     "shapes": {
-     "moved": 42,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 71
+     "moved": 113
     }
    }
   },
@@ -1136,10 +1043,9 @@
    },
    "moves": {
     "proposals": 93,
-    "sha256": "43012991a8b65041e03d4828af387198fcfd56e85f66debc4efd54e09c809d0b",
+    "sha256": "b535586e6b1fe8f45ad7dc65747be4fe408539323533c9440e316f79a6dfb949",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 81
+     "moved": 93
     }
    }
   },
@@ -1161,10 +1067,9 @@
    },
    "moves": {
     "proposals": 71,
-    "sha256": "4398ff287cdceb8ebe88c5b213c46ba3824b8586a95f1e9f95fa31da79cedfc2",
+    "sha256": "01f62e32e122254b910410033f032eda649ea7d812c478c8216438dde30cbb8f",
     "shapes": {
-     "moved": 31,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 40
+     "moved": 71
     }
    }
   },
@@ -1190,10 +1095,9 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "69a3e7dfa0d0a9bd3f105ca1966dfdd969d0dd195f8b01bf8027997522ab6cf8",
+    "sha256": "e8d01b92810549e795a3ad115086cfb5a0256e13d38d39f514c92e9d39634395",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 61,
+     "moved": 73,
      "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 6
     }
    }
@@ -1216,10 +1120,9 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "3587e432fd055bddf0eb84e06eb10517383ec1d7e779143c9480fce784b89a41",
+    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
     "shapes": {
-     "moved": 4,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 5
+     "moved": 9
     }
    }
   },
@@ -1312,10 +1215,9 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "c888065b64e59758b05ecd5400ac69d141996855bfde7ee10a927c0144056c1d",
+    "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 67
+     "moved": 79
     }
    }
   },
@@ -1337,10 +1239,9 @@
    },
    "moves": {
     "proposals": 46,
-    "sha256": "b3c9523fded005e58d5854b70b11efe8d8bc869333e5f377078546f61bdd5219",
+    "sha256": "2feb71786419bd43c610f9727867e736aaa6dd2e3dc354582872927fd9ac89ff",
     "shapes": {
-     "moved": 8,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 38
+     "moved": 46
     }
    }
   },
@@ -1362,10 +1263,9 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "a76d0e04c8f55d6451ebf9ec8177436f08afb04021c9cdd0032955fa4a6bf83f",
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
     "shapes": {
-     "moved": 8,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 22
+     "moved": 30
     }
    }
   },
@@ -1387,10 +1287,9 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "3c8ebffe00527a3d8b9c8f3ee4db46abc5531ebd307ea34ba95e320b0c765345",
+    "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
     "shapes": {
-     "moved": 33,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 46
+     "moved": 79
     }
    }
   },
@@ -1436,10 +1335,9 @@
    },
    "moves": {
     "proposals": 61,
-    "sha256": "97abcc98f44b30e1e65a7a2caf2b226d94d1df6d901125f094455b96f5b1c5fc",
+    "sha256": "37ac08321e6602a6b9690255ae4f5b4d3070430f07e05ece23e27244ac256504",
     "shapes": {
-     "moved": 29,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 32
+     "moved": 61
     }
    }
   },
@@ -1462,10 +1360,9 @@
    },
    "moves": {
     "proposals": 358,
-    "sha256": "ba77e522ecff30469e697b1b0957ccdf48be209b40d70ce4f02d8468d9c51b13",
+    "sha256": "03eb823e2fed87900806136826c577df405ba739955af37edaaa774677934539",
     "shapes": {
-     "moved": 324,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 34
+     "moved": 358
     }
    }
   },
@@ -1484,11 +1381,9 @@
    },
    "moves": {
     "proposals": 17,
-    "sha256": "4c3b6c8821f300b014d6e6f1815df746c4ed5b81d3a1770a4ad07a3650173d83",
+    "sha256": "7c6b69ff25ab107fe90ae560c186035ba0feb9a8af7ffcf214f96695d1804bd5",
     "shapes": {
-     "moved": 3,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 2
+     "moved": 17
     }
    }
   },
@@ -1507,11 +1402,9 @@
    },
    "moves": {
     "proposals": 13,
-    "sha256": "19f934a8ec7b5fa82cd064b76eda553353e5b44ef6a53f19487e6a03af50eb55",
+    "sha256": "4e69cc3576ee1ad7ded0e016711b23b968554cc8e1a1fb0d272f32a04ff53214",
     "shapes": {
-     "moved": 3,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 8,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 2
+     "moved": 13
     }
    }
   },
@@ -1530,11 +1423,9 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "053bda2c30c742621df917dcd0b9252fa576d6f683b26ffcd43c89548fa1a40a",
+    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
     "shapes": {
-     "moved": 3,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 4,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 2
+     "moved": 9
     }
    }
   },
@@ -1556,10 +1447,9 @@
    },
    "moves": {
     "proposals": 42,
-    "sha256": "d34545335d699f99d62baf6b7c3877d2718c37b5374c6dc52849b2d6003e38a2",
+    "sha256": "15f19f3f4c0cf25de15cf25e7430906c2e30ab01fc348ee63d8b502652c919f3",
     "shapes": {
-     "moved": 8,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 34
+     "moved": 42
     }
    }
   },
@@ -1581,10 +1471,9 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "5f26102f7865bf03ea2b6c766fcb1ffac50f0449c6e5b70e976a56a7c0aacf04",
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
     "shapes": {
-     "moved": 10,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 20
+     "moved": 30
     }
    }
   },
@@ -1716,11 +1605,9 @@
    },
    "moves": {
     "proposals": 65,
-    "sha256": "8253ffb3ac6d7080782d8cf45ac7dd75516bf847bbfe910f815438ef581aaed6",
+    "sha256": "0d8c03254cbdb690a33d4c46bc1cec160f47e854b81afb7bb488d6b877a81a62",
     "shapes": {
-     "moved": 11,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 36
+     "moved": 65
     }
    }
   },
@@ -1742,10 +1629,9 @@
    },
    "moves": {
     "proposals": 97,
-    "sha256": "b583277ee8573dceb88b4a27fb65ab0c166c31854b86f74c17c86a1aa8a1174e",
+    "sha256": "326794ea0dfafc6a72c6f2b63b624e24e4f8875509d518115143093042deac62",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 85
+     "moved": 97
     }
    }
   },
@@ -1767,10 +1653,9 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "66c7bb3d65cd2afab38a906fb21895b3b6018618e09369c7414f38798a28281d",
+    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 61
+     "moved": 73
     }
    }
   },
@@ -1792,10 +1677,9 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "5c50d4d92bcc41d4568ace9da05ae2efd95590eb8474587169a221385b5ee528",
+    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 61
+     "moved": 73
     }
    }
   },
@@ -1855,10 +1739,9 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "8144fa4a924e4a1b505681c458f74f6ee208b152489cb161fdf193eaff5ff094",
+    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
     "shapes": {
-     "moved": 4,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 7
+     "moved": 11
     }
    }
   },
@@ -2270,11 +2153,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "8084d44d3ea9b25651908c1f70652085b9134383e3a247ca451e49bb4515b93e",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2296,11 +2177,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "8084d44d3ea9b25651908c1f70652085b9134383e3a247ca451e49bb4515b93e",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2322,11 +2201,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "b3e2ed1b5e321f40635994f21332d0321f3d1994727bd5df53c3a08b519f89bf",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2394,11 +2271,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "8a22541433abfbe03c47392f084891cfe80009040aafa0d5b11f2ef13b937831",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2420,11 +2295,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "8a22541433abfbe03c47392f084891cfe80009040aafa0d5b11f2ef13b937831",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2518,11 +2391,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "e03bc39e877e309658f054f868acc2c7893679761c74fba260b25ac0a0a4c6da",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2544,11 +2415,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "8a22541433abfbe03c47392f084891cfe80009040aafa0d5b11f2ef13b937831",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2570,11 +2439,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "8a22541433abfbe03c47392f084891cfe80009040aafa0d5b11f2ef13b937831",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2668,11 +2535,9 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "e03bc39e877e309658f054f868acc2c7893679761c74fba260b25ac0a0a4c6da",
+    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
     "shapes": {
-     "moved": 7,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 18,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 19
+     "moved": 44
     }
    }
   },
@@ -2695,12 +2560,9 @@
    },
    "moves": {
     "proposals": 218,
-    "sha256": "d40e80ab4017b011aa63fbe46619c64a4c5bc8e15fc0c2e3aea6cbd4ad80de99",
+    "sha256": "07d3489d2a026d347ca6c7209c3d264c744347ec793e6e4000ecc4696864dff1",
     "shapes": {
-     "moved": 10,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#), (#,#). Re-route or delete these wires.": 184,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#), (#,#). Re-route or delete these wires.": 16,
-     "moved: wires left at old pin coordinates with no connection: (#,#), (#,#). Re-route or delete these wires.": 8
+     "moved": 218
     }
    }
   },
@@ -2726,10 +2588,9 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "69a3e7dfa0d0a9bd3f105ca1966dfdd969d0dd195f8b01bf8027997522ab6cf8",
+    "sha256": "e8d01b92810549e795a3ad115086cfb5a0256e13d38d39f514c92e9d39634395",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 61,
+     "moved": 73,
      "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 6
     }
    }
@@ -2752,10 +2613,9 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "c888065b64e59758b05ecd5400ac69d141996855bfde7ee10a927c0144056c1d",
+    "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 67
+     "moved": 79
     }
    }
   },
@@ -2777,10 +2637,9 @@
    },
    "moves": {
     "proposals": 46,
-    "sha256": "b3c9523fded005e58d5854b70b11efe8d8bc869333e5f377078546f61bdd5219",
+    "sha256": "2feb71786419bd43c610f9727867e736aaa6dd2e3dc354582872927fd9ac89ff",
     "shapes": {
-     "moved": 8,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 38
+     "moved": 46
     }
    }
   },
@@ -2802,10 +2661,9 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "a76d0e04c8f55d6451ebf9ec8177436f08afb04021c9cdd0032955fa4a6bf83f",
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
     "shapes": {
-     "moved": 8,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 22
+     "moved": 30
     }
    }
   },
@@ -2827,10 +2685,9 @@
    },
    "moves": {
     "proposals": 61,
-    "sha256": "97abcc98f44b30e1e65a7a2caf2b226d94d1df6d901125f094455b96f5b1c5fc",
+    "sha256": "37ac08321e6602a6b9690255ae4f5b4d3070430f07e05ece23e27244ac256504",
     "shapes": {
-     "moved": 29,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 32
+     "moved": 61
     }
    }
   },
@@ -2852,10 +2709,9 @@
    },
    "moves": {
     "proposals": 97,
-    "sha256": "b583277ee8573dceb88b4a27fb65ab0c166c31854b86f74c17c86a1aa8a1174e",
+    "sha256": "326794ea0dfafc6a72c6f2b63b624e24e4f8875509d518115143093042deac62",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 85
+     "moved": 97
     }
    }
   },
@@ -2877,10 +2733,9 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "66c7bb3d65cd2afab38a906fb21895b3b6018618e09369c7414f38798a28281d",
+    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 61
+     "moved": 73
     }
    }
   },
@@ -2902,10 +2757,9 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "5c50d4d92bcc41d4568ace9da05ae2efd95590eb8474587169a221385b5ee528",
+    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
     "shapes": {
-     "moved": 12,
-     "moved: wires left at old pin coordinates with no connection: (#,#). Re-route or delete these wires.": 61
+     "moved": 73
     }
    }
   }
