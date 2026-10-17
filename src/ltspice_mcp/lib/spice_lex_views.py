@@ -426,7 +426,6 @@ class InstanceLine:
     value: str | None
     params: dict[str, str] = field(default_factory=dict)
     _model_token: Token | None = None
-    _param_tokens: dict[str, Token] = field(default_factory=dict)
     _value_param_key: str | None = None
     # A subckt call's ``params:`` keyword as written, put back in front of the
     # overrides when the card is re-rendered.
@@ -435,10 +434,12 @@ class InstanceLine:
     # set_nodes can rewrite connectivity without disturbing the value/params
     # tail. None when there are no nodes or their offsets are synthesized.
     _node_span: tuple[int, int] | None = None
-    # Every key=value as read, repeats kept, and the body they were read from:
-    # an edit replaces the body, and param_pairs then reads it again.
+    # The parameters as the card gives them, in order, a key given twice
+    # listed twice: what the mutators edit and a re-render writes. ``params``
+    # is derived from it. ``_kv_tokens`` holds each pair's token while its
+    # offset is still good, for an in-place edit, else None.
     _pairs: list[tuple[str, str]] = field(default_factory=list)
-    _pairs_body: str = ""
+    _kv_tokens: list[Token | None] = field(default_factory=list)
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -547,7 +548,6 @@ class InstanceLine:
         kv_tokens = [tok for tok in tokens if tok.kind == TokenKind.KEY_VALUE]
         pairs = [_pair(tok) for tok in kv_tokens]
         params = dict(pairs)
-        param_tokens = {key: tok for (key, _), tok in zip(pairs, kv_tokens, strict=True)}
 
         value_param_key: str | None = None
         if kind == "value" and prefix in ("R", "C", "L"):
@@ -576,12 +576,11 @@ class InstanceLine:
             value=value,
             params=params,
             _model_token=model_token,
-            _param_tokens=param_tokens,
             _value_param_key=value_param_key,
             _params_marker=params_marker,
             _node_span=node_span,
             _pairs=pairs,
-            _pairs_body=card.body,
+            _kv_tokens=list[Token | None](kv_tokens),
         )
 
     def set_model(self, name: str) -> None:
@@ -638,16 +637,12 @@ class InstanceLine:
         # subsequent edit on this view re-renders canonically instead of
         # writing at a wrong offset.
         self._model_token = None
-        self._param_tokens.clear()
+        self._kv_tokens = [None] * len(self._pairs)
 
     def param_pairs(self) -> list[tuple[str, str]]:
         """Every ``key=value`` on the card as it now reads, in order, a key the
         card names twice listed twice. ``params`` keeps one value per key, so
         it cannot say that a card gives a parameter more than once."""
-        if self.card.body != self._pairs_body:
-            tokens = tokenize_body(self.card.body)
-            self._pairs = [_pair(tok) for tok in tokens if tok.kind == TokenKind.KEY_VALUE]
-            self._pairs_body = self.card.body
         return list(self._pairs)
 
     def get_param(self, key: str) -> str | None:
@@ -660,56 +655,78 @@ class InstanceLine:
         return next((v for k, v in self.params.items() if k.lower() == key_lower), None)
 
     def set_param(self, key: str, value: float | str) -> None:
-        """Set or add a parameter, flipping the card dirty.
+        """Set a parameter, or add it, flipping the card dirty.
 
-        On in-place success, also shifts every other cached param token
-        AND the cached model token by the length delta so subsequent
-        edits on the same view operate on correct offsets.
+        Every copy the card gives of ``key`` is set, matched without regard to
+        case: setting one left the others at their old value, and which copy a
+        simulator reads is not recorded here. Each copy is replaced in place,
+        right to left so the offsets still to edit stay put, while its span
+        allows; otherwise, and for a new key, the card is rendered again from
+        its parameters with every copy kept.
         """
         new = _format_value(value)
-        for existing in list(self.params):
-            if existing.lower() == key.lower():
-                self.params[existing] = new
-                tok = self._param_tokens.get(existing)
-                if tok is not None and tok.body_offset >= 0:
-                    new_text = f"{tok.key}={new}"
-                    old_body_end = tok.body_end
-                    delta = len(new_text) - tok.body_length
-                    try:
-                        self.card.replace_span(tok.body_offset, old_body_end, new_text)
-                        self._param_tokens[existing] = Token(
-                            kind=TokenKind.KEY_VALUE,
-                            text=new_text,
-                            key=tok.key,
-                            value=new,
-                            body_offset=tok.body_offset,
-                            body_length=len(new_text),
-                        )
-                        _shift_cached_param_tokens(
-                            self._param_tokens,
-                            edit_old_end=old_body_end,
-                            delta=delta,
-                            exclude_key=existing,
-                        )
-                        self._model_token = _shift_single_token(
-                            self._model_token, old_body_end, delta
-                        )
-                        return
-                    except ValueError:
-                        pass
-                self._canonical_rerender()
-                return
-        self.params[key] = new
-        self._canonical_rerender()
+        copies = [i for i, (k, _) in enumerate(self._pairs) if k.lower() == key.lower()]
+        if not copies:
+            self._pairs.append((key, new))
+            self._kv_tokens.append(None)
+            self._sync_params()
+            self._canonical_rerender()
+            return
+        for i in copies:
+            self._pairs[i] = (self._pairs[i][0], new)
+        self._sync_params()
+        try:
+            for i in reversed(copies):
+                self._replace_kv_token(i, new)
+        except ValueError:
+            self._canonical_rerender()
 
     def remove_param(self, key: str) -> None:
-        """Remove a parameter (no-op if absent)."""
-        for existing in list(self.params):
-            if existing.lower() == key.lower():
-                del self.params[existing]
-                self._param_tokens.pop(existing, None)
-                self._canonical_rerender()
-                return
+        """Remove every copy of a parameter (no-op if absent)."""
+        kept = [
+            (pair, tok)
+            for pair, tok in zip(self._pairs, self._kv_tokens, strict=True)
+            if pair[0].lower() != key.lower()
+        ]
+        if len(kept) == len(self._pairs):
+            return
+        self._pairs = [pair for pair, _ in kept]
+        self._kv_tokens = [tok for _, tok in kept]
+        self._sync_params()
+        self._canonical_rerender()
+
+    def _sync_params(self) -> None:
+        """Derive ``params`` from the pairs, in the same dict object."""
+        self.params.clear()
+        self.params.update(self._pairs)
+
+    def _replace_kv_token(self, index: int, new_value: str) -> None:
+        """Replace one parameter's text in place and shift the tokens past it.
+
+        Raises ``ValueError`` when the token's offset is no longer known or its
+        span cannot be replaced in place.
+        """
+        tok = self._kv_tokens[index]
+        if tok is None or tok.body_offset < 0:
+            raise ValueError("no in-place span for this parameter")
+        new_text = f"{tok.key}={new_value}"
+        old_body_end = tok.body_end
+        delta = len(new_text) - tok.body_length
+        self.card.replace_span(tok.body_offset, old_body_end, new_text)
+        self._kv_tokens = [
+            Token(
+                kind=TokenKind.KEY_VALUE,
+                text=new_text,
+                key=tok.key,
+                value=new_value,
+                body_offset=tok.body_offset,
+                body_length=len(new_text),
+            )
+            if i == index
+            else _shift_single_token(other, old_body_end, delta)
+            for i, other in enumerate(self._kv_tokens)
+        ]
+        self._model_token = _shift_single_token(self._model_token, old_body_end, delta)
 
     def _update_slot_in_place(self, new_text: str) -> None:
         """Try replace_span on the model/value token; fall back to canonical.
@@ -729,11 +746,9 @@ class InstanceLine:
                     body_offset=tok.body_offset,
                     body_length=len(new_text),
                 )
-                _shift_cached_param_tokens(
-                    self._param_tokens,
-                    edit_old_end=old_body_end,
-                    delta=delta,
-                )
+                self._kv_tokens = [
+                    _shift_single_token(other, old_body_end, delta) for other in self._kv_tokens
+                ]
                 return
             except ValueError:
                 pass
@@ -751,12 +766,12 @@ class InstanceLine:
             parts.append(self.value)
         if self._params_marker is not None:
             parts.append(self._params_marker)
-        for k, v in self.params.items():
+        for k, v in self._pairs:
             parts.append(f"{k}={v}")
         body = " ".join(parts)
         self.card.replace_body(body)
         self._model_token = None
-        self._param_tokens.clear()
+        self._kv_tokens = [None] * len(self._pairs)
 
     def display_value(self) -> str:
         """Single-string projection for display: model name for M/Q/J/X,

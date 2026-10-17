@@ -62,6 +62,12 @@ class PlacedPin:
         }
 
 
+#: The attributes whose text LTspice writes onto a part's netlist line after
+#: its value, in the order it writes them (recorded: ``export-attributes``).
+#: A ``KEY=VALUE`` in any of them is a parameter of the part.
+PARAMETER_ATTRIBUTES = ("Value", "Value2", "SpiceLine", "SpiceLine2")
+
+
 @dataclass(frozen=True)
 class SheetPart:
     """A placed part.
@@ -104,6 +110,13 @@ class SheetPart:
     def attribute(self, name: str) -> str | None:
         """The value of attribute ``name``; the last one when the part repeats it."""
         return self.record.attr(name)
+
+    @property
+    def parameters(self) -> tuple[tuple[str, str], ...]:
+        """Each of :data:`PARAMETER_ATTRIBUTES` the part gives, as ``(name, text)``."""
+        return tuple(
+            (name, text) for name in PARAMETER_ATTRIBUTES if (text := self.attribute(name))
+        )
 
 
 def _numbered(document: AscDocument) -> Iterator[tuple[int, Record]]:

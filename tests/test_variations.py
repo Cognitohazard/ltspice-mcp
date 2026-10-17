@@ -205,6 +205,20 @@ class TestAssignExpansion:
 
         assert ".param first=1 target=4.7k last=3" in variants[0].text
 
+    def test_a_component_value_given_twice_is_set_in_both_copies(self, tmp_path: Path):
+        path = tmp_path / "twice.cir"
+        text = "V1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
+        circuit = CircuitDeck("twice", path, text)
+        variation = AssignVariation(kind="assign", assign={"R1": ["2k"]})
+
+        variants = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "staged",
+        )
+
+        assert "R1 in out R=2k R=2k" in variants[0].text
+
     def test_model_swap_accepts_model_names(self, tmp_path: Path):
         circuit = _deck(tmp_path / "dut.cir")
         variation = AssignVariation(

@@ -1342,3 +1342,39 @@ def list_rules() -> list[dict[str, object]]:
         }
         for r in _RULES
     ]
+
+
+def validate_netlist_duplicate_params(cards: list[SpiceCard]) -> list[dict[str, object]]:
+    """Flag instance cards that give one parameter more than once.
+
+    SPICE reads a parameter name in any case, so ``w=1u W=2u`` gives ``w``
+    twice. Which copy a simulator reads is not known here, so each issue states
+    the copies and nothing about their effect; the caller attaches severity.
+    A card the typed view cannot read is left to the arity check.
+    """
+    issues: list[dict[str, object]] = []
+    for card in cards:
+        if card.kind != "instance":
+            continue
+        try:
+            view = InstanceLine.from_card(card)
+        except SpiceLexError:
+            continue
+        copies: dict[str, list[str]] = {}
+        for key, value in view.param_pairs():
+            copies.setdefault(key.lower(), []).append(f"{key}={value}")
+        for key, given in copies.items():
+            if len(given) < 2:
+                continue
+            issues.append(
+                {
+                    "line": card.line_start,
+                    "directive": _card_directive(card),
+                    "message": (
+                        f"{view.ref} gives the parameter {key} {len(given)} times: "
+                        f"{', '.join(given)}."
+                    ),
+                    "suggestion": "Which copy the simulator reads is not known here; keep one.",
+                }
+            )
+    return issues

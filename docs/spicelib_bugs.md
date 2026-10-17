@@ -3030,7 +3030,8 @@ def test_a_parameter_in_value2_is_set_there(tmp_path):
 workaround through the `set_component_value` op: a threshold in `Value` and a
 width in `Value2` are replaced where they are, a key the part does not give
 still goes to `SpiceLine`, appended to what it held as written, and copies
-already on a part are all set and named in a warning. `tests/test_netlist_graph.py` pins the comparison side: a
+already on a part are all set alike, with the sheet's `duplicate_parameter`
+finding naming the part. `tests/test_netlist_graph.py` pins the comparison side: a
 parameter given twice is reported (`duplicate_params`) and compares equal only
 when it does whichever copy is read. Once upstream searches every slot and
 appends as text, the workaround can call it again.

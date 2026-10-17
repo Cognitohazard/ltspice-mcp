@@ -2046,8 +2046,9 @@ matching with `regex:` as an opt-in prefix. `wire_pins` was once also spelled
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it where the part already gives that key: in `Value`, `Value2`,
 `SpiceLine` or `SpiceLine2`, matched without regard to case, every copy found.
-A key the part gives nowhere goes to `SpiceLine`. A key found more than once is
-named in a warning. The schematic editor underneath looked only in
+A key the part gives nowhere goes to `SpiceLine`. A part that gives a key more
+than once is named by the sheet's `duplicate_parameter` finding, which the
+reply lists because the op names the part. The schematic editor underneath looked only in
 `SpiceLine`, by exact spelling, so a Schmitt trigger's `Vt` in `Value` got a
 second copy (`docs/spicelib_bugs.md`, Bug 29). A behavioural source's value
 is one expression and replaces `Value` whole.
