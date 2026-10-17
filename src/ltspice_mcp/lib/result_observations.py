@@ -8,8 +8,8 @@ label is a false accusation the model may parrot or learn to ignore). Instead it
 *surfaces facts* the model would otherwise miss or have to dig for, and lets the
 model judge.
 
-This module is the canonical implementation of the repo-wide "Result-trust
-rules — report facts, do not rate them" in CLAUDE.md. Design rules:
+This module holds the project's rules for reporting a result: report the
+facts, do not rate them. The rules:
 - **Severity is relayed, never invented.** Relay observations carry the
   simulator's own classification (it called it an error). Value observations
   carry none — just the fact and its evidence; the magnitude speaks for itself.

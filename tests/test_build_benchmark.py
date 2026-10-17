@@ -7,8 +7,8 @@ directive and pin, and have exactly the findings it states. Its scores and the
 digest of its sheet after each call are held to
 `fixtures/build_benchmark_record.json`, and its final sheet, kept under
 `fixtures/ltspice_recorded/inputs/benchmark/`, byte for byte: that is what the
-present engine builds, which step 6 of `docs/design/schematic_engine.md` must
-build again. A change made on purpose changes the record and the sheets in the
+present engine builds, which a change to how ops are applied must build
+again. A change made on purpose changes the record and the sheets in the
 same commit; record them again with `LTSPICE_MCP_RECORD_BUILD_BENCHMARK=1`,
 then record LTspice's export of the sheets again (`docs/TESTING.md`).
 

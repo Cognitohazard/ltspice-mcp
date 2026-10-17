@@ -2925,8 +2925,7 @@ def test_a_pin_name_with_a_space_is_read(tmp_path):
 project's reader takes `OUT A` as the pin's name, and the schematic editor
 cannot open a sheet that places the symbol. Once upstream reads it, the second
 half goes and such a sheet joins the ones the editor is held to. Reading
-sheets without spicelib (`docs/design/schematic_engine.md`, section 6) removes
-the dependence altogether.
+such a sheet without spicelib would remove the dependence altogether.
 
 ---
 

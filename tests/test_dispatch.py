@@ -214,7 +214,7 @@ class TestOpInverseClosure:
 # becomes a reviewed decision instead of a silent absence-class gap. This is the
 # coverage the op-union closure alone lacks — a standalone mutate tool lives
 # outside the SchematicOp union. Each entry names how the mutation is undone, or
-# why a one-way mutation is accepted (see docs/TESTING.md).
+# why a one-way mutation is accepted.
 _TOOL_REVERSAL: dict[str, str] = {
     # Render — emits a derived artifact from existing data; the source raw is
     # untouched, so no edit-inverse applies. Not read-only because writing the
@@ -249,8 +249,7 @@ class TestMutatingToolsAreReversible:
         assert not undeclared, (
             f"Mutating tools with no declared reversal: {sorted(undeclared)}. "
             "Add each to _TOOL_REVERSAL naming how the mutation is undone, or — if "
-            "it is a deliberately-accepted one-way mutation — note why (see "
-            "docs/TESTING.md)."
+            "it is a deliberately-accepted one-way mutation — note why."
         )
 
     def test_no_stale_reversal_entries(self):
