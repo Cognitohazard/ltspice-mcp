@@ -29,6 +29,7 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
+from mcp_types import REQUEST_TIMEOUT
 from pydantic import BaseModel, ConfigDict
 
 from tests.conftest import (
@@ -43,8 +44,6 @@ from tests.conftest import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-TOOL_TIMEOUT = 20.0
 
 SYMBOL_FIXTURES = FIXTURES_DIR / "symbols"
 
@@ -111,13 +110,43 @@ def _server_params(work_dir: Path, *, run_code: bool = False) -> StdioServerPara
 
 
 @asynccontextmanager
+async def _connect(params: StdioServerParameters) -> AsyncIterator[ClientSession]:
+    """A client session to the server ``params`` starts, not yet negotiated.
+
+    Each request waits up to ``LIVENESS_S`` for its reply. The SDK waits with
+    no limit by default, so a server that never answered would hold the test
+    until the job's own timeout.
+    """
+    async with (
+        stdio_client(params) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream, read_timeout_seconds=LIVENESS_S) as session,
+    ):
+        yield session
+
+
+async def _discover(session: ClientSession) -> mcp_types.DiscoverResult:
+    """``session.discover()``, waiting up to ``LIVENESS_S`` for the reply.
+
+    The SDK gives up on ``server/discover`` after a fixed time of its own,
+    which a server still starting on a loaded machine can take longer than.
+    The server still answers a probe the SDK gave up on, so asking again
+    waits on the same server.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + LIVENESS_S
+    while True:
+        try:
+            return await session.discover()
+        except MCPError as exc:
+            if exc.code != REQUEST_TIMEOUT or loop.time() >= deadline:
+                raise
+
+
+@asynccontextmanager
 async def mcp_session(work_dir: Path, *, run_code: bool = False) -> AsyncIterator[ClientSession]:
     """Open a live MCP client session connected to the server."""
     params = _server_params(work_dir, run_code=run_code)
-    async with (
-        stdio_client(params) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
+    async with _connect(params) as session:
         init = await session.initialize()
         assert init.server_info.name == "ltspice-mcp"
         yield session
@@ -174,15 +203,24 @@ async def _held_open(
         await task
 
 
+#: ``python -m ltspice_mcp``, started once the file named by its argument
+#: exists: a server that is slow to start, for as long as a test chooses.
+_HELD_START = (
+    "import pathlib, runpy, sys, time\n"
+    "gate = pathlib.Path(sys.argv[1])\n"
+    "while not gate.exists():\n"
+    "    time.sleep(0.01)\n"
+    "sys.argv = ['ltspice_mcp']\n"
+    "runpy.run_module('ltspice_mcp', run_name='__main__', alter_sys=True)\n"
+)
+
+
 @asynccontextmanager
 async def _modern_session(work_dir: Path) -> AsyncIterator[ClientSession]:
     """A 2026-07-28 connection: ``server/discover``, no handshake."""
     params = _server_params(work_dir)
-    async with (
-        stdio_client(params) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.discover()
+    async with _connect(params) as session:
+        await _discover(session)
         yield session
 
 
@@ -212,8 +250,8 @@ def _data(result) -> dict:
 
 
 def _call(session, name, args=None):
-    """Shorthand for call_tool with standard timeout."""
-    return session.call_tool(name, args or {}, read_timeout_seconds=TOOL_TIMEOUT)
+    """Shorthand for call_tool; the session caps the wait (``_connect``)."""
+    return session.call_tool(name, args or {})
 
 
 def _assert_tool_error(result, expected_substring: str):
@@ -279,10 +317,7 @@ class TestServerLifecycle:
         from importlib.metadata import version as pkg_version
 
         params = _server_params(tmp_path)
-        async with (
-            stdio_client(params) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as session,
-        ):
+        async with _connect(params) as session:
             init = await session.initialize()
             assert init.server_info.version == pkg_version("ltspice-mcp")
             # Detection is disabled in this harness -> the no-simulator line.
@@ -306,16 +341,56 @@ class TestServerLifecycle:
         # Detection is disabled in this harness -> the no-simulator line.
         assert "No SPICE simulator detected" in result.instructions
 
+    async def test_discover_waits_for_a_server_still_starting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # On a loaded machine the server can take longer to start than the SDK
+        # waits for server/discover. The server here is held until the SDK has
+        # given up on the first probe, and the session still connects.
+        gate = tmp_path / "start"
+        params = _server_params(tmp_path)
+        params.args = ["-c", _HELD_START, str(gate)]
+        # timing: the SDK's own limit on one probe, shortened so that a probe
+        # is given up on while the server is held
+        monkeypatch.setattr("mcp.client.session.DISCOVER_TIMEOUT_SECONDS", 0.2)
+        async with _connect(params) as session:
+            asked_again = asyncio.Event()
+            probes = 0
+            send_discover = session.send_discover
+
+            async def counted(version: str) -> dict:
+                nonlocal probes
+                probes += 1
+                if probes == 2:
+                    asked_again.set()
+                return await send_discover(version)
+
+            monkeypatch.setattr(session, "send_discover", counted)
+            discovering = asyncio.create_task(_discover(session))
+            waiting = asyncio.create_task(asked_again.wait())
+            try:
+                await asyncio.wait(
+                    {discovering, waiting}, timeout=LIVENESS_S, return_when=asyncio.FIRST_COMPLETED
+                )
+                assert asked_again.is_set(), (
+                    f"the session gave up after the first probe: {discovering.exception()!r}"
+                    if discovering.done()
+                    else "no second probe"
+                )
+            finally:
+                waiting.cancel()
+            gate.touch()
+            result = await discovering
+        assert result.instructions is not None
+        assert "No SPICE simulator detected" in result.instructions
+
     async def test_server_name_override_via_env(self, tmp_path):
         # The alias packages (circuit-mcp/ngspice-mcp) set LTSPICE_MCP_SERVER_NAME
         # so the handshake identifies as the alias, not the canonical name.
         params = _server_params(tmp_path)
         assert params.env is not None
         params.env["LTSPICE_MCP_SERVER_NAME"] = "circuit-mcp"
-        async with (
-            stdio_client(params) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as session,
-        ):
+        async with _connect(params) as session:
             init = await session.initialize()
             assert init.server_info.name == "circuit-mcp"
 
@@ -340,10 +415,7 @@ class TestServerLifecycle:
             cwd=str(tmp_path),
         )
         config_file = tmp_path / "ltspice-mcp.toml"
-        async with (
-            stdio_client(params) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as session,
-        ):
+        async with _connect(params) as session:
             await session.initialize()
             assert not config_file.exists(), "startup must not write a config file"
             await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]})
