@@ -10,7 +10,7 @@ differently from the record must be found.
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import pytest
@@ -19,7 +19,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from tests import sheet_edit_record
 from tests._asc_ops import build_sheet
-from tests.sheet_edit_record import key_of, sheet_form
+from tests.sheet_edit_record import key_of, scrubbed, sheet_form
 
 _SHEET = [
     "Version 4",
@@ -75,6 +75,41 @@ class TestTheSheetComparison:
         )
 
 
+class TestTextReadsTheSameOnEveryPlatform:
+    """The record is made on one platform and compared on both."""
+
+    @pytest.mark.parametrize(
+        ("folder", "text"),
+        [
+            (PurePosixPath("/tmp/run/work"), "Cannot open /tmp/run/work/sub/bus.asc"),
+            (PureWindowsPath(r"C:\Temp\run\work"), r"Cannot open C:\Temp\run\work\sub\bus.asc"),
+        ],
+    )
+    def test_a_folder_reads_as_work(self, folder: PurePath, text: str):
+        assert scrubbed(text, (folder,), {}) == "Cannot open WORK/sub/bus.asc"
+
+    @pytest.mark.parametrize("drive", ["C", "D"])
+    def test_an_absolute_posix_argument_reads_as_given_on_any_drive(self, drive: str):
+        text = rf"Path {drive}:\outside\ref.cir is outside allowed directories"
+        assert (
+            scrubbed(text, (), {}, ("/outside/ref.cir",))
+            == "Path /outside/ref.cir is outside allowed directories"
+        )
+
+    def test_the_posix_spelling_is_left_alone(self):
+        text = "Path /outside/ref.cir is outside allowed directories"
+        assert scrubbed(text, (), {}, ("/outside/ref.cir",)) == text
+
+    def test_a_digest_of_bytes_a_test_wrote_reads_as_sha256(self):
+        """Such bytes have the platform's line breaks; a call's own sheets keep their tokens."""
+        before, written = "a" * 64, "b" * 64
+        text = f"expected_sha256 {before} does not match the current file ({written})"
+        assert (
+            scrubbed(text, (), {before: "BEFORE"})
+            == "expected_sha256 BEFORE does not match the current file (SHA256)"
+        )
+
+
 def test_a_call_on_two_writings_of_one_sheet_has_one_key(tmp_path: Path):
     """Each handed the digest of its own sheet, as a caller does."""
     keys = []
@@ -87,6 +122,29 @@ def test_a_call_on_two_writings_of_one_sheet_has_one_key(tmp_path: Path):
             {
                 "target": str(target),
                 "expected_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "ops": [{"op": "add_directive", "instruction": ".tran 1m"}],
+            }
+        )
+        keys.append(key_of(target, target.read_bytes(), args, (folder,)))
+    assert keys[0] == keys[1]
+
+
+@pytest.mark.parametrize("encoding", ["ascii", "utf-16-le"])
+def test_a_file_beside_the_sheet_makes_one_key_in_either_line_ending(
+    tmp_path: Path, encoding: str
+):
+    """A test writes the files beside its sheet with the platform's line breaks."""
+    keys = []
+    for name, newline in (("lf", "\n"), ("crlf", "\r\n")):
+        folder = tmp_path / name
+        folder.mkdir()
+        target = folder / "sheet.asc"
+        target.write_bytes(_bytes(_SHEET))
+        reference = _bytes(["* reference", "R1 in 0 1k", ".end"], newline, encoding)
+        (folder / "ref.cir").write_bytes(reference)
+        args = EditSchematicInput.model_validate(
+            {
+                "target": str(target),
                 "ops": [{"op": "add_directive", "instruction": ".tran 1m"}],
             }
         )

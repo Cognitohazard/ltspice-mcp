@@ -9,13 +9,15 @@ not its bytes, so two ways of writing the same records compare equal.
   arguments, with paths, and a digest of the sheet it was handed, replaced;
   the symbol files the sheet and its new parts resolve to; and the files
   beside the sheet an edit can read (sheets, symbols, plot settings,
-  netlists). So a call is matched wherever and in whatever order a
-  test makes it. A machine whose own LTspice library resolves a symbol makes a
-  different key, which is not compared.
+  netlists), each digested with LF line breaks. So a call is matched wherever,
+  on whichever platform and in whatever order a test makes it. A machine whose
+  own LTspice library resolves a symbol makes a different key, which is not
+  compared.
 - **The answer** is a digest of the committed sheet's records, grouped by kind
   in their order, each formatted, with LF line endings and the sheet's codec;
-  and a digest of the complete reply, with paths, the sheets' digests and the
-  build id replaced. A call that raised keeps the error's type and message.
+  and a digest of the complete reply, with paths, digests and the build id
+  replaced. A call that raised keeps the error's type and message, with the
+  same replacements.
 - **A call answering differently** fails the test that made it. A call that
   answered two ways while the record was made is kept as varying, with the
   tests that made it, and is not compared: its answer turns on something no
@@ -40,7 +42,7 @@ import os
 import re
 from collections import Counter
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import pytest
@@ -64,6 +66,10 @@ _READABLE = frozenset({".asc", ".asy", ".plt", ".cir", ".net", ".sp", ".lib", ".
 #: A path under the work folder, once the folder is ``WORK``.
 _UNDER_WORK = re.compile(r"WORK([\\/][^\s\"',;]*)")
 
+#: A SHA-256 digest that is not one of a call's sheets: the digest of bytes a test
+#: wrote, which differ with the platform's line breaks.
+_SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
+
 _recording = os.environ.get(RECORD_ENV) == "1"
 _record: dict[str, Any] = {}
 #: While recording: each key, each answer it gave, and the tests that made it.
@@ -82,9 +88,14 @@ def _digest(data: bytes | str) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+#: A line break in UTF-8 or UTF-16 LE. A test writes a file with the platform's
+#: line breaks, so a file's digest is taken with LF ones.
+_LINE_BREAK = re.compile(rb"\r(?=\x00?\n)\x00?")
+
+
 @functools.cache
 def _file_digest(path: str, mtime_ns: int, size: int) -> str:
-    return _digest(Path(path).read_bytes())
+    return _digest(_LINE_BREAK.sub(b"", Path(path).read_bytes()))
 
 
 def _digest_of(path: Path) -> str:
@@ -105,38 +116,45 @@ def sheet_form(data: bytes) -> str:
     return _digest("\n".join(lines))
 
 
-def _scrubbed(value: Any, folders: tuple[Path, ...], tokens: dict[str, str]) -> Any:
+def scrubbed(
+    value: Any,
+    folders: tuple[PurePath, ...],
+    tokens: dict[str, str],
+    given: tuple[str, ...] = (),
+) -> Any:
     """``value`` with each string's folders as ``WORK`` (a path under one written
-    with ``/``) and each token's text replaced by its name."""
+    with ``/``), each absolute POSIX path in ``given`` as given where Windows put
+    a drive before it, each token's text replaced by its name, and any other
+    SHA-256 digest as ``SHA256``. So a string naming a path or a file's digest
+    reads the same on Linux and on Windows."""
     if isinstance(value, dict):
-        return {k: _scrubbed(v, folders, tokens) for k, v in value.items()}
+        return {k: scrubbed(v, folders, tokens, given) for k, v in value.items()}
     if isinstance(value, list):
-        return [_scrubbed(v, folders, tokens) for v in value]
+        return [scrubbed(v, folders, tokens, given) for v in value]
     if not isinstance(value, str):
         return value
     for folder in folders:
-        value = path_pattern(str(folder)).sub("WORK", value)
+        # path_pattern leaves out the separator a POSIX path starts with.
+        pattern = re.compile(r"[\\/]?" + path_pattern(str(folder)).pattern, re.IGNORECASE)
+        value = pattern.sub("WORK", value)
     value = _UNDER_WORK.sub(lambda m: "WORK" + m.group(1).replace("\\", "/"), value)
+    for path in given:
+        on_a_drive = re.compile(r"[A-Za-z]:[\\/]+" + path_pattern(path).pattern, re.IGNORECASE)
+        value = on_a_drive.sub(lambda _, path=path: path, value)
     for text, name in tokens.items():
         value = value.replace(text, name)
-    return value
+    return _SHA256.sub("SHA256", value)
 
 
-def _given_paths(value: Any) -> dict[str, str]:
-    """Each absolute POSIX path among ``value``'s strings, as this platform
-    resolves it, mapped to the path as given. Windows puts a drive before such a
-    path, so an answer naming one would otherwise differ from Linux's."""
+def _given_paths(value: Any) -> tuple[str, ...]:
+    """The absolute POSIX paths among ``value``'s strings."""
     if isinstance(value, dict):
         value = list(value.values())
     if isinstance(value, list):
-        return {k: v for item in value for k, v in _given_paths(item).items()}
-    if not isinstance(value, str) or not value.startswith("/") or len(value) < 2:
-        return {}
-    with contextlib.suppress(OSError, ValueError):
-        resolved = str(Path(value).resolve())
-        if resolved != value:
-            return {resolved: value}
-    return {}
+        return tuple(path for item in value for path in _given_paths(item))
+    if isinstance(value, str) and len(value) > 1 and value.startswith("/"):
+        return (value,)
+    return ()
 
 
 def _symbols(target: Path, names: set[str]) -> list[Any]:
@@ -166,14 +184,14 @@ def key_of(target: Path, before: bytes | None, args: Any, folders: tuple[Path, .
     arguments = {**args.model_dump(mode="json"), "target": target.name}
     beside = [
         [path.name, _digest_of(path)]
-        for path in sorted(target.parent.iterdir())
+        for path in sorted(target.parent.iterdir(), key=lambda p: p.name)
         if path.suffix.lower() in _READABLE and path != target and path.is_file()
     ]
     return _digest(
         json.dumps(
             {
                 "before": form if before is None or form else _digest(before),
-                "args": _scrubbed(arguments, folders, tokens),
+                "args": scrubbed(arguments, folders, tokens),
                 "symbols": _symbols(target, names),
                 "beside": beside,
             },
@@ -213,13 +231,12 @@ async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool =
     if not _recording and "varies" in _record.get(key, {}):
         _counts["varying"] += 1
         return await _evaluate(args, state, present_mcp_views=present_mcp_views)
-    tokens = _given_paths(args.model_dump(mode="json"))
-    if before is not None:
-        tokens[hashlib.sha256(before).hexdigest()] = "BEFORE"
+    given = _given_paths(args.model_dump(mode="json"))
+    tokens = {} if before is None else {hashlib.sha256(before).hexdigest(): "BEFORE"}
     try:
         evaluation = await _evaluate(args, state, present_mcp_views=present_mcp_views)
     except Exception as exc:
-        message = _scrubbed(str(exc), folders, tokens)
+        message = scrubbed(str(exc), folders, tokens, given)
         _observe(key, {"raised": type(exc).__name__, "message": message})
         raise
     data = schematic_edit.complete_edit_schematic_data(evaluation, args)
@@ -234,7 +251,7 @@ async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool =
         sheet = sheet_form(after)
     if data.get("build_id"):
         tokens[data["build_id"]] = "BUILD"
-    reply = json.dumps(_scrubbed(data, folders, tokens), sort_keys=True)
+    reply = json.dumps(scrubbed(data, folders, tokens, given), sort_keys=True)
     _observe(key, {"sheet": sheet, "reply": _digest(reply)})
     return evaluation
 

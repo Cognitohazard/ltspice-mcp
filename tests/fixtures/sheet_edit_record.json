@@ -23,6 +23,10 @@
   "message": "disk full",
   "raised": "OSError"
  },
+ "06455ba9216857cf": {
+  "reply": "bfbb383807c5ddd4",
+  "sheet": "2f66633286ed1ad2"
+ },
  "066a79cdbe03ecab": {
   "reply": "c3f34d633b562583",
   "sheet": "0c9cf7c74f9326ad"
@@ -99,13 +103,13 @@
   "reply": "c53ffe3c614483ed",
   "sheet": "168171de437364ed"
  },
+ "1b6552f7f87e0755": {
+  "reply": "afe9a6d85910407a",
+  "sheet": "2f66633286ed1ad2"
+ },
  "1cd6ae62cc51cd3a": {
   "reply": "3262083af810e240",
   "sheet": "be2910d5a44c2ad2"
- },
- "1d501f8403b47750": {
-  "reply": "0e24221ff01035e9",
-  "sheet": "2f66633286ed1ad2"
  },
  "1d5f28a6fa2eee89": {
   "reply": "e77de5e471810260",
@@ -115,23 +119,17 @@
   "reply": "fe99e97cc27e302f",
   "sheet": null
  },
- "1e3b9cf3fc48d276": {
-  "varies": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]",
-   "tests/test_edit_schematic.py::test_unexportable_asc_reference_is_a_compare_error"
-  ]
- },
  "1e4d34a86a961413": {
   "reply": "ee5ca6a3d8467049",
   "sheet": null
  },
- "21033a47353a3132": {
-  "reply": "9f7cb52eeadb4539",
-  "sheet": "aaa53083dca6c6e2"
- },
  "224ec7d016e75c2c": {
   "reply": "acbf9bc358d08bca",
   "sheet": "fd0b62d3879aefde"
+ },
+ "228b3273c9cb164f": {
+  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+  "raised": "NetlistError"
  },
  "22a606f70da537b0": {
   "reply": "30fa923c87669d07",
@@ -145,13 +143,13 @@
   "reply": "36d6a70de1ffe63d",
   "sheet": null
  },
+ "26d9cca888cd07da": {
+  "reply": "9092497b2b515e4f",
+  "sheet": null
+ },
  "270cc4ec4a68cb0a": {
   "reply": "0d60b1f457cd272a",
   "sheet": "4464b9a7038d05c9"
- },
- "2a957f4b3219d5b9": {
-  "reply": "23d430f8873e26cb",
-  "sheet": "2f66633286ed1ad2"
  },
  "2be6db6b2f052148": {
   "reply": "d19fb669df9efa5d",
@@ -160,10 +158,6 @@
  "2d3208499e19272d": {
   "reply": "cc9848d6dee06c1f",
   "sheet": "189e647fb79514c1"
- },
- "2e0f8f7a44f2fbb4": {
-  "reply": "49eb4bbd7ab49de1",
-  "sheet": "4f700298c191ce88"
  },
  "2e4e28825c5c2aac": {
   "varies": [
@@ -187,6 +181,10 @@
   "reply": "ec29060bcd76e4e8",
   "sheet": "5309d926a1d3da61"
  },
+ "3283501cb3d82aac": {
+  "reply": "0e24221ff01035e9",
+  "sheet": "2f66633286ed1ad2"
+ },
  "36eaabe4ab44ec17": {
   "reply": "18f01444cc4f6762",
   "sheet": "1f7cd86c8e0a12c6"
@@ -198,10 +196,6 @@
  "3aec1feca40af999": {
   "reply": "0822e7a55006ee2b",
   "sheet": null
- },
- "3c971cdf6f5f6be5": {
-  "reply": "83d836ab74d735b5",
-  "sheet": "6e9880d2e1a04bf2"
  },
  "3e6ef77d5678db31": {
   "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
@@ -267,6 +261,16 @@
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-True]"
   ]
  },
+ "47102728b07dfb7d": {
+  "varies": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]",
+   "tests/test_edit_schematic.py::test_unexportable_asc_reference_is_a_compare_error"
+  ]
+ },
+ "4743083612f84785": {
+  "reply": "13cd1e60b5ae1eab",
+  "sheet": "168171de437364ed"
+ },
  "4790d3cc9c32b178": {
   "reply": "e2b74729e5a40862",
   "sheet": "189e647fb79514c1"
@@ -290,14 +294,6 @@
  "4ce71d984b20d383": {
   "reply": "0d1a5f30e9984a2c",
   "sheet": "9a63168c465b5051"
- },
- "4fc1fa9be3e54e61": {
-  "reply": "13cd1e60b5ae1eab",
-  "sheet": "168171de437364ed"
- },
- "51b88d6c71a01463": {
-  "reply": "afe9a6d85910407a",
-  "sheet": "2f66633286ed1ad2"
  },
  "5243b1a8e27e4cb7": {
   "reply": "115dda5edfc2a9e1",
@@ -419,6 +415,10 @@
   "reply": "a22c6a97cf9f1142",
   "sheet": null
  },
+ "75c3abc1b3693e92": {
+  "reply": "2841f3cd6da4f598",
+  "sheet": "087779c62714d69a"
+ },
  "770fc44c65ddcbcb": {
   "reply": "4f548211fc42c098",
   "sheet": "dd784a9aa9452591"
@@ -442,6 +442,10 @@
  "790965858d8e64aa": {
   "reply": "8c2fa7533c0c1a3e",
   "sheet": null
+ },
+ "79a3393addc82350": {
+  "reply": "9f7cb52eeadb4539",
+  "sheet": "aaa53083dca6c6e2"
  },
  "79e36f19e52c3458": {
   "reply": "84fb9c0210abfbc5",
@@ -468,6 +472,10 @@
  "7f67994fbf52cad8": {
   "reply": "3fa9de6b5d4321e5",
   "sheet": "bc9c9f192388fafc"
+ },
+ "7f791ee61dd1bd18": {
+  "reply": "2248da2ac2ed3e8b",
+  "sheet": "2f66633286ed1ad2"
  },
  "7f809e4a80f3400d": {
   "reply": "9a9ce11bd55d3128",
@@ -496,10 +504,6 @@
  "858d282860758b42": {
   "reply": "dfccf4437866530c",
   "sheet": "b3a2468022b86f34"
- },
- "868801c6a018cdd3": {
-  "reply": "7da3c8c74e17d02a",
-  "sheet": "2f66633286ed1ad2"
  },
  "870b27916e66432a": {
   "reply": "e2ed217cf192d69f",
@@ -533,21 +537,13 @@
   "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
   "raised": "NetlistError"
  },
- "93fd20ecb08d016b": {
-  "reply": "2841f3cd6da4f598",
-  "sheet": "087779c62714d69a"
- },
  "94e2319095feb215": {
   "reply": "2b2ba8535401b2ea",
   "sheet": null
  },
  "988c68f1f47d5443": {
-  "reply": "fe176fad9c805196",
+  "reply": "c7f7e2a46781b422",
   "sheet": null
- },
- "9970f074a636d0b8": {
-  "reply": "2248da2ac2ed3e8b",
-  "sheet": "2f66633286ed1ad2"
  },
  "9afbceacb2bdcfca": {
   "reply": "da975b70cc3b472c",
@@ -556,6 +552,10 @@
  "9cbaa87613eafdb0": {
   "reply": "1ec438a3ec143fc4",
   "sheet": "2f66633286ed1ad2"
+ },
+ "9f15a34d7a6a4e05": {
+  "reply": "49eb4bbd7ab49de1",
+  "sheet": "4f700298c191ce88"
  },
  "9f7f1d4304d828ad": {
   "reply": "d19fb669df9efa5d",
@@ -601,13 +601,17 @@
   "reply": "44ae20180da15153",
   "sheet": "b3a2468022b86f34"
  },
+ "aa507dc0fa8c0032": {
+  "reply": "23d430f8873e26cb",
+  "sheet": "2f66633286ed1ad2"
+ },
  "ad2afa76a042a5d0": {
   "reply": "adc731f95745690c",
   "sheet": "2f66633286ed1ad2"
  },
- "af5885d239fe98f8": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
-  "raised": "NetlistError"
+ "af02c6777cb81df7": {
+  "reply": "ccf505e0ccb68751",
+  "sheet": null
  },
  "b15ec7bb4b1f88dd": {
   "reply": "43adc5294e4f3b55",
@@ -662,7 +666,7 @@
   "sheet": "eb9a6ac0e8188eef"
  },
  "ba7106df610459a0": {
-  "reply": "cbea0e1805a55695",
+  "reply": "c7f7e2a46781b422",
   "sheet": null
  },
  "ba7dd10e5e378bf0": {
@@ -709,13 +713,9 @@
   "reply": "f92c18eeec397a47",
   "sheet": "2f66633286ed1ad2"
  },
- "c3e7fbe95dbf2e0e": {
-  "reply": "342fd84abca23463",
-  "sheet": null
- },
- "c4c751cd7a0703ca": {
-  "reply": "bfbb383807c5ddd4",
-  "sheet": "2f66633286ed1ad2"
+ "c63ae99314875bb1": {
+  "reply": "83d836ab74d735b5",
+  "sheet": "6e9880d2e1a04bf2"
  },
  "c68c2fce8c2ce8b7": {
   "reply": "adebc6a09327c5d5",
@@ -732,6 +732,10 @@
  "caacb59ddef35259": {
   "reply": "15f46a89e8cb9f45",
   "sheet": "af20c6214833a1e7"
+ },
+ "cba3e68304f58841": {
+  "reply": "7da3c8c74e17d02a",
+  "sheet": "2f66633286ed1ad2"
  },
  "cc2b4d1bcd7cb6cd": {
   "reply": "ccba02b056c16ed3",
@@ -768,10 +772,6 @@
  "d4d1b311f50efef3": {
   "reply": "074dee6a79523761",
   "sheet": "ffb9eba3962b6fc3"
- },
- "d51f2e76d79b4acb": {
-  "reply": "36c8bdf7ef25c5f2",
-  "sheet": null
  },
  "d53e75939f0642d8": {
   "varies": [
@@ -846,6 +846,10 @@
   "reply": "12d100e6389ab591",
   "sheet": "4464b9a7038d05c9"
  },
+ "e72011a5ee074f83": {
+  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+  "raised": "NetlistError"
+ },
  "ea05734b4af1ef87": {
   "reply": "71dbac01459b78a8",
   "sheet": "1cd64b7050cdd9bd"
@@ -870,9 +874,9 @@
   "reply": "f0a4ee5d5116e766",
   "sheet": null
  },
- "eef2b9a30f052b29": {
-  "reply": "6e7c4db23ec24b43",
-  "sheet": "018d0b7888b32527"
+ "eec06e85e113c5cd": {
+  "reply": "fc23d2f08f7a9111",
+  "sheet": null
  },
  "ef1170e4819294e1": {
   "reply": "8d5050c1983f5928",
@@ -881,10 +885,6 @@
  "f1e62c1692a43d30": {
   "reply": "670fb374e3eba7ed",
   "sheet": null
- },
- "f4a17d6e4a8744bc": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
  },
  "f5bdac8bcc0c975b": {
   "reply": "440267f7bd965dc6",
@@ -902,9 +902,9 @@
   "reply": "f2e540d151d8b954",
   "sheet": null
  },
- "f8fe9394cc5ad593": {
-  "reply": "fb7cab618905fba5",
-  "sheet": null
+ "f9a52563a7f61fd6": {
+  "reply": "6e7c4db23ec24b43",
+  "sheet": "018d0b7888b32527"
  },
  "fa29f0f4e21a7e0d": {
   "reply": "448ecf2a3c26eba1",
