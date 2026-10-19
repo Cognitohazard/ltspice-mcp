@@ -1348,11 +1348,11 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
             )
         if len(matches) > 1:
             coords = ", ".join(f"({x},{y})" for x, y in matches)
+            x, y = matches[0]
             raise NetlistError(
-                f"Multiple '{net_name}' labels found at: {coords}. "
-                "Connect to a component pin (Ref.Pin) instead, or place the label "
-                "at a specific pin with the add_net_label op of edit_schematic "
-                f"(net='{net_name}', pin='<Ref.Pin>')."
+                f"Multiple '{net_name}' labels found at: {coords}. Give the one you "
+                f"mean by its point, e.g. {{'x': {x}, 'y': {y}}}, or a component pin "
+                "(Ref.Pin) on its net."
             )
         return matches[0]
 
@@ -1387,9 +1387,9 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     name (a short at netlist time) — a structural error, refused outright. That
     happens when the network here is named and ``net`` already names a
     different one, or when the label, ground included, lands where two named
-    networks cross and joins both. Returns advisory warnings (duplicate name,
-    a second name for an already-named net, two nets joined at a crossing) as
-    plain facts for the caller to surface. A label that touches nothing is not
+    networks cross and joins both. Returns advisory warnings (a second name for
+    an already-named net, two nets joined at a crossing) as plain facts for the
+    caller to surface. A label that touches nothing is not
     said here: placing labels before wiring them is a legitimate order of work,
     and one still on nothing when the batch is done is the finished sheet's
     ``dangling_label``.
@@ -1418,27 +1418,16 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
             "them on purpose, give both the same name: remove one side's labels "
             "with remove_net_label and label it with the other's name."
         )
-    if net != GROUND:
-        # Duplicate non-ground label name. This is NOT a short: the netlist merges
-        # same-name labels into one net, which is a valid (often simpler) way to
-        # tie distant nets. The only downstream cost is that wire_pins(net=...) can't
-        # disambiguate which label to route to — so surface that, not a scare.
-        for lbl in editor.labels:
-            if lbl.text == net:
-                warnings.append(
-                    f"'{net}' already labels a net at ({int(lbl.coord.X)},"
-                    f"{int(lbl.coord.Y)}); the netlist merges the two into one net "
-                    "(this is correct — a valid way to tie distant nets). Only a "
-                    f"later wire_pins(net='{net}') is ambiguous with duplicate labels — "
-                    "connect to a component pin (Ref.Pin) instead."
-                )
-                break
-        if joined.named and net not in joined.named[0]:
-            warnings.append(
-                f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
-                "becomes a second name for it. LTspice netlists the node under one name, "
-                "so a directive or probe that uses another may not find it."
-            )
+    # A name another label already carries is not said: the netlist merges
+    # same-name labels into one net, a valid way to tie distant nets, and a
+    # later net:NAME that cannot tell them apart says so itself, with how to
+    # name the one meant by its point.
+    if net != GROUND and joined.named and net not in joined.named[0]:
+        warnings.append(
+            f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
+            "becomes a second name for it. LTspice netlists the node under one name, "
+            "so a directive or probe that uses another may not find it."
+        )
     # Said, not refused, where at most one of them has a name: a label put on
     # a crossing is taken as meant, as a pin put there is.
     if joined.wired > 1:
@@ -1501,7 +1490,7 @@ def _resolve_route_endpoint(
     endpoint: "str | GridPoint",
     editor: AscEditor,
     existing_wires: list[tuple[int, int, int, int]],
-    pin_coords: "Container[tuple[int, int]]",
+    node_coords: "Container[tuple[int, int]]",
     net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """Resolve one ``wire_pins`` endpoint to its coordinate and an anchor.
@@ -1509,16 +1498,19 @@ def _resolve_route_endpoint(
     The anchor is a pin, label or wire end on the endpoint's net before the
     route is drawn, for looking the net up. A pin or label reference resolves
     through :func:`resolve_pin` and is its own anchor. A coordinate must already
-    touch the circuit, at a pin or anywhere along a wire: an end there connects
-    to it, and one on a wire's interior is a T-junction LTspice joins without
-    the wire being split. A coordinate where wires of separate nets cross is
-    refused, because a wire ending there would join all of them.
+    touch the circuit: at a pin or a net label (``node_coords``), its own
+    anchor, or anywhere along a wire. An end there connects to it, and one on a
+    wire's interior is a T-junction LTspice joins without the wire being split.
+    A label's point is how a route reaches a label that stands on nothing, one
+    of several labels of one name, or a ground, none of which ``net:NAME`` can
+    name. A coordinate where wires of separate nets cross is refused, because a
+    wire ending there would join all of them.
     """
     if isinstance(endpoint, str):
         coord = resolve_pin(endpoint, editor)
         return coord, coord
     coord = (endpoint.x, endpoint.y)
-    if coord in pin_coords:
+    if coord in node_coords:
         return coord, coord
     through = wires_of_one_net(
         coord,
@@ -1529,9 +1521,10 @@ def _resolve_route_endpoint(
     )
     if not through:
         raise NetlistError(
-            f"{_endpoint_name(endpoint)} touches no wire and no component pin. A "
-            "coordinate endpoint must land on existing wiring; to turn a corner at "
-            "a free point, give it as a waypoint instead."
+            f"{_endpoint_name(endpoint)} touches no wire, component pin or net "
+            "label. A coordinate endpoint must land on one; to end a wire at a free "
+            "point, place a net label there first, and to turn a corner there, give "
+            "it as a waypoint instead."
         )
     return coord, through[0][:2]
 
@@ -1559,14 +1552,14 @@ def _plan_connect_route(
     existing_wires = wire_segments_of(editor)
     part_before = net_partition(editor)
     net_of = label_folded_nets(part_before)
-    pin_coords = part_before.pin_owners.keys()
+    node_coords = part_before.pin_owners.keys() | part_before.label_texts.keys()
     from_name, to_name = _endpoint_name(from_pin), _endpoint_name(to_pin)
 
     (x1, y1), from_anchor = _resolve_route_endpoint(
-        from_pin, editor, existing_wires, pin_coords, net_of
+        from_pin, editor, existing_wires, node_coords, net_of
     )
     (x2, y2), to_anchor = _resolve_route_endpoint(
-        to_pin, editor, existing_wires, pin_coords, net_of
+        to_pin, editor, existing_wires, node_coords, net_of
     )
 
     if (x1, y1) == (x2, y2) and not waypoints:
@@ -1823,7 +1816,7 @@ class OpWirePins(StrictModel):
     from_pin: str | GridPoint = Field(
         description=(
             "'REF.PIN' by name, else 1-based SpiceOrder ('M1.D', 'X1.2'), "
-            "'net:NAME' for a label, or {x, y} on a wire or pin; a wire's "
+            "'net:NAME' for a label, or {x, y} on a wire, pin or label; a wire's "
             "interior makes a T-junction."
         )
     )
@@ -2313,10 +2306,9 @@ def apply_op_inplace(
 def collapse_result_warnings(results: list[dict[str, object]]) -> None:
     """Collapse identical per-op warnings across one ops batch, in place.
 
-    The documented per-pin-label style repeats the same duplicate-label
-    advisory on every add_net_label op of that net — hundreds of identical
-    lines per converter-scale batch. Keep the first occurrence (annotated
-    with the repeat count) and drop the copies.
+    An advisory that repeats across a batch, such as one value set on one part
+    by several ops, would otherwise be listed once per op. Keep the first
+    occurrence (annotated with the repeat count) and drop the copies.
     """
     counts: Counter[str] = Counter()
     for entry in results:

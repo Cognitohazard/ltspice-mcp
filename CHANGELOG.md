@@ -29,6 +29,18 @@ tool-surface changes.
   as a fact about the sheet, although the sheet spelled the values `u`: both
   LTspice builds write a part's `u` suffix as a micro sign in the netlist they
   export. Its reason now says the export wrote them.
+- `edit_schematic`'s `wire_pins` refused a coordinate endpoint at a net label
+  that stands on no wire, so a wire could not end in a label placed first.
+  Nor could a route reach one of several labels of one name, or one of
+  several grounds: `net:NAME` refuses those as ambiguous. A label's point is
+  now an endpoint like a pin's, and the `net:NAME` refusal names one label
+  by its point. Joining two named nets through a label is still refused.
+- `add_net_label` warned on every label of a name the sheet already had
+  ("already labels a net"), though the netlist merges such labels into one
+  net as meant. One build was told so 17 times. Its only reason was that a
+  later `net:NAME` could not tell the labels apart, which that refusal now
+  answers itself, so the warning is gone. A second name for one net is still
+  warned of.
 - `edit_schematic`'s `remove_directive` did not find a directive or comment
   of more than one line given as the text it was added with. A sheet holds
   each line break as a `\n` escape, and the text given was compared with the

@@ -1145,9 +1145,7 @@ def _op_warnings(results: list[dict]) -> list[str]:
     a pin put on a crossing. The envelope carries one flat ``warnings`` list,
     so each is prefixed with its op; the repeats are already collapsed by
     ``collapse_result_warnings``, which keeps the first occurrence and
-    annotates it with how many ops it covers (the documented per-pin-label
-    style repeats one advisory on every label op, and a converter-scale batch
-    would otherwise spend hundreds of lines on it).
+    annotates it with how many ops it covers.
     """
     return [
         f"op {entry['index']} ({entry['op']}): {message}"

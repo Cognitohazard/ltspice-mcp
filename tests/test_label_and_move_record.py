@@ -302,7 +302,6 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
         ("labels", ("refused: Refused to add net", "[a name already here; 2 at the point")),
         ("labels", ("refused: Refused to add ground", "[ground; 2 at the point, 2 named]")),
         # What it says of a label it places.
-        ("labels", ("already labels a net at",)),
         ("labels", ("becomes a second name for it", "1 at the point, 1 named]")),
         ("labels", ("becomes a second name for it", "is where # wires cross", "1 named]")),
         # Two nets joined at a crossing, where at most one of them has a name.
