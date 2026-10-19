@@ -1460,8 +1460,6 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     fmt = args.format
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
-    if args.panels is not None and args.signals != "all":
-        raise ResultError("Pass signals or panels, not both: panels names the signals it plots.")
 
     raw = await services.load_raw(source, state)
     assert raw_path is not None
@@ -1485,11 +1483,11 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         else [args.signals]
     )
     groups: list[list[services.Signal]]
+    panel_of: dict[str, int] = {}
     if requested is None:
         groups = [[services.Signal(name, name) for name in trace_names if name != axis_name]]
     else:
         groups = []
-        panel_of: dict[str, int] = {}
         for index, names in enumerate(requested):
             group: list[services.Signal] = []
             for name in names:
@@ -1506,6 +1504,20 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 panel_of[sig.name] = index
                 group.append(sig)
             groups.append(group)
+    if args.panels is not None and args.signals != "all":
+        # The panels name what is plotted; a signal list beside them says it
+        # again, and is refused only where it names something they do not.
+        unplotted = [
+            name
+            for name in args.signals
+            if services.resolve_signal(raw, name).name not in panel_of
+        ]
+        if unplotted:
+            raise ResultError(
+                f"signals names {', '.join(map(repr, unplotted))}, which no panel "
+                "plots: panels alone names what is plotted, so add it to a panel or "
+                "leave signals out."
+            )
     cols = [sig for group in groups for sig in group]
     if not cols:
         raise ResultError("No signal traces to plot (the result has only an axis).")

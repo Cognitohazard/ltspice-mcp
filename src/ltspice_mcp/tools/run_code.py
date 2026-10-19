@@ -77,8 +77,8 @@ class RunCodeInput(ToolInput):
         ge=1.0,
         le=600.0,
         description=(
-            "Wall-clock bound in seconds; on timeout the snippet is interrupted and a "
-            "run it waits on is cancelled. A run longer than this belongs to "
+            "Wall-clock bound in seconds; a wait on a run ends just before it, naming "
+            "the job, which keeps running. A run longer than this belongs to "
             "api.run_experiments(wait=False) and jobs(wait)."
         ),
     )
@@ -385,7 +385,7 @@ class CodeWorker:
         """Send one snippet and await its reply: one respawn if the worker died
         between calls, an interrupt at the timeout. None or ``_EOF`` when the
         worker never answered."""
-        request = {"op": "run", "seq": seq, "code": code}
+        request = {"op": "run", "seq": seq, "code": code, "timeout_s": timeout_s}
         if not await self._send(request):
             await self._ensure()
             if not await self._send(request):

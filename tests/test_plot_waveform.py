@@ -1015,12 +1015,26 @@ class TestPanelLayout:
         # A panel the caller mixed keeps both units in its label.
         assert blob["panels"][1]["y_label"].endswith("(V, A)")
 
-    async def test_panels_beside_a_signal_list_is_refused(
+    async def test_a_signal_no_panel_plots_is_refused(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        with pytest.raises(ResultError, match="panels"):
+        with pytest.raises(ResultError, match="'V\\(out\\)', which no panel plots"):
             await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], panels=[["V(in)"]])
+
+    async def test_signals_the_panels_plot_are_accepted_beside_them(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _plot(
+            state_no_sim,
+            raw_file=str(raw),
+            signals=["v(out)", "V(in)"],
+            panels=[["V(out)"], ["V(in)", "I(C1)"]],
+        )
+        # The panels say what is drawn; the signal list only repeats part of it.
+        assert data["signals"] == ["V(out)", "V(in)", "I(C1)"]
+        assert data["panels"] == 2
 
     async def test_a_signal_in_two_panels_is_refused(
         self, state_no_sim: SessionState, work_dir: Path

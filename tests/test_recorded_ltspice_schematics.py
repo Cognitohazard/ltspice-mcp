@@ -917,6 +917,22 @@ class TestExportEncoding:
         else:
             assert [f["severity"] for f in findings] == ["observation"]
 
+    def test_an_export_spells_a_values_u_as_a_micro_sign(self, build: str):
+        """Both builds write a part's value 100u as 100µ in the netlist they
+        export, so the micro signs verify_circuit's export check reports are the
+        export's own: its observation says so, rather than reading as a fact
+        about the sheet."""
+        from ltspice_mcp.tools.verify import _exported_value_suffix_findings
+
+        sheet = (INPUTS / "benchmark/nmos_mirror_drawn.asc").read_text(encoding="utf-8")
+        assert "SYMATTR Value 100u\n" in sheet
+        sites = value_suffix_sites(rec.export_cards(build, "benchmark/nmos_mirror_drawn"))
+        assert [(site.token, site.micro) for site in sites] == [(f"100{MICRO}", True)]
+        net = rec.recorded(build, "benchmark/nmos_mirror_drawn.net")
+        (finding,) = _exported_value_suffix_findings(net, cp1252_reader=None)
+        assert finding["severity"] == "observation"
+        assert finding["evidence"]["reason"].startswith("LTspice's export wrote 1 value(s)")
+
     def test_the_setting_that_asks_for_u_writes_u(self, build: str):
         assert self.value(build, "micro_cp1252_as_u") == "1u"
 

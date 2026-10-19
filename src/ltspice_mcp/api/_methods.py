@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import inspect
 import os
@@ -686,6 +687,25 @@ class ApiMethodsMixin(ABC):
     #: Owners spawned by this session. Held only so the finished ones can be
     #: reaped; a running one is never waited on.
     _detached_children: list[subprocess.Popen[bytes]]
+    #: The ``time.monotonic()`` by which every blocking wait ends, or None;
+    #: set by ``_waits_ending_at``.
+    _waits_end_at: float | None = None
+
+    @contextlib.contextmanager
+    def _waits_ending_at(self, deadline: float | None) -> Iterator[None]:
+        """End every blocking wait made inside the block by ``deadline``.
+
+        ``run_code``'s worker sets it just before a snippet's ``timeout_s``. A
+        wait still going then raises ``ApiInterrupted`` naming its job, which
+        keeps running, and the snippet ends on its own. Otherwise the timeout
+        interrupts the snippet, and on Windows it kills the worker, taking the
+        jobs it owns with it.
+        """
+        previous, self._waits_end_at = self._waits_end_at, deadline
+        try:
+            yield
+        finally:
+            self._waits_end_at = previous
 
     @staticmethod
     def reference(op: str | None = None) -> str:
@@ -873,7 +893,8 @@ class ApiMethodsMixin(ABC):
             )
             return _with_warnings(complete if wait else _note_process_owned_job(complete), dropped)
         except KeyboardInterrupt as exc:
-            raise ApiInterrupted(receipt=receipt, job_id=waited_job) from exc
+            # The wait's own message, when it gave one, says why it stopped.
+            raise ApiInterrupted(*exc.args[:1], receipt=receipt, job_id=waited_job) from exc
         except Exception as exc:
             raise _collector_error(receipt, exc) from exc
 
@@ -1031,18 +1052,20 @@ class ApiMethodsMixin(ABC):
             if timeout < 0:
                 raise ValueError("timeout_s must be a non-negative number or None")
 
+        # Read before the clock: the first read imports the tool modules, over a
+        # second that must not land on top of a dwell measured against a deadline.
+        cap = experiments.JOBS_WAIT_CAP_S
         started = time.monotonic()
         while True:
-            remaining = (
-                None
-                if timeout is None
-                else max(0.0, float(timeout) - (time.monotonic() - started))
-            )
-            dwell = (
-                experiments.JOBS_WAIT_CAP_S
-                if remaining is None
-                else min(experiments.JOBS_WAIT_CAP_S, remaining)
-            )
+            now = time.monotonic()
+            remaining = None if timeout is None else max(0.0, float(timeout) - (now - started))
+            left = None if self._waits_end_at is None else self._waits_end_at - now
+            if left is not None and left <= 0:
+                raise ApiInterrupted(
+                    f"The wait for job {job_id!r} stopped just before the snippet's timeout_s.",
+                    job_id=job_id,
+                )
+            dwell = min(bound for bound in (cap, remaining, left) if bound is not None)
             # Poll on the raw handler page: a dwell consumes nothing but
             # timed_out, and rendering a complete receipt per dwell would pay
             # for the whole wait in receipts nobody reads.

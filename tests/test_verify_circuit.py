@@ -524,6 +524,7 @@ async def test_export_stage_reports_micro_signs_in_the_exported_netlist(
     assert finding["at"] == {"file": data["export"]["netlist"], "line": 3}
     assert finding["evidence"]["encoding"] == "utf-8"
     assert finding["evidence"]["generated_by"] == "LTspice 24.1.9 for Windows"
+    assert "LTspice's export wrote" in finding["evidence"]["reason"]
     assert data["outcome"] == "complete"
     assert asc.read_bytes() == before
 
@@ -1556,6 +1557,21 @@ async def test_render_png_forced_absent_declares_extra(
     assert render_failures, "a PNG request without the extra must declare a per-item failure"
     assert "'raster' extra" in render_failures[0]["error"]
     assert "ltspice-mcp[raster]" in (render_failures[0]["remedy"] or "")
+
+
+async def test_the_default_format_falling_back_is_not_a_failure(
+    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+):
+    """PNG is the default, so without the extra every render came back
+    partial although the caller asked for no format. The SVG is what the
+    server can draw; the note and the headline say why and how to get a PNG."""
+    asc = _write(work_dir, "rd.asc", _RES_ASC)
+    data = await _run(state_no_sim, path=str(asc), render={"mode": "only"})
+    assert data["render"]["image_format"] == "svg"
+    assert data["failures"] == []
+    assert data["outcome"] == "complete"
+    assert "'raster' extra" in data["render"]["note"]
+    assert "ltspice-mcp[raster]" in data["hint"]
 
 
 async def test_render_png_without_native_cairo_blames_the_library(

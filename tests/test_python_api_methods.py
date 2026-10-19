@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import time
 import typing
 import warnings
 from collections.abc import Iterator, Mapping
@@ -402,6 +403,23 @@ def test_wait_takes_the_timeout_the_jobs_tool_takes(state_no_sim: SessionState) 
     assert api.wait(job.job_id, timeout_s=0)["timed_out"] is True
     with pytest.raises(ValueError, match="not both"):
         api.wait(job.job_id, timeout_s=0, timeout=0)
+
+
+def test_a_wait_ends_at_the_deadline_it_was_given(state_no_sim: SessionState) -> None:
+    """run_code's worker bounds every wait to just before the snippet's
+    timeout: a wait still going then raises, naming the job, which still runs."""
+    api = SyncApi(state_no_sim)
+    job = make_experiment_job(state_no_sim, job_id="exp-bounded", count=1, status="queued")
+
+    # timing: the deadline under test; the job never ends
+    with api._waits_ending_at(time.monotonic() + 0.2):
+        # A wait the caller bounded more tightly still ends as the caller asked.
+        assert api.wait(job.job_id, timeout_s=0)["timed_out"] is True
+        with pytest.raises(ApiInterrupted, match="stopped just before") as stopped:
+            api.wait(job.job_id)
+    assert stopped.value.job_id == job.job_id
+    assert state_no_sim.all_jobs[job.job_id].status == "queued"
+    assert api._waits_end_at is None
 
 
 def _inspect_page_item(

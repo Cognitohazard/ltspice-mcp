@@ -21,7 +21,13 @@ open past this process's death. Python-level ``print`` is captured per call.
 Interrupt: the server sends SIGINT to this process alone (POSIX; the worker
 sits in its own session, so a terminal Ctrl-C never reaches it and its own
 signal never reaches a simulator). It becomes KeyboardInterrupt in the
-snippet, which the API's blocking waits honour by cancelling the run.
+snippet; an API wait it lands in raises ``ApiInterrupted`` naming its job,
+which keeps running, and the reply names that job.
+
+Deadline: each request carries the snippet's ``timeout_s``, and the API's
+blocking waits end ``WAIT_MARGIN_S`` before it, so a snippet blocked on a long
+job ends on its own instead of being interrupted, or on Windows killed with
+the jobs it owns.
 
 Parent death: the reader thread sees EOF on the request pipe when the server
 dies. It interrupts the snippet, lets the main thread close the ``Api``
@@ -53,6 +59,12 @@ TRACEBACK_CHARS = 4_000
 #: After the server is gone, how long the worker gives ``Api.close()`` before
 #: it exits regardless.
 EXIT_GRACE_S = 10.0
+
+#: How long before a snippet's ``timeout_s`` the API's blocking waits end: time
+#: for the snippet to unwind and its reply to reach the server, which counts
+#: the timeout from just before it sent the request. Half of a shorter timeout
+#: instead, so a short snippet still has half its time to wait.
+WAIT_MARGIN_S = 1.0
 
 
 class _Capture(io.TextIOBase):
@@ -188,8 +200,17 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
                 reply["result"] = (
                     text if len(text) <= RESULT_CHARS else text[:RESULT_CHARS] + "..."
                 )
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         reply["status"] = "interrupted"
+        job_id = getattr(exc, "job_id", None)
+        if job_id is not None:
+            # The job outlives the snippet; the reply is where the caller learns its id.
+            reply["error"] = {
+                "type": type(exc).__name__,
+                "message": f"{exc} Job {job_id!r} is still running: "
+                f"api.wait({job_id!r}) in a later snippet reads it.",
+                "traceback_tail": _tail(traceback.format_exc(), TRACEBACK_CHARS),
+            }
     except BaseException as exc:
         reply["status"] = "error"
         reply["error"] = {
@@ -207,6 +228,13 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
         elapsed_s=round(time.monotonic() - started, 3),
     )
     return reply
+
+
+def _wait_deadline(timeout_s: object) -> float | None:
+    """When the API's blocking waits end for a snippet given ``timeout_s``."""
+    if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool):
+        return None
+    return time.monotonic() + timeout_s - min(WAIT_MARGIN_S, timeout_s / 2)
 
 
 def _send(replies: IO[str], reply: dict[str, Any]) -> None:
@@ -299,7 +327,8 @@ def _serve_loop(
             try:
                 if parent_gone.is_set():
                     return
-                reply.update(execute(str(message.get("code", "")), _namespace(api)))
+                with api._waits_ending_at(_wait_deadline(message.get("timeout_s"))):
+                    reply.update(execute(str(message.get("code", "")), _namespace(api)))
             finally:
                 busy.clear()
             _send(replies, reply)
@@ -323,6 +352,9 @@ def serve(working_dir: str, config_path: str | None) -> int:
         from ltspice_mcp.api import Api
 
         api = Api(working_dir=working_dir, config_path=config_path)
+        # An Api imports the tool modules on its first op, over a second; here
+        # that is boot time, so no snippet's timeout_s pays for it.
+        import ltspice_mcp.tools  # noqa: F401
     except BaseException as exc:
         _send(replies, {"op": "boot_failed", "error": f"{type(exc).__name__}: {exc}"})
         return 1
