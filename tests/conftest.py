@@ -37,13 +37,19 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
 from ltspice_mcp.state import SessionState
+from tests import schedule_jitter, sheet_edit_record
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
     _schedule_jitter,
     pytest_addoption,
-    pytest_configure,
     pytest_report_header,
     pytest_runtest_makereport,
 )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    schedule_jitter.pytest_configure(config)
+    config.pluginmanager.register(sheet_edit_record, "sheet-edit-record")
+
 
 _T = typing.TypeVar("_T")
 

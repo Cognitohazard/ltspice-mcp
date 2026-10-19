@@ -1787,6 +1787,10 @@ async def test_rejected_reference_path_refuses_before_committing(asc_state, work
 _ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400, "y": 96}]
 
 
+@pytest.mark.edit_reply_per_platform(
+    "the export's .lib line names a Windows install path, which only Windows "
+    "reads as absolute, so the equivalence check's include warnings differ"
+)
 @pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
 async def test_asc_reference_is_exported_like_the_committed_sheet(
     asc_state, work_dir, monkeypatch, mode

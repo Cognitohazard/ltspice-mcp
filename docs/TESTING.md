@@ -470,6 +470,18 @@ LTSPICE_MCP_RECORD_SHEET_FINDINGS=1 uv run pytest tests/test_sheet_findings_snap
 |`LTSPICE_MCP_RECORD_INSPECT_SHEETS`|`tests/test_inspect_sheet_record.py`|`tests/fixtures/inspect_sheet_record.json`: the `inspect(kind="net")` and `inspect(kind="components")` replies for every sheet|
 |`LTSPICE_MCP_RECORD_BUILD_BENCHMARK`|`tests/test_build_benchmark.py`|`tests/fixtures/build_benchmark_record.json` and the built sheets (below)|
 
+`tests/fixtures/sheet_edit_record.json` holds what every `edit_schematic` call
+the suite makes answers: the committed sheet, read as records, and the reply.
+`tests/sheet_edit_record.py`, a plugin loaded by `tests/conftest.py`, compares
+each call with it and fails the test whose call answers differently; its
+docstring says how a call is keyed. To re-record it, run the whole suite with
+`LTSPICE_MCP_RECORD_SHEET_EDITS=1` with no LTspice library installed or
+visible. A run that finds a symbol in an LTspice library writes nothing,
+because CI has no library and would make different keys. Mark a test whose
+`edit_schematic` replies differ on Windows and Linux with
+`@pytest.mark.edit_reply_per_platform(reason)`. Its calls are then compared
+only with a recording made on the same platform.
+
 ### The schematic build benchmark
 
 `tests/test_build_benchmark.py` draws eleven reference netlists
