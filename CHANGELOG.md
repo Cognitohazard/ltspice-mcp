@@ -10,6 +10,25 @@ tool-surface changes.
 
 ### Fixed
 
+- A `run_code` snippet blocked on a run longer than its `timeout_s` lost the
+  job: on POSIX the timeout interrupted it and the reply did not name the job
+  it was waiting on; on Windows it killed the worker, and the jobs the worker
+  owned with it. A blocking wait in a snippet (`run_experiments` with
+  `wait=True`, or `api.wait`) now ends just before `timeout_s` and raises
+  `ApiInterrupted`. The reply's `error` names the job, which keeps running in
+  the worker, and how to read it from a later snippet.
+- `plot_waveform` refused `signals` given beside `panels`, even when they
+  named only what the panels plot. Such a list is now accepted; one naming a
+  signal no panel plots is refused with that signal named.
+- `verify_circuit`'s render, without the `raster` extra, turned the outcome
+  `partial` even when the caller named no format, because the default format
+  is PNG. Falling back from the default is no longer a failure; `render.note`
+  and the headline say why there is no PNG and how to get one. Asking for
+  `format: "png"` by name still reports the failure.
+- `verify_circuit`'s `value_suffix_micro_sign` observation on an export read
+  as a fact about the sheet, although the sheet spelled the values `u`: both
+  LTspice builds write a part's `u` suffix as a micro sign in the netlist they
+  export. Its reason now says the export wrote them.
 - `edit_schematic`'s `remove_directive` did not find a directive or comment
   of more than one line given as the text it was added with. A sheet holds
   each line break as a `\n` escape, and the text given was compared with the

@@ -1138,8 +1138,10 @@ a file. Inline delivery is PNG only. When `inline` or `both` returns no image,
 `render.inline_skipped` gives the reason (`svg_requested` or
 `png_unavailable`) and `render.note` gives the file's location. A PNG needs
 the `raster` extra and the native Cairo library; without them the render falls
-back to SVG, with a `render` failure naming which of the two is missing and a
-per-platform remedy. `inspect(kind:"capabilities")` reports the same as
+back to SVG, and `render.note` names which of the two is missing and a
+per-platform remedy. It is a `render` failure too when the caller named
+`format: "png"`; a default that falls back is not one, since nothing was asked
+for that the server could not do. `inspect(kind:"capabilities")` reports the same as
 `render: {png, missing, reason, remedy}` before anything is drawn.
 
 `equivalence` compares connectivity as graphs: component set, values,

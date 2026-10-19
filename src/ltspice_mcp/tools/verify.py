@@ -1112,6 +1112,7 @@ def _micro_sign_observation(
     path: Path,
     encoding: str,
     generated_by: str | None,
+    exported: bool = False,
 ) -> dict[str, Any]:
     """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
     readers = (
@@ -1127,7 +1128,11 @@ def _micro_sign_observation(
         "tokens": [site.token for site in sites],
         "encoding": encoding,
         "reason": (
-            f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
+            f"LTspice's export wrote {len(sites)} value(s) with a micro sign for the "
+            f"micro suffix in this {encoding} netlist: both builds write a part's 'u' "
+            f"suffix that way, whatever the sheet spells. {readers}"
+            if exported
+            else f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
             f"{encoding} file. {readers}"
         ),
     }
@@ -1149,6 +1154,7 @@ def _value_suffix_findings(
     encoding: str,
     *,
     cp1252_reader: str | None,
+    exported: bool = False,
 ) -> list[dict[str, Any]]:
     """Numbers whose scale-suffix position holds a non-ASCII character.
 
@@ -1166,8 +1172,9 @@ def _value_suffix_findings(
     (``cp1252_reader``, from ``services.cp1252_ltspice``) or the one the deck
     shows exported it (``export_writer``), reading a file that is not cp1252. Otherwise
     the file's micro signs are one observation, with their count and lines,
-    which leaves the outcome alone. ``encoding`` is the codec the file decoded
-    as. ``cards`` has its title card dropped already.
+    which leaves the outcome alone; for an ``exported`` netlist it says the
+    export wrote them. ``encoding`` is the codec the file decoded as. ``cards``
+    has its title card dropped already.
     """
     sites = value_suffix_sites(cards)
     if not sites:
@@ -1203,7 +1210,7 @@ def _value_suffix_findings(
             )
         )
     if micro:
-        findings.append(_micro_sign_observation(micro, path, encoding, generated_by))
+        findings.append(_micro_sign_observation(micro, path, encoding, generated_by, exported))
     return findings
 
 
@@ -1552,14 +1559,22 @@ def _exported_value_suffix_findings(
     """Value-suffix findings over an exported netlist.
 
     LTspice 24 and later write the export as UTF-8, a micro sign as C2 B5, and
-    the exported ``.net`` is what gets handed to another LTspice.
+    the exported ``.net`` is what gets handed to another LTspice. Both builds
+    write a part's value suffix ``u`` as a micro sign there (the recorded
+    ``benchmark/nmos_mirror_drawn`` export of a sheet whose value is ``100u``),
+    so the observation says the export wrote them, not the sheet.
     """
     try:
         text, encoding = read_spice_text_with_encoding(net_path)
     except OSError:
         return []
     return _value_suffix_findings(
-        _lex_deck(text).cards, net_path, text, encoding, cp1252_reader=cp1252_reader
+        _lex_deck(text).cards,
+        net_path,
+        text,
+        encoding,
+        cp1252_reader=cp1252_reader,
+        exported=True,
     )
 
 
@@ -2014,7 +2029,10 @@ async def _do_render(
 
     failures: list[dict[str, Any]] = []
     unavailable = image.png_unavailable
-    if unavailable is not None:
+    # A PNG the caller named and did not get is a shortfall. The default format
+    # falling back is not: nothing was asked for, and the note says why and how
+    # to get a PNG.
+    if unavailable is not None and "format" in policy.model_fields_set:
         failures.append(
             _failure(
                 "render",
@@ -2197,10 +2215,10 @@ def _hint(data: dict[str, Any]) -> str:
             + ", ".join(sorted({f["rule_id"] for f in observations}))
             + " (facts, not a verdict)"
         )
-    # A caller that asked for the picture inline and chose SVG has nothing to
-    # fix, but is still not holding what it asked for, so the headline says so.
-    render = data.get("render") or {}
-    delivery_note = render.get("note") if render.get("inline_skipped") == "svg_requested" else None
+    # A caller that asked for the picture inline and chose SVG, or left the
+    # format to a default that fell back to SVG, has nothing to fix, but is not
+    # holding a PNG either, so the headline says so.
+    delivery_note = (data.get("render") or {}).get("note")
     if parts:
         headline = "; ".join(parts) + "."
     else:

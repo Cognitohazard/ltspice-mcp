@@ -29,6 +29,7 @@ from tests.conftest import (
     LIVENESS_S,
     await_until,
     identify,
+    persist_experiment_record,
     process_running,
     start_when,
     wait_until,
@@ -281,6 +282,31 @@ class TestLifetime:
         assert after["status"] == "ok", after
         assert worker_of(after) != before
         assert not process_running(before)
+
+    async def test_a_wait_ends_before_the_timeout_and_names_its_job(self, state: SessionState):
+        """A snippet blocked on a job that outlasts its timeout_s ends on its
+        own, naming the job; the worker, and so the job, is kept on every
+        platform. Before, the timeout interrupted it with nothing said of the
+        job, and on Windows killed the worker that owned it."""
+        before = (await run(state, "1"))["worker_pid"]
+        deck = state.working_dir / "held.cir"
+        deck.write_text(".op\n.end\n", encoding="utf-8", newline="\n")
+        # Running, and owned by this live process, so the worker's wait never ends.
+        persist_experiment_record(
+            state.working_dir, deck, "exp-held", status="running", owner_pid=os.getpid()
+        )
+        try:
+            # timing: the snippet timeout under test
+            reply = await run(state, "api.wait('exp-held')", timeout_s=2)
+        finally:
+            persist_experiment_record(state.working_dir, deck, "exp-held")
+        assert reply["status"] == "timeout", reply
+        assert reply["error"]["type"] == "ApiInterrupted"
+        assert "'exp-held' is still running" in reply["error"]["message"]
+        assert "api.wait('exp-held')" in reply["error"]["message"]
+        after = await run(state, "1")
+        assert after["worker_pid"] == before
+        assert after["worker_restarted"] is None
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
     async def test_timeout_interrupts_and_keeps_the_worker(
