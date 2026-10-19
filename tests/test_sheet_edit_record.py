@@ -152,6 +152,16 @@ def test_a_file_beside_the_sheet_makes_one_key_in_either_line_ending(
     assert keys[0] == keys[1]
 
 
+def test_a_call_whose_reply_differs_by_platform_has_a_key_of_its_own(tmp_path: Path):
+    target = tmp_path / "sheet.asc"
+    target.write_bytes(_bytes(_SHEET))
+    args = EditSchematicInput.model_validate(
+        {"target": str(target), "ops": [{"op": "add_directive", "instruction": ".op"}]}
+    )
+    plain = key_of(target, target.read_bytes(), args, (tmp_path,))
+    assert key_of(target, target.read_bytes(), args, (tmp_path,), per_platform=True) != plain
+
+
 class _AnswersOtherwise(dict[str, Any]):
     """A record that holds every key, each answered otherwise."""
 

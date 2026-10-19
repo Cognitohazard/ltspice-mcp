@@ -25,6 +25,10 @@ not its bytes, so two ways of writing the same records compare equal.
   failure. A call whose sheet another writer changed before it could be read
   back is neither recorded nor compared. The run's summary counts each kind
   of call.
+- **A test marked** ``edit_reply_per_platform`` makes calls whose replies
+  differ on Windows and Linux, such as one reading a path only Windows takes
+  as absolute. Their keys hold the platform, so each platform compares them
+  only with a recording made on it.
 
 Record again with ``LTSPICE_MCP_RECORD_SHEET_EDITS=1`` over the whole suite,
 on a machine without an LTspice library, so the keys are the ones CI makes. A
@@ -40,6 +44,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path, PurePath
@@ -57,7 +62,9 @@ from tests.ltspice_recorder import path_pattern
 
 RECORD = TESTS / "fixtures" / "sheet_edit_record.json"
 RECORD_ENV = "LTSPICE_MCP_RECORD_SHEET_EDITS"
+PER_PLATFORM = "edit_reply_per_platform"
 _OUTPUT = "sheet_edit_record"
+_PLATFORM = "windows" if sys.platform == "win32" else "posix"
 
 #: What an edit can read beside its sheet: other sheets, symbols, plot settings,
 #: and a reference netlist or a file one includes.
@@ -81,6 +88,7 @@ _counts: Counter[str] = Counter()
 _unrecorded: set[str] = set()
 _mismatches: list[str] = []
 _test = ""
+_per_platform = False
 
 
 def _digest(data: bytes | str) -> str:
@@ -170,9 +178,16 @@ def _symbols(target: Path, names: set[str]) -> list[Any]:
     return found
 
 
-def key_of(target: Path, before: bytes | None, args: Any, folders: tuple[Path, ...]) -> str:
+def key_of(
+    target: Path,
+    before: bytes | None,
+    args: Any,
+    folders: tuple[Path, ...],
+    *,
+    per_platform: bool = False,
+) -> str:
     """The key of an ``edit_schematic`` call with ``args`` on ``target``, which
-    held ``before``."""
+    held ``before``; with the platform in it when ``per_platform``."""
     names = {op.symbol for op in args.ops if getattr(op, "op", "") == "add_component"}
     tokens: dict[str, str] = {}
     form = None
@@ -194,6 +209,7 @@ def key_of(target: Path, before: bytes | None, args: Any, folders: tuple[Path, .
                 "args": scrubbed(arguments, folders, tokens),
                 "symbols": _symbols(target, names),
                 "beside": beside,
+                **({"platform": _PLATFORM} if per_platform else {}),
             },
             sort_keys=True,
         )
@@ -208,6 +224,9 @@ def _observe(key: str, answer: dict[str, Any]) -> None:
         )
         return
     recorded = _record.get(key)
+    if recorded is None and _per_platform:
+        _counts["not recorded on this platform"] += 1
+        return
     if recorded is None:
         _counts["not recorded"] += 1
         _unrecorded.add(_test)
@@ -227,7 +246,7 @@ async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool =
         return await _evaluate(args, state, present_mcp_views=present_mcp_views)
     folders = (target.parent, Path(state.working_dir))
     before = target.read_bytes() if target.is_file() else None
-    key = key_of(target, before, args, folders)
+    key = key_of(target, before, args, folders, per_platform=_per_platform)
     if not _recording and "varies" in _record.get(key, {}):
         _counts["varying"] += 1
         return await _evaluate(args, state, present_mcp_views=present_mcp_views)
@@ -266,6 +285,11 @@ def take_mismatches() -> list[str]:
 def pytest_configure(config: pytest.Config) -> None:
     """Wrap the evaluator in this process, and read the record unless making it."""
     global _record
+    config.addinivalue_line(
+        "markers",
+        f"{PER_PLATFORM}(reason): the test's edit_schematic replies differ on Windows "
+        "and Linux, so its calls are compared only with a recording made on the same one",
+    )
     schematic_edit._evaluate_edit_schematic = _recorded_evaluate  # pyright: ignore[reportPrivateUsage]
     if not _recording and RECORD.is_file():
         _record = json.loads(RECORD.read_text(encoding="utf-8"))
@@ -328,8 +352,9 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
 def _sheet_edit_record(request: pytest.FixtureRequest) -> Iterator[None]:
     """Name the running test for a recording, and fail it if a call answered
     differently from the record."""
-    global _test
+    global _test, _per_platform
     _test = request.node.nodeid
+    _per_platform = request.node.get_closest_marker(PER_PLATFORM) is not None
     yield
     found = take_mismatches()
     if found:

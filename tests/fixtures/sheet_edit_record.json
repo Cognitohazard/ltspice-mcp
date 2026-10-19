@@ -99,6 +99,10 @@
   "reply": "c9cdf11616e4023c",
   "sheet": "2f66633286ed1ad2"
  },
+ "1a71704a2233f294": {
+  "reply": "49eb4bbd7ab49de1",
+  "sheet": "4f700298c191ce88"
+ },
  "1a9859a2bc181688": {
   "reply": "c53ffe3c614483ed",
   "sheet": "168171de437364ed"
@@ -262,10 +266,8 @@
   ]
  },
  "47102728b07dfb7d": {
-  "varies": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]",
-   "tests/test_edit_schematic.py::test_unexportable_asc_reference_is_a_compare_error"
-  ]
+  "reply": "5796269a35c7b6bb",
+  "sheet": "4f700298c191ce88"
  },
  "4743083612f84785": {
   "reply": "13cd1e60b5ae1eab",
@@ -493,6 +495,10 @@
   "reply": "d19fb669df9efa5d",
   "sheet": "b3a2468022b86f34"
  },
+ "839c090747ea8407": {
+  "reply": "761a34706cec8338",
+  "sheet": "4f700298c191ce88"
+ },
  "83ab8127b022b09d": {
   "reply": "1753bbec805815d7",
   "sheet": "32351080a0d7479e"
@@ -552,10 +558,6 @@
  "9cbaa87613eafdb0": {
   "reply": "1ec438a3ec143fc4",
   "sheet": "2f66633286ed1ad2"
- },
- "9f15a34d7a6a4e05": {
-  "reply": "49eb4bbd7ab49de1",
-  "sheet": "4f700298c191ce88"
  },
  "9f7f1d4304d828ad": {
   "reply": "d19fb669df9efa5d",

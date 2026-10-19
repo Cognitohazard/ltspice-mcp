@@ -477,7 +477,10 @@ each call with it and fails the test whose call answers differently; its
 docstring says how a call is keyed. To re-record it, run the whole suite with
 `LTSPICE_MCP_RECORD_SHEET_EDITS=1` with no LTspice library installed or
 visible. A run that finds a symbol in an LTspice library writes nothing,
-because CI has no library and would make different keys.
+because CI has no library and would make different keys. Mark a test whose
+`edit_schematic` replies differ on Windows and Linux with
+`@pytest.mark.edit_reply_per_platform(reason)`. Its calls are then compared
+only with a recording made on the same platform.
 
 ### The schematic build benchmark
 
