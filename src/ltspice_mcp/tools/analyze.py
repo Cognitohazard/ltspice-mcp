@@ -42,7 +42,7 @@ from ltspice_mcp.lib import (
     services,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import PlotDescriptor
+from ltspice_mcp.lib.decoded_raw import AC_SHAPED, PlotDescriptor
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -1630,7 +1630,7 @@ def _inline_series(
     """Render resident samples, using AC magnitude/phase only for AC plots."""
     if not np.iscomplexobj(wave):
         components = {"y": wave}
-    elif analysis == "ac":
+    elif analysis in AC_SHAPED:
         components = {
             "magnitude_db": safe_magnitude_db(wave),
             "phase_deg": np.degrees(np.angle(wave)),

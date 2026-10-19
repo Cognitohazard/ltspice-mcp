@@ -27,8 +27,23 @@ if TYPE_CHECKING:
 
 StepValue = str | int | float
 Analysis = Literal[
-    "op", "transient", "ac", "dc", "noise", "tf", "pz", "sens_dc", "sens_ac", "disto", "unknown"
+    "op",
+    "transient",
+    "ac",
+    "fra",
+    "dc",
+    "noise",
+    "tf",
+    "pz",
+    "sens_dc",
+    "sens_ac",
+    "disto",
+    "unknown",
 ]
+#: The analyses whose results are complex values over frequency: an .AC sweep,
+#: and the results file of an LTspice frequency response analysis, which is
+#: written in the same layout.
+AC_SHAPED: frozenset[Analysis] = frozenset({"ac", "fra"})
 Representation = Literal["real", "complex"]
 StepStatus = Literal["unstepped", "matched", "unresolved", "mismatch"]
 Monotonicity = Literal["nondecreasing", "nonincreasing", "constant", "nonmonotonic", "unknown"]
@@ -141,6 +156,7 @@ _ANALYSIS_NAMES: dict[str, Analysis] = {
     "pole-zero analysis": "pz",
     "transient analysis": "transient",
     "ac analysis": "ac",
+    "frequency response analysis": "fra",
     "dc transfer characteristic": "dc",
     "integrated noise": "noise",
 }
@@ -247,7 +263,10 @@ def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | N
     declared = header.variables[0].declared_type.lower()
     if analysis == "transient" and declared == "time":
         return "time", "deck_time"
-    if analysis in ("ac", "sens_ac", "disto", "noise") and declared in ("frequency", "hertz"):
+    if (analysis in AC_SHAPED or analysis in ("sens_ac", "disto", "noise")) and declared in (
+        "frequency",
+        "hertz",
+    ):
         return "frequency", "swept_f1" if analysis == "disto" else "frequency"
     if analysis == "dc":
         return "swept_variable", "sweep"

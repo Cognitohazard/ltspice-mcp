@@ -52,6 +52,7 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
+from ltspice_mcp.lib.decoded_raw import AC_SHAPED
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -179,7 +180,7 @@ def _csv_x_header(raw, analysis_type: str) -> str:
     if axis is None:
         raise ResultError("This plot has no sampled axis.")
     base = re.sub(r"[^0-9A-Za-z]+", "_", axis.name).strip("_") or "axis"
-    if analysis_type in {"ac", "noise"} and axis.quantity == "frequency":
+    if (analysis_type in AC_SHAPED or analysis_type == "noise") and axis.quantity == "frequency":
         base = "freq"
     return f"{base}_{axis.unit}" if axis.unit else base
 
@@ -282,7 +283,7 @@ def build_waveform_csv(
                 if np.iscomplexobj(wave_w):
                     had_complex = True
                     names, arrays = _complex_columns(
-                        name, wave_w, complex_format if analysis_type == "ac" else "re_im"
+                        name, wave_w, complex_format if analysis_type in AC_SHAPED else "re_im"
                     )
                 else:
                     names, arrays = [name], [wave_w]
@@ -711,7 +712,7 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
     ``summary_limit`` traces are summarized (:func:`summarize_trace`) from every
     sample in the window; ``facts["traces_total"]`` counts them all.
     """
-    is_ac = plan.analysis_type == "ac"
+    is_ac = plan.analysis_type in AC_SHAPED
     multi = len(plan.steps) > 1
 
     def _label(col: str, step: int) -> str:
@@ -841,7 +842,7 @@ def plot_spec(plot: PlotData, max_points: int) -> tuple[dict, dict]:
     that shared an axis still share one.
     """
     plan = plot.plan
-    x_scale = "log" if plan.analysis_type == "ac" or plan.x_is_log else "linear"
+    x_scale = "log" if plan.analysis_type in AC_SHAPED or plan.x_is_log else "linear"
     panels: list[dict] = []
     points_per_series: list[int] = []
     downsampled = False

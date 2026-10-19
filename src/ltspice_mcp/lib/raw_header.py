@@ -142,6 +142,10 @@ _FLAGS = {
     "fastaccess",
     "nocompression",
 }
+# A frequency response analysis writes its results file (``<deck>.fra_1.raw``)
+# in the AC layout: every value a complex double, the frequency included (the
+# recorded raw/fra.fra_1, both builds that run it).
+_LT_COMPLEX_PLOTS = {"ac analysis", "frequency response analysis"}
 _LT_REAL_PLOTS = {
     "transient analysis",
     "dc transfer characteristic",
@@ -352,7 +356,7 @@ def _layout(
     if plot == "ac analysis" and "complex" not in flags:
         raise scanner.error(RawLayoutError, "AC Analysis requires a complex layout")
     if dialect == "ltspice" and storage == "binary":
-        supported = plot == "ac analysis" if "complex" in flags else plot in _LT_REAL_PLOTS
+        supported = plot in _LT_COMPLEX_PLOTS if "complex" in flags else plot in _LT_REAL_PLOTS
         if not supported:
             raise scanner.error(
                 RawLayoutError,

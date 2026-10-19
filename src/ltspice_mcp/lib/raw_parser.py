@@ -268,7 +268,7 @@ _FLOAT_TINY = np.finfo(float).tiny
 # on phrases like "DC transfer characteristic" (contains "AC") or "backup" (also
 # contains "AC"), so detection is anchored to whole words.
 _RE_TRANSIENT = re.compile(r"\bTRANSIENT\b", re.IGNORECASE)
-_RE_AC = re.compile(r"\bAC\b", re.IGNORECASE)
+_RE_AC = re.compile(r"\bAC\b|\bFREQUENCY RESPONSE ANALYSIS\b", re.IGNORECASE)
 _RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
 _RE_NOISE = re.compile(r"\bNOISE\b", re.IGNORECASE)
 _RE_OP = re.compile(r"\bOPERATING\s+POINT\b", re.IGNORECASE)
@@ -310,7 +310,8 @@ def detect_sim_type(raw: RawData) -> str:
 
 
 def is_ac_analysis(sim_type: str) -> bool:
-    """Check if simulation type is AC analysis.
+    """Check if simulation type is AC-shaped: an AC analysis, or the results
+    of a frequency response analysis, which LTspice writes in the same layout.
 
     Uses a word-boundary match on "AC" so substrings in unrelated words
     (e.g. "characteristic", "backup", "BACK") don't false-positive.

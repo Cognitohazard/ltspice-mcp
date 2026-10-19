@@ -50,7 +50,7 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
 from ltspice_mcp.lib.log_parser import scan_op_step_log
 from ltspice_mcp.lib.log_types import MeasurementsOutput
@@ -634,6 +634,9 @@ def has_active_device(currents: dict[str, float]) -> bool:
             return True
     return False
 
+
+#: The analyses whose plots signal_stats defines statistics for.
+_STATS_ANALYSES = frozenset({"transient", "dc", "noise"}) | AC_SHAPED
 
 _OP_INTERNAL_DEV_RE = re.compile(r"@([\w.:]+)\[")
 _OP_TERMINAL_CUR_RE = re.compile(r"^i[a-z]?\(([^)]+)\)$")
@@ -1384,12 +1387,8 @@ async def signal_stats(
     resolved = services.resolve_signal(raw, recipe.signal)
     signal = resolved.name
     services.validate_step(raw, step)
-    if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis not in {
-        "transient",
-        "ac",
-        "dc",
-        "noise",
-    }:
+    analysis = raw.descriptor.analysis if isinstance(raw, (DecodedRaw, DecodedPlot)) else None
+    if analysis is not None and analysis not in _STATS_ANALYSES:
         if raw.descriptor.axis is None:
             guarded_axis(raw, step)
         raise ResultError(
@@ -1427,7 +1426,8 @@ async def signal_stats(
         phase_deg = np.angle(wave, deg=True)
         data: MetricValue = {
             "signal": signal,
-            "analysis_type": "ac",
+            # An AC-shaped analysis (a frequency response analysis too) by its own name.
+            "analysis_type": analysis if analysis in AC_SHAPED else "ac",
             "min_db": float(np.min(magnitude_db)),
             "max_db": float(np.max(magnitude_db)),
             "mean_db": float(np.mean(magnitude_db)),
@@ -2165,7 +2165,7 @@ async def operating_point(
     # (e.g. ``V(in)=1`` from an ``AC 1`` source). For Transient it's t=0
     # which may include initial conditions, not the converged op-point.
     sim_lower = sim_type.lower()
-    if "ac" in sim_lower.split() or "noise" in sim_lower:
+    if is_ac_analysis(sim_type) or "noise" in sim_lower:
         raise ResultError(
             f"Cannot extract DC operating point from {sim_type!r}: the first "
             "point in an AC/Noise raw is the magnitude at the lowest frequency, "
