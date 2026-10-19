@@ -352,6 +352,9 @@ def serve(working_dir: str, config_path: str | None) -> int:
         from ltspice_mcp.api import Api
 
         api = Api(working_dir=working_dir, config_path=config_path)
+        # An Api imports the tool modules on its first op, over a second; here
+        # that is boot time, so no snippet's timeout_s pays for it.
+        import ltspice_mcp.tools  # noqa: F401
     except BaseException as exc:
         _send(replies, {"op": "boot_failed", "error": f"{type(exc).__name__}: {exc}"})
         return 1

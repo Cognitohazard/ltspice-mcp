@@ -283,6 +283,14 @@ class TestLifetime:
         assert worker_of(after) != before
         assert not process_running(before)
 
+    async def test_a_fresh_worker_has_the_tool_modules_loaded(self, state: SessionState):
+        """An op's first call imported the tool modules inside the snippet, over
+        a second of its timeout_s; on Windows that carried a bounded wait past
+        the timeout, and the worker was killed with the job it owned."""
+        await run(state, "", reset=True)
+        reply = await run(state, "import sys\n'ltspice_mcp.tools.jobs' in sys.modules")
+        assert reply["result"] == "True", reply
+
     async def test_a_wait_ends_before_the_timeout_and_names_its_job(self, state: SessionState):
         """A snippet blocked on a job that outlasts its timeout_s ends on its
         own, naming the job; the worker, and so the job, is kept on every

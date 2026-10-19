@@ -1052,6 +1052,9 @@ class ApiMethodsMixin(ABC):
             if timeout < 0:
                 raise ValueError("timeout_s must be a non-negative number or None")
 
+        # Read before the clock: the first read imports the tool modules, over a
+        # second that must not land on top of a dwell measured against a deadline.
+        cap = experiments.JOBS_WAIT_CAP_S
         started = time.monotonic()
         while True:
             now = time.monotonic()
@@ -1062,11 +1065,7 @@ class ApiMethodsMixin(ABC):
                     f"The wait for job {job_id!r} stopped just before the snippet's timeout_s.",
                     job_id=job_id,
                 )
-            dwell = min(
-                bound
-                for bound in (experiments.JOBS_WAIT_CAP_S, remaining, left)
-                if bound is not None
-            )
+            dwell = min(bound for bound in (cap, remaining, left) if bound is not None)
             # Poll on the raw handler page: a dwell consumes nothing but
             # timed_out, and rendering a complete receipt per dwell would pay
             # for the whole wait in receipts nobody reads.
