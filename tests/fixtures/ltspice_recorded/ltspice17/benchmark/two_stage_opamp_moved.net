@@ -1,0 +1,23 @@
+* C:\recording\two_stage_opamp_moved.asc
+M3 N001 N001 vdd vdd PMOS_MOD
+M4 N002 N001 vdd vdd PMOS_MOD
+M7 out N002 vdd vdd PMOS_MOD
+M1 N001 inn N003 0 NMOS_MOD
+M2 N002 inp N003 0 NMOS_MOD
+M6 N003 bias 0 0 NMOS_MOD
+M5 bias bias 0 0 NMOS_MOD
+Ibias vdd bias 20µ
+M8 out bias 0 0 NMOS_MOD
+Cc N002 out 1p
+CL out 0 5p
+Vdd vdd 0 3.3
+Vinp inp 0 1.65 AC 1
+Vinn inn 0 1.65
+.model NMOS NMOS
+.model PMOS PMOS
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.mos
+.model NMOS_MOD NMOS(Kp=200u Vto=0.7)
+.model PMOS_MOD PMOS(Kp=80u Vto=-0.7)
+.ac dec 20 1 100meg
+.backanno
+.end

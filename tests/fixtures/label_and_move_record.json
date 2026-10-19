@@ -924,6 +924,31 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_moved.asc": {
+   "labels": {
+    "proposals": 425,
+    "sha256": "058d126d96b65c04d5b7d08d2e3656af0ead84395b87c1f4d47226a18d4f8838",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 5,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 149,
+     "placed [a name already here; 1 at the point, 1 named]": 30,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 29,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 31,
+     "placed [ground; 1 at the point, 1 named]": 29,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 31,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 119
+    }
+   },
+   "moves": {
+    "proposals": 586,
+    "sha256": "f203a9aceaff5b32aebe669f65c90d147cbd9f972e8ea3b13fdda66e25e5b717",
+    "shapes": {
+     "moved": 586
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_drawn.asc": {
    "labels": {
     "proposals": 76,

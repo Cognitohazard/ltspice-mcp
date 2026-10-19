@@ -731,6 +731,48 @@
    "label_island": 8
   }
  },
+ "two_stage_opamp_moved": {
+  "cost": {
+   "calls": 2,
+   "coordinates": 80,
+   "ops": 59,
+   "origins_from_pins": 14,
+   "refused": 0,
+   "reply_bytes": 8941
+  },
+  "digests": [
+   "e22c2793e261e8c253226123ed05659fa2f063b107be82a262cd4caa64a448bc",
+   "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61"
+  ],
+  "drawing": {
+   "bends": 7,
+   "crossings": 0,
+   "extent": [
+    45.0,
+    30.0
+   ],
+   "four_way_junctions": 0,
+   "ground_only_pins": 12,
+   "label_only_pins": 10,
+   "off_grid_points": 0,
+   "wire_length": 143.0,
+   "wires": 27
+  },
+  "equivalence": {
+   "directives_missing": [],
+   "equivalent": true,
+   "extra_parts": [],
+   "ground_differs": false,
+   "missing_parts": [],
+   "names_missing": [],
+   "nets_only_drawn": [],
+   "nets_only_in_reference": [],
+   "values_differ": []
+  },
+  "findings": {
+   "label_island": 2
+  }
+ },
  "vccs_stage_drawn": {
   "cost": {
    "calls": 1,

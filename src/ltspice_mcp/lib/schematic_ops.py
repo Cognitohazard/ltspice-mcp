@@ -1228,6 +1228,217 @@ def _strip_matching_comments(editor, matcher) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _xy(point: Point) -> tuple[int, int]:
+    return int(point.X), int(point.Y)
+
+
+def _texts_matching(editor: AscEditor, wanted: str) -> list[int]:
+    """Indices of the directives and comments ``wanted`` names, for ``move``.
+
+    Exact text, compared as a TEXT record holds it (line breaks as ``\\n``,
+    surrounding space ignored), or ``regex:<pattern>`` searched in each text.
+    """
+    if wanted.startswith("regex:"):
+        pattern = wanted[6:]
+        if not pattern.strip():
+            raise NetlistError(
+                "Empty regex pattern would match every directive; provide one after 'regex:'."
+            )
+        try:
+            compiled = re.compile(pattern)
+        except re.error as e:
+            raise NetlistError(f"Invalid regex {pattern!r}: {e}") from e
+        return [i for i, d in enumerate(editor.directives) if compiled.search(d.text)]
+    body = _text_record_body(wanted.strip())
+    return [i for i, d in enumerate(editor.directives) if d.text.strip() == body]
+
+
+class _MovePlan(NamedTuple):
+    """What a ``move`` selects, by index into the editor's record lists."""
+
+    parts: list[str]
+    labels: set[int]
+    wires: set[int]
+    texts: set[int]
+    # Each unselected wire with an end to drag: whether its first and its
+    # second end moves.
+    dragged: dict[int, tuple[bool, bool]]
+
+
+def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _MovePlan:
+    """Resolve a ``move``'s selection, refusing anything it names that is not there."""
+    region = op.region
+    parts: list[str] = []
+    for ref in op.references:
+        if ref not in editor.components:
+            raise NetlistError(f"Component '{ref}' not found.")
+        if ref not in parts:
+            parts.append(ref)
+    if region is not None:
+        for ref in editor.get_components():
+            geo = geometry.get(ref)
+            if geo is not None:
+                inside = region.holds((geo["x"], geo["y"])) and region.holds(
+                    (geo["x"] + geo["width"], geo["y"] + geo["height"])
+                )
+            else:
+                inside = region.holds(_xy(editor.get_component_position(ref)[0]))
+            if inside and ref not in parts:
+                parts.append(ref)
+
+    labels: set[int] = set()
+    for point in op.labels:
+        at = [i for i, lbl in enumerate(editor.labels) if _xy(lbl.coord) == (point.x, point.y)]
+        if not at:
+            raise NetlistError(f"No net label at ({point.x},{point.y}).")
+        labels.update(at)
+    wires: set[int] = set()
+    for seg in op.wires:
+        ends = {(seg.x1, seg.y1), (seg.x2, seg.y2)}
+        found = [i for i, w in enumerate(editor.wires) if {_xy(w.V1), _xy(w.V2)} == ends]
+        if not found:
+            raise NetlistError(f"No wire from ({seg.x1},{seg.y1}) to ({seg.x2},{seg.y2}).")
+        wires.update(found)
+    texts: set[int] = set()
+    for wanted in op.texts:
+        found = _texts_matching(editor, wanted)
+        if not found:
+            raise NetlistError(f"No directive or comment matched {wanted!r}.")
+        texts.update(found)
+    if region is not None:
+        labels.update(i for i, lbl in enumerate(editor.labels) if region.holds(_xy(lbl.coord)))
+        wires.update(
+            i
+            for i, w in enumerate(editor.wires)
+            if region.holds(_xy(w.V1)) and region.holds(_xy(w.V2))
+        )
+        texts.update(i for i, d in enumerate(editor.directives) if region.holds(_xy(d.coord)))
+    if not (parts or labels or wires or texts):
+        raise NetlistError(
+            "move selects nothing: name parts, labels, wires or texts, or give a "
+            "region that holds some."
+        )
+
+    dragged: dict[int, tuple[bool, bool]] = {}
+    if op.drag:
+        moving = {
+            (pin["x"], pin["y"]) for ref in parts for pin in geometry.get(ref, {}).get("pins", ())
+        }
+        moving |= {_xy(editor.labels[i].coord) for i in labels}
+        moving |= {
+            end for i in wires for end in (_xy(editor.wires[i].V1), _xy(editor.wires[i].V2))
+        }
+
+        def moves(end: tuple[int, int]) -> bool:
+            return end in moving or (region is not None and region.holds(end))
+
+        # A label or ground on a moved pin or wire end is attached to it as a
+        # wire end is, so it moves with it rather than being left on nothing.
+        labels.update(i for i, lbl in enumerate(editor.labels) if _xy(lbl.coord) in moving)
+        for i, w in enumerate(editor.wires):
+            if i not in wires and (moves(_xy(w.V1)) or moves(_xy(w.V2))):
+                dragged[i] = (moves(_xy(w.V1)), moves(_xy(w.V2)))
+    return _MovePlan(parts, labels, wires, texts, dragged)
+
+
+def _name_roots(part: NetPartition) -> Callable[[str], str]:
+    """Which names are one node: those on one wired net, and every label of a name."""
+    parent: dict[str, str] = {}
+
+    def find(name: str) -> str:
+        parent.setdefault(name, name)
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    on_net: dict[tuple[int, int], set[str]] = {}
+    for coord, texts in part.label_texts.items():
+        on_net.setdefault(part.root(coord), set()).update(named_labels(frozenset(texts)))
+    for names in on_net.values():
+        ordered = sorted(names)
+        for name in ordered[1:]:
+            parent[find(name)] = find(ordered[0])
+    return find
+
+
+def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
+    """Apply a ``move``: plan it, refuse a move that would short two named nets,
+    then shift every selected record and dragged wire end by ``(dx, dy)``.
+
+    Nothing is changed before the check, so a refused move leaves the sheet as
+    it was even in a batch that goes on past a failed op. What the moved sheet
+    then shows (a wire left on nothing, a part over another) is the finished
+    sheet's findings to say.
+    """
+    if op.dx == 0 and op.dy == 0:
+        raise NetlistError("move needs a non-zero dx or dy.")
+    geometry = {entry["ref"]: entry for entry in collect_component_geometry(editor)}
+    plan = _plan_move(editor, op, geometry)
+
+    def shifted(point: tuple[int, int]) -> tuple[int, int]:
+        return point[0] + op.dx, point[1] + op.dy
+
+    ends: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for i, w in enumerate(editor.wires):
+        a, b = _xy(w.V1), _xy(w.V2)
+        first, second = (True, True) if i in plan.wires else plan.dragged.get(i, (False, False))
+        ends.append((shifted(a) if first else a, shifted(b) if second else b))
+    after = partition(
+        (
+            ((shifted(xy) if entry["ref"] in plan.parts else xy), (entry["ref"], pin["name"]))
+            for entry in geometry.values()
+            for pin in entry["pins"]
+            for xy in [(pin["x"], pin["y"])]
+        ),
+        (
+            ((shifted(_xy(lbl.coord)) if i in plan.labels else _xy(lbl.coord)), lbl.text)
+            for i, lbl in enumerate(editor.labels)
+        ),
+        ends,
+    )
+    together = _name_roots(net_partition(editor))
+    for names in labels_per_coord(after).values():
+        named = sorted(named_labels(names))
+        if len({together(name) for name in named}) > 1:
+            raise NetlistError(
+                f"Refused to move: it would join nets that each carry a name {named}, "
+                "shorting them together. Move it clear of the other net's wiring, or "
+                "rename one side if they are meant to be one net."
+            )
+
+    for ref in plan.parts:
+        position, rotation = editor.get_component_position(ref)
+        editor.set_component_position(ref, Point(*shifted(_xy(position))), rotation)
+    for i in plan.labels:
+        editor.labels[i].coord = Point(*shifted(_xy(editor.labels[i].coord)))
+    for i, w in enumerate(editor.wires):
+        w.V1, w.V2 = Point(*ends[i][0]), Point(*ends[i][1])
+    for i in plan.texts:
+        editor.directives[i].coord = Point(*shifted(_xy(editor.directives[i].coord)))
+
+    result: dict[str, object] = {
+        "moved": {
+            "parts": plan.parts,
+            "labels": len(plan.labels),
+            "wires": len(plan.wires),
+            "texts": len(plan.texts),
+            "dragged_wire_ends": sum(a + b for a, b in plan.dragged.values()),
+        }
+    }
+    diagonal = [
+        f"({a[0]},{a[1]})->({b[0]},{b[1]})"
+        for i, (a, b) in enumerate(ends)
+        if i in plan.dragged and a[0] != b[0] and a[1] != b[1]
+    ]
+    if diagonal:
+        result["warnings"] = [
+            f"Dragging left {len(diagonal)} wire(s) diagonal: {', '.join(diagonal)}. "
+            "LTspice joins a diagonal wire at its ends and anywhere along it."
+        ]
+    return result
+
+
 def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     """Remove every wire with an endpoint in ``coords``; return how many were
     dropped. Shared by remove_component's wire cleanup and the remove_wire op."""
@@ -1804,6 +2015,55 @@ class OpMoveComponent(StrictModel):
     )
 
 
+class SheetRegion(StrictModel):
+    """Two opposite corners; the edges are inside."""
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    def holds(self, point: tuple[int, int]) -> bool:
+        x, y = point
+        return min(self.x1, self.x2) <= x <= max(self.x1, self.x2) and min(
+            self.y1, self.y2
+        ) <= y <= max(self.y1, self.y2)
+
+
+class WireEnds(StrictModel):
+    """A wire's two ends, in either order."""
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+
+class OpMove(StrictModel):
+    """Shift parts, wires, labels and texts by one offset."""
+
+    op: Literal["move"]
+    dx: int = Field(description="Sheet units (16 is one grid step); positive is right.")
+    dy: int = Field(description="Positive is down.")
+    references: list[str] = Field(default_factory=list, description="Parts, by reference.")
+    labels: list[GridPoint] = Field(
+        default_factory=list, description="Net labels and grounds, by point."
+    )
+    wires: list[WireEnds] = Field(default_factory=list)
+    texts: list[str] = Field(
+        default_factory=list,
+        description="Directives and comments: exact text or 'regex:'; every match moves.",
+    )
+    region: SheetRegion | None = Field(
+        default=None,
+        description="Also what lies inside: a part's box, a wire's ends, a label, a text's anchor.",
+    )
+    drag: bool = Field(
+        default=False,
+        description="Also move what is attached to what moves (or inside region): other wires' ends and labels on it.",
+    )
+
+
 class OpAddNetLabel(StrictModel):
     """Name a net by placing a label, either at a pin or at a coordinate."""
 
@@ -1942,6 +2202,7 @@ SchematicOp = (
     | OpSetComponentAttribute
     | OpRemoveComponent
     | OpMoveComponent
+    | OpMove
     | OpAddNetLabel
     | OpRemoveNetLabel
     | OpRemoveWire
@@ -2028,6 +2289,7 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
     "remove_component": ("deleted_wires",),
+    "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
 }
 
@@ -2183,6 +2445,9 @@ def apply_op_inplace(
         if joined:
             mv_result["warnings"] = joined
         return mv_result
+
+    if isinstance(op, OpMove):
+        return {"op": "move", **_apply_move(editor, op)}
 
     if isinstance(op, OpAddNetLabel):
         x, y = _resolve_op_xy(op, editor)

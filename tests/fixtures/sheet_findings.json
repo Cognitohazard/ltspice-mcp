@@ -9692,6 +9692,107 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_moved.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "points": [
+      {
+       "x": 272,
+       "y": 368
+      },
+      {
+       "x": 64,
+       "y": 416
+      }
+     ],
+     "x": 272,
+     "y": 368
+    },
+    {
+     "kind": "label_island",
+     "message": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "points": [
+      {
+       "x": 496,
+       "y": 368
+      },
+      {
+       "x": 64,
+       "y": 256
+      }
+     ],
+     "x": 496,
+     "y": 368
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 22,
+    "pins_total": 44,
+    "pins_wired": 22,
+    "wire_segments": 27
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 272,
+     "y": 368
+    },
+    "evidence": {
+     "coords": [
+      [
+       272,
+       368
+      ],
+      [
+       64,
+       416
+      ]
+     ],
+     "detail": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inn",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inn"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 496,
+     "y": 368
+    },
+    "evidence": {
+     "coords": [
+      [
+       496,
+       368
+      ],
+      [
+       64,
+       256
+      ]
+     ],
+     "detail": "Net 'inp' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "inp",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "inp"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_drawn.asc": {
   "dropped_wire": [],
   "edit": {

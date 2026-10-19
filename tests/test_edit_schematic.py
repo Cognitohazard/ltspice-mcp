@@ -2485,3 +2485,38 @@ class TestPathsThatLeaveTheSheetAsItIs:
         assert data["commit_state"] == commit_state
         assert file_at(path) == before
         assert data["sha256"] == _sha(path)
+
+
+async def test_a_move_reply_says_what_moved(asc_state):
+    """The reply relays what a move selected, so a region's catch can be checked."""
+    await _build_blank(
+        asc_state,
+        "moved",
+        [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 200, "y": 200},
+            {"op": "add_component", "reference": "R2", "symbol": "res", "x": 200, "y": 400},
+            {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
+        ],
+    )
+    data = await apply_ops(
+        asc_state,
+        "moved.asc",
+        [{"op": "move", "dx": 0, "dy": 64, "references": ["R2"], "drag": True}],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert data["results"] == [
+        {
+            "index": 0,
+            "op": "move",
+            "moved": {
+                "parts": ["R2"],
+                "labels": 0,
+                "wires": 0,
+                "texts": 0,
+                "dragged_wire_ends": 1,
+            },
+        }
+    ]
+    # Dragged along its own axis, the wire stays straight: the op says nothing.
+    assert [w for w in data["warnings"] if w.startswith("op ")] == []

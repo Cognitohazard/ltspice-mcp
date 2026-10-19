@@ -217,6 +217,13 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   done, list them with `return_views: ["preexisting"]` (on an op-less read,
   `ops: []`, that is the whole sheet) or run `verify_circuit`.
 
+**Moving what is drawn:** the `move` op shifts parts, wires, labels and
+texts by one offset (`dx`, `dy`), chosen by name or by a `region`. Give
+`drag: true` to keep what is attached to what moves: other wires' ends, and
+the labels and grounds on a moved pin, go with it. A wire dragged off its axis
+turns diagonal, and the op says so. To move one part to a
+position, or to turn it, use `move_component`.
+
 **Ground and net labels:**
 - **Ground**: give each grounded pin its own ground (`0`) label with an
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,

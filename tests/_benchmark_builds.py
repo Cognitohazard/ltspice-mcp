@@ -10,6 +10,10 @@ Each circuit has two builds (`tests/_build_benchmark.py` says what a build is):
   left to right, supplies above and ground below, matched parts mirrored,
   wires between parts, labels for supplies, ground and ports.
 
+A few circuits have a third build, named for the op it is there to judge:
+``moved`` draws the op amp with its sources out of place and puts them right
+with one ``move``.
+
 A drawn build works out where each part goes by the pin it should put at a
 point (`Drawing.part`), which is the arithmetic a caller does today before
 it can write a part's origin.
@@ -514,10 +518,11 @@ def _sallen_key() -> Build:
     return d.build()
 
 
-def _two_stage_opamp() -> Build:
+def _two_stage_opamp_drawing(sources_dy: int = 0) -> Drawing:
     """The usual drawing: the mirror load over the input pair over the tail, the
     bias diode at the left, the second stage at the right, vdd as a rail along
-    the top, inputs as ports."""
+    the top, inputs as ports. ``sources_dy`` places the three sources that much
+    lower than the drawing has them."""
     d = Drawing("two_stage_opamp")
     # The mirror load, gates facing each other.
     m3 = d.part("M3", "R180", "S", (320, 96))
@@ -535,9 +540,9 @@ def _two_stage_opamp() -> Build:
     cc = d.part("Cc", "R270", "1", (560, 336))
     cl = d.part("CL", "R0", "1", (736, 320))
     # The sources, apart at the left.
-    d.part("Vdd", "R0", "+", (64, 96))
-    d.part("Vinp", "R0", "+", (64, 256))
-    d.part("Vinn", "R0", "+", (64, 416))
+    d.part("Vdd", "R0", "+", (64, 96 + sources_dy))
+    d.part("Vinp", "R0", "+", (64, 256 + sources_dy))
+    d.part("Vinn", "R0", "+", (64, 416 + sources_dy))
 
     rail = m3["S"][1] - 32
     d.wire("M3.S", "M4.S", (m3["S"][0], rail), (m4["S"][0], rail))
@@ -573,8 +578,34 @@ def _two_stage_opamp() -> Build:
     d.ground("Vdd.-", "Vinp.-", "Vinn.-", "CL.2")
     d.ground("M1.B", "M2.B", "M5.S", "M5.B", "M6.S", "M6.B", "M8.S", "M8.B")
     d.directives((64, m6["S"][1] + 96))
+    return d
+
+
+def _two_stage_opamp() -> Build:
     # The inputs are ports, each joined to its source by a label alone.
-    return d.build({"label_island": 2})
+    return _two_stage_opamp_drawing().build({"label_island": 2})
+
+
+def _two_stage_opamp_moved() -> Build:
+    """The drawn op amp with its three sources first placed a row too low, then
+    lifted into place by one ``move``: with ``drag``, the labels and grounds on
+    their pins go with them. Without ``move`` that is three ``move_component``
+    ops and each of the six labels removed and added again."""
+    d = _two_stage_opamp_drawing(sources_dy=64)
+    lift = {
+        "op": "move",
+        "dx": 0,
+        "dy": -64,
+        "references": ["Vdd", "Vinp", "Vinn"],
+        "drag": True,
+    }
+    return Build(
+        d.reference.name,
+        "moved",
+        (tuple(d.ops), (lift,)),
+        {"label_island": 2},
+        d.origins_from_pins,
+    )
 
 
 _DRAWN = {
@@ -589,6 +620,11 @@ _DRAWN = {
     "vccs_stage": _vccs_stage,
     "nmos_mirror": _nmos_mirror,
     "diff_pair": _diff_pair,
+}
+
+# Builds that use an op the drawn ones do not, to judge it against them.
+_OTHER_STYLES = {
+    "two_stage_opamp": (_two_stage_opamp_moved,),
 }
 
 _LABELLED_KEPT = {
@@ -612,4 +648,5 @@ def builds() -> list[Build]:
             made.append(_generated_labelled(name))
         if name in _DRAWN:
             made.append(_DRAWN[name]())
+        made.extend(build() for build in _OTHER_STYLES.get(name, ()))
     return made

@@ -165,6 +165,24 @@ def test_a_drawn_build_reaches_fewer_pins_by_a_label_alone():
         assert mine["label_only_pins"] < labelled["label_only_pins"], build.id
 
 
+def test_a_moved_build_ends_as_the_drawn_one():
+    """A ``move`` with ``drag`` takes the labels and grounds on the moved parts'
+    pins with them, so the op amp drawn with its sources out of place and moved
+    once ends as the drawn sheet, for one more call and one more op."""
+    record = _recorded()
+    moved = [build for build in BUILDS if build.style == "moved"]
+    assert moved
+    for build in moved:
+        drawn_id = f"{build.circuit}_drawn"
+        assert record[build.id]["digests"][-1] == record[drawn_id]["digests"][-1], build.id
+        for score in ("drawing", "equivalence", "findings"):
+            assert record[build.id][score] == record[drawn_id][score], (build.id, score)
+        assert record[build.id]["cost"]["ops"] == record[drawn_id]["cost"]["ops"] + 1
+        assert (_SHEETS / f"{build.id}.asc").read_bytes() == (
+            _SHEETS / f"{drawn_id}.asc"
+        ).read_bytes()
+
+
 def test_every_device_class_of_the_build_battery_is_built():
     """A class added to `BUILD_ARCHETYPES` that no build places fails here
     instead of leaving a silent gap."""
@@ -339,6 +357,22 @@ def test_coordinates_written_count_what_locates_something():
     )
     assert coordinates_written({"op": "add_net_label", "net": "n", "pin": "R1.1"}) == 0
     assert coordinates_written({"op": "add_net_label", "net": "n", "x": 0, "y": 0}) == 2
+    # A move's offset is worked out as an origin is; what it names by a point
+    # (a label, a wire's two ends, a region's corners) is too.
+    assert coordinates_written({"op": "move", "dx": 0, "dy": -64, "references": ["V1"]}) == 2
+    assert (
+        coordinates_written(
+            {
+                "op": "move",
+                "dx": 16,
+                "dy": 0,
+                "labels": [{"x": 0, "y": 0}],
+                "wires": [{"x1": 0, "y1": 0, "x2": 0, "y2": 16}],
+                "region": {"x1": 0, "y1": 0, "x2": 64, "y2": 64},
+            }
+        )
+        == 12
+    )
 
 
 # ---------------------------------------------------------------------------

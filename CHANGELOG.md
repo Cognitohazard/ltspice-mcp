@@ -888,6 +888,17 @@ recording that showed it.
 
 ### Added
 
+- `edit_schematic` op `move`: shifts any mix of parts, wires, net labels,
+  directives and comments by one offset (`dx`, `dy`). Parts are chosen by
+  reference, labels by point, wires by their two ends, and texts by exact text
+  or `regex:`, and a `region` also takes what lies inside it. With `drag`,
+  what is attached to what moves goes with it: the ends of other wires, and
+  the labels and grounds on a moved pin or wire end; a wire dragged off its
+  axis is reported as diagonal. A move that
+  would join two named nets is refused before anything changes, and the
+  result's `moved` says what moved. Before, only one part could be moved,
+  with its wires left behind, and a directive had to be removed and added
+  again to move it.
 - A `duplicate_parameter` finding, from `verify_circuit`'s quality check and
   on every `edit_schematic` reply. On a netlist it names an instance,
   `.model` or `.subckt` card that gives one parameter more than once, in any

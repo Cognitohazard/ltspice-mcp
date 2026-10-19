@@ -1586,12 +1586,28 @@ looks like an expression includes the Python snippet and says where to run it,
 
 ### A.3 Edit ops
 
-There are twelve op kinds, discriminated on `op`: `add_component`,
-`move_component`, `remove_component`, `set_component_value`,
+There are thirteen op kinds, discriminated on `op`: `add_component`,
+`move_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
 `remove_wire`, `add_directive`, `remove_directive`, `set_plot_panes`. The batch
 is atomic: the first op that fails aborts the transaction and nothing is
 written.
+
+`move` shifts any mix of records by one offset, `dx` and `dy`: parts by
+`references`, net labels and grounds by point (`labels`), wires by their two
+ends (`wires`), and directives and comments by exact text or `regex:`
+(`texts`). A `region` also selects what lies inside it, edges included: a part
+whose box does, a wire whose two ends do, a label, a text's anchor. With
+`drag`, an end of any other wire that sits on what moves (a moved pin, label
+or wire end, or with `region` any end inside it) moves too, so the wire stays
+attached, and so does a label or ground on a moved pin or wire end; a wire
+dragged off its axis is reported as diagonal. A part's
+attribute text moves with it. Something named that is not there is refused,
+and so is a move that would join two nets that each carry a name, before
+anything changes. The result's `moved` counts what moved, listing the parts.
+Applied with the opposite offset to what it moved, it puts everything back.
+`move_component`, which places one part at a position and can turn it, stays
+as it was.
 
 The ops also provide exact-segment `remove_wire`, `cleanup_wires`, directive
 placement kinds, and literal matching for removals by default, with `regex:`
