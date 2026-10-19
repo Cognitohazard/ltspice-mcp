@@ -4131,6 +4131,35 @@
         ".net"
       ]
     },
+    "export/multiline_text": {
+      "behaviour": "export-multiline-text",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/multiline_text.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "export/multiline_text.asc": "8bb3eb6b62b861fca349ec084d4649a2b6aaacc4632d55e0bc3a30aecbe99344",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/multiline_text.net": {
+          "bytes": 133,
+          "sha256": "69f0999b696723a7f8a7d281f9ccaf125abe5fb3e43b7d8347b32ae2172f0905"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/orientation_cell4": {
       "behaviour": "symbol-orientation",
       "command": [
@@ -6116,6 +6145,34 @@
       "written": [
         ".log",
         ".raw"
+      ]
+    },
+    "raw/fra": {
+      "behaviour": "raw-fra",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/fra.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/fra.cir": "af7391fc98a349792f2d0ef84f10eda0c43700ef3f4c7f2e8f920e88420d9533"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/fra.log": {
+          "bytes": 288,
+          "sha256": "38e85b6fcd301d707199d8378bb993fbb05765ba4327faee1ec7a8f832939734"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
       ]
     },
     "raw/noise": {
