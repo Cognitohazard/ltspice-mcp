@@ -70,11 +70,6 @@ class MockSimulator:
 # liveness is monkeypatched per test.
 _FOREIGN_PID = 999_999_999
 
-# The cancel paths here run a real process-table scan, whose duration scales
-# with system load (parallel workers, live simulators on the box). The bound
-# catches a hang; it does not assert a latency.
-_CANCEL_PATH_TIMEOUT_S = 15.0
-
 
 def _circuit(work_dir: Path, name: str = "deck.cir") -> Path:
     path = work_dir / name
@@ -1459,7 +1454,6 @@ class TestCancellationAuthority:
         # The foreign session reads disk, so wait for the launch checkpoint.
         await await_until(
             lambda: bool(callbacks) and receipt.job.cases[0].status == "running",
-            timeout_s=_CANCEL_PATH_TIMEOUT_S,
             what="the case to start running",
         )
         await state_no_sim.job_registry.drain_pending()
@@ -1500,7 +1494,6 @@ class TestCancellationAuthority:
         callback(RunOutcome("", str(work_dir / "cancelled.fail"), 0, "killed"))
         await await_until(
             lambda: not runner.has_active_work(),
-            timeout_s=_CANCEL_PATH_TIMEOUT_S,
             what="the runner to finish its work",
         )
 

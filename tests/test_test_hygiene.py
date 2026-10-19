@@ -349,6 +349,28 @@ class _TestScan(ast.NodeVisitor):
             if _bound_name(param.arg) and _short(value := _number(default)):
                 self._flag("short-wait", default or node, f"default {param.arg}={value:g}")
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._check_constant(target, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._check_constant(node.target, node.value)
+        self.generic_visit(node)
+
+    def _check_constant(self, target: ast.expr, value: ast.expr | None) -> None:
+        # A module constant is passed by name, which no check at a call reads,
+        # so its bound is read where it is set. How often a poll looks is not
+        # how long it waits.
+        if (
+            not self.scope
+            and isinstance(target, ast.Name)
+            and _bound_name(target.id)
+            and "INTERVAL" not in target.id.upper()
+            and _short(number := _number(value))
+        ):
+            self._flag("short-wait", value or target, f"{target.id} = {number:g}")
+
     def visit_BinOp(self, node: ast.BinOp) -> None:
         # A clock read now plus N is a deadline wherever it goes: a keyword, a
         # variable, a child's command line.
@@ -455,7 +477,9 @@ def test_every_wait_is_capped_at_the_liveness_bound():
     So does any short bound a test hands the code under test, read here as:
     an argument, default or payload key whose name ends in ``_s`` or names a
     timeout, deadline or grace (``kill_grace_s=0.2``, ``"run_timeout_s": 2``);
-    an attribute set to one (``setattr(module, "..._TIMEOUT_S", 1.0)``); a
+    a module constant so named (``TOOL_TIMEOUT = 20.0``), read where it is set
+    because it is passed by name; an attribute set to one
+    (``setattr(module, "..._TIMEOUT_S", 1.0)``); a
     deadline read off a clock (``time.monotonic() + 5``, wherever it goes) or
     counted from one read earlier (``deadline=started + 5``); and a
     ``Timer`` or ``call_later`` that acts after a short delay. A poll's own
@@ -532,6 +556,8 @@ def test_the_rules_catch_what_they_name():
     """Each rule flags its pattern and a reason excuses it, on the line, on
     the statement, or in the comment block above it."""
     flagged = _scan_source(
+        "TOOL_TIMEOUT = 20.0\n"
+        "_CANCEL_TIMEOUT_S: float = 15.0\n"
         "async def test_x(path, runner, job, run_timeout_s=0.01):\n"
         "    await asyncio.sleep(0.5)\n"
         "    await await_until(lambda: not path.exists())\n"
@@ -552,6 +578,8 @@ def test_the_rules_catch_what_they_name():
     assert len(flagged["sleep"]) == 1
     assert len(flagged["file-poll"]) == 2
     assert [row.split(": ", 1)[1] for row in flagged["short-wait"]] == [
+        "TOOL_TIMEOUT = 20",
+        "_CANCEL_TIMEOUT_S = 15",
         "default run_timeout_s=0.01",
         "wait(..., 1)",
         '"wait_s": 5',
@@ -569,7 +597,13 @@ def test_the_rules_catch_what_they_name():
     ]
 
     excused = _scan_source(
+        "_POLL_INTERVAL_S = 0.01\n"
+        "HANDOFF_TIMEOUT_S = 120.0\n"
+        "_RUN_CODE_S = 2 * LIVENESS_S\n"
+        "# timing: asserts the call gives up while the peer holds the lock\n"
+        "LOCK_TIMEOUT_S = 0.2\n"
         "async def test_x(runner, job):\n"
+        "    timeout = 5\n"
         "    await asyncio.sleep(0)\n"
         "    await asyncio.sleep(0.5)  # timing: fake work\n"
         "    # timing: asserts the wait times out\n"
