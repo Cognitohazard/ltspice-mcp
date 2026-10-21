@@ -23,7 +23,9 @@ read a quantity the simulator did not write as a trace of its own:
   the sign: `V(out)/V(inp,inn)` is an open-loop gain.
 
 `value` reads the sample nearest `at` on the run's axis, without
-interpolation, and needs `at` whenever that axis has more than one sample.
+interpolation, and needs `at` whenever that axis has more than one sample. A
+stepped `.ac` at one frequency stores no frequency, one point a step: leave
+`at` out and pick the step.
 
 ## Trace math in Python
 

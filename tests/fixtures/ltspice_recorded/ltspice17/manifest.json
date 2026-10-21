@@ -6336,6 +6336,39 @@
         ".raw"
       ]
     },
+    "raw/step_ac_one_freq": {
+      "behaviour": "raw-stepped",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_ac_one_freq.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/step_ac_one_freq.cir": "00147b89a5b9fd6da397253a38ec9a75b5769927fe0662b2abdf910b05de326d"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_ac_one_freq.log": {
+          "bytes": 275,
+          "sha256": "36398ffdad438a4cec1420ce28cb00818fb58910ce4b7ff183133f7e0c1b2d3d"
+        },
+        "raw/step_ac_one_freq.raw": {
+          "bytes": 1122,
+          "sha256": "07de4caa3870c675e26f5250862afec948854d47426620ed91c21075c84c481a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "raw/step_dc": {
       "behaviour": "raw-stepped",
       "command": [

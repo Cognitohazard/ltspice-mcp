@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- A stepped `.ac` at one frequency could not be split into its steps: reading
+  a step was refused with "Step boundaries are unresolved". Both LTspice
+  builds store such a run one point a step, the stepped parameter first and
+  no frequency at all, and name no steps in the log, as a stepped `.op` does
+  (recorded: `raw/step_ac_one_freq`). It is now read the same way, the
+  parameter values as the steps. `analyze_results`' `value` reads a step's one
+  point when `at` is left out; given `at`, it says to leave it out, where it
+  called the run an operating point.
 - An `edit_schematic` batch that only set values or attributes returned every
   pin of every part it named, in `views.touched` and in
   `wiring.label_only_pins`, though no pin moved or changed net; `view_limit`

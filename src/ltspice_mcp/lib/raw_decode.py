@@ -46,6 +46,11 @@ _SAMPLED_LT_PLOTS = {
     "dc transfer characteristic",
     "noise spectral density - (v/hz½ or a/hz½)",
 }
+#: The LTspice plots that, stepped, may open with the stepped parameters and
+#: then hold one point a step, with no step named in the log: a stepped .op
+#: always (``raw/step_op``), and a stepped .ac at one frequency, which then
+#: stores no frequency at all (``raw/step_ac_one_freq``). Both builds alike.
+_PARAMETERS_FIRST_LT_PLOTS = {"operating point", "ac analysis"}
 
 
 class RawDecodeError(ValueError):
@@ -376,9 +381,8 @@ def _step_facts(
     result["step_ranges"] = None
     plot_name = header.plot_name.lower()
     parameters = leading_parameters(header)
-    if header.dialect == "ltspice" and plot_name == "operating point" and parameters:
-        # A stepped .op stores one point a step, the stepped parameters first.
-        # Its log names no step values, so the raw's own are the record.
+    if header.dialect == "ltspice" and plot_name in _PARAMETERS_FIRST_LT_PLOTS and parameters:
+        # See _PARAMETERS_FIRST_LT_PLOTS: the raw's own step values are the record.
         result["step_status"] = "matched"
         result["step_ranges"] = [
             {"step_index": index, "offset": index, "length": 1, "log_row": None}

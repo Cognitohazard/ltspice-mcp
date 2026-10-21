@@ -9,6 +9,7 @@ here, on a machine with no LTspice.
 
 from __future__ import annotations
 
+import cmath
 import math
 import re
 from dataclasses import replace
@@ -18,7 +19,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -39,7 +40,7 @@ from ltspice_mcp.lib.raw_parser import (
     raw_writer_command,
     read_partial_raw_progress,
 )
-from ltspice_mcp.lib.recipes import MeasurementsRecipe, StabilityRecipe
+from ltspice_mcp.lib.recipes import MeasurementsRecipe, StabilityRecipe, ValueRecipe
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -245,6 +246,14 @@ class TestRawLayouts:
         assert (plot.storage, plot.encoding, plot.dialect) == ("values", "utf-8", "ltspice")
 
 
+#: ``raw/step_ac_one_freq``'s steps, and the gain of its first-order low-pass
+#: (1 nF) at 100 kHz in each.
+ONE_FREQUENCY_STEPS = [{"r": 1000.0}, {"r": 2000.0}, {"r": 4000.0}]
+ONE_FREQUENCY_GAINS = [
+    1 / (1 + 2j * math.pi * 100e3 * step["r"] * 1e-9) for step in ONE_FREQUENCY_STEPS
+]
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 class TestSteppedRuns:
     def test_each_step_is_found_and_matched_to_its_log_line(self, build: str, tmp_path: Path):
@@ -329,8 +338,58 @@ class TestSteppedRuns:
         assert [stepped.value("V(out)", step=step) for step in range(3)] == pytest.approx(
             [0.8, 1.6, 2.4]
         )
+        # A stepped .ac at one frequency holds a complex point a step.
+        one_frequency = load("raw/step_ac_one_freq")
+        assert one_frequency.steps == ONE_FREQUENCY_STEPS
+        values = [one_frequency.value("V(out)", step=step) for step in range(3)]
+        assert all(isinstance(value, complex) for value in values)
+        assert values == pytest.approx(ONE_FREQUENCY_GAINS, rel=1e-5)
         with pytest.raises(ResultError, match="points"):
             load("raw/tran").value("V(out)")
+
+    def test_a_stepped_ac_at_one_frequency_stores_a_point_a_step_as_an_operating_point_does(
+        self, build: str, tmp_path: Path
+    ):
+        """At one frequency the plot has no frequency at all: it opens with the
+        stepped parameter and holds one point a step, and the log names no
+        steps. So the steps are the raw's own, as a stepped .op's are, and
+        never found by the axis starting over."""
+        header = header_fields(build, "raw/step_ac_one_freq")
+        assert header["Plotname"] == ["AC Analysis"]
+        assert "stepped" in header["Flags"][0].split()
+        assert header["No. Points"] == ["3"]
+        assert declared_names(build, "raw/step_ac_one_freq")[:2] == ["r", "V(in)"]
+        log = read_spice_text(rec.recorded(build, "raw/step_ac_one_freq.log"))
+        assert not [line for line in log.splitlines() if line.startswith(".step")]
+
+        parsed = rec.decode(build, "raw/step_ac_one_freq", tmp_path)
+        assert parsed.raw.descriptor.step_status == "matched"
+        assert parsed.raw.steps == ONE_FREQUENCY_STEPS
+        for step, expected in enumerate(ONE_FREQUENCY_GAINS):
+            (gain,) = parsed.raw.get_wave("V(out)", step)
+            assert gain == pytest.approx(expected, rel=1e-5)
+
+    async def test_the_value_recipe_reads_a_step_at_one_frequency_without_at(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """No frequency is stored, so ``value`` reads a step's one point as it
+        reads an operating point's, and a read at a frequency says to leave
+        ``at`` out rather than calling the run an operating point."""
+        raw = work_dir / "step_ac_one_freq.raw"
+        for suffix in (".raw", ".log"):
+            raw.with_suffix(suffix).write_bytes(
+                rec.recorded(build, f"raw/step_ac_one_freq{suffix}").read_bytes()
+            )
+        source = services.source_for_raw_path(raw, state_no_sim)
+        for step, gain in enumerate(ONE_FREQUENCY_GAINS):
+            result = await metrics.value(
+                source, ValueRecipe(key="g", metric="value", expr="V(out)"), step, state_no_sim
+            )
+            assert result["magnitude_linear"] == pytest.approx(abs(gain), rel=1e-5)
+            assert result["phase_deg"] == pytest.approx(math.degrees(cmath.phase(gain)), abs=1e-3)
+        at_a_frequency = ValueRecipe(key="g", metric="value", expr="V(out)", at="100k")
+        with pytest.raises(NoAxisError, match="value recipe and no 'at'"):
+            await metrics.value(source, at_a_frequency, 0, state_no_sim)
 
     def test_a_stepped_operating_points_summary_counts_its_steps(self, build: str, tmp_path: Path):
         """The run's summary no longer says only the first step is read."""

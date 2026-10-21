@@ -70,6 +70,7 @@ from ltspice_mcp.lib.raw_parser import (
     query_point_value,
     real_axis,
     safe_magnitude_db,
+    sample_to_dict,
     trace_unit,
     whattype_unit,
 )
@@ -243,6 +244,41 @@ def reject_non_transient(raw) -> None:
         )
 
 
+def _ac_point_a_step(raw: DecodedRaw | DecodedPlot, step: int) -> bool:
+    """Whether an AC plot with no sampled axis holds one point at ``step``, as
+    a stepped ``.ac`` at one frequency does: it stores no frequency at all.
+
+    Another analysis's table (``.tf``, ``.pz``) stays a table even at one
+    point, because its traces' declared types do not name what they hold.
+    """
+    if raw.descriptor.analysis not in AC_SHAPED:
+        return False
+    try:
+        return len(raw.get_wave(0, step=step)) == 1
+    except (ResultError, IndexError):
+        return False
+
+
+def _no_axis_error(raw: DecodedRaw | DecodedPlot, step: int) -> NoAxisError:
+    """Why a plot with no sampled axis cannot be read along one, and what reads it."""
+    if raw.descriptor.analysis == "op":
+        hint = "Use operating_point to read this bias point."
+    elif _ac_point_a_step(raw, step):
+        hint = (
+            "It holds one point a step: read it with the value recipe and no 'at', "
+            "or api.load_raw(...).value(name, step=k)."
+        )
+    else:
+        hint = (
+            "Read its quantities through inspect(kind='results', view='table') "
+            "or api.load_raw(...).table()."
+        )
+    return NoAxisError(
+        f"Selected plot {raw.descriptor.plot_index} ({raw.descriptor.analysis}) "
+        f"is a table with no sampled axis. {hint}"
+    )
+
+
 def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     """Real-valued sweep axis for ``step``, or a clean error for a no-axis raw.
 
@@ -259,16 +295,7 @@ def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     """
     if isinstance(raw, (DecodedRaw, DecodedPlot)):
         if raw.descriptor.axis is None:
-            hint = (
-                "Use operating_point to read this bias point."
-                if raw.descriptor.analysis == "op"
-                else "Read its quantities through inspect(kind='results', view='table') "
-                "or api.load_raw(...).table()."
-            )
-            raise NoAxisError(
-                f"Selected plot {raw.descriptor.plot_index} ({raw.descriptor.analysis}) "
-                f"is a table with no sampled axis. {hint}"
-            )
+            raise _no_axis_error(raw, step)
         axis = np.asarray(raw.get_axis(step=step))
         if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
             raise ResultError(
@@ -1201,8 +1228,10 @@ async def value(
     """One signal's value at one point on the run's primary axis.
 
     With no ``at``, a run whose axis holds a single sample answers from that
-    sample; a run with no axis at all falls back to its bias point, where the
-    expression is addressed by the name the operating point carries.
+    sample. An operating point, which has no axis, falls back to its bias point,
+    where the expression is addressed by the name the operating point carries.
+    An AC plot with no axis answers from the one point it holds at the step, as
+    a stepped ``.ac`` at one frequency does.
     """
     at = recipe.at
     if at is None:
@@ -1211,9 +1240,11 @@ async def value(
         try:
             axis = guarded_axis(raw, step, source.raw)
         except NoAxisError:
-            if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis != "op":
+            if not isinstance(raw, (DecodedRaw, DecodedPlot)) or raw.descriptor.analysis == "op":
+                return await _value_from_operating_point(source, recipe, raw, step, state)
+            if not _ac_point_a_step(raw, step):
                 raise
-            return await _value_from_operating_point(source, recipe, raw, step, state)
+            return await point_value(source, recipe.expr, None, step, state)
         if len(axis) != 1:
             raise ResultError(
                 "value.at is required when the selected run has more than one "
@@ -1295,45 +1326,49 @@ async def point_value(
     step: int,
     state: SessionState,
 ) -> MetricValue:
-    """The nearest-sample read behind the ``value`` recipe's ``at`` form."""
-    if at is None:
-        raise ResultError(
-            "value recipe: 'at' is required (or use step_axis + step_value). "
-            "If this is a .op (operating point) result, it has no time/frequency "
-            "axis — use operating_point instead.",
-            show_hint=False,
-        )
-    try:
-        target_x = parse_spice_value(at)
-    except ValueError as e:
-        raise ResultError(f"Invalid 'at' value: {e}", show_hint=False) from e
+    """The nearest-sample read behind the ``value`` recipe's ``at`` form.
 
-    # np.searchsorted treats NaN as greater than everything and returns the
-    # last index, which looks like a valid result but isn't.
-    if not math.isfinite(target_x):
-        raise ResultError(
-            f"'at' value must be finite, got {at!r} (parsed as {target_x})", show_hint=False
-        )
+    With ``at`` None it reads the one point an AC plot with no sampled axis
+    holds at ``step``, which ``value`` has checked is there.
+    """
+    target_x = None
+    if at is not None:
+        try:
+            target_x = parse_spice_value(at)
+        except ValueError as e:
+            raise ResultError(f"Invalid 'at' value: {e}", show_hint=False) from e
+
+        # np.searchsorted treats NaN as greater than everything and returns the
+        # last index, which looks like a valid result but isn't.
+        if not math.isfinite(target_x):
+            raise ResultError(
+                f"'at' value must be finite, got {at!r} (parsed as {target_x})", show_hint=False
+            )
 
     raw = await services.load_raw(source, state)
     sig = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
 
-    try:
-        result_data = query_point_value(
-            raw, sig.name, target_x, step, read_wave=lambda: sig.wave(raw, step)
-        )
-    except NoAxisError as e:
-        # Operating-point raws have no time/frequency axis. Give a precise,
-        # actionable message instead of the generic failure.
-        raise ResultError(
-            "This is an Operating Point result (no time/frequency axis to "
-            "query). Use operating_point to read node voltages and branch "
-            "currents.",
-            show_hint=False,
-        ) from e
-    except Exception as e:
-        raise ResultError(f"Failed to query value: {e}") from e
+    if target_x is None:
+        result_data = {"trace": sig.name, **sample_to_dict(sig.wave(raw, step)[0])}
+    else:
+        try:
+            result_data = query_point_value(
+                raw, sig.name, target_x, step, read_wave=lambda: sig.wave(raw, step)
+            )
+        except NoAxisError as e:
+            if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis != "op":
+                raise _no_axis_error(raw, step) from e
+            # Operating-point raws have no time/frequency axis. Give a precise,
+            # actionable message instead of the generic failure.
+            raise ResultError(
+                "This is an Operating Point result (no time/frequency axis to "
+                "query). Use operating_point to read node voltages and branch "
+                "currents.",
+                show_hint=False,
+            ) from e
+        except Exception as e:
+            raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
     unit_warnings: list[str] = []
@@ -1354,12 +1389,14 @@ async def point_value(
     else:
         value_unit = trace_unit(raw, sig.trace)
 
-    # The query snaps to the nearest sample; flag when that snap moved the
-    # requested point. On a coarse sweep this matters — e.g. a .dc temp sweep
-    # snapping 27 → 25 °C silently biases a tempco measurement.
-    exact_match = snap_match(float(result_data["requested_x"]), float(result_data["actual_x"]))
-
-    data: MetricValue = {"signal": sig.name, **result_data, "exact_match": exact_match}
+    data: MetricValue = {"signal": sig.name, **result_data}
+    if target_x is not None:
+        # The query snaps to the nearest sample; flag when that snap moved the
+        # requested point. On a coarse sweep this matters — e.g. a .dc temp
+        # sweep snapping 27 → 25 °C silently biases a tempco measurement.
+        data["exact_match"] = snap_match(
+            float(result_data["requested_x"]), float(result_data["actual_x"])
+        )
     if value_unit:
         data["unit"] = value_unit
     warnings = data.setdefault("warnings", [])
