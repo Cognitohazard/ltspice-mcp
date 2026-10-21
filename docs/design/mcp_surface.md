@@ -1015,29 +1015,36 @@ what it touched (`waypoint`, `wire_end`, `label` or `pin`) and whose `wire`,
 `label` or `pin` identifies it. A touch on any other net is refused, and the
 error names the wire and the `{x, y}` endpoint that would make the same T
 deliberately, because the op does not join a net no argument asked for. A
-route crossing a wire where neither ends is drawn with a warning naming the
-wire; LTspice does not connect the crossing, so the nets stay separate. The
-planner's advisories (a wire crossed, a junction made on the way) also appear
-in `warnings`. Route length is not reported.
+route crossing a wire where neither ends is drawn; LTspice does not connect
+the crossing, so the nets stay separate, and the finished sheet reports it
+(`unjoined_crossing`). The planner's advisories about the route itself (a
+junction made on the way) also appear in `warnings`. Route length is not
+reported.
 
-Ops do not repeat sheet findings. A route through a part, a part placed or
-moved over another, and a label on nothing are each reported once, by the
-sheet finding (`wire_through_symbol`, `symbol_overlap`, `dangling_label`).
-Findings are computed on the sheet the batch leaves, so a label placed before
-the wire that reaches it is not reported as dangling, and a repeated route
-that is already drawn through a part is counted under `preexisting`, because
-the batch drew nothing.
+Ops do not repeat sheet findings, and what an op makes of the sheet is said
+by the sheet, once: a route through a part, a part placed or moved over
+another, a label on nothing, a crossing left unjoined, a pin or label that
+joins wires where they cross, a wire left diagonal, and a net given a second
+name are each reported by the sheet finding (`wire_through_symbol`,
+`symbol_overlap`, `dangling_label`, `unjoined_crossing`, `joined_at_crossing`,
+`diagonal_wire`, `net_with_two_names`), whichever op made it. Findings are
+computed on the sheet the batch leaves, so a state the batch only passes
+through is not reported: a label placed before the wire that reaches it is not
+dangling, and a net relabelled in remove-and-add pairs has one name at the
+end. A repeated route that is already drawn through a part is counted under
+`preexisting`, because the batch drew nothing.
 
 **Labels.** `add_net_label` refuses a label that would join two named nets,
 either by giving a net a name another net already has or by placing a new name
 where two named nets cross, because the netlist would short them. A new name
-on an already named net joins nothing; it is placed with a warning that the
-node now has two names. When `wire_pins` refuses to join two named nets, its
+on an already named net joins nothing; it is placed, and the sheet reports a
+net with two names (`net_with_two_names`). When `wire_pins` refuses to join two named nets, its
 error gives the fix that op accepts: relabel one side with the other's name.
 A label, ground included, at a point where two wires cross joins them, so a
 ground flag on a crossing of two named nets is refused, as a named label or a
 pin there is. Where at most one of the two wires has a name, the label is
-placed and the join is reported, as it is for a pin. Grounding a named net is
+placed and the sheet reports the join (`joined_at_crossing`), as it does for a
+pin. Grounding a named net is
 not such a join, because it is what the flag requests, and a second named net
 may be grounded after the first. `inspect(kind: "net")` at a point on a wire's
 interior traces that wire's net and names the wire under `snapped_to_wire`; a

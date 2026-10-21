@@ -1,12 +1,14 @@
 """What placing a label and moving a part are answered on every sheet of the suite, held to a record.
 
 ``add_net_label`` refuses a label that would join two nets that each carry a
-name, and says when a name is repeated and when a net gets a second one.
-``move_component`` refuses a pin landing where wires of two named nets cross,
-says the join a pin makes on a crossing that it does not refuse, and says the
-wires a move leaves behind (``add_component`` makes the same check of its
-pins). Each works the answer out from the sheet as the schematic editor holds
-it. Work that moves those checks is held to this, as the route planner's is to
+name, and ``move_component`` a pin landing where wires of two named nets cross
+(``add_component`` makes the same check of its pins). What else they make, a
+net with a second name or nets joined at a crossing, the finished sheet says
+(the ``net_with_two_names`` and ``joined_at_crossing`` sheet rules), and the
+record holds that word beside the op's answer wherever such a thing can be
+made: so a label put where two nets meet, or a pin moved onto a crossing, is
+never placed without a word of it. Each works the answer out from the sheet
+as the schematic editor holds it. Work that moves those checks is held to this, as the route planner's is to
 ``test_route_planner_record.py``: a fixed set of proposals is put to each op on
 every sheet in the suite the editor opens, through the op itself, and what it
 answers is as it was when the record was made.
@@ -50,9 +52,11 @@ from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     named_labels,
     net_partition,
+    placed_geometry,
     resolve_pin,
     wire_segments_of,
 )
+from tests._asc_ops import sheet_findings
 from tests._proposal_record import (
     Asked,
     entry_of,
@@ -77,6 +81,27 @@ _MOST_ELSEWHERE = 300
 
 #: A label placed where two or more nets met with nothing said of it.
 _SILENT_JOIN = re.compile(r"^placed \[.*; [2-9] at the point")
+
+#: The sheet rules that say what placing a label or moving a part joined.
+_JOIN_RULES = ("net_with_two_names", "joined_at_crossing")
+
+#: How many nets met at a point, and how many of them carry a name, as
+#: ``_what_is_there`` words it.
+_THERE = re.compile(r"; (\d+) at the point, (\d+) named")
+
+
+def _sheet_says(editor: AscEditor, points: set[Point]) -> str:
+    """The join rules the sheet as the editor holds it reports at ``points``:
+    the word an edit's reply carries of them."""
+    said = sorted(
+        {
+            found.rule
+            for found in sheet_findings(editor)
+            if found.rule in _JOIN_RULES and points & set(found.points)
+        }
+    )
+    return f" | sheet: {', '.join(said)}" if said else ""
+
 
 Point = tuple[int, int]
 Wire = tuple[int, int, int, int]
@@ -214,6 +239,11 @@ def _labels_asked(editor: AscEditor) -> list[Asked]:
         else:
             answer = {"warnings": list(cast("list[str]", placed.get("warnings", [])))}
             text = "placed: " + " | ".join(answer["warnings"]) if answer["warnings"] else "placed"
+            # The sheet can say something only where nets met or a named net
+            # took another name; it is read only there, which keeps the run short.
+            met, named = map(int, _THERE.search(there(proposal["net"], at)).groups())  # type: ignore[union-attr]
+            if met > 1 or (named and proposal["net"] != "0"):
+                text += _sheet_says(editor, {at})
         # The sheet is put back as it was, so each proposal is put to the same sheet.
         del editor.labels[had:]
         answer["there"] = there(proposal["net"], at)
@@ -237,6 +267,17 @@ def _moves_asked(editor: AscEditor) -> list[Asked]:
         else:
             answer = {"warnings": list(cast("list[str]", moved.get("warnings", [])))}
             text = "moved: " + " | ".join(answer["warnings"]) if answer["warnings"] else "moved"
+            # A pin on two or more wires is where a join can be made; the sheet
+            # is read only then.
+            geometry = placed_geometry(editor, proposal["reference"])
+            wires = wire_segments_of(editor)
+            crossed = {
+                (pin["x"], pin["y"])
+                for pin in (geometry or {}).get("pins", ())
+                if len(wires_through((pin["x"], pin["y"]), wires)) > 1
+            }
+            if crossed:
+                text += _sheet_says(editor, crossed)
         editor.set_component_position(proposal["reference"], at, rotation)
         asked.append(Asked(proposal, answer, without_particulars(text)))
     return asked
@@ -301,13 +342,13 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
         ("labels", ("refused: Refused to add net", "[a new name; 2 at the point, 2 named]")),
         ("labels", ("refused: Refused to add net", "[a name already here; 2 at the point")),
         ("labels", ("refused: Refused to add ground", "[ground; 2 at the point, 2 named]")),
-        # What it says of a label it places.
-        ("labels", ("becomes a second name for it", "1 at the point, 1 named]")),
-        ("labels", ("becomes a second name for it", "is where # wires cross", "1 named]")),
+        # What the sheet says of a label placed: a second name for a net.
+        ("labels", ("sheet: net_with_two_names", "1 at the point, 1 named]")),
+        ("labels", ("joined_at_crossing, net_with_two_names", "1 named]")),
         # Two nets joined at a crossing, where at most one of them has a name.
-        ("labels", ("placed: (#,#) is where # wires cross", "[a new name; 2 at the point")),
-        ("labels", ("placed: (#,#) is where # wires cross", "[ground; 2 at the point, 0")),
-        ("labels", ("placed: (#,#) is where # wires cross", "[ground; 2 at the point, 1")),
+        ("labels", ("sheet: joined_at_crossing", "[a new name; 2 at the point")),
+        ("labels", ("sheet: joined_at_crossing", "[ground; 2 at the point, 0")),
+        ("labels", ("sheet: joined_at_crossing", "[ground; 2 at the point, 1")),
         # What it places without a word: on nothing and on one net.
         ("labels", ("placed [a new name; 0 at the point, 0 named]",)),
         ("labels", ("placed [a new name; 1 at the point, 0 named]",)),
@@ -316,8 +357,7 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
             "moves",
             ("refused: Refused to move", "where wires of nets that each carry a name cross"),
         ),
-        ("moves", ("moved: PIN at (#,#) is on a point where # wires cross",)),
-        ("moves", ("a pin on a crossing joins them. | PIN at (#,#) is on a point where",)),
+        ("moves", ("moved | sheet: joined_at_crossing",)),
     ],
 )
 def test_the_record_asks_enough_to_hold_every_answer(op: str, said: tuple[str, ...]):

@@ -634,6 +634,9 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
     assert by_rule["label_over_component"]["at"]["x"] == 100
     # Each reply lists the rules its check ran and no others, zero included.
     assert layout["rules_run"] == {
+        "joined_at_crossing": 0,
+        "unjoined_crossing": 0,
+        "diagonal_wire": 0,
         "floating_pin": 2,
         "dangling_wire_end": 0,
         "dangling_label": 2,

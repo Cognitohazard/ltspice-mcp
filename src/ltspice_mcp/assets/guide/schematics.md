@@ -221,7 +221,7 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
 texts by one offset (`dx`, `dy`), chosen by name or by a `region`. Give
 `drag: true` to keep what is attached to what moves: other wires' ends, and
 the labels and grounds on a moved pin, go with it. A wire dragged off its axis
-turns diagonal, and the op says so. To move one part to a
+turns diagonal, and the sheet says so (`diagonal_wire`). To move one part to a
 position, or to turn it, use `move_component`.
 
 **Ground and net labels:**
@@ -232,7 +232,8 @@ position, or to turn it, use `move_component`.
   ambiguous; reach one with its point, `to_pin: {"x": 400, "y": 340}`.
 - **A label or ground flag at a crossing joins the two wires.** Place it on
   the one wire you mean. `add_net_label` refuses it when both wires are on
-  named nets, and otherwise warns that it joined two nets.
+  named nets; otherwise it is placed and the sheet reports the join
+  (`joined_at_crossing`).
 - **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins
   ties them together — the netlist merges same-name labels into one net
   (correct, not a short), and no routing is needed. Names that differ only in

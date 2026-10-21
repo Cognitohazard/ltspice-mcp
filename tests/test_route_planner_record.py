@@ -218,7 +218,6 @@ def test_the_record_asks_enough_to_hold_every_check():
         "runs along the wire",
         "Route touches",
         "already wired to this net",
-        "crosses the wire",
         "The route touches",
     ):
         seen = sum(count for shape, count in shapes.items() if said in shape)

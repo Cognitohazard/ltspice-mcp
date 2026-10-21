@@ -81,11 +81,12 @@ class TestARouteThatMayBeDrawn:
         assert rules(found) == ([], [])
         assert found.junctions == []
 
-    def test_a_crossing_where_neither_wire_ends_is_only_said(self) -> None:
+    def test_a_crossing_where_neither_wire_ends_is_not_the_routes_to_say(self) -> None:
+        """It joins nothing, and the finished sheet says where wires cross (the
+        ``unjoined_crossing`` sheet rule): a later op may yet put a label on it."""
         view, nets = sheet(wires=((0, 100, 400, 100),))
         found = judge(view, nets, route((200, 0), (200, 200)))
-        assert rules(found) == ([], ["route_crosses_wire"])
-        assert found.advisories[0].points == ((200, 100),)
+        assert rules(found) == ([], [])
 
     def test_a_pin_already_wired_to_one_of_its_ends_is_a_junction(self) -> None:
         # A wire runs from the route's own start to R2's pin; the route goes on past it.
@@ -192,6 +193,11 @@ class TestARouteThatIsRefused:
         found = judge(
             view, nets, route((0, 0), (0, 400), (100, 400), (100, 0), (400, 0), (500, 64))
         )
-        assert found.refusals and found.advisories
+        # A route over a pin already wired to its start is drawn, and said.
+        parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
+        over_own_pin = judge(*sheet(parts=parts, wires=((0, 0, 200, 0),)), route((0, 0), (400, 0)))
+        assert found.refusals and over_own_pin.advisories
         assert {RULES[one.rule].on_a_proposal for one in found.refusals} == {"blocks"}
-        assert {RULES[one.rule].on_a_proposal for one in found.advisories} == {"advises"}
+        assert {
+            RULES[one.rule].on_a_proposal for one in found.advisories + over_own_pin.advisories
+        } == {"advises"}
