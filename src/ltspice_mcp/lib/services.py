@@ -36,7 +36,6 @@ from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifac
 from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
-    detect_sim_type,
     get_step_count,
     is_noise_analysis,
 )
@@ -820,7 +819,7 @@ def _node_pair(raw: RawData, signal: str, plus_node: str, minus_node: str) -> Si
     grounded = {
         node for node, trace in traces.items() if trace is None and node.lower() in GROUND_ALIASES
     }
-    if minus_node not in grounded and is_noise_analysis(detect_sim_type(raw)):
+    if minus_node not in grounded and is_noise_analysis(raw):
         raise ResultError(
             f"Signal '{signal}' is a node-pair difference, and a .noise result holds "
             "spectral densities: the difference of two densities is not the noise "

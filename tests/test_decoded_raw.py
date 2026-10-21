@@ -16,7 +16,15 @@ from spicelib.raw.raw_read import RawRead
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, RawTrace
 from ltspice_mcp.lib.raw_header import RawLimits, RawPlotHeader, RawVariable, preflight_raw
-from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
+from ltspice_mcp.lib.raw_parser import (
+    OffsetAwareRawRead,
+    detect_sim_type,
+    is_ac_analysis,
+    is_dc_analysis,
+    is_noise_analysis,
+    is_operating_point,
+    is_transient_analysis,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LIMITS = RawLimits(2_000_000, 64_000, 16_000, 16, 128, 10_000, 2_000_000)
@@ -120,6 +128,43 @@ def test_recorded_arrays_and_steps(name):
         else:
             with pytest.raises(NoAxisError):
                 raw.get_axis(step)
+
+
+#: The plot classifiers, each asked of a decoded plot and of its name.
+CLASSIFIERS = (
+    is_ac_analysis,
+    is_dc_analysis,
+    is_noise_analysis,
+    is_operating_point,
+    is_transient_analysis,
+)
+
+
+def assert_classified_as_named(raw: DecodedRaw) -> None:
+    """Every plot of ``raw`` is classified by its decoded analysis as the word
+    match on its name, kept for other readers, classifies it."""
+    for plot_index in range(raw.get_nr_plots()):
+        plot = raw.select_plot(plot_index)
+        name = detect_sim_type(plot)
+        for classify in CLASSIFIERS:
+            assert classify(plot) == classify(name), (classify.__name__, name)
+
+
+@pytest.mark.parametrize("path", sorted(FIXTURES.glob("*.raw")), ids=lambda path: path.stem)
+def test_a_decoded_plot_is_classified_as_its_name_is(path: Path):
+    """The fixture raws, ngspice's noise spectral density and integrated noise
+    among them."""
+    parsed = OffsetAwareRawRead(path, traces_to_read="*")
+    headers = preflight_raw(path, limits=LIMITS).plots
+    plots = [
+        DecodedPlot(
+            h,
+            [np.array(source.get_trace(v.name).data, copy=True) for v in h.variables],
+            snapshot_id=path.stem,
+        )
+        for h, source in zip(headers, parsed.plots, strict=True)
+    ]
+    assert_classified_as_named(DecodedRaw(plots))
 
 
 def test_recorded_noise_keeps_both_plots_and_distinct_trace_names():

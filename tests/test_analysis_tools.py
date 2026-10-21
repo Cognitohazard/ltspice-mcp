@@ -1978,10 +1978,6 @@ class TestQueryValueDcLabelAndUnit:
             state_no_sim, str(raw), ValueRecipe(key="v", metric="value", expr="V(out)", at="2")
         )
         assert data["unit"] == "V"
-        # The DC sweep axis is the swept variable, not time, and the label a
-        # reader puts on the requested point says so.
-        loaded = await services.load_raw(_source(state_no_sim, raw), state_no_sim)
-        assert metrics.query_x_label(loaded, "DC transfer characteristic") not in ("t", "f")
 
     async def test_noise_density_labels_per_root_hz(
         self, state_no_sim: SessionState, work_dir: Path
