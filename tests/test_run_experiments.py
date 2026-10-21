@@ -1002,6 +1002,24 @@ class TestLeanReceipt:
         assert "simulator_version" in row
         assert row["assignments"] == {}
 
+    async def test_a_row_names_the_raws_a_run_wrote_beside_its_raw(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A frequency response analysis's results are a raw of their own beside
+        the run's; the row names it by kind, where it named only the run's raw."""
+        fake_simulator(monkeypatch, beside=(".fra_1.raw",))
+        deck = _deck(work_dir / "fra_rows.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "fra-rows"), state_with_sim)
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["other_raws"] == {"fra_1": str(Path(row["raw"]).with_suffix(".fra_1.raw"))}
+
     async def test_run_fields_fetch_artifact_paths(
         self,
         state_with_sim: SessionState,

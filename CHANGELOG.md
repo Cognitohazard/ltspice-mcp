@@ -929,6 +929,11 @@ recording that showed it.
 
 ### Added
 
+- A run row maps in `other_raws` each kind of other raw the run wrote beside
+  its raw to its path: `op`, a transient's operating point (`.op.raw`), and
+  `fra_1`, a frequency response analysis's results (`.fra_1.raw`), which a
+  row did not name before. A run with no raw lists none, and a stopped run's
+  other raws are removed with its raw.
 - `analyze_results` reports a compressed LTspice transient stored in few
   points, as the `value` observation `coarse_compressed_waveform`, when a
   recipe reads its samples: the points stored, the span and where the widest

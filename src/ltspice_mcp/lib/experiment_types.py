@@ -68,6 +68,9 @@ class ExperimentCase:
     status: ExperimentCaseStatus = "queued"
     raw_file: Path | None = None
     log_file: Path | None = None
+    #: The kinds of other raw the run wrote beside ``raw_file``
+    #: (``raw_parser.other_raws``).
+    other_raws: list[str] = field(default_factory=list)
     error: str | None = None
     failure_code: str | None = None
     failure_evidence: dict[str, Any] | None = None

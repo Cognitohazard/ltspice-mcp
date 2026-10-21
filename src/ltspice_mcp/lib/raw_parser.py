@@ -69,6 +69,26 @@ _RAW_TITLE_UTF16 = "Title:".encode("utf-16-le")
 _RAW_HEADER_UTF16 = (b"\xff\xfe" + _RAW_TITLE_UTF16, _RAW_TITLE_UTF16)
 
 
+#: The raws LTspice is recorded writing beside a run's raw, as
+#: ``<stem>.<kind>.raw``, by kind: a transient's initial operating point (both
+#: builds) and LTspice 26's frequency response analysis results (the
+#: ``written`` list of the recorded ``raw/fra``).
+OTHER_RAW_KINDS = ("op", "fra_1")
+
+
+def other_raw_path(raw: Path, kind: str) -> Path:
+    """Where a run whose raw is ``raw`` writes its raw of ``kind``."""
+    return raw.with_name(f"{raw.stem}.{kind}.raw")
+
+
+def other_raws(raw: Path) -> list[str]:
+    """The kinds of other raw the run wrote beside ``raw``. Each is probed by
+    name, so a folder of many runs costs no more than one of a few."""
+    if raw.suffix.lower() != ".raw":
+        return []
+    return [kind for kind in OTHER_RAW_KINDS if os.path.isfile(other_raw_path(raw, kind))]
+
+
 def has_valid_raw_header(path: Path | None) -> bool:
     """True if ``path`` looks like a real ``.raw`` file, by header magic.
 

@@ -249,10 +249,10 @@ C1 out 0 {C}
   from zero. ngspice has no equivalent keyword.
 - **Frequency response analysis** (`.fra` with an analyzer `@N`): the run
   writes its transient raw and, beside it, `<run>.fra_N.raw`, complex values
-  over frequency that read like an AC result (its analysis reads `fra`). A
-  run's row names only the transient raw, so read the FRA file by path
-  (`raw_file`). A stepped FRA run is not recorded, so how its results file
-  splits into steps is not modelled. Its `gain_N` is the negative of the loop
+  over frequency that read like an AC result (its analysis reads `fra`). The
+  run's row gives its path as `other_raws.fra_1`, beside `other_raws.op`, the
+  transient's operating point; read it by that path (`raw_path`). A stepped FRA run is not recorded, so how its
+  results file splits into steps is not modelled. Its `gain_N` is the negative of the loop
   gain the `stability` recipe takes: `stability` on `-gain_1` gives the crossover and phase margin
   LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
   refuses the analyzer.

@@ -35,7 +35,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.job_lifecycle import WaitFor
-from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome
+from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.state import SessionState
 from tests import schedule_jitter, sheet_edit_record
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
@@ -474,6 +474,7 @@ def fake_simulator(
     *,
     delay_s: float | None = 0.0,
     held: list[Callable[[], None]] | None = None,
+    beside: tuple[str, ...] = (),
 ) -> list[str]:
     """Stand in for the simulator behind ``ExperimentRunner.submit_netlist``.
 
@@ -488,8 +489,10 @@ def fake_simulator(
       appends a function that finishes it when the test chooses, callable
       from any thread.
 
-    Returns the list run filenames are appended to, so a caller that passed
-    none can still read what was submitted.
+    ``beside`` names suffixes written next to the raw (``".fra_1.raw"``), as
+    a simulator writes other files; the outcome is read off the files by the
+    server's own completion check. Returns the list run filenames are appended
+    to, so a caller that passed none can still read what was submitted.
     """
     recorded = [] if submissions is None else submissions
 
@@ -497,23 +500,24 @@ def fake_simulator(
         recorded.append(run_filename)
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
 
-        def finish() -> None:
+        def write() -> RunOutcome:
             raw.write_bytes(b"Title: mock")
+            for suffix in beside:
+                raw.with_name(raw.stem + suffix).write_bytes(b"Title: mock")
             log.write_text("ok")
-            callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
+            outcome = _raw_completion_outcome(str(raw), str(log))
+            assert outcome is not None
+            return outcome
 
         if delay_s is None:
             if held is not None:
                 loop = self.loop
-                held.append(lambda: loop.call_soon_threadsafe(finish))
+                held.append(lambda: loop.call_soon_threadsafe(lambda: callback(write())))
             return object()
         if delay_s > 0:
-            self.loop.call_later(delay_s, finish)
+            self.loop.call_later(delay_s, lambda: callback(write()))
         else:
-            raw.write_bytes(b"Title: mock")
-            log.write_text("ok")
-            outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
-            self.loop.call_soon_threadsafe(callback, outcome)
+            self.loop.call_soon_threadsafe(callback, write())
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
