@@ -189,23 +189,22 @@ def test_every_op_declaring_result_facts_is_an_op_this_tool_takes():
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
     """A batch is where the same advisory repeats.
 
-    Every add_net_label of an already-labelled net reports the same duplicate
-    advisory, so a converter-scale build would spend hundreds of identical
-    lines saying one thing — and dropping them all instead (what this surface
-    did) means the caller never learns the ops warned at all. One entry, with
-    how many ops it covers.
+    Listing it once per op spends a line on each saying one thing, and
+    dropping them all instead (what this surface did) means the caller never
+    learns the ops warned at all. One entry, with how many ops it covers. A
+    subcircuit given an opamp's complexity label is warned of on every op that
+    sets it.
     """
-    ops = [
-        {"op": "add_net_label", "net": "vout", "x": 400 + 64 * index, "y": 300}
-        for index in range(4)
-    ]
+    level = {"op": "set_component_value", "reference": "X1", "value": "Level.2"}
+    ops = [{"op": "add_component", "reference": "X1", "symbol": "res", "x": 400, "y": 300}]
+    ops += [level] * 3
 
     data = await _build_blank(asc_state, "dupwarn", ops)
 
-    duplicates = [w for w in data["warnings"] if "already labels a net" in w]
-    assert len(duplicates) == 1, duplicates
-    assert "3 ops" in duplicates[0]
-    assert "collapsed" in duplicates[0]
+    repeated = [w for w in data["warnings"] if "complexity-level label" in w]
+    assert len(repeated) == 1, data["warnings"]
+    assert repeated[0].startswith("op 1 (set_component_value): X1: Value 'Level.2'")
+    assert repeated[0].endswith("(identical warning on 3 ops in this batch; collapsed)")
 
 
 async def test_committed_sha_matches_file(asc_state, work_dir):

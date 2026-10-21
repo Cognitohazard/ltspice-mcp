@@ -477,9 +477,10 @@ class TestWirePins:
     async def test_multiple_ground_labels_error(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Multiple '0'") as exc_info:
             wire_pins(asc_state, asc_file, "net:filtered", "net:0")
-        # Guidance must reference the actual ambiguous net, not a canned example.
+        # The guidance names one of the grounds by its point, which is the
+        # endpoint that reaches it, not a canned example.
         msg = str(exc_info.value)
-        assert "add_net_label op of edit_schematic (net='0'" in msg
+        assert "Give the one you mean by its point, e.g. {'x': " in msg
         assert "M3.S" not in msg
 
     async def test_multiple_label_error_names_actual_net(
@@ -491,7 +492,8 @@ class TestWirePins:
         add_net_label(asc_state, asc_file, "SIG", x=300, y=200)
         with pytest.raises(NetlistError, match="Multiple 'SIG'") as exc_info:
             wire_pins(asc_state, asc_file, "net:filtered", "net:SIG")
-        assert "add_net_label op of edit_schematic (net='SIG'" in str(exc_info.value)
+        assert "at: (100,200), (300,200)" in str(exc_info.value)
+        assert "{'x': 100, 'y': 200}" in str(exc_info.value)
 
     async def test_invalid_pin_format(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Invalid pin reference"):
@@ -2180,10 +2182,9 @@ class TestAddNetLabelOpValidation:
         )
         op2 = res["results"][2]
         assert op2["ok"] is True
-        warns = op2.get("warnings", [])
-        # Reframed: names the duplicate but says it merges correctly and only
-        # wire_pins is ambiguous — no "short"/"will error" scare.
-        assert any("already labels a net" in w and "ambiguous" in w for w in warns)
+        # A second label of one name is how distant pins are tied; the
+        # netlist merges them, so nothing is said of it.
+        assert "warnings" not in op2
 
 
 @pytest.mark.asyncio
@@ -2518,8 +2519,69 @@ class TestWirePinsTJunction:
         self, asc_state: SessionState, work_dir: Path
     ):
         asc = _write_sheet(work_dir / "t_nothing.asc", *_RAIL, _res("R3", 240, 326))
-        with pytest.raises(NetlistError, match="touches no wire and no component pin"):
+        with pytest.raises(NetlistError, match="touches no wire, component pin or net label"):
             wire_pins(asc_state, asc, "R3.1", {"x": 240, "y": 230})
+
+    async def test_a_label_on_a_free_point_is_an_endpoint(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A label placed on nothing, then a wire from a pin to it: how a stub
+        # ends in a label. The label's point was refused as touching nothing.
+        asc = _write_sheet(work_dir / "t_label_end.asc", _res("R1", 96, 244), "FLAG 240 196 vfb")
+        result = wire_pins(asc_state, asc, "R1.1", {"x": 240, "y": 196})
+        assert result["wire_count"] == 1
+        assert await _net_pins(asc_state, asc, "net:vfb") == {"R1.1"}
+
+    async def test_one_of_two_labels_of_a_name_is_reached_by_its_point(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(
+            work_dir / "t_label_dup.asc",
+            _res("R1", 96, 244),
+            _res("R2", 400, 244),
+            "FLAG 96 196 vfb",
+            "FLAG 240 196 vfb",
+        )
+        # net:vfb names two labels, so it says how to name one.
+        with pytest.raises(NetlistError, match="Give the one you mean by its point"):
+            wire_pins(asc_state, asc, "R2.1", "net:vfb")
+        wire_pins(asc_state, asc, "R2.1", {"x": 240, "y": 196})
+        assert await _net_pins(asc_state, asc, "R2.1") == {"R1.1", "R2.1"}
+
+    async def test_a_ground_is_reached_by_its_point(self, asc_state: SessionState, work_dir: Path):
+        asc = _write_sheet(
+            work_dir / "t_ground.asc",
+            _res("R1", 96, 244),
+            _res("R2", 400, 244),
+            "FLAG 96 292 0",
+            "FLAG 400 340 0",
+        )
+        wire_pins(asc_state, asc, "R2.2", {"x": 400, "y": 340})
+        assert await _net_pins(asc_state, asc, "R2.2") == {"R1.2", "R2.2"}
+
+    async def test_a_label_point_on_another_named_net_is_still_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(
+            work_dir / "t_label_short.asc", _res("R1", 96, 244), "FLAG 96 196 a", "FLAG 240 196 b"
+        )
+        with pytest.raises(NetlistError, match="would short"):
+            wire_pins(asc_state, asc, "R1.1", {"x": 240, "y": 196})
+
+    async def test_a_label_then_a_wire_to_it_in_one_batch_leaves_nothing_loose(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        _write_sheet(work_dir / "t_label_batch.asc", _res("R1", 96, 244))
+        data = await apply_ops(
+            asc_state,
+            "t_label_batch.asc",
+            [
+                {"op": "add_net_label", "net": "vfb", "x": 240, "y": 196},
+                {"op": "wire_pins", "from_pin": "R1.1", "to_pin": {"x": 240, "y": 196}},
+            ],
+        )
+        assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+        assert not [w for w in data["warnings"] if "(240,196)" in w]
 
     async def test_a_coordinate_endpoint_at_a_wire_end_is_a_plain_join(
         self, asc_state: SessionState, work_dir: Path
@@ -3023,12 +3085,10 @@ class TestDuplicateLabelAdvisory:
             ],
         )
         assert data["commit_state"] == "committed"
-        # The envelope folds the identical advisories into one entry whose
-        # count is the number of ops that raised it: all three.
-        dup = [w for w in data["warnings"] if "already labels a net" in w]
-        assert len(dup) == 1, data["warnings"]
-        assert dup[0].startswith("op 0 (add_net_label): 'vin' already labels a net at (100,0);")
-        assert dup[0].endswith("(identical warning on 3 ops in this batch; collapsed)")
+        # Three more labels of a name the sheet already has: each ties its
+        # point to that net, as meant, and an op says nothing of it. A build
+        # that labelled every pin was told so on each one.
+        assert not [w for w in data["warnings"] if w.startswith("op ")], data["warnings"]
 
 
 @pytest.mark.asyncio

@@ -5,9 +5,9 @@ refusals are a dozen checks made in one function in one order. Work that moves
 those checks is held to this: on every sheet in the suite the editor opens,
 a fixed set of proposals (pin to pin straight and by each corner, pin to the
 middle of each wire, a detour through each other part, a waypoint on an end,
-and an end given by the name of its net) is put to the planner, and what it
-answers, refusal or route with its advisories, is as it was when the record
-was made.
+an end given by the name of its net, and an end given by a label's point) is
+put to the planner, and what it answers, refusal or route with its
+advisories, is as it was when the record was made.
 
 The record is ``fixtures/route_planner_record.json``. It keeps, for each sheet,
 how many proposals there were, a digest of every answer in order, and how many
@@ -56,6 +56,7 @@ _RECORDING = os.environ.get("LTSPICE_MCP_RECORD_ROUTE_PLANNER") == "1"
 #: which keeps the largest sheets from being most of the run.
 _MOST = 600
 _MOST_BY_NAME = 150
+_MOST_BY_POINT = 150
 
 Proposal = tuple[Any, Any, list[GridPoint]]
 
@@ -113,7 +114,17 @@ def _proposals(editor: AscEditor) -> list[Proposal]:
             by_name.append((pin, f"net:{label.text}", [GridPoint(x=px, y=ly)]))
     if len(by_name) > _MOST_BY_NAME:
         by_name = every_nth(by_name, _MOST_BY_NAME)
-    return asked + by_name
+    # An end given by a label's point, for every label: what reaches one of
+    # several labels of a name, a ground, or a label that stands on nothing.
+    by_point: list[Proposal] = []
+    for label in editor.labels:
+        point = GridPoint(x=int(label.coord.X), y=int(label.coord.Y))
+        for pin, px, _py in pins:
+            by_point.append((pin, point, []))
+            by_point.append((pin, point, [GridPoint(x=px, y=point.y)]))
+    if len(by_point) > _MOST_BY_POINT:
+        by_point = every_nth(by_point, _MOST_BY_POINT)
+    return asked + by_name + by_point
 
 
 def _answer(editor: AscEditor, proposal: Proposal) -> dict[str, Any]:
