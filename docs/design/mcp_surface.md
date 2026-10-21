@@ -1231,8 +1231,11 @@ cursors where listed:
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | "NAME" | [x, y], cursor?}
     .asc gives a geometric trace; an [x, y] on a wire's interior traces that
-    wire, reported as snapped_to_wire; a netlist gives card membership and
-    no geometry. On a .asc, PIN is a pin name or, failing that,
+    wire, reported as snapped_to_wire; a netlist gives the membership of the
+    deck's own cards (not those in a .subckt body) and no geometry, with node
+    names compared without case and `gnd` read as node 0, and a warning
+    saying ngspice's kiltpsa mode may not read `gnd` so. On a .asc, PIN is a
+    pin name or, failing that,
     the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
     name on a netlist

@@ -449,6 +449,33 @@ class TestDeckStructure:
         port = rows[("X2", "R1")]["nodes"][1]
         assert (port["scope"], port["name"]) == ([], "mid")
 
+    @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
+    async def test_the_net_query_reads_gnd_as_node_0(
+        self, build: str, at: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """The run's reading: ``R1 a gnd`` and ``R2 gnd 0`` are on ground, so a
+        query for ground by any of its spellings lists them with node 0's
+        cards. Only the deck's own cards are listed, not those in a subcircuit
+        body, and the reply says ngspice's kiltpsa mode may read ``gnd``
+        otherwise."""
+        voltages = rec.operating_point(build, "deck/gnd_alias", tmp_path)
+        assert voltages["v(a)"] == pytest.approx(1000.0)
+        path = work_dir / "gnd_alias.cir"
+        path.write_bytes((INPUTS / rec.CASES.case("deck/gnd_alias").source).read_bytes())
+        (result,) = await _run(state_no_sim, [{"kind": "net", "path": str(path), "at": at}])
+        assert result["ok"], result
+        data = result["data"]
+        assert {(m["reference"], m["terminal"]) for m in data["members"]} == {
+            ("I1", 1),
+            ("R1", 2),
+            ("R2", 1),
+            ("R2", 2),
+            ("I2", 1),
+            ("I3", 1),
+            ("R3", 2),
+        }
+        assert any("kiltpsa" in warning for warning in data["warnings"]), data
+
 
 async def hierarchy_rows(state, work_dir: Path, case_id: str) -> dict[tuple[str, ...], dict]:
     """The server's resolved view of a recorded deck, by instance path."""

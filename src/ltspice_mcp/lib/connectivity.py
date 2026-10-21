@@ -271,9 +271,10 @@ def name_key(name: str) -> str:
     flag, and otherwise the name with its case folded. Labels with one key are
     one node, and a net's names are told apart by their keys alone.
 
-    A deck's node names are compared by ``netlist_graph.canon_net``, which also
-    takes ``gnd!`` for ground and strips the name; no sheet recording has a
-    ``gnd!`` label.
+    The netlist net query compares a deck's node names the same way: the
+    ``deck-structure`` recording has ``gnd`` as node 0 in a deck too.
+    ``netlist_graph.canon_net``, which compares whole decks, also takes
+    ``gnd!`` for ground and strips the name; no recording has ``gnd!``.
     """
     return GROUND if is_ground(name) else fold_case(name)
 
