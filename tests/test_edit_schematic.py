@@ -28,7 +28,7 @@ from spicelib import AscEditor
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.schematic_ops import (
-    OP_EFFECTS,
+    KEEPS_WIRING,
     OP_RESULT_FACTS,
     collect_component_geometry,
     get_asc_editor,
@@ -189,9 +189,9 @@ def test_every_op_declaring_result_facts_is_an_op_this_tool_takes():
     assert set(OP_RESULT_FACTS) <= _op_kinds()
 
 
-def test_every_op_says_what_it_changes():
-    # An op left out would be refused at lookup when a batch names it.
-    assert set(OP_EFFECTS) == _op_kinds()
+def test_every_op_said_to_keep_wiring_is_an_op_this_tool_takes():
+    # A misspelt name would list pins for that op, without an error.
+    assert _op_kinds() >= KEEPS_WIRING
 
 
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
@@ -720,6 +720,25 @@ async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, wo
         )
     )
     assert {row["ref"] for row in whole_sheet["views"]["pin_legend"]["items"]} == {"R1", "R2"}
+
+
+async def test_the_parts_a_move_lists_are_the_ones_it_touched(asc_state, work_dir):
+    """``move`` names its parts in a list of its own; they are the touched
+    view's, as a part ``move_component`` names is."""
+    await _build_blank(asc_state, "move-scope", _DIVIDER_OPS)
+
+    moved = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="move-scope.asc",
+                expected_sha256=_sha(work_dir / "move-scope.asc"),
+                ops=[{"op": "move", "references": ["R2"], "dx": 160, "dy": 0, "drag": True}],
+            ),
+            asc_state,
+        )
+    )
+
+    assert {row["ref"] for row in moved["views"]["touched"]["items"]} == {"R2"}
 
 
 async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, work_dir):
@@ -1322,6 +1341,14 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
             [{"Value": {"was": None, "now": "2k"}}, {"Value": {"was": "2k", "now": "3k"}}],
         ),
         (
+            # The second changes nothing, and says nothing.
+            [
+                {"op": "set_component_value", "reference": "R3", "value": "2k"},
+                {"op": "set_component_value", "reference": "R3", "value": "2k"},
+            ],
+            [{"Value": {"was": None, "now": "2k"}}],
+        ),
+        (
             [
                 {
                     "op": "set_component_attribute",
@@ -1333,7 +1360,7 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
             [{"SpiceLine": {"was": None, "now": "tc=0.001"}}],
         ),
     ],
-    ids=["value", "attribute"],
+    ids=["value", "attribute", "value-unchanged"],
 )
 async def test_a_batch_that_changes_no_wiring_lists_no_pins(asc_state, ops, changed):
     """A value or an attribute leaves a part's pins where they were and joined

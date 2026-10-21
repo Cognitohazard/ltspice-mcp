@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
+from ltspice_mcp.lib.log_parser import split_device_key
 from ltspice_mcp.state import SessionState
 
 
@@ -71,8 +71,7 @@ class RawResult:
                 "plot of one point a step, such as an operating point's. Read this "
                 "one with trace()."
             )
-        sample = samples.reshape(-1)[0]
-        return complex(sample) if np.iscomplexobj(samples) else float(sample)
+        return samples.item()
 
     def axis(self, *, step: int = 0) -> np.ndarray:
         """Return the selected plot's real sampled coordinates as a detached array."""
@@ -189,7 +188,7 @@ async def load_raw_result(
     )
 
 
-async def _log_section(
+async def load_log_section(
     name: LogSectionName,
     *,
     state: SessionState,
@@ -197,76 +196,38 @@ async def _log_section(
     run_index: int,
     case_id: str | None,
     log_path: str | Path | None,
-) -> tuple[Any, str]:
-    """One section of a log read through the shared log capture: of the log at
-    ``log_path``, or of one experiment case's. Returns its value, None when the
-    log has no such section, and what to say then."""
+) -> Any:
+    """One section of a log, read through the shared log capture: of the log at
+    ``log_path``, or of one experiment case's. None when the log has no such
+    section."""
     if log_path is not None:
         source = services.resolve_analysis_source(state, log_file=str(log_path))
-        absent_message = "The log has no such section"
     else:
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
         context = services.experiment_run_context(
             job, state, run_index=run_index, case_id=case_id, require_raw=False
         )
-        absent_message = f"Experiment case {context.identity['case_id']!r} has no log file"
         if context.log is None:
-            raise ResultError(absent_message)
+            raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
         source = services.source_for_run(context)
     logs = await services.load_logs(source, state)
-    section = logs.section(name)
-    if section["status"] == "error":
-        raise ResultError(section["error"]["message"])
-    return section["value"], absent_message
+    return logs.value(name)
 
 
-async def load_measurement_results(
-    *,
-    state: SessionState,
-    job_id: str | None,
-    run_index: int,
-    case_id: str | None,
-    log_path: str | Path | None = None,
-) -> dict[str, Any]:
-    """Read detached measurement facts through the shared log capture."""
-    value, absent = await _log_section(
-        "measurements",
-        state=state,
-        job_id=job_id,
-        run_index=run_index,
-        case_id=case_id,
-        log_path=log_path,
-    )
-    if value is None:
-        raise ResultError("Measurement source has no log file" if log_path is not None else absent)
-    return dict(value)
+def measurements_of(section: Any) -> dict[str, Any]:
+    """The ``measurements`` section as ``Api.measurements`` returns it."""
+    if section is None:
+        raise ResultError("The log holds no measurements")
+    return dict(section)
 
 
-#: A device op-point key as the log reader gives it: ``@m1[gm]``.
-_DEVICE_PARAM = re.compile(r"@(?P<device>.+)\[(?P<param>[^\]]+)\]")
-
-
-async def load_device_op_points(
-    *,
-    state: SessionState,
-    job_id: str | None,
-    run_index: int,
-    case_id: str | None,
-    log_path: str | Path | None = None,
-) -> dict[str, dict[str, float]]:
-    """The log's semiconductor operating points, by device and parameter."""
-    value, _absent = await _log_section(
-        "device_op",
-        state=state,
-        job_id=job_id,
-        run_index=run_index,
-        case_id=case_id,
-        log_path=log_path,
-    )
-    by_device: dict[str, dict[str, float]] = {}
-    for key, number in (value or {}).items():
-        named = _DEVICE_PARAM.fullmatch(key)
-        if named is not None:
-            by_device.setdefault(named["device"], {})[named["param"]] = float(number)
+def device_op_points_of(section: Any) -> dict[str, dict[str, float | None]]:
+    """The ``device_op`` section by device and parameter, as
+    ``Api.device_op_points`` returns it. A value the log printed as not a
+    finite number is None."""
+    by_device: dict[str, dict[str, float | None]] = {}
+    for key, number in (section or {}).items():
+        device, param = split_device_key(key)
+        by_device.setdefault(device, {})[param] = number
     return by_device

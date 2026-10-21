@@ -869,7 +869,7 @@ class TestDeviceOperatingPoints:
             assert b".options logopinfo\n.end" in run.read_bytes()
 
     def test_the_block_is_read_for_every_device(self, build: str, tmp_path: Path):
-        case_id = "log/device_op_off" if rec.generation(build) == "xvii" else "log/device_op"
+        case_id = _device_op_case(build)
         points = rec.decode_log(build, case_id, tmp_path).value("device_op")
         assert points == read_device_op_points(rec.recorded(build, f"{case_id}.log"))
         assert points["@d1[id]"] == pytest.approx(2.32e-3)
@@ -885,7 +885,7 @@ class TestDeviceOperatingPoints:
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
         """``api.device_op_points`` is the same table, by device and parameter."""
-        case_id = "log/device_op_off" if rec.generation(build) == "xvii" else "log/device_op"
+        case_id = _device_op_case(build)
         log = work_dir / "device_op.log"
         log.write_bytes(rec.recorded(build, f"{case_id}.log").read_bytes())
 
@@ -901,6 +901,12 @@ class TestDeviceOperatingPoints:
         assert {f"@{device}[{param}]" for device in points for param in points[device]} == set(
             flat
         )
+
+
+def _device_op_case(build: str) -> str:
+    """The recording whose log holds the device table: XVII prints it without
+    ``.options logopinfo`` and refuses the option."""
+    return "log/device_op_off" if rec.generation(build) == "xvii" else "log/device_op"
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

@@ -26,12 +26,14 @@ from ltspice_mcp.api._exceptions import (
 )
 from ltspice_mcp.api._primitives import (
     RawResult,
-    load_device_op_points,
-    load_measurement_results,
+    device_op_points_of,
+    load_log_section,
     load_raw_result,
+    measurements_of,
 )
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
+from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.state import SessionState
 
@@ -1175,10 +1177,7 @@ class ApiMethodsMixin(ABC):
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper."""
         self._check_process_and_thread()
-        if (raw_path is None) == (job_id is None):
-            raise TypeError("Pass exactly one of raw_path or job_id")
-        if raw_path is not None and (run_index != 0 or case_id is not None):
-            raise TypeError("run_index and case_id are only valid with job_id")
+        _one_source("raw_path", raw_path, job_id, run_index, case_id)
         if type(plot_index) is not int or plot_index < 0:
             raise ApiValidationError("plot_index must be a nonnegative integer")
         if dialect is not None and dialect not in ("ltspice", "ngspice", "qspice", "xyce"):
@@ -1206,22 +1205,8 @@ class ApiMethodsMixin(ABC):
         case_id: str | None = None,
     ) -> dict[str, Any]:
         """Return detached ``.meas`` facts from a log or one experiment case."""
-        self._check_process_and_thread()
-        if (log_path is None) == (job_id is None):
-            raise TypeError("Pass exactly one of log_path or job_id")
-        if log_path is not None and (run_index != 0 or case_id is not None):
-            raise TypeError("run_index and case_id are only valid with job_id")
-        return self._marshal(
-            load_measurement_results(
-                state=self._state,
-                log_path=log_path,
-                job_id=job_id,
-                run_index=run_index,
-                case_id=case_id,
-            ),
-            cancelable=True,
-            cancel_on_interrupt=True,
-        )
+        section = self._log_section("measurements", log_path, job_id, run_index, case_id)
+        return measurements_of(section)
 
     def device_op_points(
         self,
@@ -1230,22 +1215,32 @@ class ApiMethodsMixin(ABC):
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
-    ) -> dict[str, dict[str, float]]:
+    ) -> dict[str, dict[str, float | None]]:
         """Return the semiconductor operating points of a log or one experiment
         case, by device and parameter: ``ops["m1"]["gm"]``.
 
         LTspice prints them in the log of an ``.op`` run whose deck carries
         ``.options logopinfo``, to three significant digits; a device inside a
-        subcircuit keeps LTspice's colon-qualified name. Empty when the log has
-        no such table.
+        subcircuit keeps LTspice's name for it. Empty when the log has no such
+        table, as an ngspice log never does: ngspice's are traces of its raw,
+        read with ``load_raw(...).value("@m1[gm]")``.
         """
+        section = self._log_section("device_op", log_path, job_id, run_index, case_id)
+        return device_op_points_of(section)
+
+    def _log_section(
+        self,
+        name: LogSectionName,
+        log_path: str | Path | None,
+        job_id: str | None,
+        run_index: int,
+        case_id: str | None,
+    ) -> Any:
         self._check_process_and_thread()
-        if (log_path is None) == (job_id is None):
-            raise TypeError("Pass exactly one of log_path or job_id")
-        if log_path is not None and (run_index != 0 or case_id is not None):
-            raise TypeError("run_index and case_id are only valid with job_id")
+        _one_source("log_path", log_path, job_id, run_index, case_id)
         return self._marshal(
-            load_device_op_points(
+            load_log_section(
+                name,
                 state=self._state,
                 log_path=log_path,
                 job_id=job_id,
@@ -1255,6 +1250,17 @@ class ApiMethodsMixin(ABC):
             cancelable=True,
             cancel_on_interrupt=True,
         )
+
+
+def _one_source(
+    path_name: str, path: object, job_id: str | None, run_index: int, case_id: str | None
+) -> None:
+    """Refuse a read that names both or neither of a file and a job, or a case
+    selector without a job."""
+    if (path is None) == (job_id is None):
+        raise TypeError(f"Pass exactly one of {path_name} or job_id")
+    if path is not None and (run_index != 0 or case_id is not None):
+        raise TypeError("run_index and case_id are only valid with job_id")
 
 
 # The six methods carry their operation's catalogue entry as their docstring —

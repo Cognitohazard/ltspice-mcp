@@ -61,7 +61,7 @@ from ltspice_mcp.lib.pin_legend import (
 )
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
-    OP_EFFECTS,
+    KEEPS_WIRING,
     OP_RESULT_FACTS,
     GridPoint,
     OpAddComponent,
@@ -901,15 +901,13 @@ def _preexisting_hint(block: dict[str, Any], *, listed: bool) -> str | None:
     )
 
 
-def touched_refs(ops: list[ConsolidatedOp], *, rewired: bool = False) -> set[str]:
+def touched_refs(ops: Sequence[ConsolidatedOp]) -> set[str]:
     """Component references this op batch named, casefolded.
 
     Reads the ops' own addressing rather than diffing the sheet: an op names
-    the component it acts on, and a pin endpoint (``M1.D``) names one too. A
-    ``net:NAME`` endpoint and the coordinate forms name no component and
-    contribute nothing. With ``rewired``, only the ops whose effect is
-    ``wiring`` (``OP_EFFECTS``) count: a part whose value or attributes alone
-    changed has its pins as they were.
+    the component it acts on (``move`` the ones it lists), and a pin endpoint
+    (``M1.D``) names one too. A ``net:NAME`` endpoint and the coordinate forms
+    name no component and contribute nothing.
     """
     refs: set[str] = set()
 
@@ -918,15 +916,21 @@ def touched_refs(ops: list[ConsolidatedOp], *, rewired: bool = False) -> set[str
             refs.add(pin.split(".", 1)[0].casefold())
 
     for op in ops:
-        if rewired and OP_EFFECTS[op.op] != "wiring":
-            continue
         reference = getattr(op, "reference", None)
         if isinstance(reference, str) and reference:
             refs.add(reference.casefold())
+        refs.update(ref.casefold() for ref in getattr(op, "references", None) or ())
         add_pin(getattr(op, "from_pin", None))
         add_pin(getattr(op, "to_pin", None))
         add_pin(getattr(op, "pin", None))
     return refs
+
+
+def rewired_refs(ops: Sequence[ConsolidatedOp]) -> set[str]:
+    """The references of ``touched_refs`` that an op which may rewire them
+    names: a part whose value or attributes alone changed (``KEEPS_WIRING``)
+    has its pins where they were and joined as they were."""
+    return touched_refs([op for op in ops if op.op not in KEEPS_WIRING])
 
 
 def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
@@ -978,7 +982,7 @@ def _present_edit_views(
     for view in _requested_views(args):
         rows = neutral.preexisting if view == "preexisting" else neutral.pin_legend
         if view == "touched":
-            wanted = touched_refs(args.ops, rewired=True)
+            wanted = rewired_refs(args.ops)
             rows = [row for row in rows if _names_ref(row, wanted)]
         views[view] = page(rows, view)
     return page(neutral.label_only_pins, "label_only_pins"), views
@@ -1588,10 +1592,12 @@ async def _evaluate_edit_schematic(
             )
             # A pin is listed for the parts the batch rewired; one whose value
             # alone changed is joined as it was, and is counted, not listed.
+            # Findings stay the batch's for every part it named: a value can
+            # be what a finding is about (a parameter given twice).
             pins_reported, pins_left_out = _split_by_edit(
                 label_only,
                 label_only if before_pins is None else before_pins,
-                touched_refs(args.ops, rewired=True),
+                rewired_refs(args.ops),
                 coords,
             )
             preexisting_rows = [finding_row(one) for one in findings_left_out] + [

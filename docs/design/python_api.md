@@ -380,7 +380,9 @@ api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sour
   read from the raw with `value` holds the raw's own precision (single, about
   seven digits, in both builds' operating-point recordings). A device in a
   subcircuit keeps LTspice's name for it (`x1:m1` on LTspice 26, `m:1:1` on
-  XVII). Empty when the log has no table.
+  XVII), and a value the log did not print as a finite number is `None`. Empty
+  when the log has no table, as an ngspice log never does: ngspice writes the
+  same parameters as traces of its raw, read with `raw.value("@m1[gm]")`.
 - `plot_index` is a strict nonnegative integer, independent of case/run and
   step selection. `dialect` is `None` or `ltspice`, `ngspice`, `qspice`,
   `xyce`; an explicit dialect must agree with the producing simulator and the

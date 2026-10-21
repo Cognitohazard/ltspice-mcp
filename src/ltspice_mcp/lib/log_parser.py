@@ -431,8 +431,20 @@ def read_device_op_points(
                     if strict and pname.lower() != "model":
                         raise ResultError(f"Device operating-point field {pname!r} is not numeric")
                     continue  # skip the 'Model:' string row (opLogReader yields float | str)
-                out[f"@{dev.lower()}[{pname.lower()}]"] = float(pval)
+                out[device_key(dev, pname)] = float(pval)
     return out
+
+
+def device_key(device: str, param: str) -> str:
+    """The key ``read_device_op_points`` files a device parameter under:
+    ``@m1[gm]``, lowercased."""
+    return f"@{device.lower()}[{param.lower()}]"
+
+
+def split_device_key(key: str) -> tuple[str, str]:
+    """A ``device_key`` taken apart: ``("m1", "gm")`` for ``@m1[gm]``."""
+    device, _bracket, param = key[1:-1].partition("[")
+    return device, param
 
 
 def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
