@@ -220,17 +220,18 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
 **Ground and net labels:**
 - **Ground**: give each grounded pin its own ground (`0`) label with an
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,
-  and no ground flag is shared or reached by a long wire. Once several ground
-  labels exist, `net:0` is ambiguous; reach one with its point,
-  `to_pin: {"x": 400, "y": 340}`.
+  and no ground flag is shared or reached by a long wire. A `GND` label, in
+  any case, is ground too. Once several ground labels exist, `net:0` is
+  ambiguous; reach one with its point, `to_pin: {"x": 400, "y": 340}`.
 - **A label or ground flag at a crossing joins the two wires.** Place it on
   the one wire you mean. `add_net_label` refuses it when both wires are on
   named nets, and otherwise warns that it joined two nets.
 - **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins
   ties them together — the netlist merges same-name labels into one net
-  (correct, not a short), and no routing is needed. Wire nearby pins with the
-  `wire_pins` op. Once a name carries several labels, `net:NAME` is
-  ambiguous; end the route on the one you mean by its point instead.
+  (correct, not a short), and no routing is needed. Names that differ only in
+  case (`OUT`, `out`) are one name. Wire nearby pins with the `wire_pins` op.
+  Once a name carries several labels, `net:NAME` is ambiguous; end the route
+  on the one you mean by its point instead.
 - **A wire ending in a label**: put the label on the free point first, then
   route to that point with the `wire_pins` op. A coordinate endpoint must land
   on a pin, a wire or a label; one on nothing is refused.

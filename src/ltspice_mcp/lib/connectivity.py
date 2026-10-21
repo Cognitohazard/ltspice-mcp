@@ -23,6 +23,9 @@ LTspice behaviour"; the sheets are also in ``tests/fixtures/t_junctions/``):
 - a point on a diagonal wire is on that wire as on any other.
 
 Labels that share a name are one node as well, without any wire between them.
+Names that differ only in case are one name (the ``node-name-case``
+recording), and a ``GND`` label, in any case, is ground as ``0`` is (the
+``gnd_label`` recordings); ``name_key`` is the one form names are compared in.
 The partition does not apply that: it is wiring only, because a caller often
 needs to tell the two apart (a wire that would join two *named* nets is a
 short, two labels of one name are not). ``label_folded_nets`` applies it on
@@ -31,7 +34,8 @@ would show, so two drawings of one circuit compare equal.
 
 Two of the rules are in ``signature`` alone, because a partition is by
 coordinate and cannot hold them: the wire LTspice leaves out between two
-pins of one part, and the pins of one part that share a point.
+pins of one part when nothing else is on it, and the pins of one part that
+share a point.
 
 Nothing here reads a file or a symbol, and nothing depends on the event loop.
 """
@@ -241,13 +245,59 @@ def partition(
     return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
 
 
+#: The name of ground. A ground flag is a label like any other to the
+#: partition, and no name at all when asking whether two *named* nets are joined.
+GROUND = "0"
+
+
+def fold_case(name: str) -> str:
+    """A node name in the form two names are compared in: names that differ
+    only in case are one node (the ``node-name-case`` recording).
+
+    A fixed mapping, the same on every platform, for a sheet's labels and a
+    deck's nodes alike.
+    """
+    return name.lower()
+
+
+def is_ground(name: str) -> bool:
+    """True for a label LTspice exports as node ``0``: ``0`` itself, or ``GND``
+    in any case (the ``gnd_label`` and ``gnd_label_lower_case`` recordings)."""
+    return name == GROUND or fold_case(name) == "gnd"
+
+
+def name_key(name: str) -> str:
+    """A label's name as LTspice compares it: :data:`GROUND` for every ground
+    flag, and otherwise the name with its case folded. Labels with one key are
+    one node, and a net's names are told apart by their keys alone."""
+    return GROUND if is_ground(name) else fold_case(name)
+
+
+def name_keys(names: Iterable[str]) -> set[str]:
+    """The :func:`name_key` of each of ``names``."""
+    return {name_key(name) for name in names}
+
+
+def net_name(labels: Iterable[tuple[Point, str]]) -> str:
+    """The name LTspice gives a net that carries ``labels``, as ``(point, text)``.
+
+    Ground wins over any other label. Otherwise the label lowest on the sheet
+    names the net, and of those the one furthest right (the ``net-naming``
+    recordings), so the name is one the sheet spells.
+    """
+    found = list(labels)
+    if any(is_ground(text) for _point, text in found):
+        return GROUND
+    return max(found, key=lambda label: (label[0][1], label[0][0], label[1]))[1]
+
+
 def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
     """Map a coordinate to its electrical net's representative.
 
     The partition connects by wire only; LTspice also makes every FLAG with the
     same name one node, so wired nets that share a label name fold into one
-    here. Two coordinates are on the same netlist node iff this returns the same
-    representative for both.
+    here, names compared as :func:`name_key` has them. Two coordinates are on
+    the same netlist node iff this returns the same representative for both.
     """
     parent: dict[Point, Point] = {}
 
@@ -261,11 +311,11 @@ def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
     first_root: dict[str, Point] = {}
     for root, coords in part.members.items():
         for coord in coords:
-            for text in part.label_texts.get(coord, ()):
-                if text not in first_root:
-                    first_root[text] = root
+            for key in name_keys(part.label_texts.get(coord, ())):
+                if key not in first_root:
+                    first_root[key] = root
                     continue
-                ra, rb = find(first_root[text]), find(root)
+                ra, rb = find(first_root[key]), find(root)
                 if ra != rb:
                     parent[ra] = rb
 
@@ -275,11 +325,6 @@ def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
 def net_members(part: NetPartition, net_of: Callable[[Point], Point], net: Point) -> set[Point]:
     """Every pin, label and wire-end coordinate on ``net``, a ``net_of`` value."""
     return {c for root, coords in part.members.items() if net_of(root) == net for c in coords}
-
-
-#: The name of ground. It is a label like any other to the partition, and no
-#: name at all when asking whether two *named* nets are joined.
-GROUND = "0"
 
 
 class Joined(NamedTuple):
@@ -298,8 +343,9 @@ class NamedNets:
 
     Made once from a partition of the sheet as it is, without the thing about
     to be placed; ``joined_at`` is then asked of each point. Nets are the
-    label-folded ones, so nets that share a name, and nets that each carry a
-    ground flag, are already one net here.
+    label-folded ones, so nets that share a name, in any case, and nets that
+    each carry a ground flag, are already one net here. A net's names are as
+    the sheet spells them, two spellings of one name included.
     """
 
     def __init__(self, part: NetPartition) -> None:
@@ -307,7 +353,7 @@ class NamedNets:
         self._net_of = label_folded_nets(part)
         self._names: dict[Point, set[str]] = defaultdict(set)
         for coord, texts in part.label_texts.items():
-            self._names[self._net_of(coord)].update(text for text in texts if text != GROUND)
+            self._names[self._net_of(coord)].update(text for text in texts if not is_ground(text))
 
     def joined_at(
         self,
@@ -326,20 +372,21 @@ class NamedNets:
         place the sheet has nothing on reads as an unnamed net of its own.
 
         ``name`` is a net name the thing carries, which makes it one node with
-        every net already of that name. Ground is not given as one. Nets that
-        each carry a ground flag are one net already, and a net with a name may
-        be grounded whatever else is: that is what a ground flag is for, and no
-        join of the flag's own making.
+        every net already of that name, in any case. Ground is not given as
+        one. Nets that each carry a ground flag are one net already, and a net
+        with a name may be grounded whatever else is: that is what a ground
+        flag is for, and no join of the flag's own making.
         """
         wired = {self._net_of(point) for point in on_wires}
         nets = set(wired)
         if at is not None:
             nets.add(self._net_of(at))
         if name is not None:
+            key = name_key(name)
             nets.update(
                 self._net_of(coord)
                 for coord, texts in self._part.label_texts.items()
-                if name in texts
+                if key in name_keys(texts)
             )
         named = tuple(frozenset(self._names[net]) for net in sorted(nets) if self._names[net])
         return Joined(named, len(wired))
@@ -352,10 +399,11 @@ def _merge_collinear_runs(
     """Collapse straight runs of collinear wire segments into single segments,
     mirroring LTspice's netlist-time wire merge.
 
-    A vertex breaks a run — stays its own node — when it is a pin coordinate
-    (``node_coords``) or a corner/junction (its incident segment ends are not
-    exactly two ends of one orientation). Only pure pass-through vertices
-    (degree-2, both ends collinear, not a pin) are merged across. This is what
+    A vertex breaks a run — stays its own node — when it is a pin or a label
+    coordinate (``node_coords``) or a corner/junction (its incident segment ends
+    are not exactly two ends of one orientation). Only pure pass-through
+    vertices (degree-2, both ends collinear, nothing on them) are merged
+    across. This is what
     makes a *collinear* waypoint disappear: an in-line bend leaves only bare
     pass-through vertices, so the run collapses back to one segment; a bend that
     turns a corner leaves the corner vertices as breaks, so its segments stay
@@ -398,12 +446,12 @@ def _merge_collinear_runs(
             for a, b in itertools.pairwise(pts):
                 merged.append((line, a, line, b) if vertical else (a, line, b, line))
 
-    # A component pin on the interior of a run is a junction too — LTspice splits
-    # the wire there — but it is not a wire endpoint, so it never appears in
-    # ``ends`` and a break test over ``ends`` alone would miss it. Add every pin
-    # sitting on the line as a cut candidate; ``_emit`` keeps only those strictly
-    # inside a run's span, so a pin at a run end (already a natural node) or off
-    # any run adds nothing.
+    # A component pin, a label or a ground flag on the interior of a run is a
+    # junction too — LTspice splits the wire there — but it is not a wire
+    # endpoint, so it never appears in ``ends`` and a break test over ``ends``
+    # alone would miss it. Add every such point sitting on the line as a cut
+    # candidate; ``_emit`` keeps only those strictly inside a run's span, so one
+    # at a run end (already a natural node) or off any run adds nothing.
     for x, iv in verticals.items():
         cuts = {y for (cx, y) in ends if cx == x and _breaks((cx, y))}
         cuts |= {py for (px, py) in node_coords if px == x}
@@ -418,6 +466,7 @@ def _merge_collinear_runs(
 def same_instance_dropped_segments(
     pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
     segments: list[tuple[int, int, int, int]],
+    labels: Iterable[Point],
 ) -> list[dict]:
     """Wire segments LTspice discards from the exported netlist.
 
@@ -425,22 +474,26 @@ def same_instance_dropped_segments(
     SAME single component instance (recorded from the ``-netlist`` export of
     LTspice 26 and of LTspice XVII: such a run never reaches the netlist, so the
     two pins stay on separate nodes and the drawn tie has no electrical
-    effect). Two routes still get kept, and both are in the same recordings: a
-    run spanning two *different* instances, and a same-instance tie that turns
-    a corner OUT OF LINE with the two pins. A waypoint that stays *collinear*
-    with the pins does NOT survive —
-    LTspice merges the in-line segments back into one and drops it — so the
-    segments are collinear-merged (:func:`_merge_collinear_runs`) before this
-    check, which is what catches an all-in-line waypoint route as well as the
-    bare direct wire. A net label on one pin does not rescue the run either.
+    effect). Several runs still get kept, all in the same recordings: a run
+    spanning two *different* instances, a same-instance tie that turns a corner
+    OUT OF LINE with the two pins, and one with something on it between the
+    pins (another part's pin, another wire's end, a label or a ground flag, on
+    its interior or at a vertex). A waypoint that stays *collinear* with the
+    pins and has nothing on it does NOT survive — LTspice merges the in-line
+    segments back into one and drops it — so the segments are collinear-merged
+    (:func:`_merge_collinear_runs`) before this check, which is what catches an
+    all-in-line waypoint route as well as the bare direct wire. A net label on
+    one pin does not rescue the run.
 
     Returns one dict per dropped run with ``segment`` (the merged ``(x1, y1, x2,
     y2)`` tuple), ``ref`` (the shared instance), and ``pins`` (the two pin
     names on that instance), ordered deterministically. ``pin_owners`` maps each
     pin coordinate to its ``(ref, pin_name)`` owners, as
-    ``NetPartition.pin_owners`` holds it.
+    ``NetPartition.pin_owners`` holds it, and ``labels`` are the points of the
+    sheet's labels, ground flags among them.
     """
-    return _dropped_among(_merge_collinear_runs(list(segments), set(pin_owners)), pin_owners)
+    cuts = set(pin_owners) | set(labels)
+    return _dropped_among(_merge_collinear_runs(list(segments), cuts), pin_owners)
 
 
 def _dropped_among(
@@ -484,7 +537,9 @@ def signature(
     two pins of one part (:func:`same_instance_dropped_segments`), and a
     part's pins that share a point with no wire or label on it, of which only
     the highest in SpiceOrder touches anything. A net with no pin on it is
-    left out, since nothing in a netlist shows it.
+    left out, since nothing in a netlist shows it. A ground flag's name is
+    :data:`GROUND`, the name a netlist shows for it; other names are as the
+    sheet spells them.
 
     Two sheets with equal signatures connect the same pins and name the same
     nets, wherever their parts and wires are drawn, so an edit meant to change
@@ -493,10 +548,14 @@ def signature(
     as a symbol gives them.
     """
     pins = list(pins)
+    labels = list(labels)
     owners: dict[Point, list[tuple[str, str]]] = {}
     for coord, owner in pins:
         owners.setdefault(coord, []).append(owner)
-    runs = _merge_collinear_runs([(a[0], a[1], b[0], b[1]) for a, b in segments], set(owners))
+    runs = _merge_collinear_runs(
+        [(a[0], a[1], b[0], b[1]) for a, b in segments],
+        set(owners) | {coord for coord, _text in labels},
+    )
     dropped = {drop["segment"] for drop in _dropped_among(runs, owners)}
     netlisted = [
         ((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in dropped
@@ -517,7 +576,9 @@ def signature(
             alone += [pin for pin in at if last[pin[0]] != pin]
         on_net.setdefault(net_of(coord), set()).update(touching)
     for coord, texts in part.label_texts.items():
-        names.setdefault(net_of(coord), set()).update(texts)
+        names.setdefault(net_of(coord), set()).update(
+            GROUND if is_ground(text) else text for text in texts
+        )
     nets = {(frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()}
     nets |= {(frozenset({pin}), frozenset()) for pin in alone}
     return frozenset(nets)

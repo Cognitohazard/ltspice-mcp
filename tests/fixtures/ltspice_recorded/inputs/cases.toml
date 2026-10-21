@@ -98,7 +98,7 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.net-naming]
 summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, labels whose names differ only in case, a GND label in any case, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
-model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
+model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
 inputs = [
     "connectivity/two_labels_zeta_first.asc",
     "connectivity/two_labels_alpha_first.asc",

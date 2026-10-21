@@ -10,6 +10,28 @@ tool-surface changes.
 
 ### Fixed
 
+- A `GND` label, in any case, was a net name to the server, although both
+  LTspice builds export it as node `0`. The net trace kept it apart from the
+  sheet's other grounds, and `add_net_label` and `wire_pins` counted it as a
+  name, so grounding a named net with `GND` was refused or warned of as a
+  short. It is now ground wherever `0` is, and grounding a named net with it
+  stays allowed, as with `0`.
+- Net names that differ only in case were two nets to the server, but
+  LTspice makes them one node: a deck with `OUT` and `out` runs with one node.
+  Labels are now compared without regard to case: `out` and `OUT` labels on
+  separate wires trace as one net, `net:out` finds an `OUT` label, a route
+  between a `VOUT` net and a `Vout` net is drawn, `add_net_label out` on a
+  pin of another named net is refused while `OUT` labels a net, as
+  `add_net_label OUT` is, and a net with both spellings is not reported as
+  shorted. A net found by labels of one name in two cases is reported under
+  the name LTspice gives it. A netlist's net query compares node names by the
+  same rule.
+- A straight wire between two pins of one part was reported as left out of
+  the netlist even with a net label or a ground flag on it, on its interior or
+  at a vertex in line. Both LTspice builds keep such a wire, so the
+  `dropped_wire` finding, the net trace's warning and the `wire_pins` refusal
+  no longer report it. A label only at one of the two pins still does not keep
+  the wire.
 - A `run_code` snippet blocked on a run longer than its `timeout_s` lost the
   job: on POSIX the timeout interrupted it and the reply did not name the job
   it was waiting on; on Windows it killed the worker, and the jobs the worker

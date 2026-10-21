@@ -136,7 +136,10 @@ from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
+    fold_case,
     label_folded_nets,
+    name_key,
+    name_keys,
     net_members,
     same_instance_dropped_segments,
 )
@@ -316,11 +319,13 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
 
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
-        # normal case on label-wired schematics (one FLAG per pin). The trace's
+        # normal case on label-wired schematics (one FLAG per pin) — and a name
+        # matches its labels in any case, ground every ground flag. The trace's
         # own name-merge step below absorbs duplicates, so seed from any
         # matching label coordinate (lowest, for determinism).
         net_name = args.pin[4:]
-        matches = sorted((x, y) for x, y, name in sheet.labels if name == net_name)
+        key = name_key(net_name)
+        matches = sorted((x, y) for x, y, name in sheet.labels if name_key(name) == key)
         if not matches:
             raise NetlistError(
                 f"Net label '{net_name}' not found in schematic. Add it with the "
@@ -369,7 +374,8 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             pins.append({"reference": ref, "pin": pin_name, "x": coord[0], "y": coord[1]})
 
     named = sorted(named_labels(frozenset(labels)))
-    is_shorted = len(named) > 1
+    # Two spellings of one name are one name, not a short.
+    is_shorted = len(name_keys(named)) > 1
     pins.sort(key=lambda p: (p["reference"], p["pin"]))
     coords = sorted(member_coords)
 
@@ -391,7 +397,9 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         f"the netlist, so this connection may not exist in simulation. Reroute the "
         f"wire to bend out of line with the two pins, or label both pins with the "
         f"same net name."
-        for d in same_instance_dropped_segments(part.pin_owners, net_segments)
+        for d in same_instance_dropped_segments(
+            part.pin_owners, net_segments, part.label_texts.keys()
+        )
     ]
 
     data: dict = {
@@ -1441,11 +1449,12 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
         nodes_of[ref_lower] = line.nodes
 
     node = _netlist_node_from_at(at, nodes_of)
-    node_lower = node.lower()
+    # Node names that differ only in case are one node, as on a sheet.
+    node_key = fold_case(node)
     members: list[dict[str, Any]] = []
     for line in parsed.values():
         for i, n in enumerate(line.nodes, start=1):
-            if n.lower() == node_lower:
+            if fold_case(n) == node_key:
                 members.append({"reference": line.ref, "terminal": i})
     members.sort(key=lambda m: (m["reference"], m["terminal"]))
     payload: dict[str, Any] = {
