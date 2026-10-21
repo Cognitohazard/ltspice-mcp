@@ -52,7 +52,7 @@ from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import scan_op_step_log
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -1311,12 +1311,15 @@ async def _value_from_operating_point(
             f"literally. Present here: {present}"
         ) from None
     name, item = match
-    return {
+    data: MetricValue = {
         "signal": name,
         "value": item,
         "unit": op.get("units", {}).get(name),
         "warnings": op.get("warnings", []),
     }
+    if name in op["device_op_points"] and "device_op_significant_digits" in op:
+        data["device_op_significant_digits"] = op["device_op_significant_digits"]
+    return data
 
 
 async def point_value(
@@ -2278,10 +2281,11 @@ async def operating_point(
     # the session default. Don't clobber a value the raw gave.
     raw_dialect = raw.dialect
     logs = await _logs_for_raw(source, state, raw)
+    from_raw = set(op_data["device_op_points"])
     if raw_dialect != "ngspice":
         log_op_points = logs.value("device_op")
         if log_op_points:
-            di = op_data.setdefault("device_op_points", {})
+            di = op_data["device_op_points"]
             for key, item in log_op_points.items():
                 di.setdefault(key, item)
 
@@ -2306,6 +2310,11 @@ async def operating_point(
                 show_hint=False,
             )
         op_data["device"] = recipe.device
+
+    # The log's table holds fewer digits than a raw trace: mark a result that
+    # carries a value from it (analyze_results says so in its observations).
+    if any(key not in from_raw for key in op_data["device_op_points"]):
+        op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS
 
     # Unit per trace, only where the simulator declared the type.
     op_data["units"] = operating_point_units(raw, op_data)

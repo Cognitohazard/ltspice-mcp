@@ -410,7 +410,7 @@ def index() -> str:
             "",
             "Also on the object: wait(job_id), load_raw(...) for numpy arrays,",
             "measurements(job_id=...) for parsed .meas data, and",
-            "device_op_points(job_id=...) for an .op run's device table.",
+            "device_op_points(job_id=...) for an .op run's device table (3 digits).",
         ]
     )
     return "\n".join(lines)

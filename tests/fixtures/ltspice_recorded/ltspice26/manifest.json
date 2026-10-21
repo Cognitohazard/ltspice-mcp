@@ -4300,6 +4300,72 @@
         ".raw"
       ]
     },
+    "log/device_op_numdgt": {
+      "behaviour": "log-device-op-precision",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/device_op_numdgt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/device_op_numdgt.cir": "acbb4504b92be7fa4a236391b2c8e590df0979a0c5bc3fa78468a645168bbd93"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/device_op_numdgt.log": {
+          "bytes": 1850,
+          "sha256": "eea556815d96a4fda80002cb03b1db4633c76535764c33f189b498fe9ef0ddaf"
+        },
+        "log/device_op_numdgt.raw": {
+          "bytes": 1768,
+          "sha256": "86c4d9a537f2cbdba8e575508a5ec7674ef4616ff28a743027dab29751550933"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/device_op_numdgt_off": {
+      "behaviour": "log-device-op-precision",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/device_op_numdgt_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/device_op_numdgt_off.cir": "0e90d0c1b2fd78b9378fc1850703d434c2d089d726e2e8d970f9124881ad8186"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/device_op_numdgt_off.log": {
+          "bytes": 584,
+          "sha256": "5a08847148f7a4c5fecab63f1a932eb9fbc89a4904ee2d2313fcdf738a40a000"
+        },
+        "log/device_op_numdgt_off.raw": {
+          "bytes": 1776,
+          "sha256": "5fe91bf7d7fd7143fce2c5531e92efbd5357b51029f114583ab7e298ec46943b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/device_op_off": {
       "behaviour": "log-device-op",
       "command": [
@@ -6439,6 +6505,34 @@
       "written": [
         ".log",
         ".raw"
+      ]
+    },
+    "raw/op_save_device": {
+      "behaviour": "log-device-op-precision",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/op_save_device.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/op_save_device.cir": "5419baa431c1023ae9e683a0c0558c8f4dd13bb7b37a268895bb9245e386eeb2"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/op_save_device.log": {
+          "bytes": 120,
+          "sha256": "ef8e400d6a1122e539ab3929a1b85ade2564c841a7b8e2e641fe9add9cdfa391"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
       ]
     },
     "raw/op_subckt": {

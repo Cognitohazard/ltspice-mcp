@@ -1,0 +1,3 @@
+C:\recording\op_save_device.cir(18): syntax error
+.save V(d) @m1[gm] @q1[gm] @d1[id]
+          ^^^^^^^^^^^^^^^^^^^^^^^^

@@ -103,7 +103,7 @@ t = r.axis(step=0)  # time or frequency
 v = r.trace("V(out)", step=0)  # numpy array, complex on an .AC run
 vop = r.value("V(out)", step=0)  # one number, from an operating point (.op)
 meas = api.measurements(job_id=job_id, case_id=case_id)  # parsed .meas values
-ops = api.device_op_points(job_id=job_id, case_id=case_id)  # ops["m1"]["gm"], .op log table
+ops = api.device_op_points(job_id=job_id, case_id=case_id)  # ops["m1"]["gm"], .op log, 3 digits
 ```
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot independently of
