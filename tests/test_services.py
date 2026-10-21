@@ -431,6 +431,28 @@ class TestOptionalRawSources:
         assert case.status == "produced"
         assert job.status == "completed"
 
+    def test_a_case_with_no_raw_says_why(self, state_no_sim, work_dir):
+        """A read of a failed case names its failure as the receipt does, and
+        the log it left, not only its status."""
+        from tests.test_state import _experiment
+
+        job = _experiment(work_dir, work_dir / "deck.cir", job_id="failed_case")
+        case = job.cases[0]
+        case.status = "failed"
+        case.raw_file = None
+        case.log_file = work_dir / "failed.log"
+        case.failure_code = "include_unstaged"
+        case.error = "referenced file does not exist: models.lib"
+        state_no_sim.job_registry.add_experiment_job(job, already_persisted=True)
+
+        with pytest.raises(ResultError) as raised:
+            services.resolve_experiment_run(job.job_id, state_no_sim)
+
+        message = str(raised.value)
+        assert f"status 'failed' (include_unstaged): {case.error}" in message
+        assert job.job_id in message
+        assert str(case.log_file) in message
+
     def test_job_resolution_raw_default_and_log_opt_in(self, state_no_sim, work_dir):
         from tests.test_state import _experiment
 

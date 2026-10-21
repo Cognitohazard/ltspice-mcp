@@ -44,10 +44,10 @@ from pydantic import Field
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import O_BINARY, atomic_write_bytes, fsync_dir, fsync_fd, replace_file
+from ltspice_mcp.lib import O_BINARY, fsync_dir, fsync_fd, replace_file
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
-from ltspice_mcp.lib.deck_prep import export_netlist_text
+from ltspice_mcp.lib.deck_prep import export_netlist_text, stage_sheet
 from ltspice_mcp.lib.encoding import leading_byte_order_mark
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
@@ -985,26 +985,26 @@ def _paged_edit_views(
 # ---------------------------------------------------------------------------
 
 
-def _write_export_copy(
-    export_root: Path, copy_asc: Path, committed_text: str, encoding: str
-) -> None:
-    """Materialize the committed-sheet copy under a fresh export dir (blocking)."""
-    export_root.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(copy_asc, committed_text.encode(encoding), durable=False)
-
-
 async def _exported_reference(
     ref: Path, export_root: Path, state: SessionState
 ) -> ReferenceNetlist:
     """An ``.asc`` reference exported the way the committed sheet is: a copy
-    beside the committed-sheet copy, through ``_export_asc_to_netlist``."""
-    ref_copy = export_root / "reference.asc"
-    await asyncio.to_thread(shutil.copyfile, ref, ref_copy)
+    staged with what its own folder holds (``stage_sheet``), through
+    ``_export_asc_to_netlist``. No lock is taken: the reference may be the
+    sheet whose lock this edit holds."""
+    ref_copy, note = await asyncio.to_thread(stage_sheet, ref, export_root / "reference")
+    observations = (note,) if note else ()
     try:
-        return ReferenceNetlist(await _export_asc_to_netlist(ref_copy, state), base_dir=ref.parent)
+        return ReferenceNetlist(
+            await _export_asc_to_netlist(ref_copy, state),
+            base_dir=ref.parent,
+            observations=observations,
+        )
     except Exception as exc:  # broad by design — export failure is a reported fact
         return ReferenceNetlist(
-            None, f"the reference {ref.name} could not be exported to a netlist: {exc}"
+            None,
+            f"the reference {ref.name} could not be exported to a netlist: {exc}",
+            observations=observations,
         )
 
 
@@ -1021,8 +1021,10 @@ async def _run_reference_stage(
 
     Runs entirely on a COPY under a managed temp dir, so the exporter's own
     asc_export_lock keys on the copy's path (no reentrancy with the guard-held
-    target lock). The reference path is already resolved — the handler validates
-    it in pre-flight, so no path rejection can land here, after the commit. An
+    target lock). Each copy is staged with the symbols and model files of its
+    original's folder, so it exports as the file would where it stands. The
+    reference path is already resolved — the handler validates it in
+    pre-flight, so no path rejection can land here, after the commit. An
     export failure is captured into the returned dict; anything else escapes to
     the handler, which reports it on a committed envelope. Either way the sheet
     is already committed and stays so.
@@ -1031,11 +1033,14 @@ async def _run_reference_stage(
         "reference": str(ref) if isinstance(ref, Path) else "inline netlist"
     }
     export_root = state.store.edit_export(build_id)
-    copy_asc = export_root / "committed.asc"
+    # Filled in place: the early returns below carry what is in it by then.
+    notes: list[str] = []
+    verification["_warnings"] = notes
     try:
-        await asyncio.to_thread(
-            _write_export_copy, export_root, copy_asc, committed_text, encoding
+        copy_asc, note = await asyncio.to_thread(
+            lambda: stage_sheet(target, export_root / "sheet", committed_text.encode(encoding))
         )
+        notes.extend([note] if note else [])
         try:
             netlist_text = await _export_asc_to_netlist(copy_asc, state)
         except Exception as exc:  # broad by design — export failure is a reported fact
@@ -1047,6 +1052,7 @@ async def _run_reference_stage(
         if ref_netlist is None:
             assert isinstance(ref, Path)  # only an .asc path needs exporting
             ref_netlist = await _exported_reference(ref, export_root, state)
+            notes.extend(ref_netlist.observations)
         if ref_netlist.source is None:
             verification["compare_error"] = ref_netlist.error
             verification["equivalent"] = None
@@ -1062,10 +1068,11 @@ async def _run_reference_stage(
             state,
             ref_base_dir=ref_netlist.base_dir,
         )
-        verification["_warnings"] = cmp_warnings + [
+        notes.extend(cmp_warnings)
+        notes.extend(
             f"{f.get('rule_id')}: {(f.get('evidence') or {}).get('detail') or f.get('subject')}"
             for f in findings
-        ]
+        )
         if failure is not None:
             verification["compare_error"] = failure["error"]
             verification["equivalent"] = None

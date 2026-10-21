@@ -78,7 +78,7 @@ from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
-from ltspice_mcp.lib.deck_prep import asc_export_lock
+from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
@@ -255,13 +255,6 @@ CHECK_ORDER = ("syntax", "symbols", "export", "layout", "quality", "compare")
 # different evidence: geometry hygiene on a sheet, connectivity on a deck.
 _ASC_CHECKS = frozenset({"symbols", "export", "layout", "quality", "compare"})
 _NETLIST_CHECKS = frozenset({"syntax", "quality", "compare"})
-
-# Project-local dependencies staged alongside a schematic for a managed export.
-# Symbol resolution privileges the schematic's own directory, so exporting a lone
-# copy of the .asc strands every project-local symbol and manufactures missing-
-# symbol findings for a schematic that is entirely fine.
-STAGED_SUFFIXES = frozenset({".asy", ".lib", ".sub", ".inc", ".mod"})
-STAGE_FILE_CAP = 200
 
 # Bounded arrays: retained sample per finding rule, and the true count travels
 # in the accompanying observation when a rule is truncated.
@@ -1466,38 +1459,6 @@ def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _stage_export_inputs(asc_path: Path, dest: Path) -> tuple[Path, int, bool]:
-    """Copy a schematic and its project-local dependencies into ``dest``.
-
-    Returns the staged ``.asc``, the dependency count, and whether the file cap
-    was hit. Relative structure is preserved so a symbol referenced as
-    ``sub/thing`` still resolves; dot-directories are skipped.
-    """
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True, exist_ok=True)
-    staged_asc = dest / asc_path.name
-    shutil.copy2(asc_path, staged_asc)
-
-    copied = 0
-    truncated = False
-    root = asc_path.parent
-    for src in sorted(root.rglob("*")):
-        if not src.is_file() or src.suffix.lower() not in STAGED_SUFFIXES:
-            continue
-        rel = src.relative_to(root)
-        if any(part.startswith(".") for part in rel.parts):
-            continue
-        if copied >= STAGE_FILE_CAP:
-            truncated = True
-            break
-        target = dest / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, target)
-        copied += 1
-    return staged_asc, copied, truncated
-
-
 async def _stage_for_export(asc_path: Path, dest: Path) -> tuple[Path, str | None]:
     """Stage ``asc_path`` in ``dest`` under its circuit lock, for a managed export.
 
@@ -1505,14 +1466,7 @@ async def _stage_for_export(asc_path: Path, dest: Path) -> tuple[Path, str | Non
     saying so.
     """
     async with circuit_file_lock(asc_path):
-        staged_asc, _staged, truncated = await asyncio.to_thread(
-            _stage_export_inputs, asc_path, dest
-        )
-    note = (
-        f"only the first {STAGE_FILE_CAP} project-local symbol/library files were staged "
-        f"for the export of {asc_path.name}, so a symbol beyond that may not resolve"
-    )
-    return staged_asc, note if truncated else None
+        return await asyncio.to_thread(stage_sheet, asc_path, dest)
 
 
 def _create_netlist(simulator_cls: Any, asc_path: Path, timeout: float) -> Path:

@@ -25,7 +25,6 @@ from ltspice_mcp import engine
 from ltspice_mcp.api import Api
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import PathSecurityError
-from ltspice_mcp.lib.deck_prep import resolve_netlist_path
 from ltspice_mcp.lib.services import resolve_analysis_source
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.state import SessionState
@@ -131,10 +130,6 @@ def test_config_resource_reports_an_edited_sandbox(tmp_path: Path, monkeypatch):
     assert str(box.elsewhere) in json.loads(text)["allowed_paths"]
 
 
-def _netlist_path(state: SessionState, deck: Path) -> None:
-    assert resolve_netlist_path(str(deck), state) == deck.resolve()
-
-
 def _raw_source(state: SessionState, deck: Path) -> None:
     raw = deck.with_suffix(".raw")
     assert resolve_analysis_source(state, raw_file=str(raw)).raw == raw.resolve()
@@ -152,8 +147,8 @@ def _netlist_resource(state: SessionState, deck: Path) -> None:
 
 @pytest.mark.parametrize(
     "read",
-    [_netlist_path, _raw_source, _log_source, _netlist_resource],
-    ids=["netlist-path", "raw-source", "log-source", "netlist-resource"],
+    [_raw_source, _log_source, _netlist_resource],
+    ids=["raw-source", "log-source", "netlist-resource"],
 )
 def test_every_path_reader_admits_a_newly_allowed_directory(tmp_path: Path, monkeypatch, read):
     """Each reader is the first call after the edit, on a session that has not
@@ -167,8 +162,8 @@ def test_every_path_reader_admits_a_newly_allowed_directory(tmp_path: Path, monk
 
 @pytest.mark.parametrize(
     "read",
-    [_netlist_path, _raw_source, _log_source, _netlist_resource],
-    ids=["netlist-path", "raw-source", "log-source", "netlist-resource"],
+    [_raw_source, _log_source, _netlist_resource],
+    ids=["raw-source", "log-source", "netlist-resource"],
 )
 def test_every_path_reader_admits_any_path_with_no_sandbox(tmp_path: Path, monkeypatch, read):
     box = _Sandbox(tmp_path, monkeypatch)
@@ -346,25 +341,44 @@ async def test_verify_denied_include_carries_the_guidance(tmp_path: Path, monkey
     _assert_guidance(denied[0]["evidence"]["hint"], box.toml)
 
 
-async def test_run_experiments_case_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize(
+    "with_an_allowed_circuit", [False, True], ids=["alone", "beside-one-allowed"]
+)
+async def test_run_experiments_refuses_a_circuit_outside_the_sandbox_before_a_job_exists(
+    tmp_path: Path, monkeypatch, with_an_allowed_circuit: bool
+):
+    """A circuit path the sandbox refuses is the request's error: refused at
+    submission, with the path, the allowed roots and the guidance, and no job
+    made, not a job whose every case fails with path_denied."""
     box = _Sandbox(tmp_path, monkeypatch)
     state = box.state({"fake": FakeSim})
+    allowed = box.work / "allowed.cir"
+    allowed.write_text(_DECK, newline="\n")
+    circuits = [{"path": str(box.deck)}]
+    if with_an_allowed_circuit:
+        circuits.insert(0, {"path": str(allowed)})
 
     result = await handle_run_experiments(
         RunExperimentsInput.model_validate(
             {
                 "request_id": "outside-sandbox",
-                "circuits": [{"path": str(box.deck)}],
+                "circuits": circuits,
                 "execution": {"wait_s": LIVENESS_S},
             }
         ),
         state,
     )
 
-    assert result.structured_content is not None
-    (failure,) = result.structured_content["failures"]
-    assert failure["code"] == "path_denied"
-    _assert_guidance(failure["hint"], box.toml)
+    data = result.structured_content
+    assert result.is_error and data is not None
+    assert (data["error"]["code"], data["error"]["commit_state"]) == ("path_denied", "not_started")
+    assert str(box.deck) in data["error"]["message"]
+    # The roots as written, and where a relative one is: in the refusal and
+    # in the guidance beside it alike.
+    assert f"[. ({box.work.resolve()})]" in data["error"]["message"]
+    assert f"Allowed paths: . ({box.work.resolve()})" in data["hint"]
+    _assert_guidance(data["hint"], box.toml)
+    assert not any(state.store.experiments_dir.glob("*"))
 
 
 async def test_jobs_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):

@@ -43,6 +43,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import AC_SHAPED, PlotDescriptor
+from ltspice_mcp.lib.experiment_types import failure_summary
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -1109,7 +1110,7 @@ async def _resolve_sources(
                         "case_id": case.case_id,
                         "run_index": case.run_index,
                         "code": "raw_not_produced",
-                        "detail": f"case status is {case.status!r}",
+                        "detail": failure_summary(case),
                     }
                 )
                 continue

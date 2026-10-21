@@ -51,6 +51,7 @@ from ltspice_mcp.lib.experiment_runner import (
     StagedDecks,
     SubmissionCommitted,
     canonical_fingerprint,
+    refuse_another_request,
     verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -630,7 +631,9 @@ async def handle_run_experiments(
                 "recovery_seed_unsupported",
                 "Explicit seed requires recoverable ngspice without native statistics",
             )
-        circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
+        circuit_inputs, id_notes = await asyncio.to_thread(
+            _circuit_decks_for_validation, args.circuits, state
+        )
         normalize_circuit_decks(circuit_inputs)
         validate_variation_circuit_ids(circuit_inputs, args.variations)
         native_ids = [
@@ -683,19 +686,8 @@ async def handle_run_experiments(
             sources: list[SourceRecord] = []
             preparations = await asyncio.gather(
                 *(
-                    _prepare_circuit(
-                        circuit_input,
-                        circuit_arg,
-                        args,
-                        state,
-                        simulator,
-                        job_id,
-                    )
-                    for circuit_input, circuit_arg in zip(
-                        circuit_inputs,
-                        args.circuits,
-                        strict=True,
-                    )
+                    _prepare_circuit(circuit_input, args, state, simulator, job_id)
+                    for circuit_input in circuit_inputs
                 ),
                 # Admission can refuse a frozen-input capture. Wait for every
                 # staging worker before the coordinator cleans an unclaimed tree.
@@ -887,24 +879,24 @@ async def _render_static_run_receipt(
 
 async def _prepare_circuit(
     circuit_input: CircuitDeck,
-    circuit_arg: ExperimentCircuit,
     args: RunExperimentsInput,
     state: SessionState,
     simulator: type,
     job_id: str,
 ) -> _CircuitPreparation:
-    """Stage, lint, and materialize one circuit with isolated failures."""
+    """Stage, lint, and materialize one circuit with isolated failures.
+
+    The circuit's path is the one admission resolved."""
     circuit_id = circuit_input.circuit_id
+    source_path = circuit_input.path
     native = _native_family(circuit_id, args.variations)
     expected_count = projected_case_count(circuit_id, args.variations)
-    source_path: Path | None = None
     runnable: Path | None = None
     expanded: list[ExpandedCase] | None = None
     source: SourceRecord | None = None
     findings: list[dict[str, Any]] = []
     cases: list[ExperimentCase] = []
     try:
-        source_path = safe_path(circuit_arg.path, state)
         if source_path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
             raise VariationError(
                 "unsupported_variant",
@@ -915,11 +907,7 @@ async def _prepare_circuit(
         if not await asyncio.to_thread(source_path.is_file):
             raise FileNotFoundError(f"Circuit file not found: {source_path}")
         await state.note_recent_circuit(source_path)
-        runnable = await resolve_runnable_netlist(
-            circuit_arg.path,
-            state,
-            simulator=simulator,
-        )
+        runnable = await resolve_runnable_netlist(source_path, state, simulator=simulator)
         paths = await asyncio.to_thread(
             resolve_experiment_paths,
             state.working_dir,
@@ -1119,7 +1107,6 @@ async def _prepare_circuit(
     except NativeRequestError:
         raise
     except (
-        PathSecurityError,
         NetlistError,
         VariationError,
         DeckStagingError,
@@ -1131,8 +1118,8 @@ async def _prepare_circuit(
         _append_terminal_cases(
             cases,
             circuit_id=circuit_id,
-            circuit_path=source_path or Path(circuit_arg.path),
-            staged_deck=runnable or Path(circuit_arg.path),
+            circuit_path=source_path,
+            staged_deck=runnable or source_path,
             count=expected_count,
             status="failed",
             code=code,
@@ -1256,13 +1243,17 @@ def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
 
 
 def _circuit_decks_for_validation(
-    circuits: list[ExperimentCircuit],
+    circuits: list[ExperimentCircuit], state: SessionState
 ) -> tuple[list[CircuitDeck], dict[str, dict[str, Any]]]:
     """The circuits as decks to validate, and an observation per derived id.
 
+    Each deck's path is the circuit's, resolved here, once, before a job
+    exists: a path the sandbox refuses is the request's to fix, refused with
+    the allowed roots named, not a failure met again in each of its cases.
+
     A circuit with no ``id`` takes its file stem, made valid and unique rather
     than refused (see ``derive_circuit_ids``); the observation, keyed by the id
-    it ran under, says so on every case of that circuit.
+    it ran under, says so on every case of that circuit. Blocking.
     """
     derived = derive_circuit_ids(
         [circuit.path for circuit in circuits], [circuit.id for circuit in circuits]
@@ -1270,7 +1261,9 @@ def _circuit_decks_for_validation(
     decks: list[CircuitDeck] = []
     notes: dict[str, dict[str, Any]] = {}
     for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
-        decks.append(CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text=""))
+        decks.append(
+            CircuitDeck(circuit_id=circuit_id, path=safe_path(circuit.path, state), text="")
+        )
         if note is not None:
             notes[circuit_id] = {
                 "code": "circuit_id_derived",
@@ -1315,14 +1308,7 @@ async def _load_matching_replay(
     )
     if index is None:
         return None
-    if (
-        index.get("canonicalizer_version") != CANONICALIZER_VERSION
-        or index.get("fingerprint") != fingerprint
-    ):
-        raise IdempotencyConflictError(
-            f"request_id {args.request_id!r} was already used for a different "
-            "request payload or canonicalizer version"
-        )
+    refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
     job_id = str(index.get("job_id", ""))
     job = state.all_jobs.get(job_id)
     if job is None:
@@ -1464,18 +1450,10 @@ def _append_terminal_cases(
         )
 
 
-def _circuit_error(exc: Exception, source_path: Path | None) -> tuple[str, str]:
-    if isinstance(exc, PathSecurityError):
+def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
+    if isinstance(exc, (VariationError, DeckStagingError)):
         return exc.code, str(exc)
-    if isinstance(exc, VariationError):
-        return exc.code, str(exc)
-    if isinstance(exc, DeckStagingError):
-        return exc.code, str(exc)
-    if (
-        source_path is not None
-        and source_path.suffix.casefold() == ".asc"
-        and isinstance(exc, SimulationError)
-    ):
+    if source_path.suffix.casefold() == ".asc" and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)
     if isinstance(exc, FileNotFoundError):
         return "source_not_found", str(exc)

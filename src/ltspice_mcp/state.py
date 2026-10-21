@@ -22,7 +22,7 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.ltspice_window import OpenWindows
-from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
+from ltspice_mcp.lib.pathutil import describe_roots, resolve_safe_path, with_roots
 from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
@@ -242,7 +242,7 @@ class SessionState:
                 f"There is no sandbox ({key} is not set), so the path was refused "
                 "only because it could not be resolved as written."
             )
-        allowed = ", ".join(str(p) for p in paths)
+        allowed = describe_roots(paths)
         # The branches follow the loader's precedence: an explicit argument, then
         # the environment, then the file.
         if self.sandbox_pinned:

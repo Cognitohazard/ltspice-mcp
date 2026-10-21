@@ -202,9 +202,18 @@ persists `{request_id -> job_id, fingerprint}`, where the fingerprint is the
 sha256 of the canonical (sorted-key) input payload. The same id with the same
 fingerprint returns the existing receipt with `replayed: true`; that field
 describes this call, and the replay does not change the job's record. The same
-id with a different fingerprint is an `idempotency_conflict`. Ids are scoped to
-the server working directory's job store and are kept as long as jobs are.
-Cancelling the transport ends only the dwell, never the job.
+id with a different fingerprint is an `idempotency_conflict` that names the job
+the id made, which `jobs` and `analyze_results` read by its `job_id`. Ids are
+scoped to the server working directory's job store and are kept as long as jobs
+are. Cancelling the transport ends only the dwell, never the job.
+
+**Circuit paths are resolved at submission.** Each circuit's path is resolved
+before a job exists. A path a sandbox refuses fails the call with `path_denied`
+and the sandbox guidance, and no job is made, even when other circuits of the
+call are allowed. A circuit that fails after that (a file that is gone, an
+export LTspice refuses, an include that cannot be staged) fails its own cases
+and leaves the call's other circuits to run. A read of a case with no raw
+names that case's failure as its receipt row does.
 
 **Claim the id, then stage.** A submission takes the gate for its
 `request_id` (a file lock, so it works across processes sharing the working
@@ -855,7 +864,11 @@ view_limit          page size for the paginated views (default 100)
 `compare` is the model `verify_circuit` takes, with no other spelling.
 
 **The exported netlist is returned only when the comparison did not match.**
-The compare stage exports the committed sheet to a netlist. On
+The compare stage exports the committed sheet to a netlist. It exports a copy,
+staged with the project-local `.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under the
+sheet's folder, as `verify_circuit`'s `managed` export stages them, so a symbol
+saved beside the sheet is found; an `.asc` reference is staged the same way
+from its own folder. On
 `equivalent: true` the reply omits it and no option includes it;
 `verify_circuit` with the `export` check writes it and returns its path. On a
 mismatch, a compare error or no verdict, it is returned as `netlist`. An

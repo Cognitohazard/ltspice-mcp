@@ -10,6 +10,23 @@ tool-surface changes.
 
 ### Fixed
 
+- `edit_schematic`'s compare exported a copy of the committed sheet, and of
+  an `.asc` reference, in a folder with nothing beside it, so a symbol saved
+  next to the sheet was not found and the export failed, though
+  `verify_circuit` passed on the same sheet. Each copy is now staged with the
+  project-local symbol and library files under its original's folder, as
+  `verify_circuit`'s managed export stages them.
+- `run_experiments` accepted a circuit outside the sandbox and made a job
+  whose every case failed with `path_denied`. The call is now refused at
+  submission with `path_denied`, the sandbox guidance and no job made. A
+  refusal names a relative allowed directory, such as `.`, with the directory
+  it resolves to.
+- Reading a case that produced no raw (`api.load_raw`, an analysis by job)
+  said only the case's status. It now names the case's failure code and
+  reason, as its receipt row does, the job, and the log it left.
+- A `request_id` reused for a different payload was refused without saying
+  which job it had made. The refusal now names that job and says to read it by
+  its `job_id`, or to submit under a new `request_id`.
 - `inspect(kind="net")` on a netlist kept `gnd` apart from node `0`, although
   both LTspice builds run a deck's `gnd` as ground, so a query for either
   missed the cards on the other. `gnd`, in any case, is now node `0` there, as

@@ -111,5 +111,22 @@ def resolve_safe_path(
             continue
 
     # Path is outside all allowed directories
-    allowed_list = ", ".join(str(d) for d in allowed_dirs)
-    raise PathSecurityError(f"Path {resolved} is outside allowed directories [{allowed_list}]")
+    raise PathSecurityError(
+        f"Path {resolved} is outside allowed directories [{describe_roots(allowed_dirs)}]"
+    )
+
+
+def describe_roots(allowed_dirs: Sequence[Path]) -> str:
+    """The allowed directories as a refusal and its guidance name them: each
+    as written, and a relative one with the directory it resolves to, since
+    "." alone does not say where the sandbox is."""
+
+    def named(allowed_dir: Path) -> str:
+        if allowed_dir.is_absolute():
+            return str(allowed_dir)
+        try:
+            return f"{allowed_dir} ({_anchor(allowed_dir, _relative_base.get()).resolve()})"
+        except (OSError, RuntimeError):
+            return str(allowed_dir)
+
+    return ", ".join(named(allowed_dir) for allowed_dir in allowed_dirs)

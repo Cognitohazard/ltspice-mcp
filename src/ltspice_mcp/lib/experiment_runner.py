@@ -10,7 +10,7 @@ import logging
 import secrets
 import shutil
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -150,6 +150,37 @@ class IdempotencyConflictError(SimulationError):
     """A request id was reused for a different canonical payload."""
 
     code = "idempotency_conflict"
+
+
+def payload_conflict(request_id: str, job_id: str | None) -> IdempotencyConflictError:
+    """The refusal of ``request_id`` reused for a different request: it names
+    the job the id already made, which is read by its job_id, and how to run
+    this request instead."""
+    made = (
+        f", and made experiment {job_id}: read that job by its job_id (jobs, "
+        "analyze_results), or submit this request under a new request_id"
+        if job_id
+        else "; submit this request under a new request_id"
+    )
+    return IdempotencyConflictError(
+        f"request_id {request_id!r} was already used for a different request payload{made}"
+    )
+
+
+def refuse_another_request(
+    index: Mapping[str, Any], request_id: str, fingerprint: str, canonicalizer_version: int
+) -> None:
+    """Refuse when ``index``, the record of what ``request_id`` was first used
+    for, is not this request: one canonicalized another way, or another payload.
+    Both the tool's lookup before the request gate and the gate itself ask it."""
+    indexed_version = index.get("canonicalizer_version")
+    if indexed_version != canonicalizer_version:
+        raise IdempotencyConflictError(
+            f"request_id {request_id!r} was stored with canonicalizer "
+            f"version {indexed_version!r}, not {canonicalizer_version}"
+        )
+    if index.get("fingerprint") != fingerprint:
+        raise payload_conflict(request_id, index.get("job_id"))
 
 
 class RequestGateBusy(SimulationError):
@@ -807,17 +838,9 @@ class ExperimentRunner(RunnerBase):
         index = experiment_store.load_request_index(request.request_id, working_dir)
         if index is None:
             return _IndexLookup(existing=None, dangling=False)
-        indexed_version = index.get("canonicalizer_version")
-        if indexed_version != request.canonicalizer_version:
-            raise IdempotencyConflictError(
-                f"request_id {request.request_id!r} was stored with canonicalizer "
-                f"version {indexed_version!r}, not {request.canonicalizer_version}"
-            )
-        if index.get("fingerprint") != request.fingerprint:
-            raise IdempotencyConflictError(
-                f"request_id {request.request_id!r} was already used for a "
-                "different request payload"
-            )
+        refuse_another_request(
+            index, request.request_id, request.fingerprint, request.canonicalizer_version
+        )
         indexed_job_id = str(index.get("job_id", ""))
         try:
             existing = experiment_store.load_job(
