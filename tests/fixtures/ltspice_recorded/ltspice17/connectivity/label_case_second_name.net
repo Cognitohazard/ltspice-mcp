@@ -1,0 +1,5 @@
+* C:\recording\label_case_second_name.asc
+R1 vout 0 1k
+R2 VOUT 0 1k
+.backanno
+.end

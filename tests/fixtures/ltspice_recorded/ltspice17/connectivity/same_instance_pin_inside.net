@@ -1,0 +1,5 @@
+* C:\recording\same_instance_pin_inside.asc
+R1 a a 1k
+R3 c a 1k
+.backanno
+.end
