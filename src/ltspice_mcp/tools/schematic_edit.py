@@ -61,6 +61,7 @@ from ltspice_mcp.lib.pin_legend import (
 )
 from ltspice_mcp.lib.schematic_ops import (
     COORDINATE_DESCRIPTION,
+    OP_EFFECTS,
     OP_RESULT_FACTS,
     GridPoint,
     OpAddComponent,
@@ -222,7 +223,7 @@ class EditSchematicInput(ToolInput):
         default_factory=lambda: ["touched"],
         description=(
             "Which pin/net table to return: 'touched' (default) covers the "
-            "components this batch named, 'pin_legend' the whole sheet. "
+            "parts this batch rewired, 'pin_legend' the whole sheet. "
             "'preexisting' lists the findings and label-only pins counted "
             "under preexisting. To draw the sheet, call verify_circuit."
         ),
@@ -355,7 +356,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "pins_total pins, pins_wired have a wire through them and "
                 "pins_label_only carry a net-label but no wire. The counts are "
                 "whole-sheet; label_only_pins pages the label-only pins this batch "
-                "introduced or named, and preexisting.label_only_pins counts the "
+                "introduced or rewired, and preexisting.label_only_pins counts the "
                 "rest, so the two sum to pins_label_only."
             ),
             "properties": {
@@ -422,9 +423,11 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "(requested segments already on the sheet, not redrawn) and "
                 "junctions (where the route joined existing wiring off its "
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
-                "report how much they took. set_plot_panes reports the plot_settings "
-                "file it writes and the replaced_panes it held before, which passed "
-                "back as panes restore them."
+                "report how much they took. set_component_value and "
+                "set_component_attribute report each attribute they changed, with "
+                "what it was and what it is now (null where absent). set_plot_panes "
+                "reports the plot_settings file it writes and the replaced_panes it "
+                "held before, which passed back as panes restore them."
             ),
             "items": {
                 "type": "object",
@@ -449,6 +452,17 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     },
                     "removed": {"type": "integer"},
                     "deleted_wires": {"type": "integer"},
+                    "changed": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "was": {"type": ["string", "null"]},
+                                "now": {"type": ["string", "null"]},
+                            },
+                            "required": ["was", "now"],
+                        },
+                    },
                     "plot_settings": {"type": "string"},
                     "replaced_panes": {
                         "type": "array",
@@ -887,13 +901,15 @@ def _preexisting_hint(block: dict[str, Any], *, listed: bool) -> str | None:
     )
 
 
-def touched_refs(ops: list[ConsolidatedOp]) -> set[str]:
+def touched_refs(ops: list[ConsolidatedOp], *, rewired: bool = False) -> set[str]:
     """Component references this op batch named, casefolded.
 
     Reads the ops' own addressing rather than diffing the sheet: an op names
     the component it acts on, and a pin endpoint (``M1.D``) names one too. A
     ``net:NAME`` endpoint and the coordinate forms name no component and
-    contribute nothing.
+    contribute nothing. With ``rewired``, only the ops whose effect is
+    ``wiring`` (``OP_EFFECTS``) count: a part whose value or attributes alone
+    changed has its pins as they were.
     """
     refs: set[str] = set()
 
@@ -902,6 +918,8 @@ def touched_refs(ops: list[ConsolidatedOp]) -> set[str]:
             refs.add(pin.split(".", 1)[0].casefold())
 
     for op in ops:
+        if rewired and OP_EFFECTS[op.op] != "wiring":
+            continue
         reference = getattr(op, "reference", None)
         if isinstance(reference, str) and reference:
             refs.add(reference.casefold())
@@ -960,7 +978,7 @@ def _present_edit_views(
     for view in _requested_views(args):
         rows = neutral.preexisting if view == "preexisting" else neutral.pin_legend
         if view == "touched":
-            wanted = touched_refs(args.ops)
+            wanted = touched_refs(args.ops, rewired=True)
             rows = [row for row in rows if _names_ref(row, wanted)]
         views[view] = page(rows, view)
     return page(neutral.label_only_pins, "label_only_pins"), views
@@ -1568,8 +1586,13 @@ async def _evaluate_edit_schematic(
             findings_reported, findings_left_out = _split_findings(
                 found, found_before, refs, coords
             )
+            # A pin is listed for the parts the batch rewired; one whose value
+            # alone changed is joined as it was, and is counted, not listed.
             pins_reported, pins_left_out = _split_by_edit(
-                label_only, label_only if before_pins is None else before_pins, refs, coords
+                label_only,
+                label_only if before_pins is None else before_pins,
+                touched_refs(args.ops, rewired=True),
+                coords,
             )
             preexisting_rows = [finding_row(one) for one in findings_left_out] + [
                 {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out

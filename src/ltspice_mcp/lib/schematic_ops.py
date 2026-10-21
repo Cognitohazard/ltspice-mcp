@@ -513,6 +513,23 @@ def level_label_lint(editor, reference: str, value: str) -> str | None:
     return None
 
 
+def _attributes_of(editor, reference: str) -> dict[str, str]:
+    """A part's attributes as its SYMATTR lines hold them, by name."""
+    return {name: str(text) for name, text in editor.get_component(reference).attributes.items()}
+
+
+def _attributes_changed(
+    before: Mapping[str, str], after: Mapping[str, str]
+) -> dict[str, dict[str, str | None]]:
+    """Each attribute that differs between ``before`` and ``after``, with what
+    it was and what it is now; None where it was not there or is gone."""
+    return {
+        name: {"was": before.get(name), "now": after.get(name)}
+        for name in sorted(before.keys() | after.keys())
+        if before.get(name) != after.get(name)
+    }
+
+
 def _set_or_create_value(editor, reference: str, value: str) -> None:
     """Set the Value slot, creating the ``SYMATTR Value`` line if it has none.
 
@@ -2225,7 +2242,30 @@ def _resolve_op_xy(
 # draw, and relaying the count would put a line per route on every build. Nor
 # is ``remove_directive``'s ``removed``, which names a kind, not an amount. An
 # op missing here reports nothing beyond its arguments.
+#: What each op changes of a sheet. ``wiring``: where pins are or what joins
+#: them. ``attributes``: a part's value or attributes, its pins left where they
+#: were and joined as they were. ``text``: directives and comments. ``plot``:
+#: the plot settings file beside the sheet. A reply lists pins for the parts a
+#: ``wiring`` op names, and no others.
+OP_EFFECTS: dict[str, Literal["wiring", "attributes", "text", "plot"]] = {
+    "add_component": "wiring",
+    "set_component_value": "attributes",
+    "set_component_attribute": "attributes",
+    "remove_component": "wiring",
+    "move_component": "wiring",
+    "move": "wiring",
+    "add_net_label": "wiring",
+    "remove_net_label": "wiring",
+    "remove_wire": "wiring",
+    "wire_pins": "wiring",
+    "add_directive": "text",
+    "remove_directive": "text",
+    "set_plot_panes": "plot",
+}
+
 OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
+    "set_component_value": ("changed",),
+    "set_component_attribute": ("changed",),
     "wire_pins": ("already_present", "junctions"),
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
@@ -2316,11 +2356,13 @@ def apply_op_inplace(
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
+        before = _attributes_of(editor, op.reference)
         _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result: dict[str, object] = {
             "op": "set_component_value",
             "reference": op.reference,
             "value": op.value,
+            "changed": _attributes_changed(before, _attributes_of(editor, op.reference)),
         }
         if lint:
             result["warnings"] = [lint]
@@ -2330,6 +2372,7 @@ def apply_op_inplace(
         _reject_unknown_attr(op.attribute)
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
+        before = _attributes_of(editor, op.reference)
         if not op.value.strip():
             # Empty value = clear. LTspice's format has no "empty value"
             # representation (a 2-token SYMATTR line is unreadable), so the
@@ -2342,6 +2385,7 @@ def apply_op_inplace(
             "op": "set_component_attribute",
             "reference": op.reference,
             "attribute": op.attribute,
+            "changed": _attributes_changed(before, _attributes_of(editor, op.reference)),
         }
 
     if isinstance(op, OpRemoveComponent):

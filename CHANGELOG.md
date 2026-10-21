@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- An `edit_schematic` batch that only set values or attributes returned every
+  pin of every part it named, in `views.touched` and in
+  `wiring.label_only_pins`, though no pin moved or changed net; `view_limit`
+  was the only way to keep the reply short. Pins are now listed for the parts
+  a batch rewires (places, moves, removes, wires or labels); a value change
+  lists none, and its label-only pins are counted under `preexisting`. Each
+  `set_component_value` and `set_component_attribute` reports in `results`
+  what it `changed`: every attribute it touched, as it was and as it is now.
 - `edit_schematic`'s compare exported a copy of the committed sheet, and of
   an `.asc` reference, in a folder with nothing beside it, so a symbol saved
   next to the sheet was not found and the export failed, though
