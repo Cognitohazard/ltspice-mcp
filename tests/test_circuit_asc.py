@@ -29,6 +29,7 @@ from tests._asc_ops import (
     components_of,
     inspect_one,
     load_editor,
+    sheet_findings,
     structured_warnings,
     wire_pins,
 )
@@ -325,7 +326,9 @@ class TestARouteThatJoinsNamedNets:
         add_net_label(asc_state, sheet, "SIG", x=200, y=252)
 
         drawn = wire_pins(asc_state, sheet, "R3.2", "R4.1")
-        assert any("plain crossing unjoined" in warning for warning in drawn["warnings"])
+        # The route says nothing of the crossing; the sheet does, once.
+        assert "warnings" not in drawn
+        assert [f.points for f in _found(asc_state, sheet, "unjoined_crossing")] == [((300, 252),)]
 
 
 @pytest.mark.asyncio
@@ -375,8 +378,9 @@ class TestAPinPlacedOnACrossing:
     ):
         sheet = self._crossing(asc_state, "cross-plain", "VDD")
         placed = add_component(asc_state, sheet, "R1", "res", 200, 148)
-        (said,) = [w for w in placed["warnings"] if "cross" in w]
-        assert said.startswith("R1.1 at (200,100) is on a point where 2 wires cross")
+        assert "warnings" not in placed
+        (found,) = _found(asc_state, sheet, "joined_at_crossing")
+        assert (found.refs, found.points) == (("R1",), ((200, 100),))
         # And it is so: the two wires are one net now.
         nets = load_editor(asc_state, sheet)
         from ltspice_mcp.lib.schematic_ops import trace_nets
@@ -441,10 +445,10 @@ class TestALabelPlacedOnACrossing:
     ):
         sheet = self._crossing(asc_state, f"label-cross-{net}")
         placed = add_net_label(asc_state, sheet, net, x=200, y=100)
-        assert placed["warnings"] == [
-            "(200,100) is where 2 wires cross that were separate nets; a label on a "
-            "crossing joins them."
-        ]
+        assert "warnings" not in placed
+        (found,) = _found(asc_state, sheet, "joined_at_crossing")
+        assert found.points == ((200, 100),)
+        assert found.detail.startswith(f"label '{net}' at (200,100) sits where 2 wires cross")
         # And it is so: the two wires are one net now.
         from ltspice_mcp.lib.schematic_ops import trace_nets
 
@@ -454,9 +458,13 @@ class TestALabelPlacedOnACrossing:
     async def test_a_second_name_and_the_join_are_both_said(self, asc_state: SessionState):
         sheet = self._crossing(asc_state, "label-cross-second", "VDD")
         placed = add_net_label(asc_state, sheet, "OUT", x=200, y=100)
-        assert len(placed["warnings"]) == 2
-        assert "becomes a second name for it" in placed["warnings"][0]
-        assert placed["warnings"][1].startswith("(200,100) is where 2 wires cross")
+        assert "warnings" not in placed
+        assert [f.facts["names"] for f in _found(asc_state, sheet, "net_with_two_names")] == [
+            ("OUT", "VDD")
+        ]
+        assert [f.points for f in _found(asc_state, sheet, "joined_at_crossing")] == [
+            ((200, 100),)
+        ]
 
     async def test_a_label_on_one_wire_or_where_one_net_crosses_itself_says_nothing_of_it(
         self, asc_state: SessionState
@@ -1629,14 +1637,15 @@ class TestAddNetLabelJoins:
     that names nothing else and so shorts nothing. It now refuses only a label
     that joins two named nets."""
 
-    async def test_a_second_name_for_a_net_is_accepted_with_a_warning(
+    async def test_a_second_name_for_a_net_is_accepted_and_the_sheet_says_it(
         self, asc_state: SessionState, work_dir: Path
     ):
         asc = _write_sheet(work_dir / "alias.asc", *_RAIL)
         add_net_label(asc_state, asc, "rail", x=96, y=196)
         result = add_net_label(asc_state, asc, "vdd_alias", x=288, y=196)
-        (warning,) = [w for w in result["warnings"] if "second name" in w]
-        assert "['rail']" in warning
+        assert "warnings" not in result
+        (found,) = _found(asc_state, asc, "net_with_two_names")
+        assert found.facts == {"names": ("rail", "vdd_alias")}
         assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
 
     @pytest.mark.parametrize(("there", "added"), [("other", "other"), ("OUT", "out")])
@@ -2266,7 +2275,8 @@ class TestAddNetLabelOpValidation:
         assert results[4]["ok"] is False  # "b" on R1's net "a" would short — refused
         assert "short" in results[4]["error"].lower()
         assert results[5]["ok"] is True  # "c" names nothing else — a second name
-        assert any("second name" in w for w in results[5]["warnings"])
+        assert "warnings" not in results[5]
+        assert any(w["kind"] == "net_with_two_names" for w in res["validation_warnings"])
 
     async def test_a_label_on_nothing_is_the_sheets_to_say(self, asc_state: SessionState):
         """The op places it and says nothing: it may be wired later in the batch."""
@@ -2576,6 +2586,11 @@ class TestTJunctionGroundTruth:
         assert await _net_pins(asc_state, asc, [192, 96]) == {"R1.1", "R2.1", "R3.1"}
 
 
+def _found(state: SessionState, sheet: Path, rule: str) -> list:
+    """What the sheet rule ``rule`` finds of ``sheet`` as an edit leaves it."""
+    return [found for found in sheet_findings(load_editor(state, sheet)) if found.rule == rule]
+
+
 def _write_sheet(path: Path, *lines: str) -> Path:
     """A blank sheet plus ``lines``, written byte-exact on every platform."""
     text = blank_sheet() + "".join(f"{line}\n" for line in lines)
@@ -2756,20 +2771,19 @@ class TestWirePinsTJunction:
         assert '{"x": 240, "y": 196}' in message
         assert _wire_segments(asc) == before
 
-    async def test_a_plain_crossing_is_drawn_with_a_warning_and_joins_nothing(
+    async def test_a_plain_crossing_is_drawn_and_joins_nothing(
         self, asc_state: SessionState, work_dir: Path
     ):
         # The same route without the waypoint crosses the rail with neither wire
         # ending there. The export leaves such a crossing unjoined
         # (crossing_wires), so the route is drawn, the nets stay apart, and the
-        # warning names the wire without saying the nets would merge.
+        # finished sheet says where the wires cross.
         asc = _write_sheet(
             work_dir / "plain_cross.asc", *_RAIL, _res("R3", 240, 100), _res("R6", 240, 388)
         )
         result = wire_pins(asc_state, asc, "R3.2", "R6.1")
-        (warning,) = [w for w in result["warnings"] if "crosses" in w]
-        assert "(96,196)->(288,196) at (240,196)" in warning
-        assert "unjoined" in warning
+        assert "warnings" not in result
+        assert [f.points for f in _found(asc_state, asc, "unjoined_crossing")] == [((240, 196),)]
         assert "junctions" not in result
         assert await _net_pins(asc_state, asc, "R3.2") == {"R3.2", "R6.1"}
         assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
@@ -2827,10 +2841,10 @@ class TestWirePinsTJunction:
         assert {"x": 96, "y": 196, "via": "pin", "pin": "R1.1"} in result["junctions"]
         assert any("R1.1" in w and "already wired" in w for w in result["warnings"])
 
-    async def test_route_warnings_reach_the_edit_response(
+    async def test_a_crossing_a_route_makes_reaches_the_edit_response(
         self, asc_state: SessionState, work_dir: Path
     ):
-        # The planner's advisories (here a wire crossed) used to stop at the op.
+        # Said by the sheet rule, once the batch is drawn, and not by the route.
         envelope = await build_sheet(
             asc_state,
             "crossed",
@@ -2844,11 +2858,11 @@ class TestWirePinsTJunction:
             ],
         )
         assert envelope["outcome"] == "complete"
-        assert [w for w in envelope["warnings"] if w.startswith("op ")] == [
-            "op 5 (wire_pins): The route crosses the wire (320,-52)->(320,252) at (320,52) "
-            "where neither ends; LTspice leaves a plain crossing unjoined, so the two stay "
-            "separate nets. To join them, end the route on that wire instead."
-        ]
+        assert [w for w in envelope["warnings"] if w.startswith("op ")] == []
+        assert (
+            "Wires cross at (320,52) without joining: neither ends there and nothing sits "
+            "on the crossing"
+        ) in envelope["warnings"]
         # 640 units long, and nothing is said of that.
         assert not [w for w in envelope["warnings"] if "ong" in w]
 
@@ -3289,6 +3303,117 @@ _PAIR = (
 )
 
 
+# A wire between R1 and R2's top pins, and a wire crossing it at (192,196)
+# with its ends on nothing.
+_CROSSED = (
+    _res("R1", 96, 244),
+    _res("R2", 288, 244),
+    "WIRE 96 196 288 196",
+    "WIRE 192 148 192 244",
+)
+
+
+def _op_said(data: dict) -> list[str]:
+    """What the ops of a batch said for themselves, apart from the sheet's findings."""
+    return [w for w in data["warnings"] if w.startswith("op ")]
+
+
+@pytest.mark.asyncio
+class TestJudgedOnTheFinishedSheet:
+    """What an edit says of the sheet is judged once, on the sheet the batch
+    commits (the sheet rules, the ones verify_circuit reports). A state the
+    batch only passes through is not said, and a condition is said in one way
+    whichever op made it."""
+
+    async def test_a_net_relabelled_in_remove_and_add_pairs_says_nothing(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # Halfway through, the wired net carries VB2 and VBX; at the end, VBX alone.
+        _write_sheet(
+            work_dir / "relabel.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            _res("R3", 480, 244),
+            "WIRE 96 196 288 196",
+            "FLAG 96 196 VB2",
+            "FLAG 288 196 VB2",
+            "FLAG 480 196 VB2",
+        )
+        ops: list[dict] = []
+        for x in (96, 288, 480):
+            ops.append({"op": "remove_net_label", "x": x, "y": 196})
+            ops.append({"op": "add_net_label", "net": "VBX", "x": x, "y": 196})
+        data = await apply_ops(asc_state, "relabel.asc", ops)
+        assert data["commit_state"] == "committed"
+        assert data["warnings"] == []
+
+    async def test_a_label_put_on_a_crossing_is_said_by_the_sheet(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        _write_sheet(work_dir / "label_cross.asc", *_CROSSED)
+        data = await apply_ops(
+            asc_state,
+            "label_cross.asc",
+            [{"op": "add_net_label", "net": "OUT", "x": 192, "y": 196}],
+        )
+        assert _op_said(data) == []
+        assert (
+            "label 'OUT' at (192,196) sits where 2 wires cross, and joins 2 nets there "
+            "that are apart without it"
+        ) in data["warnings"]
+
+    async def test_a_part_moved_onto_a_crossing_is_said_whichever_op_moved_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        said = []
+        for name, op in (
+            ("by_move", {"op": "move", "dx": -208, "dy": 0, "references": ["R3"]}),
+            ("by_move_component", {"op": "move_component", "reference": "R3", "x": 192, "y": 244}),
+        ):
+            _write_sheet(work_dir / f"{name}.asc", *_CROSSED, _res("R3", 400, 244))
+            data = await apply_ops(asc_state, f"{name}.asc", [op])
+            assert _op_said(data) == [], name
+            said.append([w for w in data["warnings"] if "wires cross" in w])
+        assert said[0] == said[1]
+        (sentence,) = said[0]
+        assert sentence.startswith("R3.") and "at (192,196) sits where 2 wires cross" in sentence
+
+    async def test_a_wire_dragged_diagonal_is_said_by_the_sheet(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        _write_sheet(work_dir / "drag_diag.asc", *_PAIR)
+        data = await apply_ops(
+            asc_state,
+            "drag_diag.asc",
+            [{"op": "move", "dx": 0, "dy": 64, "references": ["R2"], "drag": True}],
+        )
+        assert _op_said(data) == []
+        assert (
+            "Wire (96,196)->(288,260) is diagonal; LTspice joins anything on it, along its "
+            "length as at its ends"
+        ) in data["warnings"]
+
+    async def test_a_route_across_a_wire_is_said_by_the_sheet(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        _write_sheet(
+            work_dir / "route_cross.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            "WIRE 192 148 192 244",
+        )
+        data = await apply_ops(
+            asc_state,
+            "route_cross.asc",
+            [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"}],
+        )
+        assert _op_said(data) == []
+        assert (
+            "Wires cross at (192,196) without joining: neither ends there and nothing sits "
+            "on the crossing"
+        ) in data["warnings"]
+
+
 @pytest.mark.asyncio
 class TestMoveOp:
     """The general ``move``: one offset for any mix of parts, wires, labels and
@@ -3420,7 +3545,7 @@ class TestMoveOp:
         assert result["moved"]["labels"] == 0
         assert "FLAG 288 292 0" in _records(asc)
 
-    async def test_a_wire_dragged_off_its_axis_is_said_to_be_diagonal(
+    async def test_a_wire_dragged_off_its_axis_stays_attached_and_is_diagonal(
         self, asc_state: SessionState, work_dir: Path
     ):
         asc = _write_sheet(work_dir / "mv_diag.asc", *_PAIR)
@@ -3429,9 +3554,9 @@ class TestMoveOp:
             asc,
             {"op": "move", "dx": 0, "dy": 64, "references": ["R2"], "drag": True},
         )
-        assert result["warnings"] == [
-            "Dragging left 1 wire(s) diagonal: (96,196)->(288,260). LTspice joins a "
-            "diagonal wire at its ends and anywhere along it."
+        assert "warnings" not in result
+        assert [f.points for f in _found(asc_state, asc, "diagonal_wire")] == [
+            ((96, 196), (288, 260))
         ]
         assert await _net_pins(asc_state, asc, "R2.1") == {"R1.1", "R2.1"}
 

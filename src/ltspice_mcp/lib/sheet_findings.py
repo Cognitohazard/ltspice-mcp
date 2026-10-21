@@ -38,10 +38,15 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ltspice_mcp.lib.connectivity import (
+    NetPartition,
     build_on_wire_predicate,
     build_wire_counter,
+    crossing_points,
     is_ground,
+    label_folded_nets,
     name_key,
+    partition,
+    point_on_segment,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.geometry import BBox
@@ -100,6 +105,38 @@ _RULES = (
         "SpiceLine and SpiceLine2, which LTspice writes onto one netlist line.",
         check="quality",
         provenance="export-attributes",
+    ),
+    Rule(
+        "net_with_two_names",
+        "electrical",
+        "net",
+        "A net carrying labels of two or more names; LTspice gives its node one of them.",
+        check="export",
+        provenance="net-naming",
+    ),
+    Rule(
+        "joined_at_crossing",
+        "electrical",
+        "point",
+        "A pin or label where wires cross, which joins nets that would be apart without it.",
+        check="layout",
+        provenance="wire-connectivity",
+    ),
+    Rule(
+        "unjoined_crossing",
+        "electrical",
+        "point",
+        "Two wires crossing where neither ends and nothing sits, which LTspice leaves apart.",
+        check="layout",
+        provenance="wire-connectivity",
+    ),
+    Rule(
+        "diagonal_wire",
+        "electrical",
+        "wire",
+        "A wire neither horizontal nor vertical, which LTspice joins anywhere along it.",
+        check="layout",
+        provenance="wire-connectivity",
     ),
     Rule(
         "floating_pin",
@@ -279,6 +316,30 @@ class _Index:
         self.drawn = [
             (index, part, drawn) for index, part in found if (drawn := part.drawn) is not None
         ]
+        #: Every point a wire ends at.
+        self.wire_ends = {end for wire in self.wires for end in wire}
+
+
+def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
+    """The sheet's nets as its wiring joins them (``connectivity.partition``),
+    leaving out the pins and labels on the points in ``without``."""
+    return partition(
+        (
+            ((x, y), (part.name, name))
+            for part in view.parts
+            for name, x, y in part.pins
+            if (x, y) not in without
+        ),
+        (((x, y), text) for x, y, text in view.labels if (x, y) not in without),
+        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in view.wires],
+    )
+
+
+def _net_name(labels: list[tuple[Point, str]]) -> str:
+    """Of labels whose names differ only in case, the spelling LTspice gives
+    the node: the label lowest on the sheet, and of those the one furthest
+    right (the net-naming recordings)."""
+    return max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1]
 
 
 _Finder = Callable[[_Index], list[Finding]]
@@ -412,6 +473,112 @@ def floating_pins(view: SheetView) -> list[tuple[Part, tuple[str, int, int]]]:
     A wire of no length connects nothing.
     """
     return _floating(_Index(view))
+
+
+@_finds("net_with_two_names")
+def _nets_with_two_names(ix: _Index) -> list[Finding]:
+    # One node per label-folded net, names compared as LTspice compares them,
+    # ground no name. Each name is given in the spelling LTspice gives it.
+    named = [
+        ((x, y), name)
+        for x, y, text in ix.view.labels
+        if (name := text.strip()) and not is_ground(name)
+    ]
+    if len({name_key(name) for _point, name in named}) < 2:
+        return []
+    net_of = label_folded_nets(_wired_nets(ix.view))
+    nets: dict[Point, dict[str, list[tuple[Point, str]]]] = {}
+    for point, name in named:
+        nets.setdefault(net_of(point), {}).setdefault(name_key(name), []).append((point, name))
+    found: list[Finding] = []
+    for by_key in nets.values():
+        if len(by_key) < 2:
+            continue
+        names = tuple(sorted(_net_name(labels) for labels in by_key.values()))
+        points = tuple(sorted(point for labels in by_key.values() for point, _ in labels))
+        found.append(
+            Finding(
+                "net_with_two_names",
+                f"One net carries labels {list(names)}; LTspice gives the node one of these "
+                "names, so a directive or probe that uses another may not find it",
+                points=points,
+                facts={"names": names},
+            )
+        )
+    return found
+
+
+@_finds("joined_at_crossing")
+def _joined_at_crossings(ix: _Index) -> list[Finding]:
+    # Wires crossing where neither ends are apart; a pin or a label on the
+    # crossing joins them (pin_at_crossing, label_at_crossing). Said only where
+    # what sits there is what joins them: without the pins and labels on such
+    # crossings, the wires through each would be on separate nets, nets that
+    # share a name being one.
+    on: dict[Point, list[str]] = {}
+    refs: dict[Point, dict[str, None]] = {}
+    for part in ix.view.parts:
+        for name, x, y in part.pins:
+            on.setdefault((x, y), []).append(f"{part.name}.{name}")
+            refs.setdefault((x, y), {})[part.name] = None
+    for x, y, text in ix.view.labels:
+        on.setdefault((x, y), []).append(f"label '{text.strip()}'")
+    # A point no wire ends at lies away from the ends of every wire through it.
+    crossings = {
+        point: [(a, b) for a, b in ix.wires if point_on_segment(point, a, b)]
+        for point in on
+        if point not in ix.wire_ends and ix.wires_through(point) > 1
+    }
+    if not crossings:
+        return []
+    net_of = label_folded_nets(_wired_nets(ix.view, without=crossings))
+    found: list[Finding] = []
+    for point, through in sorted(crossings.items()):
+        nets = {net_of(a) for a, _b in through}
+        if len(nets) < 2:
+            continue
+        what = ", ".join(on[point])
+        found.append(
+            Finding(
+                "joined_at_crossing",
+                f"{what} at {_at(point)} sits where {len(through)} wires cross, and joins "
+                f"{len(nets)} nets there that are apart without it",
+                refs=tuple(refs.get(point, ())),
+                points=(point,),
+                facts={"wires": len(through), "nets": len(nets)},
+            )
+        )
+    return found
+
+
+@_finds("unjoined_crossing")
+def _unjoined_crossings(ix: _Index) -> list[Finding]:
+    # Horizontal and vertical wires through each other, at a point that is no
+    # wire's end and has no pin or label on it.
+    return [
+        Finding(
+            "unjoined_crossing",
+            f"Wires cross at {_at(point)} without joining: neither ends there and "
+            "nothing sits on the crossing",
+            points=(point,),
+        )
+        for point in sorted(crossing_points(ix.wires))
+        if point not in ix.wire_ends and point not in ix.pins_at and point not in ix.labelled
+    ]
+
+
+@_finds("diagonal_wire")
+def _diagonal_wires(ix: _Index) -> list[Finding]:
+    return [
+        Finding(
+            "diagonal_wire",
+            f"Wire {_wire(a, b)} is diagonal; LTspice joins anything on it, along its "
+            "length as at its ends",
+            points=(a, b),
+        )
+        for a, b in ix.wires
+        if a[0] != b[0] and a[1] != b[1]
+    ]
 
 
 @_finds("floating_pin")
@@ -679,10 +846,7 @@ def _label_islands(ix: _Index) -> list[Finding]:
         if name and not is_ground(name):
             stubs.setdefault(name_key(name), []).append(((x, y), name))
     islands = [
-        (
-            max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1],
-            tuple(point for point, _name in labels),
-        )
+        (_net_name(labels), tuple(point for point, _name in labels))
         for labels in stubs.values()
         # A lone label is not a connection by name standing in for a wire.
         if len(labels) > 1 and not any(ix.on_a_wire(point) for point, _name in labels)
@@ -715,6 +879,15 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       (``connectivity.same_instance_dropped_segments``).
     - ``duplicate_parameter``: a part giving one parameter, in any case, more
       than once across the attributes LTspice writes onto its line.
+    - ``net_with_two_names``: a net, labels of one name being one node, whose
+      labels carry two or more names, compared as LTspice compares them, ground
+      no name. LTspice gives the node one of them.
+    - ``joined_at_crossing``: a pin or label on a point where two or more wires
+      cross, none ending there, which joins nets that are apart without it,
+      nets that share a name being one.
+    - ``unjoined_crossing``: a horizontal and a vertical wire through each
+      other at a point no wire ends at and nothing sits on.
+    - ``diagonal_wire``: a wire neither horizontal nor vertical.
     - ``floating_pin``: a pin connected to nothing (:func:`floating_pins`).
     - ``dangling_wire_end``: a wire end on no pin, no label and no other wire.
     - ``dangling_label``: a label that is on no wire and at no pin.

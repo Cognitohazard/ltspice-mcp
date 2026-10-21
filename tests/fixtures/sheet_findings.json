@@ -499,6 +499,42 @@
   "edit": {
    "warnings": [
     {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (96,96) without joining: neither ends there and nothing sits on the crossing",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (96,400) without joining: neither ends there and nothing sits on the crossing",
+     "x": 96,
+     "y": 400
+    },
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (96,608) without joining: neither ends there and nothing sits on the crossing",
+     "x": 96,
+     "y": 608
+    },
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (96,704) without joining: neither ends there and nothing sits on the crossing",
+     "x": 96,
+     "y": 704
+    },
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (400,96) without joining: neither ends there and nothing sits on the crossing",
+     "x": 400,
+     "y": 96
+    },
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (400,400) without joining: neither ends there and nothing sits on the crossing",
+     "x": 400,
+     "y": 400
+    },
+    {
      "kind": "floating_pin",
      "message": "Floating pin: R1.1 at (704,96)",
      "pin": "1",
@@ -637,6 +673,132 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "Wires cross at (96,96) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(96,96)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       400
+      ]
+     ],
+     "detail": "Wires cross at (96,400) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(96,400)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 608
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       608
+      ]
+     ],
+     "detail": "Wires cross at (96,608) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(96,608)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 96,
+     "y": 704
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       704
+      ]
+     ],
+     "detail": "Wires cross at (96,704) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(96,704)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 400,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       96
+      ]
+     ],
+     "detail": "Wires cross at (400,96) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(400,96)"
+   },
+   {
+    "at": {
+     "file": "every_kind.asc",
+     "x": 400,
+     "y": 400
+    },
+    "evidence": {
+     "coords": [
+      [
+       400,
+       400
+      ]
+     ],
+     "detail": "Wires cross at (400,400) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(400,400)"
+   },
    {
     "at": {
      "file": "every_kind.asc",
@@ -9964,7 +10126,14 @@
  "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (192,96) without joining: neither ends there and nothing sits on the crossing",
+     "x": 192,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -9972,12 +10141,47 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "crossing_wires.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "Wires cross at (192,96) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(192,96)"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_end.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "from": {
+      "x": 0,
+      "y": 0
+     },
+     "kind": "diagonal_wire",
+     "message": "Wire (0,0)->(96,96) is diagonal; LTspice joins anything on it, along its length as at its ends",
+     "to": {
+      "x": 96,
+      "y": 96
+     }
+    }
+   ],
    "wiring": {
     "pins_label_only": 1,
     "pins_total": 2,
@@ -9985,12 +10189,50 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "diagonal_wire_end.asc",
+     "x": 0,
+     "y": 0
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       0
+      ],
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "Wire (0,0)->(96,96) is diagonal; LTspice joins anything on it, along its length as at its ends",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "diagonal_wire",
+    "severity": "observation",
+    "subject": "(0,0)"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_interior.asc": {
   "dropped_wire": [],
   "edit": {
    "warnings": [
+    {
+     "from": {
+      "x": 0,
+      "y": 0
+     },
+     "kind": "diagonal_wire",
+     "message": "Wire (0,0)->(192,192) is diagonal; LTspice joins anything on it, along its length as at its ends",
+     "to": {
+      "x": 192,
+      "y": 192
+     }
+    },
     {
      "kind": "dangling_wire_end",
      "message": "Wire end at (192,192) meets no pin, net label, or other wire",
@@ -10023,6 +10265,31 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "diagonal_wire_interior.asc",
+     "x": 0,
+     "y": 0
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       0
+      ],
+      [
+       192,
+       192
+      ]
+     ],
+     "detail": "Wire (0,0)->(192,192) is diagonal; LTspice joins anything on it, along its length as at its ends",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "diagonal_wire",
+    "severity": "observation",
+    "subject": "(0,0)"
+   },
    {
     "at": {
      "file": "diagonal_wire_interior.asc",
@@ -10156,9 +10423,73 @@
   "verify": []
  },
  "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "label_at_crossing.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       192,
+       48
+      ],
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b', 'c']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b', 'c']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b",
+      "c"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 192,
+       "y": 48
+      },
+      {
+       "x": 192,
+       "y": 96
+      }
+     ],
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "joined_at_crossing",
+     "message": "label 'c' at (192,96) sits where 2 wires cross, and joins 2 nets there that are apart without it",
+     "nets": 2,
+     "wires": 2,
+     "x": 192,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -10166,7 +10497,29 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "label_at_crossing.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "label 'c' at (192,96) sits where 2 wires cross, and joins 2 nets there that are apart without it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "joined_at_crossing",
+    "severity": "observation",
+    "subject": "(192,96)"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/label_case_one_wire.asc": {
   "dropped_wire": [],
@@ -10182,9 +10535,64 @@
   "verify": []
  },
  "fixtures/ltspice_recorded/inputs/connectivity/label_case_second_name.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "label_case_second_name.asc",
+     "x": 96,
+     "y": 64
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       64
+      ],
+      [
+       288,
+       64
+      ],
+      [
+       288,
+       80
+      ]
+     ],
+     "detail": "One net carries labels ['VDD', 'VOUT']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,64)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['VDD', 'VOUT']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "VDD",
+      "VOUT"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 64
+      },
+      {
+       "x": 288,
+       "y": 64
+      },
+      {
+       "x": 288,
+       "y": 80
+      }
+     ],
+     "x": 96,
+     "y": 64
+    }
+   ],
    "wiring": {
     "pins_label_only": 2,
     "pins_total": 4,
@@ -10238,6 +10646,15 @@
   "edit": {
    "warnings": [
     {
+     "kind": "joined_at_crossing",
+     "message": "R1.1 at (96,96) sits where 2 wires cross, and joins 2 nets there that are apart without it",
+     "nets": 2,
+     "ref": "R1",
+     "wires": 2,
+     "x": 96,
+     "y": 96
+    },
+    {
      "kind": "dangling_wire_end",
      "message": "Wire end at (96,128) meets no pin, net label, or other wire",
      "x": 96,
@@ -10269,6 +10686,29 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "pin_at_crossing.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R1.1 at (96,96) sits where 2 wires cross, and joins 2 nets there that are apart without it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "joined_at_crossing",
+    "severity": "observation",
+    "subject": "R1"
+   },
    {
     "at": {
      "file": "pin_at_crossing.asc",
@@ -10663,9 +11103,56 @@
   ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "same_instance_detour.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "x": 96,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 0,
     "pins_total": 2,
@@ -10793,6 +11280,31 @@
     "rule_id": "dropped_wire",
     "severity": "warning",
     "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_inline_vertex.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
    }
   ],
   "edit": {
@@ -10809,6 +11321,26 @@
       "x": 96,
       "y": 192
      }
+    },
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "x": 96,
+     "y": 96
     },
     {
      "kind": "wire_through_symbol",
@@ -10910,9 +11442,55 @@
   ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_at_vertex.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "same_instance_label_at_vertex.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'm']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
   "edit": {
    "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'm']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "m"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 144
+      }
+     ],
+     "x": 96,
+     "y": 96
+    },
     {
      "kind": "wire_through_symbol",
      "message": "Wire (96,96)->(96,144) passes through R1's body",
@@ -11044,9 +11622,55 @@
   ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_inside.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "same_instance_label_inside.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'm']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
   "edit": {
    "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'm']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "m"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 144
+      }
+     ],
+     "x": 96,
+     "y": 96
+    },
     {
      "kind": "wire_through_symbol",
      "message": "Wire (96,96)->(96,192) passes through R1's body",
@@ -11372,6 +11996,31 @@
     "rule_id": "dropped_wire",
     "severity": "warning",
     "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_wire.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
    }
   ],
   "edit": {
@@ -11388,6 +12037,26 @@
       "x": 96,
       "y": 192
      }
+    },
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "x": 96,
+     "y": 96
     },
     {
      "kind": "wire_through_symbol",
@@ -11471,9 +12140,56 @@
   "verify": []
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_alpha_first.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "two_labels_alpha_first.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ],
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "One net carries labels ['alpha', 'zeta']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(0,96)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['alpha', 'zeta']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "alpha",
+      "zeta"
+     ],
+     "points": [
+      {
+       "x": 0,
+       "y": 96
+      },
+      {
+       "x": 192,
+       "y": 96
+      }
+     ],
+     "x": 0,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 1,
     "pins_total": 2,
@@ -11484,9 +12200,56 @@
   "verify": []
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_corner.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "two_labels_corner.asc",
+     "x": 0,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       192
+      ],
+      [
+       192,
+       0
+      ]
+     ],
+     "detail": "One net carries labels ['low', 'right']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(0,192)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['low', 'right']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "low",
+      "right"
+     ],
+     "points": [
+      {
+       "x": 0,
+       "y": 192
+      },
+      {
+       "x": 192,
+       "y": 0
+      }
+     ],
+     "x": 0,
+     "y": 192
+    }
+   ],
    "wiring": {
     "pins_label_only": 1,
     "pins_total": 2,
@@ -11497,9 +12260,56 @@
   "verify": []
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_later_on_left.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "two_labels_later_on_left.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ],
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "One net carries labels ['alpha', 'zeta']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(0,96)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['alpha', 'zeta']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "alpha",
+      "zeta"
+     ],
+     "points": [
+      {
+       "x": 0,
+       "y": 96
+      },
+      {
+       "x": 192,
+       "y": 96
+      }
+     ],
+     "x": 0,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 1,
     "pins_total": 2,
@@ -11510,9 +12320,56 @@
   "verify": []
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_zeta_first.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "two_labels_zeta_first.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ],
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "One net carries labels ['alpha', 'zeta']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(0,96)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['alpha', 'zeta']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "alpha",
+      "zeta"
+     ],
+     "points": [
+      {
+       "x": 0,
+       "y": 96
+      },
+      {
+       "x": 192,
+       "y": 96
+      }
+     ],
+     "x": 0,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 1,
     "pins_total": 2,
@@ -37848,7 +38705,14 @@
  "fixtures/t_junctions/crossing_wires.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "unjoined_crossing",
+     "message": "Wires cross at (192,96) without joining: neither ends there and nothing sits on the crossing",
+     "x": 192,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -37856,12 +38720,98 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "crossing_wires.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "Wires cross at (192,96) without joining: neither ends there and nothing sits on the crossing",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "unjoined_crossing",
+    "severity": "observation",
+    "subject": "(192,96)"
+   }
+  ]
  },
  "fixtures/t_junctions/label_at_crossing.asc": {
-  "dropped_wire": [],
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "label_at_crossing.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       192,
+       48
+      ],
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b', 'c']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b', 'c']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b",
+      "c"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 192,
+       "y": 48
+      },
+      {
+       "x": 192,
+       "y": 96
+      }
+     ],
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "joined_at_crossing",
+     "message": "label 'c' at (192,96) sits where 2 wires cross, and joins 2 nets there that are apart without it",
+     "nets": 2,
+     "wires": 2,
+     "x": 192,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -37869,7 +38819,29 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "label_at_crossing.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "label 'c' at (192,96) sits where 2 wires cross, and joins 2 nets there that are apart without it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "joined_at_crossing",
+    "severity": "observation",
+    "subject": "(192,96)"
+   }
+  ]
  },
  "fixtures/t_junctions/label_on_vertical_wire_interior.asc": {
   "dropped_wire": [],

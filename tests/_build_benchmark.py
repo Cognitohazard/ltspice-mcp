@@ -22,12 +22,17 @@ import hashlib
 import json
 import math
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib.connectivity import GROUND, build_on_wire_predicate, signature
+from ltspice_mcp.lib.connectivity import (
+    GROUND,
+    build_on_wire_predicate,
+    crossing_points,
+    signature,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.netlist_graph import canon_ref, parse_netlist_graph
 from ltspice_mcp.lib.schematic_scene import scene_of_sheet, sheet_view
@@ -412,24 +417,13 @@ def _through(point: _Point, segment: _Segment) -> int:
     return 2 if inside else 0
 
 
-def _crossing_points(segments: Sequence[_Segment]) -> set[_Point]:
-    """Every point where a level wire and an upright one pass through each other."""
-    level = [s for s in segments if s[1] == s[3] and s[0] != s[2]]
-    upright = [s for s in segments if s[0] == s[2] and s[1] != s[3]]
-    points = set()
-    for x1, y, x2, _ in level:
-        for x, y1, _, y2 in upright:
-            if min(x1, x2) < x < max(x1, x2) and min(y1, y2) < y < max(y1, y2):
-                points.add((x, y))
-    return points
-
-
 def drawing(sheet: Sheet) -> dict[str, Any]:
     """Measures of the drawing the sheet rules do not have. Each is a definition:
 
     - ``crossings``: points where two wires pass through each other, neither
-      ending there, with no pin or label on the point. LTspice leaves such a
-      point unjoined (the ``wire-connectivity`` recording).
+      ending there, with no pin or label on the point. These are the points
+      the ``unjoined_crossing`` rule reports, and also those where a third
+      wire ends, which LTspice joins (the ``wire-connectivity`` recording).
     - ``four_way_junctions``: joined points with four or more wire arms. A
       wire counts one arm at its end and two through a point inside it.
     - ``bends``: points where exactly two wire ends meet out of line, with no
@@ -450,10 +444,11 @@ def drawing(sheet: Sheet) -> dict[str, Any]:
     for x, y, name in sheet.labels:
         labels.setdefault((x, y), set()).add(name)
     occupied = set(pins) | set(labels)
-    crossings = {p for p in _crossing_points(segments) if p not in occupied}
+    crossed = set(crossing_points(((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments))
+    crossings = crossed - occupied
     ends = Counter(p for x1, y1, x2, y2 in segments for p in ((x1, y1), (x2, y2)))
     four_way = 0
-    for point in set(ends) | _crossing_points(segments):
+    for point in set(ends) | crossed:
         arms = sum(_through(point, s) for s in segments)
         if arms >= 4 and point not in crossings:
             four_way += 1

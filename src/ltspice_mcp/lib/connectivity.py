@@ -141,6 +141,24 @@ def build_wire_counter(
     return count
 
 
+def crossing_points(segments: Iterable[Segment]) -> list[Point]:
+    """Where a horizontal and a vertical wire pass through each other, each
+    away from its ends, in the order the pairs are met.
+
+    Two such wires stay apart unless something on the point joins them; a
+    third wire ending there, or a pin or label on it, is the caller's to ask.
+    """
+    wires = list(segments)
+    horizontal = [(a, b) for a, b in wires if a[1] == b[1] and a[0] != b[0]]
+    vertical = [(a, b) for a, b in wires if a[0] == b[0] and a[1] != b[1]]
+    points: dict[Point, None] = {}
+    for (hx1, y), (hx2, _y) in horizontal:
+        for (x, vy1), (_x, vy2) in vertical:
+            if min(hx1, hx2) < x < max(hx1, hx2) and min(vy1, vy2) < y < max(vy1, vy2):
+                points[(x, y)] = None
+    return list(points)
+
+
 class NetPartition(NamedTuple):
     """Connected-component view of a schematic's nets.
 
@@ -358,10 +376,6 @@ class NamedNets:
             self._names[net].update(named_labels(texts))
             for key in name_keys(texts):
                 self._net_named[key] = net
-
-    def has_name(self, name: str) -> bool:
-        """True if a label of the sheet already carries ``name``, in any case."""
-        return name_key(name) in self._net_named
 
     def net_named(self, name: str) -> Point | None:
         """The net a label of ``name`` is on, in any case; None if no label carries it."""

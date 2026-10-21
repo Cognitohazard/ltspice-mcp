@@ -55,6 +55,10 @@ class TestTheRegistry:
                 "unresolved_symbol",
                 "dropped_wire",
                 "duplicate_parameter",
+                "net_with_two_names",
+                "joined_at_crossing",
+                "unjoined_crossing",
+                "diagonal_wire",
                 "floating_pin",
                 "dangling_wire_end",
                 "dangling_label",
@@ -79,8 +83,11 @@ class TestTheRegistry:
         assert set(by_check) <= set(CHECK_ORDER)
         assert by_check == {
             "symbols": {"unresolved_symbol"},
-            "export": {"dropped_wire"},
+            "export": {"dropped_wire", "net_with_two_names"},
             "layout": {
+                "joined_at_crossing",
+                "unjoined_crossing",
+                "diagonal_wire",
                 "floating_pin",
                 "dangling_wire_end",
                 "dangling_label",
@@ -298,6 +305,8 @@ class TestWhatIsLeftUndone:
         assert [one.refs for one in found if "U1" in one.refs] == [("U1",)]
         assert {one.rule for one in found} == {
             "unresolved_symbol",
+            # The wire's two labels, a and b: one net of two names, U1 not in it.
+            "net_with_two_names",
             "dangling_label",
             "wire_through_symbol",
             "text_in_symbol_body",
@@ -328,6 +337,92 @@ class TestWhatLtspiceLeavesOut:
             wires=((0, 0, 0, 96),),
         )
         assert only(view, "dropped_wire") == []
+
+
+# Two wires through each other at (32,32), neither ending there.
+_CROSS = ((0, 32, 64, 32), (32, 0, 32, 64))
+
+
+class TestWhatJoinsAndWhatDoesNot:
+    """What a finished sheet joins, judged once on the whole sheet, so a batch
+    that passes through a state on its way says nothing of that state."""
+
+    def test_a_net_with_labels_of_two_names(self) -> None:
+        view = SheetView(wires=((0, 0, 64, 0),), labels=((0, 0, "a"), (64, 0, "b")))
+        (found,) = only(view, "net_with_two_names")
+        assert (found.points, found.facts) == (((0, 0), (64, 0)), {"names": ("a", "b")})
+
+    def test_labels_of_one_name_are_one_node_with_whatever_else_they_carry(self) -> None:
+        """``a`` on a wire of its own and ``a`` beside ``b`` are one node, with two names."""
+        view = SheetView(
+            wires=((0, 0, 64, 0), (0, 96, 64, 96)),
+            labels=((0, 0, "a"), (0, 96, "a"), (64, 96, "b")),
+        )
+        (found,) = only(view, "net_with_two_names")
+        assert found.points == ((0, 0), (0, 96), (64, 96))
+
+    def test_a_name_in_two_cases_is_spelled_as_label_island_spells_it(self) -> None:
+        """The label lowest on the sheet, and of those the one furthest right."""
+        view = SheetView(
+            wires=((0, 0, 64, 0),), labels=((0, 0, "out"), (64, 0, "OUT"), (32, 0, "b"))
+        )
+        (found,) = only(view, "net_with_two_names")
+        assert found.facts == {"names": ("OUT", "b")}
+
+    @pytest.mark.parametrize(
+        "names", [("out", "OUT"), ("a", "0"), ("a", "GND")], ids=["case", "ground", "gnd"]
+    )
+    def test_names_differing_in_case_or_a_ground_are_no_second_name(
+        self, names: tuple[str, str]
+    ) -> None:
+        view = SheetView(wires=((0, 0, 64, 0),), labels=((0, 0, names[0]), (64, 0, names[1])))
+        assert only(view, "net_with_two_names") == []
+
+    def test_a_label_on_a_crossing_joins_the_wires(self) -> None:
+        view = SheetView(wires=_CROSS, labels=((32, 32, "x"),))
+        (found,) = only(view, "joined_at_crossing")
+        assert (found.points, found.facts) == (((32, 32),), {"wires": 2, "nets": 2})
+        assert only(view, "unjoined_crossing") == []
+
+    def test_a_pin_on_a_crossing_names_its_part(self) -> None:
+        view = SheetView(parts=(Part("R1", pins=(("A", 32, 32), ("B", 32, 128))),), wires=_CROSS)
+        (found,) = only(view, "joined_at_crossing")
+        assert found.refs == ("R1",)
+
+    def test_wires_already_joined_elsewhere_are_not_joined_by_the_crossing(self) -> None:
+        view = SheetView(
+            wires=(*_CROSS, (64, 32, 64, 64), (32, 64, 64, 64)), labels=((32, 32, "x"),)
+        )
+        assert only(view, "joined_at_crossing") == []
+
+    @pytest.mark.parametrize(
+        "names", [("a", "A"), ("0", "GND")], ids=["one-name-any-case", "ground"]
+    )
+    def test_wires_already_one_node_by_name_are_not_joined_by_the_crossing(
+        self, names: tuple[str, str]
+    ) -> None:
+        """Each wire carries a label of one name at its far end, so the two are
+        one node before anything sits on the crossing."""
+        view = SheetView(
+            parts=(Part("R1", pins=(("A", 32, 32), ("B", 32, 128))),),
+            wires=_CROSS,
+            labels=((64, 32, names[0]), (32, 64, names[1])),
+        )
+        assert only(view, "joined_at_crossing") == []
+
+    def test_a_crossing_with_nothing_on_it_is_left_apart(self) -> None:
+        (found,) = only(SheetView(wires=_CROSS), "unjoined_crossing")
+        assert found.points == ((32, 32),)
+
+    def test_a_wire_ending_on_another_is_a_junction_not_a_crossing(self) -> None:
+        view = SheetView(wires=((0, 32, 64, 32), (32, 0, 32, 32)))
+        assert only(view, "unjoined_crossing") == []
+        assert only(view, "joined_at_crossing") == []
+
+    def test_a_diagonal_wire(self) -> None:
+        view = SheetView(wires=((0, 0, 32, 32), (0, 64, 64, 64)))
+        (found,) = only(view, "diagonal_wire")
+        assert found.points == ((0, 0), (32, 32))
 
 
 class TestAParameterGivenTwice:

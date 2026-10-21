@@ -73,7 +73,7 @@ tool-surface changes.
   net as meant. One build was told so 17 times. Its only reason was that a
   later `net:NAME` could not tell the labels apart, which that refusal now
   answers itself, so the warning is gone. A second name for one net is still
-  warned of.
+  reported (`net_with_two_names`).
 - The results file of an LTspice frequency response analysis
   (`<run>.fra_1.raw`) could not be read: the raw reader refused its layout.
   It is the AC layout, every value a complex double, and now reads as complex
@@ -185,8 +185,8 @@ tool-surface changes.
   and to ground. A named label or a pin at the same point was already
   refused; ground skipped that check. It is now refused, and the error names
   the point and the two nets. A label at a crossing where at most one wire is
-  named is still placed, now with a warning that it joins two nets. Grounding
-  a net that has a name is unchanged.
+  named is still placed, and the join is reported (`joined_at_crossing`).
+  Grounding a net that has a name is unchanged.
 - `verify_circuit` and `edit_schematic` reported a wire as passing through a
   part's body whenever it ended on a pin inside the part's body box. About 4%
   of LTspice's stock symbols have such a pin (a frame drawn one unit outside
@@ -200,7 +200,7 @@ tool-surface changes.
   landed on such a point, between wires of two differently named nets, was
   written. It is now refused, with the pin, the point and the names, and the
   part stays where it was. Where one of the two wires has no name the part
-  is placed and the join is said in the op's warnings.
+  is placed and the join is reported (`joined_at_crossing`).
 - The bounding box `inspect` and `edit_schematic` report for a part took
   each `ARC` of its symbol as the whole ellipse the arc is cut from, so a part
   drawn with arcs was reported larger than it is: a polarized capacitor 64 by
@@ -1253,6 +1253,19 @@ recording that showed it.
 
 ### Changed
 
+- `edit_schematic` reports what its ops make of the sheet once, on the sheet
+  the batch commits, through four new sheet rules that `verify_circuit`
+  reports too: `net_with_two_names` (a net whose labels carry two or more
+  names), `joined_at_crossing` (a pin or label where wires cross that joins
+  nets which would otherwise be apart), `unjoined_crossing` (wires crossing
+  where neither ends and nothing sits) and `diagonal_wire`. Ops used to warn
+  of these themselves, judged on the sheet as it stood after each op: a net
+  relabelled in remove-and-add pairs was told it had a second name though the
+  batch ended with one, and `move` said nothing of a pin it put on a crossing
+  where `move_component` warned. Those op warnings, and the route planner's
+  "crosses the wire" advice, are gone; the refusals are unchanged. The
+  value-slot check of `set_component_value` stays with the op, since it
+  judges the value given.
 - `Api.wait` takes its timeout as `timeout_s`, as `jobs(action="wait")` does.
   `timeout=` is still accepted; giving both is refused.
 - `inspect(kind="net")` and `inspect(kind="components")` on an `.asc` read the

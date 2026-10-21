@@ -1405,7 +1405,7 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
     for i in plan.texts:
         editor.directives[i].coord = Point(*shifted(_xy(editor.directives[i].coord)))
 
-    result: dict[str, object] = {
+    return {
         "moved": {
             "parts": plan.parts,
             "labels": len(plan.labels),
@@ -1414,17 +1414,6 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
             "dragged_wire_ends": sum(a + b for a, b in plan.dragged.values()),
         }
     }
-    diagonal = [
-        f"({a[0]},{a[1]})->({b[0]},{b[1]})"
-        for a, b in (ends[i] for i in plan.dragged)
-        if a[0] != b[0] and a[1] != b[1]
-    ]
-    if diagonal:
-        result["warnings"] = [
-            f"Dragging left {len(diagonal)} wire(s) diagonal: {', '.join(diagonal)}. "
-            "LTspice joins a diagonal wire at its ends and anywhere along it."
-        ]
-    return result
 
 
 def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
@@ -1448,16 +1437,16 @@ def _pins_on_crossings(
     pins: Sequence[Mapping[str, Any]],
     doing: str,
     already: Container[tuple[int, int]] = (),
-) -> list[str]:
-    """What putting ``reference``'s pins at ``pins`` would join that was apart.
+) -> None:
+    """Refuse putting ``reference``'s pins at ``pins`` where one would short two named nets.
 
     A pin on a point where wires cross joins them (the ``pin_at_crossing``
     recording), as a label there does. Anywhere else a pin lands, on a wire's
     interior or end, a label or another part's pin, there is one net already,
     so a crossing is the one way placing or moving a part makes one net of
     two. Two that each carry a name are a short, refused as a wire or a label
-    that joined them is. Otherwise the join is returned to be said: unlike a
-    route's waypoint, a pin put there is taken as meant.
+    that joined them is. Any other join is taken as meant, and the finished
+    sheet says it (the ``joined_at_crossing`` rule).
 
     The sheet is read without the part itself, and ``already`` is where its
     pins are now: what a pin joins from where it already is, is not this
@@ -1474,28 +1463,19 @@ def _pins_on_crossings(
         and len(through := wires_through((pin["x"], pin["y"]), wires)) > 1
     ]
     if not on_wires:
-        return []
+        return
     nets = NamedNets(net_partition(editor, without=reference))
-    said: list[str] = []
     for pin, through in on_wires:
-        at = (pin["x"], pin["y"])
         joined = nets.joined_at(seg[:2] for seg in through)
-        if joined.wired < 2:
-            continue
-        pin_name = f"{reference}.{pin['name']}"
         if len(joined.named) > 1:
             listed = "; ".join(str(sorted(names)) for names in joined.named)
             raise NetlistError(
-                f"Refused to {doing}: {pin_name} would land at ({at[0]},{at[1]}), where "
+                f"Refused to {doing}: {reference}.{pin['name']} would land at "
+                f"({pin['x']},{pin['y']}), where "
                 f"wires of nets that each carry a name cross ({listed}). A pin on a "
                 "crossing joins the wires, shorting those nets together. Put the part "
                 "where the pin is on the one wire it is meant for."
             )
-        said.append(
-            f"{pin_name} at ({at[0]},{at[1]}) is on a point where {joined.wired} wires cross "
-            "that were separate nets; a pin on a crossing joins them."
-        )
-    return said
 
 
 def _placed_component_data(
@@ -1580,29 +1560,23 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     return find_pin(pins, ref, symbol or "", pin_name, "not found" if geometry is None else "")
 
 
-def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:
-    """Validate placing net label ``net`` at ``(x, y)``.
+def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> None:
+    """Refuse placing net label ``net`` at ``(x, y)`` where it would short two named nets.
 
-    Raises ``NetlistError`` if the label would join two nets that each carry a
-    name (a short at netlist time) — a structural error, refused outright. That
-    happens when the network here is named and ``net`` already names a
+    That happens when the network here is named and ``net`` already names a
     different one, or when the label, ground included, lands where two named
-    networks cross and joins both. Returns advisory warnings (a second name for
-    an already-named net, two nets joined at a crossing) as plain facts for the
-    caller to surface. A label that touches nothing is not
-    said here: placing labels before wiring them is a legitimate order of work,
-    and one still on nothing when the batch is done is the finished sheet's
-    ``dangling_label``.
+    networks cross and joins both. Anything else it makes is the finished
+    sheet's to say, once the batch is done: a second name for a net
+    (``net_with_two_names``), two nets joined at a crossing
+    (``joined_at_crossing``), a label still on nothing (``dangling_label``).
     """
-    warnings: list[str] = []
     # A FLAG anywhere along a wire, its interior included, joins that wire's
     # net, and one at a crossing joins both (see connectivity.partition for the
     # export record). It is one node with whatever sits on its point, and with
     # every net already of its name; ground is no name (NamedNets.joined_at).
     through = wires_through((x, y), wire_segments_of(editor))
     grounding = is_ground(net)
-    nets = NamedNets(net_partition(editor))
-    joined = nets.joined_at(
+    joined = NamedNets(net_partition(editor)).joined_at(
         (seg[:2] for seg in through), at=(x, y), name=None if grounding else net
     )
     if len(joined.named) > 1:
@@ -1620,24 +1594,6 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
             "them on purpose, give both the same name: remove one side's labels "
             "with remove_net_label and label it with the other's name."
         )
-    # A name another label already carries, in any case, is not said: the
-    # netlist merges same-name labels into one net, a valid way to tie distant
-    # nets, and a later net:NAME that cannot tell them apart says so itself,
-    # with how to name the one meant by its point.
-    if not grounding and joined.named and not nets.has_name(net):
-        warnings.append(
-            f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
-            "becomes a second name for it. LTspice netlists the node under one name, "
-            "so a directive or probe that uses another may not find it."
-        )
-    # Said, not refused, where at most one of them has a name: a label put on
-    # a crossing is taken as meant, as a pin put there is.
-    if joined.wired > 1:
-        warnings.append(
-            f"({x},{y}) is where {joined.wired} wires cross that were separate nets; a "
-            "label on a crossing joins them."
-        )
-    return warnings
 
 
 class _ConnectPlan(NamedTuple):
@@ -2329,7 +2285,7 @@ def apply_op_inplace(
         if op.reference in editor.components:
             raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
         erot = _parse_rotation(op.rotation)
-        joined = _pins_on_crossings(
+        _pins_on_crossings(
             editor,
             op.reference,
             compute_placed_geometry(symbol_info, op.x, op.y, op.rotation)["pins"],
@@ -2354,8 +2310,6 @@ def apply_op_inplace(
             op.rotation,
             symbol_info,
         )
-        if joined:
-            placed["warnings"] = joined
         return {"op": "add_component", **placed}
 
     if isinstance(op, OpSetComponentValue):
@@ -2363,7 +2317,11 @@ def apply_op_inplace(
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
         _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
-        result = {"op": "set_component_value", "reference": op.reference, "value": op.value}
+        result: dict[str, object] = {
+            "op": "set_component_value",
+            "reference": op.reference,
+            "value": op.value,
+        }
         if lint:
             result["warnings"] = [lint]
         return result
@@ -2412,7 +2370,7 @@ def apply_op_inplace(
         old_pins = _component_pin_coords(editor, op.reference)
         moved_symbol = editor.components[op.reference].symbol
         moved_info = symbol_info_for(editor, moved_symbol) if moved_symbol else None
-        joined = (
+        if moved_info is not None:
             _pins_on_crossings(
                 editor,
                 op.reference,
@@ -2420,30 +2378,19 @@ def apply_op_inplace(
                 f"move {op.reference}",
                 already=old_pins,
             )
-            if moved_info is not None
-            else []
-        )
         # Wires left at its old pins are the finished sheet's to say
         # (dangling_wire_end), as for remove_component.
         editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
-        mv_result: dict[str, object] = {"op": "move_component", "reference": op.reference}
-        if joined:
-            mv_result["warnings"] = joined
-        return mv_result
+        return {"op": "move_component", "reference": op.reference}
 
     if isinstance(op, OpMove):
         return {"op": "move", **_apply_move(editor, op)}
 
     if isinstance(op, OpAddNetLabel):
         x, y = _resolve_op_xy(op, editor)
-        # Same short-refusal + duplicate/floating warnings as the standalone
-        # handler — the op is the public path, so it enforces the same rules.
-        warnings = _add_net_label_checks(editor, op.net, x, y)
+        _add_net_label_checks(editor, op.net, x, y)
         editor.labels.append(Text(coord=Point(x, y), text=op.net, type=TextTypeEnum.LABEL))
-        result: dict[str, object] = {"op": "add_net_label", "net": op.net, "x": x, "y": y}
-        if warnings:
-            result["warnings"] = warnings
-        return result
+        return {"op": "add_net_label", "net": op.net, "x": x, "y": y}
 
     if isinstance(op, OpRemoveNetLabel):
         x, y = _resolve_op_xy(op, editor)

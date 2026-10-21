@@ -1017,6 +1017,10 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "unresolved_symbol": 0,
         "dropped_wire": 0,
         "duplicate_parameter": 0,
+        "net_with_two_names": 0,
+        "joined_at_crossing": 0,
+        "unjoined_crossing": 0,
+        "diagonal_wire": 0,
         "floating_pin": 6,
         "dangling_wire_end": 2,
         "dangling_label": 0,
@@ -1034,7 +1038,10 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
     )
     # A check of the same sheet ran all of them but the one its export check holds.
     assert checked["rules_run"] == {
-        rule: count for rule, count in data["rules_run"].items() if rule != "dropped_wire"
+        rule: count
+        for rule, count in data["rules_run"].items()
+        # The export check's rules, which this call did not ask for.
+        if se.RULES[rule].check != "export"
     }
 
 
