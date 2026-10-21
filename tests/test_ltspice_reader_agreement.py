@@ -272,15 +272,16 @@ def test_a_run_stored_a_point_a_step_is_one_sweep_to_ltspices_reader_and_steps_h
     def a_point_a_step(trace: str) -> np.ndarray:
         return np.asarray([np.asarray(raw.get_wave(trace, step))[0] for step in steps])
 
+    precision = read["precision"]
     np.testing.assert_array_equal(
-        np.real(a_point_a_step(stepped_parameter)).astype(np.float32),
-        np.asarray(read["data"]["x"], dtype=np.float32),
+        at_the_precision_recorded(np.real(a_point_a_step(stepped_parameter)), precision),
+        at_the_precision_recorded(np.asarray(read["data"]["x"]), precision),
     )
-    # Single precision, as both files store it: a complex value is two floats.
-    stored = np.complex64 if read["complex"] == "true" else np.float32
     for signal, columns in read["data"]["signals"].items():
         np.testing.assert_array_equal(
-            a_point_a_step(signal).astype(stored), theirs(columns).astype(stored)
+            at_the_precision_recorded(a_point_a_step(signal), precision),
+            at_the_precision_recorded(theirs(columns), precision),
+            err_msg=signal,
         )
 
 

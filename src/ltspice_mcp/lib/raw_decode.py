@@ -382,8 +382,7 @@ def _step_facts(
     plot_name = header.plot_name.lower()
     parameters = leading_parameters(header)
     if header.dialect == "ltspice" and plot_name in _PARAMETERS_FIRST_LT_PLOTS and parameters:
-        # One point a step, the stepped parameters first. The log names no
-        # step values, so the raw's own are the record.
+        # See _PARAMETERS_FIRST_LT_PLOTS: the raw's own step values are the record.
         result["step_status"] = "matched"
         result["step_ranges"] = [
             {"step_index": index, "offset": index, "length": 1, "log_row": None}
