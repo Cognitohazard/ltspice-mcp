@@ -411,11 +411,15 @@ class TestALabelPlacedOnACrossing:
 
     _crossing = TestAPinPlacedOnACrossing._crossing  # pyright: ignore[reportPrivateUsage]
 
-    async def test_ground_there_between_two_named_nets_is_refused(self, asc_state: SessionState):
-        sheet = self._crossing(asc_state, "ground-cross", "VDD", "VSS")
+    @pytest.mark.parametrize("ground", ["0", "GND"])
+    async def test_ground_there_between_two_named_nets_is_refused(
+        self, asc_state: SessionState, ground: str
+    ):
+        """``GND`` in any case is ground too (the ``gnd_label`` recordings)."""
+        sheet = self._crossing(asc_state, f"ground-cross-{ground}", "VDD", "VSS")
         before = sheet.read_bytes()
         with pytest.raises(NetlistError, match=r"Refused to add ground at \(200,100\)") as refusal:
-            add_net_label(asc_state, sheet, "0", x=200, y=100)
+            add_net_label(asc_state, sheet, ground, x=200, y=100)
         said = str(refusal.value)
         assert "['VDD']" in said and "['VSS']" in said
         assert "shorting those nets together and to ground" in said
@@ -1635,16 +1639,19 @@ class TestAddNetLabelJoins:
         assert "['rail']" in warning
         assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
 
+    @pytest.mark.parametrize(("there", "added"), [("other", "other"), ("OUT", "out")])
     async def test_a_name_another_net_carries_is_refused(
-        self, asc_state: SessionState, work_dir: Path
+        self, asc_state: SessionState, work_dir: Path, there: str, added: str
     ):
-        asc = _write_sheet(work_dir / "merge.asc", *_RAIL, _res("R3", 400, 100))
+        """In any case: names that differ only in case are one name (the
+        ``node-name-case`` recording)."""
+        asc = _write_sheet(work_dir / f"merge_{added}.asc", *_RAIL, _res("R3", 400, 100))
         add_net_label(asc_state, asc, "rail", x=96, y=196)
-        add_net_label(asc_state, asc, "other", pin="R3.1")
+        add_net_label(asc_state, asc, there, pin="R3.1")
         before = asc.read_bytes()
         with pytest.raises(NetlistError, match="shorting them together") as exc_info:
-            add_net_label(asc_state, asc, "other", x=288, y=196)
-        assert "['other']" in str(exc_info.value) and "['rail']" in str(exc_info.value)
+            add_net_label(asc_state, asc, added, x=288, y=196)
+        assert f"['{there}']" in str(exc_info.value) and "['rail']" in str(exc_info.value)
         assert asc.read_bytes() == before
 
     async def test_a_label_at_a_crossing_of_two_named_nets_is_refused(
@@ -1670,18 +1677,6 @@ class TestNamesThatDifferOnlyInCase:
     ``node-name-case`` and ``net-naming`` recordings), so ``OUT`` and ``out``
     are one name to every check that compares names, as two ``OUT`` labels
     are."""
-
-    async def test_a_label_naming_another_net_in_another_case_is_refused(
-        self, asc_state: SessionState, work_dir: Path
-    ):
-        asc = _write_sheet(work_dir / "case_merge.asc", *_RAIL, _res("R3", 400, 100))
-        add_net_label(asc_state, asc, "X", x=96, y=196)
-        add_net_label(asc_state, asc, "OUT", pin="R3.1")
-        before = asc.read_bytes()
-        with pytest.raises(NetlistError, match="shorting them together") as exc_info:
-            add_net_label(asc_state, asc, "out", x=288, y=196)
-        assert "['OUT']" in str(exc_info.value) and "['X']" in str(exc_info.value)
-        assert asc.read_bytes() == before
 
     async def test_a_label_in_another_case_is_no_second_name(
         self, asc_state: SessionState, work_dir: Path
@@ -1718,8 +1713,6 @@ class TestAGroundLabelInAnyCase:
     wherever ``0`` is: one net with every other ground, and no name that a
     named net it grounds would be shorted to."""
 
-    _crossing = TestAPinPlacedOnACrossing._crossing  # pyright: ignore[reportPrivateUsage]
-
     async def test_the_net_of_a_gnd_label_is_the_ground_net(
         self, asc_state: SessionState, work_dir: Path
     ):
@@ -1752,13 +1745,6 @@ class TestAGroundLabelInAnyCase:
         add_net_label(asc_state, asc, "a", pin="R1.1")
         add_net_label(asc_state, asc, "Gnd", pin="R2.1")
         assert wire_pins(asc_state, asc, "R1.1", "R2.1")["wire_count"] == 1
-
-    async def test_gnd_at_a_crossing_of_two_named_nets_is_refused_as_ground(
-        self, asc_state: SessionState
-    ):
-        sheet = self._crossing(asc_state, "gnd-cross", "VDD", "VSS")
-        with pytest.raises(NetlistError, match=r"Refused to add ground at \(200,100\)"):
-            add_net_label(asc_state, sheet, "GND", x=200, y=100)
 
 
 @pytest.mark.asyncio
@@ -2442,7 +2428,7 @@ class TestMidSegmentLabelDetected:
         assert not point_on_segment((101, 150), (100, 100), (100, 200))
 
     def test_named_labels_strips_ground(self) -> None:
-        from ltspice_mcp.lib.schematic_ops import named_labels
+        from ltspice_mcp.lib.connectivity import named_labels
 
         assert named_labels(frozenset({"OUTP", "0"})) == {"OUTP"}
         assert named_labels(frozenset({"0"})) == set()

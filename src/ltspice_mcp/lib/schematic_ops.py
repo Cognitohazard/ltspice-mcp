@@ -84,6 +84,7 @@ from ltspice_mcp.lib.connectivity import (
     label_folded_nets,
     name_key,
     name_keys,
+    named_labels,
     partition,
     same_instance_dropped_segments,
 )
@@ -757,12 +758,6 @@ def _net_label_at(
     return nets.get(coord, frozenset())
 
 
-def named_labels(labels: frozenset[str]) -> set[str]:
-    """Strip ground ('0', or 'GND' in any case) from a label set so 'short to
-    ground' isn't flagged as a conflict by detect-multi-label net checks."""
-    return {lbl for lbl in labels if not is_ground(lbl)}
-
-
 def _segment_key(
     a: tuple[int, int], b: tuple[int, int]
 ) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -1407,7 +1402,8 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     # every net already of its name; ground is no name (NamedNets.joined_at).
     through = wires_through((x, y), wire_segments_of(editor))
     grounding = is_ground(net)
-    joined = NamedNets(net_partition(editor)).joined_at(
+    nets = NamedNets(net_partition(editor))
+    joined = nets.joined_at(
         (seg[:2] for seg in through), at=(x, y), name=None if grounding else net
     )
     if len(joined.named) > 1:
@@ -1429,7 +1425,7 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     # netlist merges same-name labels into one net, a valid way to tie distant
     # nets, and a later net:NAME that cannot tell them apart says so itself,
     # with how to name the one meant by its point.
-    if not grounding and joined.named and name_key(net) not in name_keys(joined.named[0]):
+    if not grounding and joined.named and not nets.has_name(net):
         warnings.append(
             f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
             "becomes a second name for it. LTspice netlists the node under one name, "
@@ -1612,11 +1608,8 @@ def _plan_connect_route(
     nets_before = labels_per_coord(part_before)
     from_labels_before = named_labels(_net_label_at(nets_before, from_anchor))
     to_labels_before = named_labels(_net_label_at(nets_before, to_anchor))
-    if (
-        from_labels_before
-        and to_labels_before
-        and name_keys(from_labels_before).isdisjoint(name_keys(to_labels_before))
-    ):
+    from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
+    if from_keys and to_keys and from_keys.isdisjoint(to_keys):
         raise NetlistError(
             f"Refused to connect {from_name} to {to_name}: "
             f"Net-label conflict — {from_name} is on net "
@@ -1633,7 +1626,7 @@ def _plan_connect_route(
     if len(name_keys(unioned)) >= 2:
         # Some labels seen post-route weren't there pre-route on
         # either endpoint — that's the mid-segment case.
-        known = name_keys(from_labels_before | to_labels_before)
+        known = from_keys | to_keys
         new_labels = {label for label in unioned if name_key(label) not in known}
         if new_labels:
             raise NetlistError(

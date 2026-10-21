@@ -269,7 +269,12 @@ def is_ground(name: str) -> bool:
 def name_key(name: str) -> str:
     """A label's name as LTspice compares it: :data:`GROUND` for every ground
     flag, and otherwise the name with its case folded. Labels with one key are
-    one node, and a net's names are told apart by their keys alone."""
+    one node, and a net's names are told apart by their keys alone.
+
+    A deck's node names are compared by ``netlist_graph.canon_net``, which also
+    takes ``gnd!`` for ground and strips the name; no sheet recording has a
+    ``gnd!`` label.
+    """
     return GROUND if is_ground(name) else fold_case(name)
 
 
@@ -278,17 +283,10 @@ def name_keys(names: Iterable[str]) -> set[str]:
     return {name_key(name) for name in names}
 
 
-def net_name(labels: Iterable[tuple[Point, str]]) -> str:
-    """The name LTspice gives a net that carries ``labels``, as ``(point, text)``.
-
-    Ground wins over any other label. Otherwise the label lowest on the sheet
-    names the net, and of those the one furthest right (the ``net-naming``
-    recordings), so the name is one the sheet spells.
-    """
-    found = list(labels)
-    if any(is_ground(text) for _point, text in found):
-        return GROUND
-    return max(found, key=lambda label: (label[0][1], label[0][0], label[1]))[1]
+def named_labels(labels: Iterable[str]) -> set[str]:
+    """``labels`` without the ground flags among them: ground is no name when
+    asking whether two *named* nets are joined."""
+    return {label for label in labels if not is_ground(label)}
 
 
 def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
@@ -311,7 +309,8 @@ def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
     first_root: dict[str, Point] = {}
     for root, coords in part.members.items():
         for coord in coords:
-            for key in name_keys(part.label_texts.get(coord, ())):
+            for text in part.label_texts.get(coord, ()):
+                key = name_key(text)
                 if key not in first_root:
                     first_root[key] = root
                     continue
@@ -349,11 +348,19 @@ class NamedNets:
     """
 
     def __init__(self, part: NetPartition) -> None:
-        self._part = part
         self._net_of = label_folded_nets(part)
         self._names: dict[Point, set[str]] = defaultdict(set)
+        #: The one net each name is on, by its key: labels of one key are one net.
+        self._net_named: dict[str, Point] = {}
         for coord, texts in part.label_texts.items():
-            self._names[self._net_of(coord)].update(text for text in texts if not is_ground(text))
+            net = self._net_of(coord)
+            self._names[net].update(named_labels(texts))
+            for key in name_keys(texts):
+                self._net_named[key] = net
+
+    def has_name(self, name: str) -> bool:
+        """True if a label of the sheet already carries ``name``, in any case."""
+        return name_key(name) in self._net_named
 
     def joined_at(
         self,
@@ -381,13 +388,8 @@ class NamedNets:
         nets = set(wired)
         if at is not None:
             nets.add(self._net_of(at))
-        if name is not None:
-            key = name_key(name)
-            nets.update(
-                self._net_of(coord)
-                for coord, texts in self._part.label_texts.items()
-                if key in name_keys(texts)
-            )
+        if name is not None and (named_net := self._net_named.get(name_key(name))) is not None:
+            nets.add(named_net)
         named = tuple(frozenset(self._names[net]) for net in sorted(nets) if self._names[net])
         return Joined(named, len(wired))
 
@@ -452,14 +454,15 @@ def _merge_collinear_runs(
     # alone would miss it. Add every such point sitting on the line as a cut
     # candidate; ``_emit`` keeps only those strictly inside a run's span, so one
     # at a run end (already a natural node) or off any run adds nothing.
+    cuts_on_x: dict[int, set[int]] = defaultdict(set)
+    cuts_on_y: dict[int, set[int]] = defaultdict(set)
+    for cx, cy in itertools.chain((end for end in ends if _breaks(end)), node_coords):
+        cuts_on_x[cx].add(cy)
+        cuts_on_y[cy].add(cx)
     for x, iv in verticals.items():
-        cuts = {y for (cx, y) in ends if cx == x and _breaks((cx, y))}
-        cuts |= {py for (px, py) in node_coords if px == x}
-        _emit(iv, cuts, vertical=True, line=x)
+        _emit(iv, cuts_on_x.get(x, set()), vertical=True, line=x)
     for y, iv in horizontals.items():
-        cuts = {x for (x, cy) in ends if cy == y and _breaks((x, cy))}
-        cuts |= {px for (px, py) in node_coords if py == y}
-        _emit(iv, cuts, vertical=False, line=y)
+        _emit(iv, cuts_on_y.get(y, set()), vertical=False, line=y)
     return merged
 
 
@@ -492,8 +495,18 @@ def same_instance_dropped_segments(
     ``NetPartition.pin_owners`` holds it, and ``labels`` are the points of the
     sheet's labels, ground flags among them.
     """
-    cuts = set(pin_owners) | set(labels)
-    return _dropped_among(_merge_collinear_runs(list(segments), cuts), pin_owners)
+    return _runs_and_drops(segments, pin_owners, labels)[1]
+
+
+def _runs_and_drops(
+    segments: Iterable[tuple[int, int, int, int]],
+    pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
+    labels: Iterable[Point],
+) -> tuple[list[tuple[int, int, int, int]], list[dict]]:
+    """The collinear-merged runs of ``segments``, cut at every pin and label,
+    and the runs among them LTspice drops (:func:`same_instance_dropped_segments`)."""
+    runs = _merge_collinear_runs(list(segments), set(pin_owners) | set(labels))
+    return runs, _dropped_among(runs, pin_owners)
 
 
 def _dropped_among(
@@ -537,9 +550,9 @@ def signature(
     two pins of one part (:func:`same_instance_dropped_segments`), and a
     part's pins that share a point with no wire or label on it, of which only
     the highest in SpiceOrder touches anything. A net with no pin on it is
-    left out, since nothing in a netlist shows it. A ground flag's name is
-    :data:`GROUND`, the name a netlist shows for it; other names are as the
-    sheet spells them.
+    left out, since nothing in a netlist shows it. Names are given as
+    :func:`name_key` has them, so two spellings of one name, or of ground,
+    compare equal.
 
     Two sheets with equal signatures connect the same pins and name the same
     nets, wherever their parts and wires are drawn, so an edit meant to change
@@ -552,11 +565,12 @@ def signature(
     owners: dict[Point, list[tuple[str, str]]] = {}
     for coord, owner in pins:
         owners.setdefault(coord, []).append(owner)
-    runs = _merge_collinear_runs(
+    runs, drops = _runs_and_drops(
         [(a[0], a[1], b[0], b[1]) for a, b in segments],
-        set(owners) | {coord for coord, _text in labels},
+        owners,
+        (coord for coord, _text in labels),
     )
-    dropped = {drop["segment"] for drop in _dropped_among(runs, owners)}
+    dropped = {drop["segment"] for drop in drops}
     netlisted = [
         ((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in dropped
     ]
@@ -576,9 +590,7 @@ def signature(
             alone += [pin for pin in at if last[pin[0]] != pin]
         on_net.setdefault(net_of(coord), set()).update(touching)
     for coord, texts in part.label_texts.items():
-        names.setdefault(net_of(coord), set()).update(
-            GROUND if is_ground(text) else text for text in texts
-        )
+        names.setdefault(net_of(coord), set()).update(name_keys(texts))
     nets = {(frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()}
     nets |= {(frozenset({pin}), frozenset()) for pin in alone}
     return frozenset(nets)

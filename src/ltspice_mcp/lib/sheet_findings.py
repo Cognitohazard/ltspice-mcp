@@ -42,7 +42,6 @@ from ltspice_mcp.lib.connectivity import (
     build_wire_counter,
     is_ground,
     name_key,
-    net_name,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.geometry import BBox
@@ -672,14 +671,18 @@ def _stacked_directives(ix: _Index) -> list[Finding]:
 def _label_islands(ix: _Index) -> list[Finding]:
     # Ground, by any of its names, is exempt: joining ground by flag is the
     # ordinary practice. Names that differ only in case are one net, reported
-    # under the name LTspice gives it.
+    # under the name LTspice gives it: the label lowest on the sheet, and of
+    # those the one furthest right (the net-naming recordings).
     stubs: dict[str, list[tuple[Point, str]]] = {}
     for x, y, text in ix.view.labels:
         name = text.strip()
         if name and not is_ground(name):
             stubs.setdefault(name_key(name), []).append(((x, y), name))
     islands = [
-        (net_name(labels), tuple(point for point, _name in labels))
+        (
+            max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1],
+            tuple(point for point, _name in labels),
+        )
         for labels in stubs.values()
         # A lone label is not a connection by name standing in for a wire.
         if len(labels) > 1 and not any(ix.on_a_wire(point) for point, _name in labels)

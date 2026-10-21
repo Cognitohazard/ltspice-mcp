@@ -24,8 +24,7 @@ tool-surface changes.
   pin of another named net is refused while `OUT` labels a net, as
   `add_net_label OUT` is, and a net with both spellings is not reported as
   shorted. A net found by labels of one name in two cases is reported under
-  the name LTspice gives it. A netlist's net query compares node names by the
-  same rule.
+  the name LTspice gives it.
 - A straight wire between two pins of one part was reported as left out of
   the netlist even with a net label or a ground flag on it, on its interior or
   at a vertex in line. Both LTspice builds keep such a wire, so the
