@@ -408,8 +408,9 @@ def index() -> str:
             "example. Every argument is a plain dict or scalar; the typed models are",
             "importable from ltspice_mcp.api.types if you want them.",
             "",
-            "Also on the object: wait(job_id), load_raw(...) for numpy arrays, and",
-            "measurements(job_id=...) for parsed .meas data.",
+            "Also on the object: wait(job_id), load_raw(...) for numpy arrays,",
+            "measurements(job_id=...) for parsed .meas data, and",
+            "device_op_points(job_id=...) for an .op run's device table.",
         ]
     )
     return "\n".join(lines)

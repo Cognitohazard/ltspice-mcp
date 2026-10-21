@@ -213,7 +213,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   leaves out of the netlist), said as soon as the edit that caused them.
 - **On an existing sheet, the reported findings are the edit's.** `warnings`
   and `wiring.label_only_pins` list only what your ops introduced or named;
-  older ones are counted in `preexisting`, not listed. Before calling a sheet
+  older ones are counted in `preexisting`, not listed. A batch that only sets
+  values or attributes lists no pins at all, since it leaves every pin joined
+  as it was. Before calling a sheet
   done, list them with `return_views: ["preexisting"]` (on an op-less read,
   `ops: []`, that is the whole sheet) or run `verify_circuit`.
 

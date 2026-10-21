@@ -28,6 +28,7 @@ from spicelib import AscEditor
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.schematic_ops import (
+    KEEPS_WIRING,
     OP_RESULT_FACTS,
     collect_component_geometry,
     get_asc_editor,
@@ -186,6 +187,11 @@ async def test_the_response_carries_each_ops_own_facts(asc_state, dry_run: bool)
 def test_every_op_declaring_result_facts_is_an_op_this_tool_takes():
     # A misspelt key would relay nothing for that op, without an error.
     assert set(OP_RESULT_FACTS) <= _op_kinds()
+
+
+def test_every_op_said_to_keep_wiring_is_an_op_this_tool_takes():
+    # A misspelt name would list pins for that op, without an error.
+    assert _op_kinds() >= KEEPS_WIRING
 
 
 async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
@@ -682,7 +688,8 @@ async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, wo
     """An ack-shaped edit returns the geometry of what it edited, not the sheet.
 
     R8 adds one net label and used to be handed every pin on the sheet. The
-    whole-sheet table is still one explicit ``return_views`` away.
+    whole-sheet table is still one explicit ``return_views`` away. A part moved
+    to where it already is was rewired as far as the reply knows, and is listed.
     """
     built = await _build_blank(asc_state, "touched-scope", _DIVIDER_OPS)
     assert {row["ref"] for row in built["views"]["touched"]["items"]} == {"R1", "R2"}
@@ -693,7 +700,7 @@ async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, wo
             _edit_input(
                 target="touched-scope.asc",
                 expected_sha256=_sha(work_dir / "touched-scope.asc"),
-                ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
+                ops=[{"op": "move_component", "reference": "R2", "x": 700, "y": 300}],
             ),
             asc_state,
         )
@@ -713,6 +720,25 @@ async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, wo
         )
     )
     assert {row["ref"] for row in whole_sheet["views"]["pin_legend"]["items"]} == {"R1", "R2"}
+
+
+async def test_the_parts_a_move_lists_are_the_ones_it_touched(asc_state, work_dir):
+    """``move`` names its parts in a list of its own; they are the touched
+    view's, as a part ``move_component`` names is."""
+    await _build_blank(asc_state, "move-scope", _DIVIDER_OPS)
+
+    moved = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="move-scope.asc",
+                expected_sha256=_sha(work_dir / "move-scope.asc"),
+                ops=[{"op": "move", "references": ["R2"], "dx": 160, "dy": 0, "drag": True}],
+            ),
+            asc_state,
+        )
+    )
+
+    assert {row["ref"] for row in moved["views"]["touched"]["items"]} == {"R2"}
 
 
 async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, work_dir):
@@ -1304,6 +1330,53 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
     assert len(label_only) == wiring["pins_label_only"]
 
 
+@pytest.mark.parametrize(
+    ("ops", "changed"),
+    [
+        (
+            [
+                {"op": "set_component_value", "reference": "R3", "value": "2k"},
+                {"op": "set_component_value", "reference": "R3", "value": "3k"},
+            ],
+            [{"Value": {"was": None, "now": "2k"}}, {"Value": {"was": "2k", "now": "3k"}}],
+        ),
+        (
+            # The second changes nothing, and says nothing.
+            [
+                {"op": "set_component_value", "reference": "R3", "value": "2k"},
+                {"op": "set_component_value", "reference": "R3", "value": "2k"},
+            ],
+            [{"Value": {"was": None, "now": "2k"}}],
+        ),
+        (
+            [
+                {
+                    "op": "set_component_attribute",
+                    "reference": "R3",
+                    "attribute": "SpiceLine",
+                    "value": "tc=0.001",
+                }
+            ],
+            [{"SpiceLine": {"was": None, "now": "tc=0.001"}}],
+        ),
+    ],
+    ids=["value", "attribute", "value-unchanged"],
+)
+async def test_a_batch_that_changes_no_wiring_lists_no_pins(asc_state, ops, changed):
+    """A value or an attribute leaves a part's pins where they were and joined
+    as they were, so the reply lists none of them by default: its label-only
+    pins stay counted under preexisting, and the touched view is empty. What
+    each op changed is the reply instead, as it was and as it is now."""
+    sheet = await _untidy_sheet(asc_state, "untidy-values")
+
+    data = await apply_ops(asc_state, sheet, ops)
+
+    assert data["wiring"]["label_only_pins"]["items"] == []
+    assert data["preexisting"]["label_only_pins"] == _UNTIDY_LABEL_ONLY
+    assert data["views"]["touched"]["items"] == []
+    assert [entry["changed"] for entry in data["results"]] == changed
+
+
 async def test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-ask")
 
@@ -1498,12 +1571,18 @@ async def test_view_pagination_cursor_resumption(asc_state):
                     return_views=["pin_legend"],
                     view_limit=2,
                     view_cursors={"label_only_pins": cursor_lo, "pin_legend": cursor_pl},
-                    # Ops that name every part without moving one keep the paged
+                    # Ops that rewire every part without moving one keep the paged
                     # list identical across resume calls: add_net_label would change
-                    # label_only membership, and an op naming none of the parts
-                    # would leave their label-only pins counted under preexisting.
+                    # label_only membership, and an op rewiring none of the parts
+                    # (a value change) would leave their label-only pins counted
+                    # under preexisting. Each part is moved to where it is.
                     ops=[
-                        {"op": "set_component_value", "reference": f"R{i}", "value": "1k"}
+                        {
+                            "op": "move_component",
+                            "reference": f"R{i}",
+                            "x": 200 + 200 * i,
+                            "y": 300,
+                        }
                         for i in range(5)
                     ],
                 ),

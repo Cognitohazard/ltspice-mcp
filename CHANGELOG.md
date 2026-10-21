@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- An `edit_schematic` batch that only set values or attributes returned every
+  pin of every part it named, in `views.touched` and in
+  `wiring.label_only_pins`, though no pin moved or changed net; `view_limit`
+  was the only way to keep the reply short. Pins are now listed for the parts
+  a batch rewires (places, moves, removes, wires or labels); a value change
+  lists none, and its label-only pins are counted under `preexisting`. Each
+  `set_component_value` and `set_component_attribute` reports in `results`
+  what it `changed`: every attribute it touched, as it was and as it is now.
 - `edit_schematic`'s compare exported a copy of the committed sheet, and of
   an `.asc` reference, in a folder with nothing beside it, so a symbol saved
   next to the sheet was not found and the export failed, though
@@ -913,6 +921,14 @@ recording that showed it.
 
 ### Added
 
+- `RawResult.value(name, step=0)` reads a plot of one point a step, such as
+  an operating point, as a number: a float, or a complex for a complex trace.
+  A trace of more points is refused rather than cut to its first.
+- `api.device_op_points(job_id=..., case_id=...)` (or `log_path=`) returns
+  the semiconductor operating points LTspice prints in an `.op` run's log, by
+  device and parameter (`ops["m1"]["gm"]`), and says that the table holds
+  three significant digits. The guide's Python section shows a run's
+  operating point, device table and an AC trace kept in a JSON file.
 - `edit_schematic` op `move`: shifts any mix of parts, wires, net labels,
   directives and comments by one offset (`dx`, `dy`). Parts are chosen by
   reference, labels by point, wires by their two ends, and texts by exact text

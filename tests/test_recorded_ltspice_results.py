@@ -18,6 +18,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -43,6 +44,7 @@ from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests._ltspice_recorded import declared_points, header_fields
+from tests.conftest import SyncApi
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 
 
@@ -305,6 +307,30 @@ class TestSteppedRuns:
             assert list(parsed.raw.get_wave("V(out)", step)) == pytest.approx([level])
         log = read_spice_text(rec.recorded(build, "raw/step_op.log"))
         assert not [line for line in log.splitlines() if line.startswith(".step")]
+
+    def test_the_api_reads_an_operating_point_as_one_number_a_step(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """``value`` is a one-point trace's number, per step; a trace of more
+        points is refused rather than cut to its first."""
+        api = SyncApi(state_no_sim)
+
+        def load(case_id: str):
+            staged = work_dir / build / f"{Path(case_id).name}.raw"
+            staged.parent.mkdir(exist_ok=True)
+            staged.write_bytes(rec.recorded(build, f"{case_id}.raw").read_bytes())
+            return api.load_raw(staged)
+
+        alone = load("raw/op")
+        assert alone.value("V(out)") == pytest.approx(4.0)
+        assert isinstance(alone.value("V(out)"), float)
+        assert alone.value("V(in,out)") == pytest.approx(1.0)
+        stepped = load("raw/step_op")
+        assert [stepped.value("V(out)", step=step) for step in range(3)] == pytest.approx(
+            [0.8, 1.6, 2.4]
+        )
+        with pytest.raises(ResultError, match="points"):
+            load("raw/tran").value("V(out)")
 
     def test_a_stepped_operating_points_summary_counts_its_steps(self, build: str, tmp_path: Path):
         """The run's summary no longer says only the first step is read."""
@@ -843,7 +869,7 @@ class TestDeviceOperatingPoints:
             assert b".options logopinfo\n.end" in run.read_bytes()
 
     def test_the_block_is_read_for_every_device(self, build: str, tmp_path: Path):
-        case_id = "log/device_op_off" if rec.generation(build) == "xvii" else "log/device_op"
+        case_id = _device_op_case(build)
         points = rec.decode_log(build, case_id, tmp_path).value("device_op")
         assert points == read_device_op_points(rec.recorded(build, f"{case_id}.log"))
         assert points["@d1[id]"] == pytest.approx(2.32e-3)
@@ -854,6 +880,33 @@ class TestDeviceOperatingPoints:
         # element letter, the subcircuit's number and its own.
         inner = "@m:1:1[gm]" if rec.generation(build) == "xvii" else "@x1:m1[gm]"
         assert points[inner] == pytest.approx(8.64e-4)
+
+    def test_the_api_reads_the_block_by_device(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """``api.device_op_points`` is the same table, by device and parameter."""
+        case_id = _device_op_case(build)
+        log = work_dir / "device_op.log"
+        log.write_bytes(rec.recorded(build, f"{case_id}.log").read_bytes())
+
+        points = SyncApi(state_no_sim).device_op_points(log)
+
+        assert points["m1"]["gm"] == pytest.approx(5.86e-4)
+        assert points["q1"]["gm"] == pytest.approx(1.15e-2)
+        assert points["d1"]["id"] == pytest.approx(2.32e-3)
+        inner = "m:1:1" if rec.generation(build) == "xvii" else "x1:m1"
+        assert points[inner]["gm"] == pytest.approx(8.64e-4)
+        # Every value of the table, and nothing else.
+        flat = read_device_op_points(log)
+        assert {f"@{device}[{param}]" for device in points for param in points[device]} == set(
+            flat
+        )
+
+
+def _device_op_case(build: str) -> str:
+    """The recording whose log holds the device table: XVII prints it without
+    ``.options logopinfo`` and refuses the option."""
+    return "log/device_op_off" if rec.generation(build) == "xvii" else "log/device_op"
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

@@ -9,7 +9,8 @@ What lives here:
 
 - the typed op union (``OpAddComponent`` … ``OpSetPlotPanes``), the in-place
   applier ``apply_op_inplace``, the facts its results report
-  (``OP_RESULT_FACTS``), and the batch runner ``run_op_batch``;
+  (``OP_RESULT_FACTS``), the ops that leave wiring alone (``KEEPS_WIRING``),
+  and the batch runner ``run_op_batch``;
 - ``SheetPlotSettings``, the plot settings file beside a sheet as one batch
   changes it: the one op that does not edit the sheet itself writes there;
 - ``edit_guard``, which serializes one file's mutation in-process and across
@@ -511,6 +512,28 @@ def level_label_lint(editor, reference: str, value: str) -> str | None:
             "SpiceModel instead."
         )
     return None
+
+
+def _attributes_of(editor, reference: str) -> dict[str, str]:
+    """A part's attributes as its SYMATTR lines hold them, by name. The editor's
+    own bookkeeping, under names starting ``_``, is left out."""
+    return {
+        name: str(text)
+        for name, text in editor.get_component(reference).attributes.items()
+        if not name.startswith("_")
+    }
+
+
+def _attributes_changed(
+    before: Mapping[str, str], after: Mapping[str, str]
+) -> dict[str, dict[str, str | None]]:
+    """Each attribute that differs between ``before`` and ``after``, with what
+    it was and what it is now; None where it was not there or is gone."""
+    return {
+        name: {"was": before.get(name), "now": after.get(name)}
+        for name in sorted(before.keys() | after.keys())
+        if before.get(name) != after.get(name)
+    }
 
 
 def _set_or_create_value(editor, reference: str, value: str) -> None:
@@ -2217,15 +2240,31 @@ def _resolve_op_xy(
     raise NetlistError(f"{op.op} needs either pin or both x and y.")
 
 
+#: The ops that leave every pin where it was and joined as it was: a part's
+#: value or attributes, directives and comments, the plot settings beside the
+#: sheet. A reply lists pins for the parts the other ops name, and none for
+#: these; an op not listed is taken to rewire what it names.
+KEEPS_WIRING = frozenset(
+    {
+        "set_component_value",
+        "set_component_attribute",
+        "add_directive",
+        "remove_directive",
+        "set_plot_panes",
+    }
+)
+
 # The keys of an op's result that report what applying it found on the sheet:
 # the segments a route found already drawn, the junctions it made, how much a
-# removal took. The rest of a result restates the op or carries geometry and
+# removal took. A value or attribute change reports what it changed. The rest of a result restates the op or carries geometry and
 # advisories a surface reports through views and warnings of its own. A route's
 # ``wire_count`` is not one: ``already_present`` names the segments it did not
 # draw, and relaying the count would put a line per route on every build. Nor
 # is ``remove_directive``'s ``removed``, which names a kind, not an amount. An
 # op missing here reports nothing beyond its arguments.
 OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
+    "set_component_value": ("changed",),
+    "set_component_attribute": ("changed",),
     "wire_pins": ("already_present", "junctions"),
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
@@ -2316,12 +2355,15 @@ def apply_op_inplace(
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         lint = level_label_lint(editor, op.reference, op.value)
+        before = _attributes_of(editor, op.reference)
         _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result: dict[str, object] = {
             "op": "set_component_value",
             "reference": op.reference,
             "value": op.value,
         }
+        if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
+            result["changed"] = changed
         if lint:
             result["warnings"] = [lint]
         return result
@@ -2330,6 +2372,7 @@ def apply_op_inplace(
         _reject_unknown_attr(op.attribute)
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
+        before = _attributes_of(editor, op.reference)
         if not op.value.strip():
             # Empty value = clear. LTspice's format has no "empty value"
             # representation (a 2-token SYMATTR line is unreadable), so the
@@ -2338,11 +2381,14 @@ def apply_op_inplace(
             editor.get_component(op.reference).attributes.pop(op.attribute, None)
         else:
             editor.set_component_attribute(op.reference, op.attribute, op.value)
-        return {
+        attr_result: dict[str, object] = {
             "op": "set_component_attribute",
             "reference": op.reference,
             "attribute": op.attribute,
         }
+        if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
+            attr_result["changed"] = changed
+        return attr_result
 
     if isinstance(op, OpRemoveComponent):
         if op.reference not in editor.components:

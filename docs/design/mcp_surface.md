@@ -880,8 +880,12 @@ views.
 A failed batch writes nothing, not even a draft file, and the response names
 the failed stage and the reason.
 
-`touched` is the pin/net table for the references the batch addressed. The
-whole-sheet `pin_legend` is returned only on request, and is the only
+`touched` is the pin/net table for the parts whose wiring the batch could
+change: those its ops place, move, remove, wire or label. A part whose value or
+attributes alone changed keeps its pins where they were and joined as they
+were, so a batch of value changes lists no pins, in `touched` or in
+`wiring.label_only_pins`; its label-only pins are counted under `preexisting`.
+The whole-sheet `pin_legend` is returned only on request, and is the only
 whole-sheet pin-to-net table on the surface:
 `inspect(kind: "components", detail: "full")` gives pin coordinates without
 net names, and `inspect(kind: "net")` traces one net at a time.

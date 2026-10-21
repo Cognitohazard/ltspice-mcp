@@ -396,3 +396,22 @@ def test_archetype_build_verify_and_recorded_analysis_through_api(
         # simulator from full-resolution data; the recipe interpolates the
         # stored raw points, which lands ~2ppm away on this fixture.
         assert value == pytest.approx(LTSPICE_TRAN_RC_VFINAL, abs=5e-6)
+
+
+def test_device_op_points_group_by_device_and_keep_a_value_the_log_left_out():
+    """The table's keys are taken apart by the reader that wrote them, a
+    subcircuit device's colon-qualified name kept whole; a value that was not a
+    finite number stays None rather than failing the read."""
+    from ltspice_mcp.api._primitives import device_op_points_of
+    from ltspice_mcp.lib.log_parser import device_key
+
+    section = {
+        device_key("M1", "gm"): 5.86e-4,
+        device_key("M1", "Vth"): None,
+        device_key("x1:M1", "gm"): 8.64e-4,
+    }
+    assert device_op_points_of(section) == {
+        "m1": {"gm": 5.86e-4, "vth": None},
+        "x1:m1": {"gm": 8.64e-4},
+    }
+    assert device_op_points_of(None) == {}
