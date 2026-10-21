@@ -77,11 +77,14 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
-    GROUND,
     NamedNets,
     NetPartition,
     build_on_wire_predicate,
+    is_ground,
     label_folded_nets,
+    name_key,
+    name_keys,
+    named_labels,
     partition,
     same_instance_dropped_segments,
 )
@@ -755,12 +758,6 @@ def _net_label_at(
     return nets.get(coord, frozenset())
 
 
-def named_labels(labels: frozenset[str]) -> set[str]:
-    """Strip ground ('0') from a label set so 'short to ground' isn't
-    flagged as a conflict by detect-multi-label net checks."""
-    return {lbl for lbl in labels if lbl != "0"}
-
-
 def _segment_key(
     a: tuple[int, int], b: tuple[int, int]
 ) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -1336,10 +1333,14 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     Raises NetlistError if the reference cannot be resolved.
     """
     if pin_ref.startswith("net:"):
-        # Look up a FLAG/net label position in the .asc
+        # Look up a FLAG/net label position in the .asc. A name finds its labels
+        # in any case, and ground finds every ground flag, as LTspice joins them.
         net_name = pin_ref[4:]
+        key = name_key(net_name)
         matches = [
-            (int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels if lbl.text == net_name
+            (int(lbl.coord.X), int(lbl.coord.Y))
+            for lbl in editor.labels
+            if name_key(lbl.text) == key
         ]
         if not matches:
             raise NetlistError(
@@ -1400,12 +1401,14 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     # export record). It is one node with whatever sits on its point, and with
     # every net already of its name; ground is no name (NamedNets.joined_at).
     through = wires_through((x, y), wire_segments_of(editor))
-    joined = NamedNets(net_partition(editor)).joined_at(
-        (seg[:2] for seg in through), at=(x, y), name=None if net == GROUND else net
+    grounding = is_ground(net)
+    nets = NamedNets(net_partition(editor))
+    joined = nets.joined_at(
+        (seg[:2] for seg in through), at=(x, y), name=None if grounding else net
     )
     if len(joined.named) > 1:
         listed = "; ".join(f"{sorted(names)}" for names in joined.named)
-        if net == GROUND:
+        if grounding:
             raise NetlistError(
                 f"Refused to add ground at ({x},{y}): wires of nets that each carry a "
                 f"name cross there ({listed}). A ground flag on a crossing joins the "
@@ -1418,11 +1421,11 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
             "them on purpose, give both the same name: remove one side's labels "
             "with remove_net_label and label it with the other's name."
         )
-    # A name another label already carries is not said: the netlist merges
-    # same-name labels into one net, a valid way to tie distant nets, and a
-    # later net:NAME that cannot tell them apart says so itself, with how to
-    # name the one meant by its point.
-    if net != GROUND and joined.named and net not in joined.named[0]:
+    # A name another label already carries, in any case, is not said: the
+    # netlist merges same-name labels into one net, a valid way to tie distant
+    # nets, and a later net:NAME that cannot tell them apart says so itself,
+    # with how to name the one meant by its point.
+    if not grounding and joined.named and not nets.has_name(net):
         warnings.append(
             f"({x},{y}) is on the net already labelled {sorted(joined.named[0])}; '{net}' "
             "becomes a second name for it. LTspice netlists the node under one name, "
@@ -1600,10 +1603,13 @@ def _plan_connect_route(
     #      nets (the standard short).
     #   2) AFTER state — proposed route drags a mid-segment label into
     #      the union, merging an additional named net.
+    # Names are compared as LTspice compares them (name_key): a net named
+    # VOUT and one named Vout are one node already.
     nets_before = labels_per_coord(part_before)
     from_labels_before = named_labels(_net_label_at(nets_before, from_anchor))
     to_labels_before = named_labels(_net_label_at(nets_before, to_anchor))
-    if from_labels_before and to_labels_before and from_labels_before.isdisjoint(to_labels_before):
+    from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
+    if from_keys and to_keys and from_keys.isdisjoint(to_keys):
         raise NetlistError(
             f"Refused to connect {from_name} to {to_name}: "
             f"Net-label conflict — {from_name} is on net "
@@ -1617,11 +1623,11 @@ def _plan_connect_route(
     from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))
     to_labels_after = named_labels(_net_label_at(nets_after, (x2, y2)))
     unioned = from_labels_after | to_labels_after
-    if len(unioned) >= 2:
+    if len(name_keys(unioned)) >= 2:
         # Some labels seen post-route weren't there pre-route on
         # either endpoint — that's the mid-segment case.
-        unioned_before = from_labels_before | to_labels_before
-        new_labels = unioned - unioned_before
+        known = from_keys | to_keys
+        new_labels = {label for label in unioned if name_key(label) not in known}
         if new_labels:
             raise NetlistError(
                 f"Refused to connect {from_name} to {to_name}: "
@@ -1635,10 +1641,13 @@ def _plan_connect_route(
     # Same-instance self-loop — refused first because, like the net-label
     # conflict above, it's a "wrong intent" error: a wire tying two pins of one
     # component (directly, or through a collinear waypoint that merges back into
-    # a straight wire) is dropped by LTspice at netlist time (see
-    # same_instance_dropped_segments), so reporting the tie as connected would
-    # be a lie. The fix is a route change, so surface it before route geometry.
-    dropped = same_instance_dropped_segments(part_before.pin_owners, segments)
+    # a straight wire) with nothing on it is dropped by LTspice at netlist time
+    # (see same_instance_dropped_segments), so reporting the tie as connected
+    # would be a lie. The fix is a route change, so surface it before route
+    # geometry.
+    dropped = same_instance_dropped_segments(
+        part_before.pin_owners, segments, part_before.label_texts.keys()
+    )
     if dropped:
         ref = dropped[0]["ref"]
         pin_a, pin_b = dropped[0]["pins"]

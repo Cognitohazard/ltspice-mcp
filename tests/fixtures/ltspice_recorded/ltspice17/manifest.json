@@ -977,6 +977,60 @@
         ".net"
       ]
     },
+    "connectivity/gnd_label": {
+      "behaviour": "net-naming",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/gnd_label.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/gnd_label.asc": "bd432246b9fbaefe056f48f61c57075440f8c30d29026b466cb815bdfa55e20f",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/gnd_label.net": {
+          "bytes": 69,
+          "sha256": "a67d94dc4aab00d7b056f074d21ee04db5832dda4ea239aa721a17e54645f8e6"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/gnd_label_lower_case": {
+      "behaviour": "net-naming",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/gnd_label_lower_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/gnd_label_lower_case.asc": "d357f1eb3c9a5dcdbdf195aeff42f3dc65f78c1d5131bd7a8c17e3c5800e7a99",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/gnd_label_lower_case.net": {
+          "bytes": 80,
+          "sha256": "f1bbdddb1c0196264c75664d8368f1698da2729a5f9871cc6b3a450003c94c8e"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/label_and_ground": {
       "behaviour": "net-naming",
       "command": [
@@ -1023,6 +1077,87 @@
         "connectivity/label_at_crossing.net": {
           "bytes": 88,
           "sha256": "b364d469c4c3352f6997084c123ec2e0b5d9026287bcc456d9158dcd679f56f0"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/label_case_one_wire": {
+      "behaviour": "net-naming",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/label_case_one_wire.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/label_case_one_wire.asc": "ed39a25f84573b7d3df23f4de3c815bc2c7f7ed0ad2309150c4071b2ee0a4f25",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/label_case_one_wire.net": {
+          "bytes": 71,
+          "sha256": "baee44b6567c6164fe6d17cd8f6fa5b5a6dafffc38fb55cc6eaf86fa37361135"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/label_case_second_name": {
+      "behaviour": "net-naming",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/label_case_second_name.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/label_case_second_name.asc": "4e349de7458a2e6f9bcbc886aa8818ef000fbb6087dbf2e2e58b4f5242eb7ce4",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/label_case_second_name.net": {
+          "bytes": 88,
+          "sha256": "aefeae8201086dd7f45c4144bdc189983276259d7c0914d0ff67c824cd41dde5"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/label_case_separate_wires": {
+      "behaviour": "net-naming",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/label_case_separate_wires.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/label_case_separate_wires.asc": "0cbde47a4fca7d7d0c0fea2f7f7389b81deb07b077daa2b5524035024150c52a",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/label_case_separate_wires.net": {
+          "bytes": 89,
+          "sha256": "2787dbc6fa434a52e2af0dccf696053cdc11fc202a9b73d7071fdfb50f40b956"
         }
       },
       "reported_build": null,
@@ -1083,6 +1218,38 @@
       "stopped": false,
       "written": [
         ".net"
+      ]
+    },
+    "connectivity/node_name_case": {
+      "behaviour": "node-name-case",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/node_name_case.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/node_name_case.cir": "fd10265e31b7c7c09ca450cd63afbbdca7f5a223928e4b545214cd69264b4750"
+      },
+      "kind": "run",
+      "outputs": {
+        "connectivity/node_name_case.log": {
+          "bytes": 412,
+          "sha256": "736dd40bed2deab314a34935fd12a7463c01207c048d03ce65bb035eb0285582"
+        },
+        "connectivity/node_name_case.raw": {
+          "bytes": 732,
+          "sha256": "e8194603291781a72d9f8cb84eab448a574a29c33cb9634c6be7b4233a1e9bf9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
       ]
     },
     "connectivity/pin_at_crossing": {
@@ -1222,6 +1389,33 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_ground_inside": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_ground_inside.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_ground_inside.asc": "6cd853bd2101ff72829cdef90ad5735a8bea5ee463973de37a75300bcfed82f7"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_ground_inside.net": {
+          "bytes": 76,
+          "sha256": "45ada8c4df3db411d6643a169e06460aeeb22df286bd399590a48905a2d5661b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_inline_vertex": {
       "behaviour": "same-instance-wire",
       "command": [
@@ -1241,6 +1435,114 @@
         "connectivity/same_instance_inline_vertex.net": {
           "bytes": 76,
           "sha256": "75b593954b7ef22fac3cae4a0b51a0032c8805859cfaf64249cf5736e4c83097"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_label_at_vertex": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_label_at_vertex.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_label_at_vertex.asc": "57d07ae67460bb31c07883d3a3b4bca35dd32899d0c7a7eaac8caaf4336efb51"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_label_at_vertex.net": {
+          "bytes": 78,
+          "sha256": "a25e70b1eeea41e78dc083dd4750920e217a5a0ba05eff60fb9532813312144a"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_label_inside": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_label_inside.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_label_inside.asc": "c06405f872c4a1655233438e874157fce9e3c913edf29776030f464e402f964b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_label_inside.net": {
+          "bytes": 75,
+          "sha256": "c1c335b58ef62c1195f81a69127704fb4118b2e69295a9d5bb0f30f464c1e9a5"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_pin_inside": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_pin_inside.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_pin_inside.asc": "4b68b4f4429d94799880d67bea22cfeb5598d9dba83e0a7fbb0ad5a436d6bbff"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_pin_inside.net": {
+          "bytes": 84,
+          "sha256": "21da7abf655b84ee010b7d03b06b71d6f8afd67b1665e2a286e23b3886ac7c73"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_t_junction": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_t_junction.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_t_junction.asc": "e4d5136f8eb3f466e4bffd63dc32bdcd48e7cd8987d8847731989ecfb88721b3"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_t_junction.net": {
+          "bytes": 84,
+          "sha256": "270650d871794b3391b8bb338f68317585f6de5e1aedf340b0bbc980a6791d36"
         }
       },
       "reported_build": null,

@@ -1,0 +1,5 @@
+* Node names that differ only in case: V1 drives OUT, R1 sits on out
+V1 OUT 0 1
+R1 out 0 1k
+.op
+.end

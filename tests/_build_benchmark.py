@@ -213,7 +213,8 @@ def netlisted(sheet: Sheet) -> list[tuple[frozenset[tuple[str, int]], frozenset[
 
     A pin is its part's reference, as `netlist_graph.canon_ref` spells it, and
     its SpiceOrder, the order a netlist lists a part's nodes in (the
-    ``symbol-orientation`` recording). Names are in lower case.
+    ``symbol-orientation`` recording). Names are in lower case, ground as ``0``
+    (``connectivity.name_key``).
 
     A transistor drawn with three pins is exported with four nodes. A
     MOSFET's fourth is its source's net when the source is connected, and a
@@ -233,7 +234,7 @@ def netlisted(sheet: Sheet) -> list[tuple[frozenset[tuple[str, int]], frozenset[
     nets = [
         (
             {(canon_ref(ref), int(order)) for ref, order in owners},
-            frozenset(name.lower() for name in names),
+            names,
         )
         for owners, names in signature(
             pins,

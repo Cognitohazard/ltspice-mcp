@@ -1,0 +1,5 @@
+* C:\recording\same_instance_t_junction.asc
+R1 a a 1k
+R2 a 0 1k
+.backanno
+.end

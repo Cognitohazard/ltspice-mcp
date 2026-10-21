@@ -977,6 +977,60 @@
         ".net"
       ]
     },
+    "connectivity/gnd_label": {
+      "behaviour": "net-naming",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/gnd_label.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/gnd_label.asc": "bd432246b9fbaefe056f48f61c57075440f8c30d29026b466cb815bdfa55e20f",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/gnd_label.net": {
+          "bytes": 107,
+          "sha256": "9b23191db40f2463cb5c8081847b1d68701a896b4dacbecd8c5fa0df7ccb9e2a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/gnd_label_lower_case": {
+      "behaviour": "net-naming",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/gnd_label_lower_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/gnd_label_lower_case.asc": "d357f1eb3c9a5dcdbdf195aeff42f3dc65f78c1d5131bd7a8c17e3c5800e7a99",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/gnd_label_lower_case.net": {
+          "bytes": 118,
+          "sha256": "da721198de47e31183c873e4bedec6b9da2bc3751ea50ca2725e475befeb2ee3"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/label_and_ground": {
       "behaviour": "net-naming",
       "command": [
@@ -1023,6 +1077,87 @@
         "connectivity/label_at_crossing.net": {
           "bytes": 125,
           "sha256": "2a6d1d3299fe550e4400a9f2f1ed56ee3a3da45057a044698fe684c3e35c8904"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/label_case_one_wire": {
+      "behaviour": "net-naming",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/label_case_one_wire.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/label_case_one_wire.asc": "ed39a25f84573b7d3df23f4de3c815bc2c7f7ed0ad2309150c4071b2ee0a4f25",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/label_case_one_wire.net": {
+          "bytes": 110,
+          "sha256": "cde37e75ad77b7b09c67cad6a95940b5ecfd04a9bbfc5f609f8dcddd8c85269f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/label_case_second_name": {
+      "behaviour": "net-naming",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/label_case_second_name.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/label_case_second_name.asc": "4e349de7458a2e6f9bcbc886aa8818ef000fbb6087dbf2e2e58b4f5242eb7ce4",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/label_case_second_name.net": {
+          "bytes": 126,
+          "sha256": "eb927e33addf2c3b1c56c9df0f8d8ffca41823ea1b8a629ecc4e3bb682ffea17"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/label_case_separate_wires": {
+      "behaviour": "net-naming",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/label_case_separate_wires.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/label_case_separate_wires.asc": "0cbde47a4fca7d7d0c0fea2f7f7389b81deb07b077daa2b5524035024150c52a",
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/label_case_separate_wires.net": {
+          "bytes": 127,
+          "sha256": "673a5c8eb2695eb2d8e7ec204a6a038bcc00d3c0a1c3eaca607f9316cc4de01f"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -1083,6 +1218,38 @@
       "stopped": false,
       "written": [
         ".net"
+      ]
+    },
+    "connectivity/node_name_case": {
+      "behaviour": "node-name-case",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/node_name_case.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/node_name_case.cir": "fd10265e31b7c7c09ca450cd63afbbdca7f5a223928e4b545214cd69264b4750"
+      },
+      "kind": "run",
+      "outputs": {
+        "connectivity/node_name_case.log": {
+          "bytes": 344,
+          "sha256": "09d626892b8b6374412cd0cc12fe178b26d761babe0006cb87c6a5f269696ce2"
+        },
+        "connectivity/node_name_case.raw": {
+          "bytes": 648,
+          "sha256": "c229b1eef5620c98c9c8d67facbacaf254536e9fc1ec4fdf94e340e9e84db49a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
       ]
     },
     "connectivity/pin_at_crossing": {
@@ -1222,6 +1389,33 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_ground_inside": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_ground_inside.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_ground_inside.asc": "6cd853bd2101ff72829cdef90ad5735a8bea5ee463973de37a75300bcfed82f7"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_ground_inside.net": {
+          "bytes": 115,
+          "sha256": "c8405e19bd6d697bb1792b6bc4637308756415fe1c364d094d5a808a08a81813"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_inline_vertex": {
       "behaviour": "same-instance-wire",
       "command": [
@@ -1241,6 +1435,114 @@
         "connectivity/same_instance_inline_vertex.net": {
           "bytes": 115,
           "sha256": "3cfc176e7d13f9fd2617d83ee553022f7e4b30b367eff4bc6a5aba7bbe567f9d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_label_at_vertex": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_label_at_vertex.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_label_at_vertex.asc": "57d07ae67460bb31c07883d3a3b4bca35dd32899d0c7a7eaac8caaf4336efb51"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_label_at_vertex.net": {
+          "bytes": 117,
+          "sha256": "ec17bde85bfc2c407a0301c5d7a9be6f3def0df065c8d9159c62f0d446680725"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_label_inside": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_label_inside.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_label_inside.asc": "c06405f872c4a1655233438e874157fce9e3c913edf29776030f464e402f964b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_label_inside.net": {
+          "bytes": 114,
+          "sha256": "40c8fdd2a88f1c219f0998cbb63db1829924af7db3ba7c5e7d46817a5ab08795"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_pin_inside": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_pin_inside.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_pin_inside.asc": "4b68b4f4429d94799880d67bea22cfeb5598d9dba83e0a7fbb0ad5a436d6bbff"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_pin_inside.net": {
+          "bytes": 122,
+          "sha256": "e52abca70fb93829e5a2dec46d0990238fbc1f823a4b15e6cd1bd03d58295306"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_t_junction": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_t_junction.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_t_junction.asc": "e4d5136f8eb3f466e4bffd63dc32bdcd48e7cd8987d8847731989ecfb88721b3"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_t_junction.net": {
+          "bytes": 122,
+          "sha256": "14d11b7e5dbce5a1b7656c495604397252719e1bc59520706778a24272b57a99"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

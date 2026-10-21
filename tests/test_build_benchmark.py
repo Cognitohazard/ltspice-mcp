@@ -234,10 +234,13 @@ class TestEquivalence:
         assert not said["equivalent"]
         assert said["nets_only_drawn"] and said["nets_only_in_reference"]
 
-    def test_ground_is_only_the_label_0(self):
-        said = equivalence(_rc(v1=("in", "gnd")), circuit("rc_lowpass"))
-        assert said["ground_differs"]
-        assert not said["equivalent"]
+    @pytest.mark.parametrize("ground", ["gnd", "GND", "Gnd"])
+    def test_a_gnd_label_in_any_case_is_ground(self, ground: str):
+        """Both builds export a GND label, in any case, as node 0 (the
+        ``gnd_label`` and ``gnd_label_lower_case`` recordings)."""
+        said = equivalence(_rc(v1=("in", ground)), circuit("rc_lowpass"))
+        assert not said["ground_differs"]
+        assert said["equivalent"], said
 
     def test_a_node_drawn_without_its_name_is_reported_and_still_equivalent(self):
         unnamed = _sheet(

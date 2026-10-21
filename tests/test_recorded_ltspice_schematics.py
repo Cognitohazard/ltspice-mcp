@@ -44,9 +44,11 @@ from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from ltspice_mcp.lib.symbol_library import SymbolResolver, find_symbol
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import verify as verify_tool
 from tests import _ltspice_recorded as rec
-from tests._asc_ops import apply_ops, sha_of, sheet_findings
-from tests.conftest import FIXTURES_DIR
+from tests._asc_ops import apply_ops, inspect_one, sha_of, sheet_findings
+from tests.conftest import FIXTURES_DIR, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -208,6 +210,39 @@ def test_the_net_partition_connects_what_ltspice_connects(
     assert modelled_groups(sheet) == exported_groups(build, case_id)
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_node_names_that_differ_only_in_case_are_one_node(
+    build: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """An export keeps each label's spelling (``label_case_separate_wires``
+    exports ``out`` and ``OUT``), so a run is what shows the two are one node:
+    V1 drives ``OUT``, R1 sits on ``out``, and the run has a single node
+    voltage, 1 V, with 1 mA through R1. The server's net query joins them the
+    same way in that deck and on the sheet."""
+    case_id = "connectivity/node_name_case"
+    raw = rec.decode(build, case_id, tmp_path / "run").raw
+    names = raw.get_trace_names()
+    assert [name for name in names if name.lower().startswith("v(")] == ["V(out)"]
+    assert float(raw.get_wave("V(out)", 0)[0]) == pytest.approx(1.0)
+    assert float(raw.get_wave("I(R1)", 0)[0]) == pytest.approx(1e-3, rel=1e-6)
+
+    deck = work_dir / "node_name_case.cir"
+    deck.write_bytes((INPUTS / rec.CASES.case(case_id).source).read_bytes())
+    in_deck = await inspect_one(state_no_sim, {"kind": "net", "path": str(deck), "at": "out"})
+    assert {(m["reference"], m["terminal"]) for m in in_deck["members"]} == {
+        ("R1", 1),
+        ("V1", 1),
+    }
+
+    sheet = rec.stage_sheet(build, "connectivity/label_case_separate_wires", work_dir)
+    on_sheet = await inspect_one(
+        state_no_sim, {"kind": "net", "path": str(sheet), "at": "net:out"}
+    )
+    assert {(p["reference"], p["pin"]) for p in on_sheet["pins"]} == {("R1", "1"), ("R2", "1")}
+    assert on_sheet["labels"] == ["OUT", "out"]
+    assert on_sheet["is_shorted"] is False
+
+
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(CONNECTIVITY)))
 def test_a_labelled_net_is_named_by_one_of_its_labels_and_ground_wins(
     build: str, case_id: str, tmp_path: Path
@@ -226,7 +261,8 @@ def test_a_labelled_net_is_named_by_one_of_its_labels_and_ground_wins(
         for pin in row["pins"]:
             on_net = labels.get(node_of((pin["x"], pin["y"])), set())
             node = nodes[pin["order"] - 1]
-            if "0" in on_net:
+            if any(text == "0" or text.lower() == "gnd" for text in on_net):
+                # A GND label is ground in any case (gnd_label, gnd_label_lower_case).
                 assert node == "0", f"{row['ref']}.{pin['order']}"
             elif on_net:
                 # Of several labels, the lowest on the sheet names the net, and
@@ -239,7 +275,11 @@ def test_a_labelled_net_is_named_by_one_of_its_labels_and_ground_wins(
                     for text in texts
                 }
                 winner = max(node_labels, key=lambda text: node_labels[text][::-1])
-                assert node == winner, f"{row['ref']}.{pin['order']}"
+                # Names that differ only in case are one node, which an export
+                # spells as each pin's own label does: out and OUT on separate
+                # wires export as out and OUT (label_case_separate_wires).
+                assert node.lower() == winner.lower(), f"{row['ref']}.{pin['order']}"
+                assert node in node_labels, f"{row['ref']}.{pin['order']}"
             else:
                 # N001 for a wired net, P001 where pins only touch, NC_01 for
                 # a pin on nothing: never a name the sheet gave.
@@ -256,11 +296,35 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
     editor = make_editor(sheet)
     assert isinstance(editor, AscEditor)
     part = net_partition(editor)
-    dropped = same_instance_dropped_segments(part.pin_owners, wire_segments_of(editor))
+    dropped = same_instance_dropped_segments(
+        part.pin_owners, wire_segments_of(editor), part.label_texts.keys()
+    )
     first, second = exported_card(build, case_id, "R1").nodes
     assert bool(dropped) == (first != second)
     if dropped:
         assert [(d["ref"], set(d["pins"])) for d in dropped] == [("R1", {"1", "2"})]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
+async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
+    build: str, case_id: str, config, monkeypatch: pytest.MonkeyPatch, work_dir: Path
+):
+    """``verify_circuit`` exporting the sheet, with the build's own export of it
+    standing in for the run: a label or a ground flag on a tie keeps it."""
+    staged = rec.stage_sheet(build, case_id, work_dir)
+
+    def recorded_export(_cls, asc_path, timeout=0):
+        net = Path(asc_path).with_suffix(".net")
+        net.write_bytes(rec.recorded(build, f"{case_id}.net").read_bytes())
+        return net
+
+    monkeypatch.setattr(verify_tool, "_create_netlist", recorded_export)
+    state = SessionState.create(config, available={"ltspice": FakeSim})
+    data = await run_verify_circuit(state, path=str(staged), checks=["export"])
+    assert data["export"]["ok"] is True
+    dropped = [f for f in data["findings"] if f["rule_id"] == "dropped_wire"]
+    first, second = exported_card(build, case_id, "R1").nodes
+    assert bool(dropped) == (first != second), dropped
 
 
 def netlisted_groups(sheet: Path) -> set[frozenset[str]]:

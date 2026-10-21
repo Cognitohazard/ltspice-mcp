@@ -6,7 +6,7 @@
    "ops": 17,
    "origins_from_pins": 5,
    "refused": 0,
-   "reply_bytes": 2528
+   "reply_bytes": 2269
   },
   "digests": [
    "58d235ff0701aa0c081f3b48f79aa0dd9c74fb601ef80fb14bb8dabcb9eedbe9"
@@ -47,7 +47,7 @@
    "ops": 16,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 3019
+   "reply_bytes": 2474
   },
   "digests": [
    "7ae31635e8cea0d69901ee32586bc3864d2aabc8ba41aaf0551ac1ef60df8c93"
@@ -90,7 +90,7 @@
    "ops": 30,
    "origins_from_pins": 8,
    "refused": 0,
-   "reply_bytes": 3516
+   "reply_bytes": 3201
   },
   "digests": [
    "c88321afee254ed6fcafabc866ec10d1d1d9bebd3f821d62fb7c72ec043d7c5a"
@@ -131,7 +131,7 @@
    "ops": 30,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 6136
+   "reply_bytes": 4324
   },
   "digests": [
    "40fef114bf33284bcf994ee6720cc2b87158a7bbb32129ecb39e662390f09257"
@@ -172,7 +172,7 @@
    "ops": 21,
    "origins_from_pins": 5,
    "refused": 0,
-   "reply_bytes": 3245
+   "reply_bytes": 2930
   },
   "digests": [
    "c4456e2cf09211f6f0e2a6ee7c5fae685f2e8650301e2d35c1686245485fbffc"
@@ -213,7 +213,7 @@
    "ops": 21,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 4156
+   "reply_bytes": 3214
   },
   "digests": [
    "eb8729a9d0120934d5b14d8f4383248fc7302cd8202119f189db780ffebac353"
@@ -254,7 +254,7 @@
    "ops": 129,
    "origins_from_pins": 51,
    "refused": 0,
-   "reply_bytes": 10522
+   "reply_bytes": 10547
   },
   "digests": [
    "fc625f04186d5657ed1f331f499cc2abe06bd9e3c13cd4000dac6b8732d5aabb"
@@ -293,7 +293,7 @@
    "ops": 129,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 11001
+   "reply_bytes": 10738
   },
   "digests": [
    "d9a4b93f219dda17134843bed0ae7a2d47d3d63a9019474f4ceaaa3aa5ac7364"
@@ -334,7 +334,7 @@
    "ops": 10,
    "origins_from_pins": 3,
    "refused": 0,
-   "reply_bytes": 1613
+   "reply_bytes": 1638
   },
   "digests": [
    "30187c8ba89a435a2574ea11e0d3dd7a32f90ed3b34f514c28cd0346ada8ee6a"
@@ -373,7 +373,7 @@
    "ops": 10,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 2587
+   "reply_bytes": 2042
   },
   "digests": [
    "0f1a1580d1511acfc1b1cbe01f0c77bdf7ff6cae7d45d48f7428cb384679d6e9"
@@ -414,7 +414,7 @@
    "ops": 11,
    "origins_from_pins": 3,
    "refused": 0,
-   "reply_bytes": 1612
+   "reply_bytes": 1637
   },
   "digests": [
    "bc541fe802ebe82ec61face1d4e1ceb6f252e0aad6c95d0fc2bd756920a70a5e"
@@ -453,7 +453,7 @@
    "ops": 10,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 2097
+   "reply_bytes": 1838
   },
   "digests": [
    "304d87107f8eb92912a7d4dbfb0dcde7f8f3ee979d66932e8112ca8796a91853"
@@ -496,7 +496,7 @@
    "ops": 414,
    "origins_from_pins": 153,
    "refused": 0,
-   "reply_bytes": 39810
+   "reply_bytes": 38683
   },
   "digests": [
    "39532e94ee94df0bce6d5943acce4ca3e6380bf11645f7cb301083128242d26b"
@@ -535,7 +535,7 @@
    "ops": 460,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 65970
+   "reply_bytes": 48303
   },
   "digests": [
    "409d011ef1cb8cf96cab5416eb5e92b2366a4c0e2b4940e02373bb40bb943acd"
@@ -576,7 +576,7 @@
    "ops": 19,
    "origins_from_pins": 6,
    "refused": 0,
-   "reply_bytes": 2732
+   "reply_bytes": 2757
   },
   "digests": [
    "be3ddd9ade1b3d25a3b29cc801f339c8ba8a9b34b9869fa21ca334cb0f9f0458"
@@ -615,7 +615,7 @@
    "ops": 21,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 4531
+   "reply_bytes": 3258
   },
   "digests": [
    "f2159bc2175c6aaa03f83154bdcd8d0e163fc91b6e339a14d0da0d36ced3b919"
@@ -656,7 +656,7 @@
    "ops": 58,
    "origins_from_pins": 14,
    "refused": 0,
-   "reply_bytes": 7963
+   "reply_bytes": 6785
   },
   "digests": [
    "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61"
@@ -697,7 +697,7 @@
    "ops": 61,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 10257
+   "reply_bytes": 7663
   },
   "digests": [
    "adcad5f63545894caf1b80b1147decf2e98040f0fb78edd2914bbaa5c8217925"
@@ -738,7 +738,7 @@
    "ops": 11,
    "origins_from_pins": 3,
    "refused": 0,
-   "reply_bytes": 1876
+   "reply_bytes": 1901
   },
   "digests": [
    "3a3d6c642e235a27980faf5535c1337e410433856bed474c39aef8c8610602b0"
@@ -777,7 +777,7 @@
    "ops": 11,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 2363
+   "reply_bytes": 2104
   },
   "digests": [
    "b15548d3f45f2da383410c4c57b81e7e50ccdb09310fdc84500adea2f47ebd9d"
@@ -818,7 +818,7 @@
    "ops": 11,
    "origins_from_pins": 3,
    "refused": 0,
-   "reply_bytes": 1873
+   "reply_bytes": 1898
   },
   "digests": [
    "84b639fea906822922e1dd63a37747c22a91ebf5a43817f1a67a56a956e038c3"
@@ -857,7 +857,7 @@
    "ops": 11,
    "origins_from_pins": 0,
    "refused": 0,
-   "reply_bytes": 2355
+   "reply_bytes": 2096
   },
   "digests": [
    "51fd79e309dd2fc11c13d1e5fa3beae051b0c3c6a3a1599c9154e985aeaee063"

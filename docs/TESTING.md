@@ -158,7 +158,7 @@ These tests run on any machine, without LTspice:
 
 |test module|checks|
 |-|-|
-|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, an export's spelling and encoding, and the effect on an export of a data label, a bus tap, a bus label, an empty line and an unknown keyword|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, node names that differ only in case and a `GND` label as ground, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, an export's spelling and encoding, and the effect on an export of a data label, a bus tap, a bus label, an empty line and an unknown keyword|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms that lint and arity checks accept or refuse, how a deck is interpreted where simulators differ, and how a three-node transistor card is read|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes on save (line endings, encoding, record order), and that `asc_document` reads it, writes it back byte-identical, and formats a record as the build does|

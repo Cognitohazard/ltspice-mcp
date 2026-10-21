@@ -40,6 +40,8 @@ from typing import Any, Literal
 from ltspice_mcp.lib.connectivity import (
     build_on_wire_predicate,
     build_wire_counter,
+    is_ground,
+    name_key,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.geometry import BBox
@@ -326,16 +328,17 @@ def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
 
 @_finds("dropped_wire")
 def _dropped_wires(ix: _Index) -> list[Finding]:
-    # LTspice leaves out a run whose two ends both land on pins of one part: the
-    # pins stay on separate nodes, so the sheet shows a tie the netlist does not
-    # have. A part is told from another by its place in the view, since two
-    # parts may carry one reference, or none.
+    # LTspice leaves out a run whose two ends both land on pins of one part,
+    # with nothing on it between them: the pins stay on separate nodes, so the
+    # sheet shows a tie the netlist does not have. A label or a ground flag on
+    # the run keeps it. A part is told from another by its place in the view,
+    # since two parts may carry one reference, or none.
     owners: dict[Point, list[tuple[str, str]]] = {}
     for index, part in enumerate(ix.view.parts):
         for _name, x, y in part.pins:
             owners.setdefault((x, y), []).append((str(index), ""))
     found: list[Finding] = []
-    for drop in same_instance_dropped_segments(owners, list(ix.view.wires)):
+    for drop in same_instance_dropped_segments(owners, list(ix.view.wires), ix.labelled):
         x1, y1, x2, y2 = drop["segment"]
         name = ix.view.parts[int(drop["ref"])].name
         found.append(
@@ -666,23 +669,33 @@ def _stacked_directives(ix: _Index) -> list[Finding]:
 
 @_finds("label_island")
 def _label_islands(ix: _Index) -> list[Finding]:
-    # Ground is exempt: joining ground by flag is the ordinary practice.
-    stubs: dict[str, list[Point]] = {}
+    # Ground, by any of its names, is exempt: joining ground by flag is the
+    # ordinary practice. Names that differ only in case are one net, reported
+    # under the name LTspice gives it: the label lowest on the sheet, and of
+    # those the one furthest right (the net-naming recordings).
+    stubs: dict[str, list[tuple[Point, str]]] = {}
     for x, y, text in ix.view.labels:
         name = text.strip()
-        if name and name != "0":
-            stubs.setdefault(name, []).append((x, y))
+        if name and not is_ground(name):
+            stubs.setdefault(name_key(name), []).append(((x, y), name))
+    islands = [
+        (
+            max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1],
+            tuple(point for point, _name in labels),
+        )
+        for labels in stubs.values()
+        # A lone label is not a connection by name standing in for a wire.
+        if len(labels) > 1 and not any(ix.on_a_wire(point) for point, _name in labels)
+    ]
     return [
         Finding(
             "label_island",
             f"Net '{name}' is connected by {len(points)} net-label stubs and "
             "no drawn wire segment",
-            points=tuple(points),
+            points=points,
             facts={"net": name},
         )
-        for name, points in sorted(stubs.items())
-        # A lone label is not a connection by name standing in for a wire.
-        if len(points) > 1 and not any(ix.on_a_wire(point) for point in points)
+        for name, points in sorted(islands)
     ]
 
 

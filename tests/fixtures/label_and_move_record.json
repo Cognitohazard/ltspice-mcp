@@ -17,6 +17,14 @@
     "x": 240,
     "y": 256
    },
+   "placed [a name already elsewhere; 1 at the point, 1 named]": {
+    "net": "GND",
+    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/gnd_label.asc",
+    "there": "a name already elsewhere; 1 at the point, 1 named",
+    "warnings": [],
+    "x": 96,
+    "y": 96
+   },
    "placed [a name already here; 1 at the point, 1 named]": {
     "net": "filtered",
     "sheet": "fixtures/Draft1.asc",
@@ -77,10 +85,10 @@
    },
    "placed: (#,#) is on the net already labelled ['\u2026', '\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": {
     "net": "a_name_no_sheet_has",
-    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc",
+    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/label_case_one_wire.asc",
     "there": "a new name; 1 at the point, 1 named",
     "warnings": [
-     "(96,96) is on the net already labelled ['a', 'b']; 'a_name_no_sheet_has' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it."
+     "(96,96) is on the net already labelled ['VOUT', 'vout']; 'a_name_no_sheet_has' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it."
     ],
     "x": 96,
     "y": 96
@@ -1167,6 +1175,57 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/gnd_label.asc": {
+   "labels": {
+    "proposals": 36,
+    "sha256": "b2391df96db5269feab1deea721c802148f0e12d7262c661d8817f6d30ac2efc",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
+     "placed [a name already elsewhere; 1 at the point, 1 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 6,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 6,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "proposals": 30,
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "shapes": {
+     "moved": 30
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/gnd_label_lower_case.asc": {
+   "labels": {
+    "proposals": 54,
+    "sha256": "d1c81cf19c31ccb3a3cbaadb343a1961574e3474813490a6cd94d01818f33c66",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
+     "placed [a name already elsewhere; 1 at the point, 1 named]": 8,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 30,
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "shapes": {
+     "moved": 30
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/label_and_ground.asc": {
    "labels": {
     "proposals": 28,
@@ -1210,6 +1269,78 @@
     "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
     "shapes": {
      "moved": 79
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/label_case_one_wire.asc": {
+   "labels": {
+    "proposals": 28,
+    "sha256": "d2faf5446cb3d59871f7e3e94a8f8d243cf672a091d8cb53a0604419f334fbbd",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
+     "placed [a name already here; 1 at the point, 1 named]": 8,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 2,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 2,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026', '\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 11,
+    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "shapes": {
+     "moved": 11
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/label_case_second_name.asc": {
+   "labels": {
+    "proposals": 65,
+    "sha256": "96e46f9a51f105d0ed0eed857068b242dfea898780101fea25f0cf2f752a5acf",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
+     "placed [a name already here; 1 at the point, 1 named]": 24,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed: (#,#) is on the net already labelled ['\u2026', '\u2026', '\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 42,
+    "sha256": "15f19f3f4c0cf25de15cf25e7430906c2e30ab01fc348ee63d8b502652c919f3",
+    "shapes": {
+     "moved": 42
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/label_case_separate_wires.asc": {
+   "labels": {
+    "proposals": 52,
+    "sha256": "7af82aeb72df8e78336570dc82791e107a547c17f5207ce41a284f1f47c4716e",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 8,
+     "placed [a name already here; 1 at the point, 1 named]": 16,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed: (#,#) is on the net already labelled ['\u2026', '\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 42,
+    "sha256": "15f19f3f4c0cf25de15cf25e7430906c2e30ab01fc348ee63d8b502652c919f3",
+    "shapes": {
+     "moved": 42
     }
    }
   },
@@ -1379,6 +1510,27 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_ground_inside.asc": {
+   "labels": {
+    "proposals": 18,
+    "sha256": "da3ad2db0efa0f29339b2eae6b5d23f2c18ce833a2ac27fdd55ba5e8d3e6fad5",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already here; 1 at the point, 1 named]": 5,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 5,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 5
+    }
+   },
+   "moves": {
+    "proposals": 9,
+    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "shapes": {
+     "moved": 9
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc": {
    "labels": {
     "proposals": 32,
@@ -1397,6 +1549,94 @@
     "sha256": "4e69cc3576ee1ad7ded0e016711b23b968554cc8e1a1fb0d272f32a04ff53214",
     "shapes": {
      "moved": 13
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_at_vertex.asc": {
+   "labels": {
+    "proposals": 32,
+    "sha256": "dd06719cf7e2e262647c2c499b7b8a9194d2ff6c42fa73a01d9b07943804937b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 14,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 7,
+     "placed: (#,#) is on the net already labelled ['\u2026', '\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 7
+    }
+   },
+   "moves": {
+    "proposals": 13,
+    "sha256": "4e69cc3576ee1ad7ded0e016711b23b968554cc8e1a1fb0d272f32a04ff53214",
+    "shapes": {
+     "moved": 13
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_inside.asc": {
+   "labels": {
+    "proposals": 24,
+    "sha256": "244c713864a57757df32f6868cfce76026804ea783eb29af0c2ab31d0120d0d6",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 10,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 5,
+     "placed: (#,#) is on the net already labelled ['\u2026', '\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 5
+    }
+   },
+   "moves": {
+    "proposals": 9,
+    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "shapes": {
+     "moved": 9
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_pin_inside.asc": {
+   "labels": {
+    "proposals": 36,
+    "sha256": "f69be0d0aac5bda5982a5307f3b852b688596c0e1e435e6f9b8430d0abb42a36",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 8,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 26,
+    "sha256": "6d6d8707f0a9099924695d5767a2fa200b7e8b23f58109b4090ac7cd7424026a",
+    "shapes": {
+     "moved": 26
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_t_junction.asc": {
+   "labels": {
+    "proposals": 33,
+    "sha256": "400091b61d2f6038ed30cc96313c5b8054630d237ce5ba8f26f0f47bb60a15f8",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 8,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 2,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 2,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "c0f9039d130cdadfbc699683a86e6b95fd22b6063726af088a4649c6d78e27da",
+    "shapes": {
+     "moved": 34
     }
    }
   },

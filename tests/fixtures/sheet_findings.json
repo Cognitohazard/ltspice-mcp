@@ -10015,6 +10015,32 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/gnd_label.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/gnd_label_lower_case.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": []
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/label_and_ground.asc": {
   "dropped_wire": [],
   "edit": {
@@ -10036,6 +10062,45 @@
     "pins_label_only": 3,
     "pins_total": 6,
     "pins_wired": 3,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/label_case_one_wire.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 2,
+    "pins_wired": 1,
+    "wire_segments": 1
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/label_case_second_name.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 2,
+    "pins_total": 4,
+    "pins_wired": 2,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/label_case_separate_wires.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 2,
+    "pins_total": 4,
+    "pins_wired": 2,
     "wire_segments": 2
    }
   },
@@ -10509,6 +10574,96 @@
   },
   "verify": []
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_ground_inside.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "label_over_component",
+     "label": "0",
+     "message": "Label '0' at (96,144) is inside R1's bounding box",
+     "ref": "R1",
+     "x": 96,
+     "y": 144
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 2,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_ground_inside.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_ground_inside.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "Label '0' at (96,144) is inside R1's bounding box",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "label_over_component",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc": {
   "dropped_wire": [
    {
@@ -10642,6 +10797,441 @@
       ]
      ],
      "detail": "Wire (96,144)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_at_vertex.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,144) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 144
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,144)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 144
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 144
+    },
+    {
+     "kind": "label_over_component",
+     "label": "m",
+     "message": "Label 'm' at (96,144) is inside R1's bounding box",
+     "ref": "R1",
+     "x": 96,
+     "y": 144
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 2,
+    "pins_wired": 2,
+    "wire_segments": 2
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_label_at_vertex.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,144) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_label_at_vertex.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,144)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_label_at_vertex.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "Label 'm' at (96,144) is inside R1's bounding box",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "label_over_component",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_inside.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "label_over_component",
+     "label": "m",
+     "message": "Label 'm' at (96,144) is inside R1's bounding box",
+     "ref": "R1",
+     "x": 96,
+     "y": 144
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 2,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_label_inside.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_label_inside.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "Label 'm' at (96,144) is inside R1's bounding box",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "label_over_component",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_pin_inside.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "symbol_overlap",
+     "message": "R1 and R3: bounding boxes share a 16x32 region at (96,128)",
+     "points": [
+      {
+       "x": 96,
+       "y": 128
+      },
+      {
+       "x": 112,
+       "y": 160
+      }
+     ],
+     "ref": "R1",
+     "refs": [
+      "R1",
+      "R3"
+     ],
+     "x": 96,
+     "y": 128
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 4,
+    "pins_wired": 3,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_pin_inside.asc",
+     "x": 96,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       128
+      ],
+      [
+       112,
+       160
+      ]
+     ],
+     "detail": "R1 and R3: bounding boxes share a 16x32 region at (96,128)",
+     "refs": [
+      "R1",
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "symbol_overlap",
+    "severity": "observation",
+    "subject": "R1 & R3"
+   },
+   {
+    "at": {
+     "file": "same_instance_pin_inside.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_t_junction.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,144)->(192,144) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 144
+      },
+      {
+       "x": 192,
+       "y": 144
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 144
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 4,
+    "pins_wired": 3,
+    "wire_segments": 2
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_t_junction.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_t_junction.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ],
+      [
+       192,
+       144
+      ]
+     ],
+     "detail": "Wire (96,144)->(192,144) passes through R1's body",
      "refs": [
       "R1"
      ]

@@ -82,18 +82,23 @@ model = ["lib/symbol_library.py"]
 inputs = ["search/library_folder_bare.asc", "search/library_folder_named.asc", "search/library_folder_wrong.asc"]
 
 [behaviour.same-instance-wire]
-summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line."
+summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line, and kept when a label, a ground flag, another part's pin or another wire's end is on it."
 model = ["lib/connectivity.py"]
 inputs = [
     "connectivity/same_instance_wire.asc",
     "connectivity/same_instance_detour.asc",
     "connectivity/same_instance_inline_vertex.asc",
+    "connectivity/same_instance_label_inside.asc",
+    "connectivity/same_instance_label_at_vertex.asc",
+    "connectivity/same_instance_ground_inside.asc",
+    "connectivity/same_instance_pin_inside.asc",
+    "connectivity/same_instance_t_junction.asc",
 ]
 extra = ["connectivity/res.asy"]
 
 [behaviour.net-naming]
-summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
-model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
+summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, labels whose names differ only in case, a GND label in any case, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
+model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
 inputs = [
     "connectivity/two_labels_zeta_first.asc",
     "connectivity/two_labels_alpha_first.asc",
@@ -104,8 +109,18 @@ inputs = [
     "connectivity/same_name_labels.asc",
     "connectivity/unconnected_pins.asc",
     "connectivity/unlabelled_nets.asc",
+    "connectivity/label_case_separate_wires.asc",
+    "connectivity/label_case_one_wire.asc",
+    "connectivity/label_case_second_name.asc",
+    "connectivity/gnd_label.asc",
+    "connectivity/gnd_label_lower_case.asc",
 ]
 extra = ["connectivity/res.asy"]
+
+[behaviour.node-name-case]
+summary = "Whether two node names that differ only in case are one node when a deck runs. An export keeps each label's spelling (net-naming), so the run is what shows they join: V1 drives OUT, R1 sits on out, and I(R1) is 1 mA only if they are one node."
+model = ["lib/connectivity.py"]
+inputs = ["connectivity/node_name_case.cir"]
 
 [behaviour.build-benchmark-export]
 summary = "The netlist each build exports from every sheet the schematic build benchmark draws: which pins are one node, the name each node gets, and each card's value."

@@ -411,11 +411,15 @@ class TestALabelPlacedOnACrossing:
 
     _crossing = TestAPinPlacedOnACrossing._crossing  # pyright: ignore[reportPrivateUsage]
 
-    async def test_ground_there_between_two_named_nets_is_refused(self, asc_state: SessionState):
-        sheet = self._crossing(asc_state, "ground-cross", "VDD", "VSS")
+    @pytest.mark.parametrize("ground", ["0", "GND"])
+    async def test_ground_there_between_two_named_nets_is_refused(
+        self, asc_state: SessionState, ground: str
+    ):
+        """``GND`` in any case is ground too (the ``gnd_label`` recordings)."""
+        sheet = self._crossing(asc_state, f"ground-cross-{ground}", "VDD", "VSS")
         before = sheet.read_bytes()
         with pytest.raises(NetlistError, match=r"Refused to add ground at \(200,100\)") as refusal:
-            add_net_label(asc_state, sheet, "0", x=200, y=100)
+            add_net_label(asc_state, sheet, ground, x=200, y=100)
         said = str(refusal.value)
         assert "['VDD']" in said and "['VSS']" in said
         assert "shorting those nets together and to ground" in said
@@ -1635,16 +1639,19 @@ class TestAddNetLabelJoins:
         assert "['rail']" in warning
         assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
 
+    @pytest.mark.parametrize(("there", "added"), [("other", "other"), ("OUT", "out")])
     async def test_a_name_another_net_carries_is_refused(
-        self, asc_state: SessionState, work_dir: Path
+        self, asc_state: SessionState, work_dir: Path, there: str, added: str
     ):
-        asc = _write_sheet(work_dir / "merge.asc", *_RAIL, _res("R3", 400, 100))
+        """In any case: names that differ only in case are one name (the
+        ``node-name-case`` recording)."""
+        asc = _write_sheet(work_dir / f"merge_{added}.asc", *_RAIL, _res("R3", 400, 100))
         add_net_label(asc_state, asc, "rail", x=96, y=196)
-        add_net_label(asc_state, asc, "other", pin="R3.1")
+        add_net_label(asc_state, asc, there, pin="R3.1")
         before = asc.read_bytes()
         with pytest.raises(NetlistError, match="shorting them together") as exc_info:
-            add_net_label(asc_state, asc, "other", x=288, y=196)
-        assert "['other']" in str(exc_info.value) and "['rail']" in str(exc_info.value)
+            add_net_label(asc_state, asc, added, x=288, y=196)
+        assert f"['{there}']" in str(exc_info.value) and "['rail']" in str(exc_info.value)
         assert asc.read_bytes() == before
 
     async def test_a_label_at_a_crossing_of_two_named_nets_is_refused(
@@ -1662,6 +1669,125 @@ class TestAddNetLabelJoins:
         )
         with pytest.raises(NetlistError, match="shorting them together"):
             add_net_label(asc_state, asc, "joined", x=96, y=96)
+
+
+@pytest.mark.asyncio
+class TestNamesThatDifferOnlyInCase:
+    """LTspice makes one node of two names that differ only in case (the
+    ``node-name-case`` and ``net-naming`` recordings), so ``OUT`` and ``out``
+    are one name to every check that compares names, as two ``OUT`` labels
+    are."""
+
+    async def test_a_label_in_another_case_is_no_second_name(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "case_alias.asc", *_RAIL)
+        add_net_label(asc_state, asc, "VOUT", x=96, y=196)
+        assert "warnings" not in add_net_label(asc_state, asc, "vout", x=288, y=196)
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "R1.1"})
+        assert (data["labels"], data["is_shorted"]) == (["VOUT", "vout"], False)
+
+    async def test_a_net_name_finds_its_label_in_another_case(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "case_find.asc", _res("R1", 96, 244), _res("R2", 288, 244))
+        add_net_label(asc_state, asc, "OUT", pin="R1.1")
+        wire_pins(asc_state, asc, "net:out", "R2.1")
+        assert _wire_segments(asc) == [((96, 196), (288, 196))]
+        assert await _net_pins(asc_state, asc, "net:out") == {"R1.1", "R2.1"}
+
+    async def test_a_route_between_nets_named_in_two_cases_is_drawn(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "case_route.asc", _res("R1", 96, 244), _res("R2", 288, 244))
+        add_net_label(asc_state, asc, "VOUT", pin="R1.1")
+        add_net_label(asc_state, asc, "Vout", pin="R2.1")
+        assert wire_pins(asc_state, asc, "R1.1", "R2.1")["wire_count"] == 1
+        assert _wire_segments(asc) == [((96, 196), (288, 196))]
+
+
+@pytest.mark.asyncio
+class TestAGroundLabelInAnyCase:
+    """LTspice exports a ``GND`` label, in any case, as node 0 (the
+    ``gnd_label`` and ``gnd_label_lower_case`` recordings), so it is ground
+    wherever ``0`` is: one net with every other ground, and no name that a
+    named net it grounds would be shorted to."""
+
+    async def test_the_net_of_a_gnd_label_is_the_ground_net(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(
+            work_dir / "gnd_trace.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            _res("R3", 480, 244),
+            "WIRE 480 196 560 196",
+            "FLAG 96 292 GND",
+            "FLAG 288 292 0",
+            "FLAG 480 196 a",
+            "FLAG 560 196 gnd",
+        )
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "net:GND"})
+        assert {f"{p['reference']}.{p['pin']}" for p in data["pins"]} == {"R1.2", "R2.2", "R3.1"}
+        assert (data["labels"], data["is_shorted"]) == (["0", "GND", "a", "gnd"], False)
+
+    async def test_ground_by_name_on_a_named_net_is_no_second_name(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "gnd_named.asc", *_RAIL)
+        add_net_label(asc_state, asc, "rail", x=96, y=196)
+        assert "warnings" not in add_net_label(asc_state, asc, "GND", x=288, y=196)
+
+    async def test_a_route_from_a_named_net_to_a_gnd_label_grounds_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "gnd_route.asc", _res("R1", 96, 244), _res("R2", 288, 244))
+        add_net_label(asc_state, asc, "a", pin="R1.1")
+        add_net_label(asc_state, asc, "Gnd", pin="R2.1")
+        assert wire_pins(asc_state, asc, "R1.1", "R2.1")["wire_count"] == 1
+
+
+@pytest.mark.asyncio
+class TestATieBetweenOnePartsPinsWithSomethingOnIt:
+    """LTspice keeps a straight wire between two pins of one part when a label
+    or a ground flag is on it, on its interior or at a vertex in line (the
+    ``same-instance-wire`` recordings), and drops it when a label is only at a
+    pin. R1's pins are at (200,152) and (200,248)."""
+
+    async def test_a_label_on_the_wire_keeps_it(self, asc_state: SessionState, work_dir: Path):
+        asc = _write_sheet(
+            work_dir / "tie_label.asc",
+            _res("R1", 200, 200),
+            "WIRE 200 152 200 248",
+            "FLAG 200 200 m",
+        )
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "R1.1"})
+        assert {f"{p['reference']}.{p['pin']}" for p in data["pins"]} == {"R1.1", "R1.2"}
+        assert "warnings" not in data
+        kinds = {row["kind"] for row in structured_warnings(load_editor(asc_state, asc))}
+        assert "dropped_wire" not in kinds
+
+    async def test_a_label_at_a_pin_does_not(self, asc_state: SessionState, work_dir: Path):
+        asc = _write_sheet(
+            work_dir / "tie_pin_label.asc",
+            _res("R1", 200, 200),
+            "WIRE 200 152 200 248",
+            "FLAG 200 152 m",
+        )
+        data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "R1.1"})
+        assert any("LTspice drops that wire" in warning for warning in data["warnings"])
+        kinds = {row["kind"] for row in structured_warnings(load_editor(asc_state, asc))}
+        assert "dropped_wire" in kinds
+
+    async def test_a_route_past_a_ground_flag_of_its_own_net_is_drawn(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(
+            work_dir / "tie_ground.asc", _res("R1", 200, 200), "FLAG 200 152 0", "FLAG 200 200 0"
+        )
+        drawn = wire_pins(asc_state, asc, "R1.1", "R1.2")
+        assert drawn["wire_count"] == 1
+        assert await _net_pins(asc_state, asc, "R1.2") == {"R1.1", "R1.2"}
 
 
 @pytest.mark.asyncio
@@ -2302,7 +2428,7 @@ class TestMidSegmentLabelDetected:
         assert not point_on_segment((101, 150), (100, 100), (100, 200))
 
     def test_named_labels_strips_ground(self) -> None:
-        from ltspice_mcp.lib.schematic_ops import named_labels
+        from ltspice_mcp.lib.connectivity import named_labels
 
         assert named_labels(frozenset({"OUTP", "0"})) == {"OUTP"}
         assert named_labels(frozenset({"0"})) == set()
