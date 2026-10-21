@@ -346,25 +346,41 @@ async def test_verify_denied_include_carries_the_guidance(tmp_path: Path, monkey
     _assert_guidance(denied[0]["evidence"]["hint"], box.toml)
 
 
-async def test_run_experiments_case_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize(
+    "with_an_allowed_circuit", [False, True], ids=["alone", "beside-one-allowed"]
+)
+async def test_run_experiments_refuses_a_circuit_outside_the_sandbox_before_a_job_exists(
+    tmp_path: Path, monkeypatch, with_an_allowed_circuit: bool
+):
+    """A circuit path the sandbox refuses is the request's error: refused at
+    submission, with the path, the allowed roots and the guidance, and no job
+    made, not a job whose every case fails with path_denied."""
     box = _Sandbox(tmp_path, monkeypatch)
     state = box.state({"fake": FakeSim})
+    allowed = box.work / "allowed.cir"
+    allowed.write_text(_DECK, newline="\n")
+    circuits = [{"path": str(box.deck)}]
+    if with_an_allowed_circuit:
+        circuits.insert(0, {"path": str(allowed)})
 
     result = await handle_run_experiments(
         RunExperimentsInput.model_validate(
             {
                 "request_id": "outside-sandbox",
-                "circuits": [{"path": str(box.deck)}],
+                "circuits": circuits,
                 "execution": {"wait_s": LIVENESS_S},
             }
         ),
         state,
     )
 
-    assert result.structured_content is not None
-    (failure,) = result.structured_content["failures"]
-    assert failure["code"] == "path_denied"
-    _assert_guidance(failure["hint"], box.toml)
+    data = result.structured_content
+    assert result.is_error and data is not None
+    assert (data["error"]["code"], data["error"]["commit_state"]) == ("path_denied", "not_started")
+    assert str(box.deck) in data["error"]["message"]
+    assert f"[. ({box.work.resolve()})]" in data["error"]["message"]
+    _assert_guidance(data["hint"], box.toml)
+    assert not any(state.store.experiments_dir.glob("*"))
 
 
 async def test_jobs_refusal_carries_the_guidance(tmp_path: Path, monkeypatch):

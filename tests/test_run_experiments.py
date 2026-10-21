@@ -938,9 +938,8 @@ class TestIdempotency:
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "conflict.cir")
-        await handle_run_experiments(
-            _args(deck, "conflicting-payload"),
-            state_with_sim,
+        first = _assert_schema(
+            await handle_run_experiments(_args(deck, "conflicting-payload"), state_with_sim)
         )
 
         result = await handle_run_experiments(
@@ -959,9 +958,13 @@ class TestIdempotency:
         }
         assert data["error"] == {
             "code": "idempotency_conflict",
+            # It names the job the id made and how to read it, so a caller who
+            # changed the payload by accident has its results one call away.
             "message": (
                 "request_id 'conflicting-payload' was already used for a different "
-                "request payload or canonicalizer version"
+                f"request payload, and made experiment {first['job_id']}: read that job "
+                "by its job_id (jobs, analyze_results), or submit this request under a "
+                "new request_id"
             ),
             "stage": "submission",
             "retryable": False,

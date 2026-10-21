@@ -70,6 +70,28 @@ async def export_asc_to_netlist(asc_copy: Path, _state) -> str:
     return netlist_text(asc_copy)
 
 
+def exporter_needing_symbols_beside(*names: str):
+    """A drop-in for ``schematic_edit._export_asc_to_netlist`` that, like
+    LTspice, exports a sheet using one of the symbols ``names`` only when that
+    symbol's file is beside the sheet being exported, in its folder or in a
+    folder within it (the ``symbol-beside-sheet`` recording).
+
+    The other symbols are taken as LTspice's own library's.
+    """
+
+    def exported(asc_copy: Path) -> str:
+        used = {sym["symbol"] for sym in _symbols_and_directives(asc_copy.read_text("latin-1"))[0]}
+        for name in sorted(used & set(names)):
+            if not any(asc_copy.parent.rglob(f"{name}.asy")):
+                raise RuntimeError(f"Could not open symbol {name} beside {asc_copy.name}")
+        return netlist_text(asc_copy)
+
+    async def export(asc_copy: Path, _state) -> str:
+        return exported(asc_copy)
+
+    return export
+
+
 def install_fixed_exporter(state, netlist: str, *, encoding: str = "utf-8") -> None:
     """Make ``state``'s LTspice export every schematic as ``netlist``.
 

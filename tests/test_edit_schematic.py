@@ -14,6 +14,7 @@ by file and line), and the routes that leave a sheet's bytes as they were.
 from __future__ import annotations
 
 import hashlib
+import shutil
 import threading
 from collections import Counter
 from pathlib import Path
@@ -43,6 +44,7 @@ from ltspice_mcp.tools.schematic_edit import (
 )
 from tests import _fake_netlister as fake_netlister
 from tests._asc_ops import apply_ops, file_at, sheet_findings
+from tests._schematic_fixtures import TESTS
 from tests.test_api_reference import _op_kinds
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -1844,6 +1846,50 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     assert verification["equivalent"] is False
     # The reference was exported from a copy; nothing was written beside it.
     assert not (work_dir / "amp_orig.net").exists()
+
+
+#: A symbol of the recorded symbol-search cases: a resistor under a name no
+#: library has, which LTspice finds only beside the sheet.
+_LOCAL_SYMBOL = TESTS / "fixtures" / "ltspice_recorded" / "inputs" / "search" / "lib" / "part.asy"
+_LOCAL_PART = "SYMBOL part 560 96 R0\nSYMATTR InstName R9\nSYMATTR Value 1k\n"
+
+
+@pytest.mark.edit_reply_per_platform(
+    "the export's .lib line names a Windows install path, which only Windows "
+    "reads as absolute, so the comparison's include warnings differ"
+)
+@pytest.mark.parametrize("folder", [".", "lib"], ids=["beside", "in-a-folder-beside"])
+async def test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export(
+    asc_state, work_dir, monkeypatch, folder
+):
+    """The commit-time compare exports copies of the sheet and of an ``.asc``
+    reference elsewhere; each copy has the symbols saved beside its original,
+    as LTspice finds them where the sheet stands."""
+    (work_dir / folder).mkdir(exist_ok=True)
+    shutil.copy(_LOCAL_SYMBOL, work_dir / folder / "part.asy")
+    sheet = work_dir / "amp.asc"
+    sheet.write_text(fake_netlister.amp_asc(_LOCAL_PART), newline="\n")
+    (work_dir / "amp_orig.asc").write_text(fake_netlister.amp_asc(_LOCAL_PART), newline="\n")
+    monkeypatch.setattr(
+        se, "_export_asc_to_netlist", fake_netlister.exporter_needing_symbols_beside("part")
+    )
+
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="amp.asc",
+                expected_sha256=_sha(sheet),
+                ops=_ADD_R2,
+                compare={"reference": "amp_orig.asc", "mode": "structural_diff"},
+            ),
+            asc_state,
+        )
+    )
+
+    verification = data["verification"]
+    assert (verification.get("export_error"), verification.get("compare_error")) == (None, None)
+    assert verification["comparison"]["components_added"] == ["R2"]
+    assert verification["comparison"]["components_changed"] == []
 
 
 async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir, monkeypatch):

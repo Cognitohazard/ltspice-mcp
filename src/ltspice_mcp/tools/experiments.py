@@ -51,6 +51,7 @@ from ltspice_mcp.lib.experiment_runner import (
     StagedDecks,
     SubmissionCommitted,
     canonical_fingerprint,
+    refuse_another_request,
     verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -632,6 +633,10 @@ async def handle_run_experiments(
             )
         circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
         normalize_circuit_decks(circuit_inputs)
+        # Each circuit's path is resolved once, here, before a job exists: a
+        # path the sandbox refuses is the request's to fix, refused with the
+        # allowed roots named, not a failure met again in each of its cases.
+        source_paths = [safe_path(circuit.path, state) for circuit in args.circuits]
         validate_variation_circuit_ids(circuit_inputs, args.variations)
         native_ids = [
             item.id.casefold() for item in args.variations if isinstance(item, PdkNativeVariation)
@@ -685,15 +690,15 @@ async def handle_run_experiments(
                 *(
                     _prepare_circuit(
                         circuit_input,
-                        circuit_arg,
+                        source_path,
                         args,
                         state,
                         simulator,
                         job_id,
                     )
-                    for circuit_input, circuit_arg in zip(
+                    for circuit_input, source_path in zip(
                         circuit_inputs,
-                        args.circuits,
+                        source_paths,
                         strict=True,
                     )
                 ),
@@ -887,24 +892,24 @@ async def _render_static_run_receipt(
 
 async def _prepare_circuit(
     circuit_input: CircuitDeck,
-    circuit_arg: ExperimentCircuit,
+    source_path: Path,
     args: RunExperimentsInput,
     state: SessionState,
     simulator: type,
     job_id: str,
 ) -> _CircuitPreparation:
-    """Stage, lint, and materialize one circuit with isolated failures."""
+    """Stage, lint, and materialize one circuit with isolated failures.
+
+    ``source_path`` is the circuit's path as admission resolved it."""
     circuit_id = circuit_input.circuit_id
     native = _native_family(circuit_id, args.variations)
     expected_count = projected_case_count(circuit_id, args.variations)
-    source_path: Path | None = None
     runnable: Path | None = None
     expanded: list[ExpandedCase] | None = None
     source: SourceRecord | None = None
     findings: list[dict[str, Any]] = []
     cases: list[ExperimentCase] = []
     try:
-        source_path = safe_path(circuit_arg.path, state)
         if source_path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
             raise VariationError(
                 "unsupported_variant",
@@ -916,7 +921,7 @@ async def _prepare_circuit(
             raise FileNotFoundError(f"Circuit file not found: {source_path}")
         await state.note_recent_circuit(source_path)
         runnable = await resolve_runnable_netlist(
-            circuit_arg.path,
+            str(source_path),
             state,
             simulator=simulator,
         )
@@ -1119,7 +1124,6 @@ async def _prepare_circuit(
     except NativeRequestError:
         raise
     except (
-        PathSecurityError,
         NetlistError,
         VariationError,
         DeckStagingError,
@@ -1131,8 +1135,8 @@ async def _prepare_circuit(
         _append_terminal_cases(
             cases,
             circuit_id=circuit_id,
-            circuit_path=source_path or Path(circuit_arg.path),
-            staged_deck=runnable or Path(circuit_arg.path),
+            circuit_path=source_path,
+            staged_deck=runnable or source_path,
             count=expected_count,
             status="failed",
             code=code,
@@ -1315,14 +1319,7 @@ async def _load_matching_replay(
     )
     if index is None:
         return None
-    if (
-        index.get("canonicalizer_version") != CANONICALIZER_VERSION
-        or index.get("fingerprint") != fingerprint
-    ):
-        raise IdempotencyConflictError(
-            f"request_id {args.request_id!r} was already used for a different "
-            "request payload or canonicalizer version"
-        )
+    refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
     job_id = str(index.get("job_id", ""))
     job = state.all_jobs.get(job_id)
     if job is None:
@@ -1464,18 +1461,12 @@ def _append_terminal_cases(
         )
 
 
-def _circuit_error(exc: Exception, source_path: Path | None) -> tuple[str, str]:
-    if isinstance(exc, PathSecurityError):
-        return exc.code, str(exc)
+def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
     if isinstance(exc, VariationError):
         return exc.code, str(exc)
     if isinstance(exc, DeckStagingError):
         return exc.code, str(exc)
-    if (
-        source_path is not None
-        and source_path.suffix.casefold() == ".asc"
-        and isinstance(exc, SimulationError)
-    ):
+    if source_path.suffix.casefold() == ".asc" and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)
     if isinstance(exc, FileNotFoundError):
         return "source_not_found", str(exc)

@@ -13,6 +13,8 @@ does it write" — the questions that sit between a caller's path argument and
   the bytes out from under a run that already claimed them.
 * ``export_netlist_text`` — the same export for a schematic copy the server
   owns, as text, with no sandbox check and no snapshot.
+* ``stage_beside`` — what a copy exported away from its sheet needs beside
+  it: the symbols and model files of the sheet's own folder.
 
 Split out of ``tools/_base`` so the run path stops being part of the module
 every tool imports; it lives in ``lib`` because nothing here is MCP-shaped.
@@ -24,6 +26,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -223,6 +226,48 @@ async def resolve_runnable_netlist(
         )
     stem, data = await _export_schematic(netlist_path, state, simulator)
     return await asyncio.to_thread(_stage_deck_snapshot, state.store, stem, data)
+
+
+#: What a sheet's folder holds that LTspice reads when it exports the sheet: the
+#: symbols it finds beside the sheet, in its folder or a folder within it (the
+#: ``symbol-beside-sheet`` recording), and the model files they name.
+STAGED_SUFFIXES = frozenset({".asy", ".lib", ".sub", ".inc", ".mod"})
+#: The most of those files staged for one export.
+STAGE_FILE_CAP = 200
+
+
+def stage_beside(origin: Path, dest: Path) -> bool:
+    """Copy into ``dest`` what the folder ``origin`` holds for an export of a sheet in it.
+
+    A copy of a sheet exported anywhere but its own folder finds its symbols
+    only when they are staged beside it: LTspice looks for a symbol beside
+    the sheet before its libraries. The folders within ``origin`` keep their
+    places, so a symbol named ``sub/thing`` still resolves; dot-folders are
+    skipped. Returns True when :data:`STAGE_FILE_CAP` was reached and files
+    after it were left out. Blocking.
+    """
+    copied = 0
+    for src in sorted(origin.rglob("*")):
+        if not src.is_file() or src.suffix.lower() not in STAGED_SUFFIXES:
+            continue
+        rel = src.relative_to(origin)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        if copied >= STAGE_FILE_CAP:
+            return True
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+        copied += 1
+    return False
+
+
+def staging_cap_note(sheet_name: str) -> str:
+    """What to say of an export of ``sheet_name`` whose staging reached the cap."""
+    return (
+        f"only the first {STAGE_FILE_CAP} project-local symbol/library files were staged "
+        f"for the export of {sheet_name}, so a symbol beyond that may not resolve"
+    )
 
 
 async def export_netlist_text(asc_path: Path, state: SessionState) -> str:

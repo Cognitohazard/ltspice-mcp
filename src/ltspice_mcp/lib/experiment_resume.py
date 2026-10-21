@@ -415,6 +415,7 @@ async def admit_initial(
     from ltspice_mcp.lib.experiment_runner import (
         AdmissionResult,
         IdempotencyConflictError,
+        payload_conflict,
         request_gate,
         verify_replay,
     )
@@ -427,7 +428,7 @@ async def admit_initial(
         journal = await asyncio.to_thread(load_journal, store, request.request_id)
         if journal is not None:
             if journal.root.fingerprint != request.fingerprint:
-                raise IdempotencyConflictError("request_id already names a different payload")
+                raise payload_conflict(request.request_id, journal.head_job_id)
             job = await asyncio.to_thread(_load_attempt, journal, journal.root, store)
             await asyncio.to_thread(
                 verify_replay, job, request.request_id, request.simulator_executable

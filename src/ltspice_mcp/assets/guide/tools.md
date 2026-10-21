@@ -113,7 +113,9 @@ lint blocks a mismatch. A case that produced nothing is counted in
 
 - `run_experiments`: a reused `request_id` returns `idempotency_conflict` when
   the arguments differ, a deck has changed since the job ran, or the simulator
-  is now a different build; submit under a new id to run again. A `skipped`
+  is now a different build; submit under a new id to run again. For changed
+  arguments the refusal names the job the id made, which `jobs` reads by its
+  `job_id`. A `skipped`
   case means lint blocked its deck: fix the deck, or drop that one rule with
   `suppress` (the `rule_id` from the finding, such as `"save-meas-coverage"`)
   rather than setting `lint: "warn"`.
