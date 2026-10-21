@@ -66,6 +66,7 @@ from ltspice_mcp.lib.schematic_ops import (
     OpAddComponent,
     OpAddDirective,
     OpAddNetLabel,
+    OpMove,
     OpMoveComponent,
     OpRemoveComponent,
     OpRemoveDirective,
@@ -140,6 +141,7 @@ ConsolidatedOp = Annotated[
     | OpSetComponentAttribute
     | OpRemoveComponent
     | OpMoveComponent
+    | OpMove
     | OpAddNetLabel
     | OpRemoveNetLabel
     | OpRemoveWire

@@ -667,6 +667,44 @@
         ".net"
       ]
     },
+    "benchmark/two_stage_opamp_moved": {
+      "behaviour": "build-benchmark-export",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/two_stage_opamp_moved.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "benchmark/cap.asy": "2348597c264a72825968f439f93584ab15495dad1e7cf6def28555a758962f68",
+        "benchmark/current.asy": "a64943df4cf49496d6cc0ec0fa2f7050c667c312225704ce3e9184401c13d76b",
+        "benchmark/diode.asy": "3c006b0617d8f15fd67c3a8fba42777c87958a4e5d8c6b512c2c65078fc4480c",
+        "benchmark/e.asy": "0a0ad08a9ed79940218bfafea1374386e6051e65d449daea118ca82d89622ee8",
+        "benchmark/g.asy": "a45ebaf301feaa1df84a49e5b262a9480a50c72b9ac531eb7e9f5b9741483c83",
+        "benchmark/ind.asy": "09925edd7c49949f6c1d5a8b97add0cf83465aa9e5057eecd765d015e99e5168",
+        "benchmark/nmos.asy": "ae0ecad638afa53fb3905aa156446b15250ded103baf0674f725746629c116e2",
+        "benchmark/nmos4.asy": "1a3727b597b49ad41fb4d9d46d1da8c82bf9b7747142cce0a151736d47b05b1d",
+        "benchmark/pmos4.asy": "024453c74931109a848475e440bed334b390428a136685da3a121814291961be",
+        "benchmark/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "benchmark/two_stage_opamp_moved.asc": "33f9cf81df632072dbda228da0e3ebbda753fd56fba0d2b1818d8d34ac1cac61",
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "benchmark/two_stage_opamp_moved.net": {
+          "bytes": 590,
+          "sha256": "8d76909ae1a2c65d41f239fcd37e374741ddd5b5091618b07b47cae8ccceac58"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "benchmark/vccs_stage_drawn": {
       "behaviour": "build-benchmark-export",
       "command": [

@@ -146,6 +146,7 @@ inputs = [
     "benchmark/sallen_key_labelled.asc",
     "benchmark/two_stage_opamp_drawn.asc",
     "benchmark/two_stage_opamp_labelled.asc",
+    "benchmark/two_stage_opamp_moved.asc",
     "benchmark/vccs_stage_drawn.asc",
     "benchmark/vccs_stage_labelled.asc",
     "benchmark/vcvs_stage_drawn.asc",

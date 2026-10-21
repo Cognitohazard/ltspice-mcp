@@ -343,16 +343,26 @@ def equivalence(sheet: Sheet, reference: Circuit) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+_COORDINATE_KEYS = frozenset({"x", "y", "x1", "y1", "x2", "y2", "dx", "dy"})
+
+
 def coordinates_written(op: Mapping[str, Any]) -> int:
     """How many numbers locating something on the sheet the caller wrote in ``op``.
 
-    Two for each part origin, label or directive placed at a point, wire
-    waypoint, wire end given as a point, and point a removal names; a wire's
-    two segment ends count four. A pin given by name counts nothing.
+    Every number given under a coordinate's key, at any depth: two for each
+    part origin, label or directive placed at a point, wire waypoint, wire end
+    given as a point, point a removal or a move names, and a move's offset;
+    four for a wire's two segment ends and a region's corners. A pin or a part
+    given by name counts nothing.
     """
-    count = 2 * len(op.get("waypoints", ()))
-    count += sum(2 for key in ("from_pin", "to_pin") if isinstance(op.get(key), Mapping))
-    count += sum(1 for key in ("x", "y", "x1", "y1", "x2", "y2") if op.get(key) is not None)
+    count = 0
+    for key, value in op.items():
+        if isinstance(value, Mapping):
+            count += coordinates_written(value)
+        elif isinstance(value, list | tuple):
+            count += sum(coordinates_written(v) for v in value if isinstance(v, Mapping))
+        elif key in _COORDINATE_KEYS and isinstance(value, int):
+            count += 1
     return count
 
 

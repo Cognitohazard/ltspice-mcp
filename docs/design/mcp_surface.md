@@ -1586,12 +1586,29 @@ looks like an expression includes the Python snippet and says where to run it,
 
 ### A.3 Edit ops
 
-There are twelve op kinds, discriminated on `op`: `add_component`,
-`move_component`, `remove_component`, `set_component_value`,
+There are thirteen op kinds, discriminated on `op`: `add_component`,
+`move_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
 `remove_wire`, `add_directive`, `remove_directive`, `set_plot_panes`. The batch
 is atomic: the first op that fails aborts the transaction and nothing is
 written.
+
+`move` shifts any mix of records by one offset, `dx` and `dy`: parts by
+`references`, net labels and grounds by point (`labels`), wires by their two
+ends (`wires`), and directives and comments by exact text or `regex:`
+(`texts`). A `region` also selects what lies inside it, edges included: a part
+whose box does, a wire whose two ends do, a label, a text's anchor. With
+`drag`, an end of any other wire that sits on what moves (a moved pin, label
+or wire end, a point along a wire that moves whole, or with `region` any end
+inside it) moves too, so the wire stays attached, and so does a label or
+ground on any of those points; a wire dragged off its axis is reported as
+diagonal. A part's
+attribute text moves with it. Something named that is not there is refused,
+and so is a move that would join two nets that each carry a name (names
+compared as LTspice compares them, in any case), before anything changes. The result's `moved` counts what moved, listing the parts.
+Applied with the opposite offset to what it moved, it puts everything back.
+`move_component`, which places one part at a position and can turn it, stays
+as it was.
 
 The ops also provide exact-segment `remove_wire`, `cleanup_wires`, directive
 placement kinds, and literal matching for removals by default, with `regex:`
@@ -1631,6 +1648,73 @@ expression and replaces `Value` entirely.
   wire whose interior passes through it is kept. At a T that removes the stem
   and keeps the wire it joined, but at a pin on a wire's interior it leaves
   that wire in place although the two are connected.
+- No op edits a record in place. Renaming a part, renaming a net's labels or
+  changing a directive's text is a remove and an add, which restores only what
+  the add op takes and changes the order of the sheet's records. §9 proposes
+  an op for it.
+
+## 9. Proposed: `set`, editing records in place
+
+Not implemented. This section records the design so that it can be built and
+reviewed against it; until then nothing here is a contract.
+
+**The task.** Agents building sheets rename parts (eight MOSFETs given names
+that say what they do), rename nets (five nets, ten label ops), change a
+directive's text, and copy values from a netlist into the sheet it was
+exported from, one op per part. Each of those changes fields of records that
+already exist and keeps the rest: the position, the orientation, the other
+attributes, the attribute text's placement and the record's place in the file.
+
+**The shape.** `set` takes the selection `move` takes (`references`, `labels`,
+`texts`, `region`), plus `net`, which selects every label and ground of one
+net by name, and `fields`, applied to every record selected:
+
+| record | fields |
+|-|-|
+| part | `name` (its `InstName`), and any attribute `set_component_attribute` takes |
+| net label or ground | `name`, the net name it carries |
+| directive or comment | `text` |
+
+A field that does not belong to a selected record's kind is refused.
+`expect`, when given, is how many records the selection must match; any other
+count is refused before anything changes, so a selection that matches more
+than meant writes nothing.
+
+**What the server checks**, before anything changes:
+
+- A part name another part has, one name given to several parts, or a name
+  the export would not write as given (the instance-name rules recorded in
+  `export/instance_names`) is refused.
+- A net name is held to the rules `add_net_label` applies: a label that would
+  join two named nets is refused.
+- A directive's new text goes through the directive validation `add_directive`
+  applies.
+- Later ops of the batch use the new names; the reply gives old and new for
+  each record changed.
+
+**What it does not do.** It does not rewrite references to a renamed part or
+net. A directive can name a part (`I(M1)`, `@M1[id]`) or a net (`V(VB2)`), and
+the reply lists every such reference to an old name, as a fact. Renaming a
+name everywhere it is used is agent code: a `run_code` snippet reads that list,
+decides which references to change, and sends `set` on those texts. The
+server's part is the list, because where LTspice resolves a name (case,
+hierarchy such as `V(X1:out)`, behavioural sources, `{param}` in values) is
+LTspice's rule and has to be kept with the code that already reads it
+(`validate_netlist_directive_refs` for a netlist's `V()` and `I()`
+references). Copying values from a reference netlist is agent code too: read
+its cards and send one `set` per part.
+
+**Relation to the existing ops.** `set_component_attribute` is `set` on one
+part with one attribute; `set_component_value` keeps its parsing of a
+trailing `KEY=VALUE`; a `remove_net_label` and `add_net_label` pair on every
+label of a net becomes one `set` with `net`. The existing ops stay until a
+build has shown that `set` covers them.
+
+**What it needs before it ships:** its inverse (`set` with the old values,
+which the inverse-op closure test holds it to), a record of its answers to
+proposals on the suite's sheets like the label and move records, a build in
+the build benchmark that uses it, and a recording of a sheet with renamed
+parts and nets exported by both LTspice builds.
 
 ## Hierarchy discovery contract
 

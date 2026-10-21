@@ -758,7 +758,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # KEY=VALUE: where the part already gives the key, else in SpiceLine. It
     # used to put every one in SpiceLine, which wrote a Schmitt trigger's
     # thresholds twice; the op now says where the value lands. Measured 13,162.
-    "edit_schematic": 13170,
+    # Raised by about 1,600 characters for move, the thirteenth op: one offset
+    # for any mix of parts, wires, labels and texts, chosen by name or by a
+    # region, optionally dragging attached wires. Most of it is the op's
+    # structure (seven selectors, a region and a wire shape); the descriptions
+    # are a line each. Measured 14,768.
+    "edit_schematic": 14775,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what

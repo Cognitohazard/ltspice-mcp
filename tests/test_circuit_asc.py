@@ -3268,3 +3268,278 @@ class TestSchematicReadability:
         # The anti-soup invariant: no internal junction is realized as a label.
         for junction in ((200, 248), (200, 352), (200, 448), (200, 552)):
             assert junction not in flag_coords, f"junction {junction} labeled, not wired"
+
+
+def _records(asc: Path) -> list[str]:
+    """The sheet's placed records, in order: what a move changes."""
+    kinds = ("SYMBOL ", "WIRE ", "FLAG ", "TEXT ")
+    return [
+        line for line in asc.read_text(encoding="utf-8").splitlines() if line.startswith(kinds)
+    ]
+
+
+# R1 and R2 side by side, their top pins wired along y=196, a label "a" on
+# R1.1 and a directive at the sheet's corner.
+_PAIR = (
+    _res("R1", 96, 244),
+    _res("R2", 288, 244),
+    "WIRE 96 196 288 196",
+    "FLAG 96 196 a",
+    "TEXT 16 16 Left 2 !.op",
+)
+
+
+@pytest.mark.asyncio
+class TestMoveOp:
+    """The general ``move``: one offset for any mix of parts, wires, labels and
+    texts, chosen by name or by a region, optionally dragging attached wires."""
+
+    async def test_a_dragged_part_keeps_its_wire(self, asc_state: SessionState, work_dir: Path):
+        asc = _write_sheet(work_dir / "mv_drag.asc", *_PAIR)
+        result = apply_one(
+            asc_state,
+            asc,
+            {"op": "move", "dx": 64, "dy": 0, "references": ["R2"], "drag": True},
+        )
+        assert result["moved"] == {
+            "parts": ["R2"],
+            "labels": 0,
+            "wires": 0,
+            "texts": 0,
+            "dragged_wire_ends": 1,
+        }
+        assert "warnings" not in result
+        assert "WIRE 96 196 352 196" in _records(asc)
+        assert await _net_pins(asc_state, asc, "R2.1") == {"R1.1", "R2.1"}
+
+    async def test_without_drag_the_wire_stays_where_it_was(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "mv_nodrag.asc", *_PAIR)
+        apply_one(asc_state, asc, {"op": "move", "dx": 64, "dy": 0, "references": ["R2"]})
+        assert "WIRE 96 196 288 196" in _records(asc)
+        assert await _net_pins(asc_state, asc, "R2.1") == {"R2.1"}
+
+    async def test_a_dragged_part_takes_the_labels_on_its_pins(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A ground on R2's bottom pin, the guide's way of grounding a pin with
+        # no wire: it is attached to the pin as a wire end is, so it follows.
+        asc = _write_sheet(work_dir / "mv_drag_label.asc", *_PAIR, "FLAG 288 292 0")
+        result = apply_one(
+            asc_state,
+            asc,
+            {"op": "move", "dx": 64, "dy": 0, "references": ["R2"], "drag": True},
+        )
+        assert result["moved"]["labels"] == 1
+        records = _records(asc)
+        # R2 now stands at x=352, so its bottom pin is at (352, 292).
+        assert "SYMBOL res 352 244 R0" in records
+        assert "FLAG 352 292 0" in records
+        assert "FLAG 96 196 a" in records
+
+    async def test_a_label_along_a_moved_wire_goes_with_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # LTspice joins a label anywhere along a wire, so one on the wire's
+        # interior is attached to it as one on its end is.
+        asc = _write_sheet(
+            work_dir / "mv_wire_label.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            "WIRE 96 196 288 196",
+            "FLAG 192 196 mid",
+        )
+        apply_one(
+            asc_state,
+            asc,
+            {
+                "op": "move",
+                "dx": 0,
+                "dy": -32,
+                "references": ["R1", "R2"],
+                "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}],
+                "drag": True,
+            },
+        )
+        assert "FLAG 192 164 mid" in _records(asc)
+
+    async def test_a_wire_teed_onto_a_moved_wire_is_dragged_with_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The stem ends on the moved wire's interior, a T-junction LTspice
+        # joins, so with drag its end goes with the wire.
+        asc = _write_sheet(
+            work_dir / "mv_tee.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            _res("R3", 192, 340),
+            "WIRE 96 196 288 196",
+            "WIRE 192 196 192 292",
+        )
+        result = apply_one(
+            asc_state,
+            asc,
+            {
+                "op": "move",
+                "dx": 0,
+                "dy": -32,
+                "references": ["R1", "R2"],
+                "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}],
+                "drag": True,
+            },
+        )
+        assert result["moved"]["dragged_wire_ends"] == 1
+        assert "WIRE 192 164 192 292" in _records(asc)
+
+    async def test_names_that_differ_only_in_case_are_one_net_to_a_move(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # LTspice makes VDD and vdd one node (the connectivity recordings), so
+        # a move that wires the two together joins nothing that was apart.
+        asc = _write_sheet(
+            work_dir / "mv_case.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            "WIRE 96 196 192 196",
+            "FLAG 96 196 VDD",
+            "FLAG 288 196 vdd",
+        )
+        apply_one(
+            asc_state,
+            asc,
+            {"op": "move", "dx": -96, "dy": 0, "references": ["R2"], "drag": True},
+        )
+        assert "FLAG 192 196 vdd" in _records(asc)
+
+    async def test_without_drag_a_label_on_a_moved_pin_stays(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "mv_nodrag_label.asc", *_PAIR, "FLAG 288 292 0")
+        result = apply_one(asc_state, asc, {"op": "move", "dx": 64, "dy": 0, "references": ["R2"]})
+        assert result["moved"]["labels"] == 0
+        assert "FLAG 288 292 0" in _records(asc)
+
+    async def test_a_wire_dragged_off_its_axis_is_said_to_be_diagonal(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "mv_diag.asc", *_PAIR)
+        result = apply_one(
+            asc_state,
+            asc,
+            {"op": "move", "dx": 0, "dy": 64, "references": ["R2"], "drag": True},
+        )
+        assert result["warnings"] == [
+            "Dragging left 1 wire(s) diagonal: (96,196)->(288,260). LTspice joins a "
+            "diagonal wire at its ends and anywhere along it."
+        ]
+        assert await _net_pins(asc_state, asc, "R2.1") == {"R1.1", "R2.1"}
+
+    async def test_a_region_moves_what_lies_inside_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # R1's box, its label and the part of the wire at its pin are inside;
+        # the wire's far end and R2 are not, so with drag the wire stretches.
+        asc = _write_sheet(work_dir / "mv_region.asc", *_PAIR)
+        result = apply_one(
+            asc_state,
+            asc,
+            {
+                "op": "move",
+                "dx": -32,
+                "dy": 0,
+                "region": {"x1": 48, "y1": 180, "x2": 160, "y2": 320},
+                "drag": True,
+            },
+        )
+        assert result["moved"]["parts"] == ["R1"]
+        assert result["moved"]["labels"] == 1
+        assert result["moved"]["texts"] == 0
+        records = _records(asc)
+        assert "SYMBOL res 64 244 R0" in records
+        assert "FLAG 64 196 a" in records
+        assert "WIRE 64 196 288 196" in records
+        assert "TEXT 16 16 Left 2 !.op" in records
+
+    async def test_texts_move_by_their_text_or_a_pattern(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "mv_text.asc", *_PAIR, "TEXT 16 48 Left 2 ;a note")
+        apply_one(asc_state, asc, {"op": "move", "dx": 0, "dy": 400, "texts": [".op"]})
+        apply_one(asc_state, asc, {"op": "move", "dx": 32, "dy": 0, "texts": ["regex:note$"]})
+        records = _records(asc)
+        assert "TEXT 16 416 Left 2 !.op" in records
+        assert "TEXT 48 48 Left 2 ;a note" in records
+
+    async def test_a_move_that_would_short_two_named_nets_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # Label b dropped on the end of net a's wire would make one net of both.
+        asc = _write_sheet(work_dir / "mv_short.asc", *_PAIR, "FLAG 480 196 b")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match=r"join nets that each carry a name \['a', 'b'\]"):
+            apply_one(
+                asc_state,
+                asc,
+                {"op": "move", "dx": -192, "dy": 0, "labels": [{"x": 480, "y": 196}]},
+            )
+        assert asc.read_bytes() == before
+
+    async def test_a_refused_move_in_a_batch_that_goes_on_changes_nothing(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # With stop_on_error off the batch keeps going past a refused op, so
+        # the move must refuse before it changes anything.
+        asc = _write_sheet(work_dir / "mv_goes_on.asc", *_PAIR, "FLAG 480 196 b")
+        data = batch_view(
+            asc_state,
+            asc,
+            [
+                {"op": "move", "dx": -192, "dy": 0, "labels": [{"x": 480, "y": 196}]},
+                {"op": "add_net_label", "net": "c", "x": 600, "y": 100},
+            ],
+            stop_on_error=False,
+        )
+        assert [entry["ok"] for entry in data["results"]] == [False, True]
+        assert "FLAG 480 196 b" in _records(asc)
+
+    @pytest.mark.parametrize(
+        ("op", "refusal"),
+        [
+            ({"dx": 16, "dy": 0}, "selects nothing"),
+            ({"dx": 0, "dy": 0, "references": ["R1"]}, "non-zero dx or dy"),
+            ({"dx": 16, "dy": 0, "references": ["R9"]}, "Component 'R9' not found"),
+            ({"dx": 16, "dy": 0, "labels": [{"x": 0, "y": 0}]}, r"No net label at \(0,0\)"),
+            ({"dx": 16, "dy": 0, "texts": [".tran 1"]}, "No directive or comment matched"),
+            (
+                {"dx": 16, "dy": 0, "wires": [{"x1": 0, "y1": 0, "x2": 16, "y2": 0}]},
+                r"No wire from \(0,0\) to \(16,0\)",
+            ),
+        ],
+    )
+    async def test_what_is_not_there_is_refused(
+        self, asc_state: SessionState, work_dir: Path, op: dict, refusal: str
+    ):
+        asc = _write_sheet(work_dir / "mv_none.asc", *_PAIR)
+        with pytest.raises(NetlistError, match=refusal):
+            apply_one(asc_state, asc, {"op": "move", **op})
+
+    async def test_the_opposite_offset_puts_everything_back(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "mv_back.asc", *_PAIR)
+        before = _records(asc)
+        selection = {
+            "references": ["R1", "R2"],
+            "labels": [{"x": 96, "y": 196}],
+            "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}],
+        }
+        apply_one(asc_state, asc, {"op": "move", "dx": 48, "dy": -32, **selection})
+        moved = {
+            "references": ["R1", "R2"],
+            "labels": [{"x": 144, "y": 164}],
+            "wires": [{"x1": 144, "y1": 164, "x2": 336, "y2": 164}],
+        }
+        apply_one(asc_state, asc, {"op": "move", "dx": -48, "dy": 32, **moved})
+        # The editor writes wires before parts; every record is where it was.
+        assert sorted(_records(asc)) == sorted(before)
