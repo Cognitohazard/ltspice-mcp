@@ -268,6 +268,9 @@ class BridgeSession:
     def _gave_up(self) -> BridgeError:
         return BridgeError(f"{self._name} did not answer within {self._timeout:g} s and was ended")
 
+    def _closed_before(self, method: str) -> BridgeError:
+        return BridgeError(f"{self._name} closed before answering {method}")
+
     def _send(self, message: dict[str, Any]) -> None:
         try:
             self._stdin.write(json.dumps(message).encode("utf-8") + b"\n")
@@ -275,6 +278,11 @@ class BridgeSession:
         except (OSError, ValueError) as error:
             if self._expired:
                 raise self._gave_up() from error
+            if "id" in message:
+                # A bridge already ended refuses a request's write; one that
+                # ends a moment later closes its output instead. Both closed
+                # before answering.
+                raise self._closed_before(message["method"]) from error
             raise BridgeError(f"{self._name} stopped reading: {error}") from error
 
     def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -290,7 +298,7 @@ class BridgeSession:
                 self._replies.put(None)
                 if self._expired:
                     raise self._gave_up()
-                raise BridgeError(f"{self._name} closed before answering {method}")
+                raise self._closed_before(method)
             if reply.get("id") != wanted or "method" in reply:
                 continue
             error = reply.get("error")

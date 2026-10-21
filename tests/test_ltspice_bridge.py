@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib import hidden_desktop, ltspice_window, windows_job
+from ltspice_mcp.lib import hidden_desktop, ltspice_bridge, ltspice_window, windows_job
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.ltspice_bridge import (
     BRIDGE_NAME,
@@ -455,6 +455,26 @@ class TestSession:
             assert session._process.wait(timeout=LIVENESS_S) is not None
 
     def test_a_bridge_that_exits_is_reported(self, tmp_path: Path):
+        with pytest.raises(BridgeError, match="closed before answering initialize"):
+            BridgeSession([sys.executable, "-c", "pass"], timeout=LIVENESS_S)
+
+    def test_a_bridge_that_has_exited_before_the_first_request_is_reported_the_same(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Whether the bridge is gone before the session first writes to it, or
+        goes a moment later, it closed before answering; the report used to
+        depend on which, and called the first a broken pipe."""
+
+        def exited_first(start: Any) -> Any:
+            def run(*args: Any) -> Any:
+                started = start(*args)
+                assert started[0].wait(timeout=LIVENESS_S) is not None
+                return started
+
+            return run
+
+        for name in ("_start_plain", "_start_hidden"):
+            monkeypatch.setattr(ltspice_bridge, name, exited_first(getattr(ltspice_bridge, name)))
         with pytest.raises(BridgeError, match="closed before answering initialize"):
             BridgeSession([sys.executable, "-c", "pass"], timeout=LIVENESS_S)
 
