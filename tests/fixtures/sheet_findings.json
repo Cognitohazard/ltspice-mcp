@@ -10557,7 +10557,7 @@
        80
       ]
      ],
-     "detail": "One net carries labels ['VDD', 'vout']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "detail": "One net carries labels ['VDD', 'VOUT']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
      "refs": []
     },
     "ok": false,
@@ -10570,10 +10570,10 @@
    "warnings": [
     {
      "kind": "net_with_two_names",
-     "message": "One net carries labels ['VDD', 'vout']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "message": "One net carries labels ['VDD', 'VOUT']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
      "names": [
       "VDD",
-      "vout"
+      "VOUT"
      ],
      "points": [
       {

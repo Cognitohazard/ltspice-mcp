@@ -33,16 +33,15 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
-from functools import cached_property
 from typing import Any, Literal
 
 from ltspice_mcp.lib.connectivity import (
     NetPartition,
     build_on_wire_predicate,
     build_wire_counter,
+    crossing_points,
     is_ground,
     label_folded_nets,
     name_key,
@@ -317,23 +316,30 @@ class _Index:
         self.drawn = [
             (index, part, drawn) for index, part in found if (drawn := part.drawn) is not None
         ]
-        #: How many wires have an end at each point.
-        self.ends_at = Counter(end for wire in self.wires for end in wire)
+        #: Every point a wire ends at.
+        self.wire_ends = {end for wire in self.wires for end in wire}
 
-    def interior_wires(self, point: Point) -> list[tuple[Point, Point]]:
-        """The wires ``point`` lies on away from their ends."""
-        return [
-            (a, b) for a, b in self.wires if point not in (a, b) and point_on_segment(point, a, b)
-        ]
 
-    @cached_property
-    def partition(self) -> NetPartition:
-        """The sheet's nets, joined as LTspice joins them (``connectivity.partition``)."""
-        return partition(
-            (((x, y), (part.name, name)) for part in self.view.parts for name, x, y in part.pins),
-            (((x, y), text) for x, y, text in self.view.labels),
-            [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in self.view.wires],
-        )
+def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
+    """The sheet's nets as its wiring joins them (``connectivity.partition``),
+    leaving out the pins and labels on the points in ``without``."""
+    return partition(
+        (
+            ((x, y), (part.name, name))
+            for part in view.parts
+            for name, x, y in part.pins
+            if (x, y) not in without
+        ),
+        (((x, y), text) for x, y, text in view.labels if (x, y) not in without),
+        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in view.wires],
+    )
+
+
+def _net_name(labels: list[tuple[Point, str]]) -> str:
+    """Of labels whose names differ only in case, the spelling LTspice gives
+    the node: the label lowest on the sheet, and of those the one furthest
+    right (the net-naming recordings)."""
+    return max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1]
 
 
 _Finder = Callable[[_Index], list[Finding]]
@@ -472,19 +478,23 @@ def floating_pins(view: SheetView) -> list[tuple[Part, tuple[str, int, int]]]:
 @_finds("net_with_two_names")
 def _nets_with_two_names(ix: _Index) -> list[Finding]:
     # One node per label-folded net, names compared as LTspice compares them,
-    # ground no name. Each name is given in the spelling of its first label.
-    net_of = label_folded_nets(ix.partition)
+    # ground no name. Each name is given in the spelling LTspice gives it.
+    named = [
+        ((x, y), name)
+        for x, y, text in ix.view.labels
+        if (name := text.strip()) and not is_ground(name)
+    ]
+    if len({name_key(name) for _point, name in named}) < 2:
+        return []
+    net_of = label_folded_nets(_wired_nets(ix.view))
     nets: dict[Point, dict[str, list[tuple[Point, str]]]] = {}
-    for x, y, text in ix.view.labels:
-        name = text.strip()
-        if name and not is_ground(name):
-            spellings = nets.setdefault(net_of((x, y)), {})
-            spellings.setdefault(name_key(name), []).append(((x, y), name))
+    for point, name in named:
+        nets.setdefault(net_of(point), {}).setdefault(name_key(name), []).append((point, name))
     found: list[Finding] = []
     for by_key in nets.values():
         if len(by_key) < 2:
             continue
-        names = tuple(sorted(labels[0][1] for labels in by_key.values()))
+        names = tuple(sorted(_net_name(labels) for labels in by_key.values()))
         points = tuple(sorted(point for labels in by_key.values() for point, _ in labels))
         found.append(
             Finding(
@@ -503,33 +513,28 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
     # Wires crossing where neither ends are apart; a pin or a label on the
     # crossing joins them (pin_at_crossing, label_at_crossing). Said only where
     # what sits there is what joins them: without the pins and labels on such
-    # crossings, the wires through each would be on separate nets.
+    # crossings, the wires through each would be on separate nets, nets that
+    # share a name being one.
     on: dict[Point, list[str]] = {}
+    refs: dict[Point, dict[str, None]] = {}
     for part in ix.view.parts:
         for name, x, y in part.pins:
             on.setdefault((x, y), []).append(f"{part.name}.{name}")
+            refs.setdefault((x, y), {})[part.name] = None
     for x, y, text in ix.view.labels:
         on.setdefault((x, y), []).append(f"label '{text.strip()}'")
+    # A point no wire ends at lies away from the ends of every wire through it.
     crossings = {
-        point: through
+        point: [(a, b) for a, b in ix.wires if point_on_segment(point, a, b)]
         for point in on
-        if ix.ends_at[point] == 0 and len(through := ix.interior_wires(point)) > 1
+        if point not in ix.wire_ends and ix.wires_through(point) > 1
     }
     if not crossings:
         return []
-    apart = partition(
-        (
-            ((x, y), (part.name, name))
-            for part in ix.view.parts
-            for name, x, y in part.pins
-            if (x, y) not in crossings
-        ),
-        (((x, y), text) for x, y, text in ix.view.labels if (x, y) not in crossings),
-        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in ix.view.wires],
-    )
+    net_of = label_folded_nets(_wired_nets(ix.view, without=crossings))
     found: list[Finding] = []
     for point, through in sorted(crossings.items()):
-        nets = {apart.root(a) for a, _b in through}
+        nets = {net_of(a) for a, _b in through}
         if len(nets) < 2:
             continue
         what = ", ".join(on[point])
@@ -538,14 +543,7 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
                 "joined_at_crossing",
                 f"{what} at {_at(point)} sits where {len(through)} wires cross, and joins "
                 f"{len(nets)} nets there that are apart without it",
-                refs=tuple(
-                    dict.fromkeys(
-                        part.name
-                        for part in ix.view.parts
-                        for _name, x, y in part.pins
-                        if (x, y) == point
-                    )
-                ),
+                refs=tuple(refs.get(point, ())),
                 points=(point,),
                 facts={"wires": len(through), "nets": len(nets)},
             )
@@ -557,13 +555,6 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
 def _unjoined_crossings(ix: _Index) -> list[Finding]:
     # Horizontal and vertical wires through each other, at a point that is no
     # wire's end and has no pin or label on it.
-    horizontal = [(a, b) for a, b in ix.wires if a[1] == b[1]]
-    vertical = [(a, b) for a, b in ix.wires if a[0] == b[0]]
-    points: set[Point] = set()
-    for (hx1, y), (hx2, _y) in horizontal:
-        for (x, vy1), (_x, vy2) in vertical:
-            if min(hx1, hx2) < x < max(hx1, hx2) and min(vy1, vy2) < y < max(vy1, vy2):
-                points.add((x, y))
     return [
         Finding(
             "unjoined_crossing",
@@ -571,8 +562,8 @@ def _unjoined_crossings(ix: _Index) -> list[Finding]:
             "nothing sits on the crossing",
             points=(point,),
         )
-        for point in sorted(points)
-        if ix.ends_at[point] == 0 and point not in ix.pins_at and point not in ix.labelled
+        for point in sorted(crossing_points(ix.wires))
+        if point not in ix.wire_ends and point not in ix.pins_at and point not in ix.labelled
     ]
 
 
@@ -855,10 +846,7 @@ def _label_islands(ix: _Index) -> list[Finding]:
         if name and not is_ground(name):
             stubs.setdefault(name_key(name), []).append(((x, y), name))
     islands = [
-        (
-            max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1],
-            tuple(point for point, _name in labels),
-        )
+        (_net_name(labels), tuple(point for point, _name in labels))
         for labels in stubs.values()
         # A lone label is not a connection by name standing in for a wire.
         if len(labels) > 1 and not any(ix.on_a_wire(point) for point, _name in labels)
@@ -895,7 +883,8 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       labels carry two or more names, compared as LTspice compares them, ground
       no name. LTspice gives the node one of them.
     - ``joined_at_crossing``: a pin or label on a point where two or more wires
-      cross, none ending there, which joins nets that are apart without it.
+      cross, none ending there, which joins nets that are apart without it,
+      nets that share a name being one.
     - ``unjoined_crossing``: a horizontal and a vertical wire through each
       other at a point no wire ends at and nothing sits on.
     - ``diagonal_wire``: a wire neither horizontal nor vertical.

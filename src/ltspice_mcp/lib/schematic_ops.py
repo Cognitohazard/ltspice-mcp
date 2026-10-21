@@ -1405,7 +1405,7 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
     for i in plan.texts:
         editor.directives[i].coord = Point(*shifted(_xy(editor.directives[i].coord)))
 
-    result: dict[str, object] = {
+    return {
         "moved": {
             "parts": plan.parts,
             "labels": len(plan.labels),
@@ -1414,7 +1414,6 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
             "dragged_wire_ends": sum(a + b for a, b in plan.dragged.values()),
         }
     }
-    return result
 
 
 def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
@@ -1467,15 +1466,12 @@ def _pins_on_crossings(
         return
     nets = NamedNets(net_partition(editor, without=reference))
     for pin, through in on_wires:
-        at = (pin["x"], pin["y"])
         joined = nets.joined_at(seg[:2] for seg in through)
-        if joined.wired < 2:
-            continue
-        pin_name = f"{reference}.{pin['name']}"
         if len(joined.named) > 1:
             listed = "; ".join(str(sorted(names)) for names in joined.named)
             raise NetlistError(
-                f"Refused to {doing}: {pin_name} would land at ({at[0]},{at[1]}), where "
+                f"Refused to {doing}: {reference}.{pin['name']} would land at "
+                f"({pin['x']},{pin['y']}), where "
                 f"wires of nets that each carry a name cross ({listed}). A pin on a "
                 "crossing joins the wires, shorting those nets together. Put the part "
                 "where the pin is on the one wire it is meant for."
@@ -1580,8 +1576,7 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> None:
     # every net already of its name; ground is no name (NamedNets.joined_at).
     through = wires_through((x, y), wire_segments_of(editor))
     grounding = is_ground(net)
-    nets = NamedNets(net_partition(editor))
-    joined = nets.joined_at(
+    joined = NamedNets(net_partition(editor)).joined_at(
         (seg[:2] for seg in through), at=(x, y), name=None if grounding else net
     )
     if len(joined.named) > 1:
