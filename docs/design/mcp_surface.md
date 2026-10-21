@@ -940,8 +940,11 @@ Fixed rules:
   the pin's name or, when no pin has that name and it is all digits, its
   1-based SpiceOrder, so `X1.2` works on a block whose pins are lettered; the
   legal symbols are the ones `inspect` reports.
-- Validation errors: unresolvable endpoint, diagonal wire, wire over a symbol
-  body, pin collision, junction overlap.
+- Route refusals: an endpoint that does not resolve, a diagonal, a pin passed
+  over, a run along an existing wire, another net's wiring touched, two named
+  nets joined, and a straight wire between two pins of one part, which LTspice
+  leaves out of the netlist. A route through a part's body is not refused; the
+  finished sheet's `wire_through_symbol` finding reports it.
 - The wiring metric, with `label_only_pins`, and findings carrying `at` and
   `subject`.
 - Retry: resubmitting with the original `expected_sha256` returns
@@ -1001,8 +1004,8 @@ is bounded by the batch the caller sent. The Python API returns the same list.
 **Wire ops.** A routed segment identical to one already on the sheet is not
 drawn again; the op's `results` entry lists it under `already_present`, and
 the rest of the route is drawn. Removing an exact segment that exists more
-than once removes every copy, unless that would leave a pin newly floating, in
-which case the op is refused, naming the pin, and nothing is written. A
+than once removes every copy, unless that would split a net in two, in which
+case the op is refused, naming pins on each side, and nothing is written. A
 segment that exists once is always removed, because that is an explicit
 disconnection.
 
@@ -1011,7 +1014,7 @@ anywhere along a wire, including its interior, to that wire, and does not
 connect two wires that only cross; a label at a crossing connects both wires.
 Every tool that reads connectivity applies this rule, so a T needs no wire
 split. `wire_pins` accepts `{x, y}` for either endpoint. The point must touch a
-wire or a pin; on a wire's interior the new segment ends there and the wire is
+wire, a pin or a label; on a wire's interior the new segment ends there and the wire is
 left whole, so `remove_wire` of that segment restores the sheet. The op's
 `results` entry lists the T under `junctions` as
 `{x, y, via: "endpoint", wire}`, where `wire` is the segment joined. The new
