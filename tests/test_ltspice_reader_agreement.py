@@ -20,7 +20,8 @@ here with what LTspice's reader says:
   LTspice's reader, and at its real start from the server's;
 - a file of one point (an operating point, a transfer function) is refused by
   LTspice's reader, and read by the server's;
-- a stepped operating point is one sweep to LTspice's reader, and a point a
+- a stepped operating point, and a stepped AC analysis at one frequency, is
+  one sweep to LTspice's reader, along the stepped parameter, and a point a
   step to the server's;
 - a run stopped part way is read as far as its header says by LTspice's
   reader, and refused by the server's decoder when the header and the samples
@@ -62,7 +63,9 @@ READ = [subject for subject in SUBJECTS if "read" in reader_reply(*subject)]
 REFUSED = [subject for subject in SUBJECTS if "refused" in reader_reply(*subject)]
 #: Files of one point: no axis to read along.
 ONE_POINT = {"op", "op_one_subckt", "op_subckt", "tf", "tran_op_raw.op"}
-STEPPED_OPERATING_POINT = "step_op"
+#: Stepped runs stored a point a step, the stepped parameter first, and the
+#: analysis LTspice's reader names each.
+PARAMETERS_FIRST = {"step_op": "Operating Point", "step_ac_one_freq": "AC Analysis"}
 STOPPED_PART_WAY = "tran_killed"
 
 
@@ -139,7 +142,7 @@ def test_every_results_file_in_the_main_recordings_was_put_to_the_reader(reader:
     [
         subject
         for subject in READ
-        if subject[2] != STEPPED_OPERATING_POINT and is_whole(subject[1], subject[2])
+        if subject[2] not in PARAMETERS_FIRST and is_whole(subject[1], subject[2])
     ],
 )
 def test_the_server_reads_the_samples_ltspices_reader_gives(
@@ -247,17 +250,19 @@ def test_every_file_of_one_point_is_refused_and_no_other():
 
 
 @pytest.mark.parametrize(
-    ("reader", "written_by", "name"), [s for s in READ if s[2] == STEPPED_OPERATING_POINT]
+    ("reader", "written_by", "name"), [s for s in READ if s[2] in PARAMETERS_FIRST]
 )
-def test_a_stepped_operating_point_is_one_sweep_to_ltspices_reader_and_a_point_a_step_here(
+def test_a_run_stored_a_point_a_step_is_one_sweep_to_ltspices_reader_and_steps_here(
     reader: str, written_by: str, name: str, tmp_path: Path
 ):
     """One point is stored a step, with the stepped parameter as the first
-    variable. LTspice's reader calls that an unstepped run with the parameter
-    for its axis; the server's keeps the steps, and the values are the same."""
+    variable: a stepped operating point, and a stepped AC analysis at one
+    frequency, which stores no frequency. LTspice's reader calls that an
+    unstepped run with the parameter for its axis; the server's keeps the
+    steps, and the values are the same."""
     said = reader_reply(reader, written_by, name)
     info, read = said["info"], said["read"]
-    assert (read["stepped"], read["analysis"]) == ("false", "Operating Point")
+    assert (read["stepped"], read["analysis"]) == ("false", PARAMETERS_FIRST[name])
     raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
     stepped_parameter, *traces = raw.get_trace_names()
     assert (info["x_name"], info["signals"]) == (stepped_parameter, traces)
@@ -268,12 +273,14 @@ def test_a_stepped_operating_point_is_one_sweep_to_ltspices_reader_and_a_point_a
         return np.asarray([np.asarray(raw.get_wave(trace, step))[0] for step in steps])
 
     np.testing.assert_array_equal(
-        a_point_a_step(stepped_parameter).astype(np.float32),
+        np.real(a_point_a_step(stepped_parameter)).astype(np.float32),
         np.asarray(read["data"]["x"], dtype=np.float32),
     )
+    # Single precision, as both files store it: a complex value is two floats.
+    stored = np.complex64 if read["complex"] == "true" else np.float32
     for signal, columns in read["data"]["signals"].items():
         np.testing.assert_array_equal(
-            a_point_a_step(signal).astype(np.float32), theirs(columns).astype(np.float32)
+            a_point_a_step(signal).astype(stored), theirs(columns).astype(stored)
         )
 
 

@@ -332,6 +332,42 @@ class TestSteppedRuns:
         with pytest.raises(ResultError, match="points"):
             load("raw/tran").value("V(out)")
 
+    def test_a_stepped_ac_at_one_frequency_stores_a_point_a_step_as_an_operating_point_does(
+        self, build: str, tmp_path: Path, state_no_sim: SessionState, work_dir: Path
+    ):
+        """At one frequency the plot has no frequency at all: it opens with the
+        stepped parameter and holds one point a step, and the log names no
+        steps. So the steps are the raw's own, as a stepped .op's are, and
+        never found by the axis starting over."""
+        header = header_fields(build, "raw/step_ac_one_freq")
+        assert header["Plotname"] == ["AC Analysis"]
+        assert "stepped" in header["Flags"][0].split()
+        assert declared_points(build, "raw/step_ac_one_freq") == 3
+        assert declared_names(build, "raw/step_ac_one_freq")[:2] == ["r", "V(in)"]
+        log = read_spice_text(rec.recorded(build, "raw/step_ac_one_freq.log"))
+        assert not [line for line in log.splitlines() if line.startswith(".step")]
+
+        parsed = rec.decode(build, "raw/step_ac_one_freq", tmp_path)
+        assert parsed.raw.descriptor.step_status == "matched"
+        assert parsed.raw.steps == [{"r": 1000.0}, {"r": 2000.0}, {"r": 4000.0}]
+        # A first-order low-pass at 100 kHz with a 1 nF capacitor.
+        for step, ohms in enumerate((1e3, 2e3, 4e3)):
+            (gain,) = parsed.raw.get_wave("V(out)", step)
+            expected = 1 / (1 + 2j * math.pi * 100e3 * ohms * 1e-9)
+            assert gain == pytest.approx(expected, rel=1e-5)
+
+        # Through the API, as a stepped sweep is read: a number a step.
+        staged = work_dir / "step_ac_one_freq.raw"
+        staged.write_bytes(rec.recorded(build, "raw/step_ac_one_freq.raw").read_bytes())
+        raw = SyncApi(state_no_sim).load_raw(staged)
+        assert raw.steps == [{"r": 1000.0}, {"r": 2000.0}, {"r": 4000.0}]
+        values = [raw.value("V(out)", step=step) for step in range(raw.step_count)]
+        assert all(isinstance(value, complex) for value in values)
+        assert [abs(value) for value in values] == pytest.approx(
+            [abs(1 / (1 + 2j * math.pi * 100e3 * ohms * 1e-9)) for ohms in (1e3, 2e3, 4e3)],
+            rel=1e-5,
+        )
+
     def test_a_stepped_operating_points_summary_counts_its_steps(self, build: str, tmp_path: Path):
         """The run's summary no longer says only the first step is read."""
         parsed = rec.decode(build, "raw/step_op", tmp_path)

@@ -6368,6 +6368,40 @@
         ".raw"
       ]
     },
+    "raw/step_ac_one_freq": {
+      "behaviour": "raw-stepped",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_ac_one_freq.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/step_ac_one_freq.cir": "00147b89a5b9fd6da397253a38ec9a75b5769927fe0662b2abdf910b05de326d"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_ac_one_freq.log": {
+          "bytes": 472,
+          "sha256": "8a8dc11a2140d7e1ee2c83483b4ff7bf09bdccbcfd064759fab030601449eece"
+        },
+        "raw/step_ac_one_freq.raw": {
+          "bytes": 1072,
+          "sha256": "a5886403a11c0e90e7deda6b7accd652724ba3ca4e7cf5ce526fd169ed373023"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/step_dc": {
       "behaviour": "raw-stepped",
       "command": [

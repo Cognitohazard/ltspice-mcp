@@ -174,7 +174,9 @@ with open("results.jsonl", "a", encoding="utf-8") as out:
 ```
 
 A stepped run keeps a value a step: read each with `step=k`, and keep
-`op.steps[k]`, the step's parameters, beside it.
+`op.steps[k]`, the step's parameters, beside it. A stepped `.ac` at one
+frequency is stored the same way, a point a step with no frequency axis, so
+`value(name, step=k)` reads it too.
 
 ## Analysis primitives
 
