@@ -363,6 +363,10 @@ class NamedNets:
         """True if a label of the sheet already carries ``name``, in any case."""
         return name_key(name) in self._net_named
 
+    def net_named(self, name: str) -> Point | None:
+        """The net a label of ``name`` is on, in any case; None if no label carries it."""
+        return self._net_named.get(name_key(name))
+
     def joined_at(
         self,
         on_wires: Iterable[Point],

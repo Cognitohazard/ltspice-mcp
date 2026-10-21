@@ -3338,6 +3338,80 @@ class TestMoveOp:
         assert "FLAG 352 292 0" in records
         assert "FLAG 96 196 a" in records
 
+    async def test_a_label_along_a_moved_wire_goes_with_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # LTspice joins a label anywhere along a wire, so one on the wire's
+        # interior is attached to it as one on its end is.
+        asc = _write_sheet(
+            work_dir / "mv_wire_label.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            "WIRE 96 196 288 196",
+            "FLAG 192 196 mid",
+        )
+        apply_one(
+            asc_state,
+            asc,
+            {
+                "op": "move",
+                "dx": 0,
+                "dy": -32,
+                "references": ["R1", "R2"],
+                "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}],
+                "drag": True,
+            },
+        )
+        assert "FLAG 192 164 mid" in _records(asc)
+
+    async def test_a_wire_teed_onto_a_moved_wire_is_dragged_with_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The stem ends on the moved wire's interior, a T-junction LTspice
+        # joins, so with drag its end goes with the wire.
+        asc = _write_sheet(
+            work_dir / "mv_tee.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            _res("R3", 192, 340),
+            "WIRE 96 196 288 196",
+            "WIRE 192 196 192 292",
+        )
+        result = apply_one(
+            asc_state,
+            asc,
+            {
+                "op": "move",
+                "dx": 0,
+                "dy": -32,
+                "references": ["R1", "R2"],
+                "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}],
+                "drag": True,
+            },
+        )
+        assert result["moved"]["dragged_wire_ends"] == 1
+        assert "WIRE 192 164 192 292" in _records(asc)
+
+    async def test_names_that_differ_only_in_case_are_one_net_to_a_move(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # LTspice makes VDD and vdd one node (the connectivity recordings), so
+        # a move that wires the two together joins nothing that was apart.
+        asc = _write_sheet(
+            work_dir / "mv_case.asc",
+            _res("R1", 96, 244),
+            _res("R2", 288, 244),
+            "WIRE 96 196 192 196",
+            "FLAG 96 196 VDD",
+            "FLAG 288 196 vdd",
+        )
+        apply_one(
+            asc_state,
+            asc,
+            {"op": "move", "dx": -96, "dy": 0, "references": ["R2"], "drag": True},
+        )
+        assert "FLAG 192 196 vdd" in _records(asc)
+
     async def test_without_drag_a_label_on_a_moved_pin_stays(
         self, asc_state: SessionState, work_dir: Path
     ):
@@ -3455,8 +3529,11 @@ class TestMoveOp:
     ):
         asc = _write_sheet(work_dir / "mv_back.asc", *_PAIR)
         before = _records(asc)
-        selection = {"references": ["R1", "R2"], "labels": [{"x": 96, "y": 196}]}
-        selection["wires"] = [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}]
+        selection = {
+            "references": ["R1", "R2"],
+            "labels": [{"x": 96, "y": 196}],
+            "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}],
+        }
         apply_one(asc_state, asc, {"op": "move", "dx": 48, "dy": -32, **selection})
         moved = {
             "references": ["R1", "R2"],

@@ -173,14 +173,12 @@ def test_a_moved_build_ends_as_the_drawn_one():
     moved = [build for build in BUILDS if build.style == "moved"]
     assert moved
     for build in moved:
-        drawn_id = f"{build.circuit}_drawn"
-        assert record[build.id]["digests"][-1] == record[drawn_id]["digests"][-1], build.id
+        mine, drawn = record[build.id], record[f"{build.circuit}_drawn"]
+        # The last digest is the finished sheet's, which is the kept sheet.
+        assert mine["digests"][-1] == drawn["digests"][-1], build.id
         for score in ("drawing", "equivalence", "findings"):
-            assert record[build.id][score] == record[drawn_id][score], (build.id, score)
-        assert record[build.id]["cost"]["ops"] == record[drawn_id]["cost"]["ops"] + 1
-        assert (_SHEETS / f"{build.id}.asc").read_bytes() == (
-            _SHEETS / f"{drawn_id}.asc"
-        ).read_bytes()
+            assert mine[score] == drawn[score], (build.id, score)
+        assert mine["cost"]["ops"] == drawn["cost"]["ops"] + 1
 
 
 def test_every_device_class_of_the_build_battery_is_built():

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ltspice_mcp.lib.symbol_file import read_symbol
@@ -599,13 +599,8 @@ def _two_stage_opamp_moved() -> Build:
         "references": ["Vdd", "Vinp", "Vinn"],
         "drag": True,
     }
-    return Build(
-        d.reference.name,
-        "moved",
-        (tuple(d.ops), (lift,)),
-        {"label_island": 2},
-        d.origins_from_pins,
-    )
+    drawn = d.build({"label_island": 2})
+    return replace(drawn, style="moved", calls=(*drawn.calls, (lift,)))
 
 
 _DRAWN = {
@@ -623,9 +618,7 @@ _DRAWN = {
 }
 
 # Builds that use an op the drawn ones do not, to judge it against them.
-_OTHER_STYLES = {
-    "two_stage_opamp": (_two_stage_opamp_moved,),
-}
+_MOVED = {"two_stage_opamp": _two_stage_opamp_moved}
 
 _LABELLED_KEPT = {
     "rectifier": _RECTIFIER,
@@ -648,5 +641,6 @@ def builds() -> list[Build]:
             made.append(_generated_labelled(name))
         if name in _DRAWN:
             made.append(_DRAWN[name]())
-        made.extend(build() for build in _OTHER_STYLES.get(name, ()))
+        if name in _MOVED:
+            made.append(_MOVED[name]())
     return made

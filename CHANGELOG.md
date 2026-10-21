@@ -893,8 +893,8 @@ recording that showed it.
   reference, labels by point, wires by their two ends, and texts by exact text
   or `regex:`, and a `region` also takes what lies inside it. With `drag`,
   what is attached to what moves goes with it: the ends of other wires, and
-  the labels and grounds on a moved pin or wire end; a wire dragged off its
-  axis is reported as diagonal. A move that
+  the labels and grounds, on a moved pin or wire end or along a wire that
+  moves whole; a wire dragged off its axis is reported as diagonal. A move that
   would join two named nets is refused before anything changes, and the
   result's `moved` says what moved. Before, only one part could be moved,
   with its wires left behind, and a directive had to be removed and added
