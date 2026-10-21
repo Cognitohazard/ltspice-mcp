@@ -100,11 +100,12 @@ def _committed_failure(
 def refuse_reserved_request(request: ExperimentRunRequest) -> None:
     """An ordinary submission cannot bypass a journal-only committed root."""
     store = Store(request.state.working_dir)
-    if load_journal(store, request.request_id) is None:
+    journal = load_journal(store, request.request_id)
+    if journal is None:
         return
-    from ltspice_mcp.lib.experiment_runner import IdempotencyConflictError
+    from ltspice_mcp.lib.experiment_runner import payload_conflict
 
-    raise IdempotencyConflictError("request_id already belongs to a recoverable experiment")
+    raise payload_conflict(request.request_id, journal.head_job_id)
 
 
 def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
@@ -712,8 +713,8 @@ async def lookup_root_recovery(
     """Find a journal-only root before the tool inspects authoring paths."""
     from ltspice_mcp.lib.experiment_runner import (
         ExperimentRunRequest,
-        IdempotencyConflictError,
         already_staged,
+        payload_conflict,
     )
 
     store = Store(state.working_dir)
@@ -721,9 +722,7 @@ async def lookup_root_recovery(
     if journal is None:
         return None
     if not recoverable or journal.root.fingerprint != fingerprint:
-        raise IdempotencyConflictError(
-            "request_id already belongs to a different recoverable request"
-        )
+        raise payload_conflict(request_id, journal.head_job_id)
     folder = await asyncio.to_thread(store.runs_root, simulator)
     runner = state.runners.get_experiment_runner(
         asyncio.get_running_loop(), simulator, folder, max_parallel=state.config.max_parallel_sims

@@ -760,25 +760,3 @@ class TestSanitizePayloadNonFinite:
         assert res.structured_content is not None
         assert res.structured_content["value"] is None
         assert "warnings" in res.structured_content
-
-
-# ---------------------------------------------------------------------------
-# resolve_netlist_path must let PathSecurityError reach the dispatch layer's
-# sandbox-guidance branch instead of re-wrapping it as SimulationError
-# ---------------------------------------------------------------------------
-
-
-class TestResolveNetlistPathSecurityError:
-    def test_path_security_error_propagates(self, state_no_sim):
-        from ltspice_mcp.errors import PathSecurityError
-        from ltspice_mcp.lib.deck_prep import resolve_netlist_path
-
-        with pytest.raises(PathSecurityError):
-            resolve_netlist_path("/etc/passwd", state_no_sim)
-
-    def test_other_failures_still_wrapped(self, state_no_sim, work_dir):
-        from ltspice_mcp.errors import SimulationError
-        from ltspice_mcp.lib.deck_prep import resolve_netlist_path
-
-        with pytest.raises(SimulationError, match="not found"):
-            resolve_netlist_path(str(work_dir / "missing.cir"), state_no_sim)

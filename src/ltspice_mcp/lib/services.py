@@ -26,7 +26,7 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, Resul
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
-from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob
+from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob, failure_summary
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
@@ -270,18 +270,12 @@ def resolve_experiment_run(
 
 
 def _no_raw_result(job_id: str, case: ExperimentCase) -> str:
-    """Why ``case`` has no raw result to read: its failure as the job records
-    it, and the log it left when there is one, so a read of a failed case says
-    what a receipt of it says."""
-    status = f"status={case.status!r}"
-    if case.failure_code:
-        status += f", failure_code={case.failure_code!r}"
+    """Why ``case`` has no raw result to read (``failure_summary``), and the
+    log it left when there is one."""
     text = (
         f"Experiment case {case.case_id!r} of job {job_id!r} did not produce a raw "
-        f"result ({status})"
+        f"result: {failure_summary(case)}"
     )
-    if case.error:
-        text += f": {case.error}"
     if case.log_file is not None:
         text += f". Its log is {case.log_file}"
     return text

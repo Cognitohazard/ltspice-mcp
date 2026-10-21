@@ -44,7 +44,7 @@ from ltspice_mcp.tools.schematic_edit import (
 )
 from tests import _fake_netlister as fake_netlister
 from tests._asc_ops import apply_ops, file_at, sheet_findings
-from tests._schematic_fixtures import TESTS
+from tests.ltspice_recorder import INPUTS
 from tests.test_api_reference import _op_kinds
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -1850,28 +1850,34 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
 
 #: A symbol of the recorded symbol-search cases: a resistor under a name no
 #: library has, which LTspice finds only beside the sheet.
-_LOCAL_SYMBOL = TESTS / "fixtures" / "ltspice_recorded" / "inputs" / "search" / "lib" / "part.asy"
-_LOCAL_PART = "SYMBOL part 560 96 R0\nSYMATTR InstName R9\nSYMATTR Value 1k\n"
+_LOCAL_SYMBOL = INPUTS / "search" / "lib" / "part.asy"
 
 
 @pytest.mark.edit_reply_per_platform(
     "the export's .lib line names a Windows install path, which only Windows "
     "reads as absolute, so the comparison's include warnings differ"
 )
-@pytest.mark.parametrize("folder", [".", "lib"], ids=["beside", "in-a-folder-beside"])
+@pytest.mark.parametrize(
+    ("folder", "symbol"),
+    [(".", "part"), ("lib", "lib\\part")],
+    ids=["beside", "in-the-folder-its-name-says"],
+)
 async def test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export(
-    asc_state, work_dir, monkeypatch, folder
+    asc_state, work_dir, monkeypatch, folder, symbol
 ):
     """The commit-time compare exports copies of the sheet and of an ``.asc``
     reference elsewhere; each copy has the symbols saved beside its original,
-    as LTspice finds them where the sheet stands."""
+    as LTspice finds them where the sheet stands: right beside it, or in the
+    folder beside it that the symbol's name says (the symbol-beside-sheet
+    recordings)."""
     (work_dir / folder).mkdir(exist_ok=True)
     shutil.copy(_LOCAL_SYMBOL, work_dir / folder / "part.asy")
+    local = f"SYMBOL {symbol} 560 96 R0\nSYMATTR InstName R9\nSYMATTR Value 1k\n"
     sheet = work_dir / "amp.asc"
-    sheet.write_text(fake_netlister.amp_asc(_LOCAL_PART), newline="\n")
-    (work_dir / "amp_orig.asc").write_text(fake_netlister.amp_asc(_LOCAL_PART), newline="\n")
+    sheet.write_text(fake_netlister.amp_asc(local), newline="\n")
+    (work_dir / "amp_orig.asc").write_text(fake_netlister.amp_asc(local), newline="\n")
     monkeypatch.setattr(
-        se, "_export_asc_to_netlist", fake_netlister.exporter_needing_symbols_beside("part")
+        se, "_export_asc_to_netlist", fake_netlister.exporter_needing_symbols_beside(symbol)
     )
 
     data = _assert_schema(
@@ -1942,7 +1948,7 @@ async def test_post_commit_reference_error_returns_committed_envelope(
     def boom(*_a, **_kw):
         raise OSError("no space left on device")
 
-    monkeypatch.setattr(se, "_write_export_copy", boom)
+    monkeypatch.setattr(se, "stage_sheet", boom)
 
     data = await _build_blank(asc_state, "refboom", _DIVIDER_OPS, compare={"reference": "ref.cir"})
     committed = work_dir / "refboom.asc"

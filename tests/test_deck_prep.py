@@ -35,7 +35,7 @@ async def test_the_ngspice_deck_goes_straight_into_the_store(
     install_fixed_exporter(state_no_sim, _EXPORT)
     sheet = _schematic(project_dir)
 
-    deck = await resolve_runnable_netlist(str(sheet), state_no_sim, simulator=NGspiceSimulator)
+    deck = await resolve_runnable_netlist(sheet, state_no_sim, simulator=NGspiceSimulator)
 
     assert deck.parent == state_no_sim.store.exports_dir
     assert deck.name.startswith("amp-ngspice.run-")
@@ -68,7 +68,7 @@ async def test_the_ngspice_scrub_changes_only_instance_names_and_backanno(
     install_fixed_exporter(state_no_sim, export, encoding=codec)
     sheet = _schematic(project_dir)
 
-    deck = await resolve_runnable_netlist(str(sheet), state_no_sim, simulator=NGspiceSimulator)
+    deck = await resolve_runnable_netlist(sheet, state_no_sim, simulator=NGspiceSimulator)
 
     assert deck.read_bytes() == export.replace(".backanno\n", "").replace(
         "R§Load in 0", "RLoad in 0"
@@ -81,8 +81,8 @@ async def test_one_deck_content_is_one_snapshot(state_no_sim: SessionState, proj
     install_fixed_exporter(state_no_sim, _EXPORT)
     sheet = _schematic(project_dir)
 
-    first = await resolve_runnable_netlist(str(sheet), state_no_sim)
-    second = await resolve_runnable_netlist(str(sheet), state_no_sim)
+    first = await resolve_runnable_netlist(sheet, state_no_sim)
+    second = await resolve_runnable_netlist(sheet, state_no_sim)
 
     assert first == second
     assert first.read_bytes() == _EXPORT.encode("utf-8")
@@ -96,7 +96,7 @@ async def test_a_schematic_name_a_store_path_cannot_carry_is_folded(
     install_fixed_exporter(state_no_sim, _EXPORT)
     sheet = _schematic(project_dir, "My Amp (v2).asc")
 
-    deck = await resolve_runnable_netlist(str(sheet), state_no_sim)
+    deck = await resolve_runnable_netlist(sheet, state_no_sim)
 
     assert deck.parent == state_no_sim.store.exports_dir
     assert deck.name.startswith("my-amp-v2.run-")

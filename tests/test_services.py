@@ -449,8 +449,7 @@ class TestOptionalRawSources:
             services.resolve_experiment_run(job.job_id, state_no_sim)
 
         message = str(raised.value)
-        assert "failure_code='include_unstaged'" in message
-        assert case.error in message
+        assert f"status 'failed' (include_unstaged): {case.error}" in message
         assert job.job_id in message
         assert str(case.log_file) in message
 

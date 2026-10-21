@@ -4,8 +4,8 @@ Everything here answers "which file does the simulator actually read, and where
 does it write" — the questions that sit between a caller's path argument and
 ``runner_base.submit_netlist``:
 
-* ``resolve_netlist_path`` / ``resolve_runnable_netlist`` — validate the path,
-  and export an ``.asc`` schematic to a runnable ``.net`` when that is what was
+* ``resolve_runnable_netlist`` — export an ``.asc`` schematic, at a path the
+  caller already resolved, to a runnable ``.net`` when that is what was
   handed in (serialized per schematic by ``asc_export_lock``, sanitized for
   ngspice when that is the target simulator).
 * ``_stage_deck_snapshot`` — a content-addressed copy of the exported deck in
@@ -13,8 +13,8 @@ does it write" — the questions that sit between a caller's path argument and
   the bytes out from under a run that already claimed them.
 * ``export_netlist_text`` — the same export for a schematic copy the server
   owns, as text, with no sandbox check and no snapshot.
-* ``stage_beside`` — what a copy exported away from its sheet needs beside
-  it: the symbols and model files of the sheet's own folder.
+* ``stage_sheet`` — a copy of a sheet to export away from its folder, with
+  the symbols and model files of that folder beside it.
 
 Split out of ``tools/_base`` so the run path stops being part of the module
 every tool imports; it lives in ``lib`` because nothing here is MCP-shaped.
@@ -26,6 +26,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -39,7 +40,7 @@ from ltspice_mcp.config import (
 from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
-from ltspice_mcp.errors import PathSecurityError, SimulationError
+from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes,
     decode_spice_bytes_with_encoding,
@@ -54,24 +55,6 @@ from ltspice_mcp.lib.sweep_utils import sanitize_stem
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
-    """Resolve and validate a netlist path. Raises SimulationError on failure.
-
-    PathSecurityError propagates unchanged: the caller attaches the sandbox
-    guidance (``state.sandbox_guidance``) — re-wrapping it as SimulationError
-    would replace that guidance with a misdirecting simulator hint.
-    """
-    try:
-        netlist_path = state.resolve_path(netlist_str)
-    except PathSecurityError:
-        raise
-    except Exception as e:
-        raise SimulationError(f"Invalid netlist path: {e}") from e
-    if not netlist_path.exists():
-        raise SimulationError(f"Netlist file not found: {netlist_path}")
-    return netlist_path
 
 
 # LTspice's ``create_netlist`` always writes the sidecar ``<name>.net`` next to
@@ -193,9 +176,10 @@ async def _export_schematic(
 
 
 async def resolve_runnable_netlist(
-    netlist_str: str, state: SessionState, simulator: type | None = None
+    netlist_path: Path, state: SessionState, simulator: type | None = None
 ) -> Path:
-    """Resolve a path AND auto-export ``.asc`` → ``.net`` if needed.
+    """The deck a run of ``netlist_path`` reads: the path itself, or for an
+    ``.asc`` its export. The path is one the caller resolved and admitted.
 
     spicelib's ``SpiceEditor`` (used by the sweep / Monte Carlo runners)
     rejects ``.asc`` schematics — it expects the ``^*`` netlist comment
@@ -214,7 +198,6 @@ async def resolve_runnable_netlist(
     A schematic is refused, before LTspice is launched, for a simulator that
     cannot read LTspice's netlist dialect (``simulator.asc_export_refusal``).
     """
-    netlist_path = resolve_netlist_path(netlist_str, state)
     if netlist_path.suffix.lower() != ".asc":
         return netlist_path
     from ltspice_mcp.lib.simulator import asc_export_refusal
@@ -229,44 +212,55 @@ async def resolve_runnable_netlist(
 
 
 #: What a sheet's folder holds that LTspice reads when it exports the sheet: the
-#: symbols it finds beside the sheet, in its folder or a folder within it (the
-#: ``symbol-beside-sheet`` recording), and the model files they name.
-STAGED_SUFFIXES = frozenset({".asy", ".lib", ".sub", ".inc", ".mod"})
+#: symbols it finds beside the sheet, in its folder or in a folder within it
+#: that the symbol's name says (the ``symbol-beside-sheet`` recordings), and
+#: the model files they name.
+_STAGED_SUFFIXES = frozenset({".asy", ".lib", ".sub", ".inc", ".mod"})
 #: The most of those files staged for one export.
-STAGE_FILE_CAP = 200
+_STAGE_FILE_CAP = 200
 
 
-def stage_beside(origin: Path, dest: Path) -> bool:
-    """Copy into ``dest`` what the folder ``origin`` holds for an export of a sheet in it.
+def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[Path, str | None]:
+    """A copy of the sheet at ``asc_path`` in the fresh folder ``dest``, to export there.
 
-    A copy of a sheet exported anywhere but its own folder finds its symbols
-    only when they are staged beside it: LTspice looks for a symbol beside
-    the sheet before its libraries. The folders within ``origin`` keep their
-    places, so a symbol named ``sub/thing`` still resolves; dot-folders are
-    skipped. Returns True when :data:`STAGE_FILE_CAP` was reached and files
-    after it were left out. Blocking.
+    ``data`` is the sheet's bytes when the copy is to hold other bytes than
+    the file's (a sheet about to be written). A copy exported anywhere but its
+    own folder finds its symbols only when they are staged beside it, since
+    LTspice looks for a symbol beside the sheet before its libraries, so what
+    the sheet's folder holds for its export is copied too: the folders within
+    it keep their places, and dot-folders are passed over. Returns the copy
+    and, when :data:`_STAGE_FILE_CAP` left files out, a note saying so.
+    Blocking; the caller takes any lock the sheet needs.
     """
-    copied = 0
-    for src in sorted(origin.rglob("*")):
-        if not src.is_file() or src.suffix.lower() not in STAGED_SUFFIXES:
-            continue
-        rel = src.relative_to(origin)
-        if any(part.startswith(".") for part in rel.parts):
-            continue
-        if copied >= STAGE_FILE_CAP:
-            return True
-        target = dest / rel
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    staged = dest / asc_path.name
+    if data is None:
+        shutil.copy2(asc_path, staged)
+    else:
+        from ltspice_mcp.lib import atomic_write_bytes
+
+        atomic_write_bytes(staged, data, durable=False)
+    origin = asc_path.parent
+    found: list[Path] = []
+    for folder, folders, files in os.walk(origin):
+        folders[:] = [name for name in folders if not name.startswith(".")]
+        found += (
+            Path(folder, name)
+            for name in files
+            if not name.startswith(".") and Path(name).suffix.lower() in _STAGED_SUFFIXES
+        )
+    found = sorted(path for path in found if path.is_file())
+    for src in found[:_STAGE_FILE_CAP]:
+        target = dest / src.relative_to(origin)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, target)
-        copied += 1
-    return False
-
-
-def staging_cap_note(sheet_name: str) -> str:
-    """What to say of an export of ``sheet_name`` whose staging reached the cap."""
-    return (
-        f"only the first {STAGE_FILE_CAP} project-local symbol/library files were staged "
-        f"for the export of {sheet_name}, so a symbol beyond that may not resolve"
+    if len(found) <= _STAGE_FILE_CAP:
+        return staged, None
+    return staged, (
+        f"only the first {_STAGE_FILE_CAP} project-local symbol/library files were staged "
+        f"for the export of {asc_path.name}, so a symbol beyond that may not resolve"
     )
 
 

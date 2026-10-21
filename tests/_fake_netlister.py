@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ltspice_mcp.lib.symbol_library import find_beside
+
 # The install directory the exporter writes into its ``.lib`` line.
 _INSTALL = r"C:\Users\dev\AppData\Local\LTspice\lib\cmp"
 
@@ -73,8 +75,8 @@ async def export_asc_to_netlist(asc_copy: Path, _state) -> str:
 def exporter_needing_symbols_beside(*names: str):
     """A drop-in for ``schematic_edit._export_asc_to_netlist`` that, like
     LTspice, exports a sheet using one of the symbols ``names`` only when that
-    symbol's file is beside the sheet being exported, in its folder or in a
-    folder within it (the ``symbol-beside-sheet`` recording).
+    symbol's file is beside the sheet being exported, where the server's model
+    of the ``symbol-beside-sheet`` recordings finds it (``find_beside``).
 
     The other symbols are taken as LTspice's own library's.
     """
@@ -82,7 +84,7 @@ def exporter_needing_symbols_beside(*names: str):
     def exported(asc_copy: Path) -> str:
         used = {sym["symbol"] for sym in _symbols_and_directives(asc_copy.read_text("latin-1"))[0]}
         for name in sorted(used & set(names)):
-            if not any(asc_copy.parent.rglob(f"{name}.asy")):
+            if find_beside(asc_copy.parent, name) is None:
                 raise RuntimeError(f"Could not open symbol {name} beside {asc_copy.name}")
         return netlist_text(asc_copy)
 

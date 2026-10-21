@@ -110,18 +110,23 @@ def resolve_safe_path(
             # Skip this allowed_dir if it can't be resolved
             continue
 
-    # Path is outside all allowed directories. A relative entry is named with
-    # the directory it stands for: "." alone does not say where the sandbox is.
-    allowed_list = ", ".join(_as_named(d, base) for d in allowed_dirs)
-    raise PathSecurityError(f"Path {resolved} is outside allowed directories [{allowed_list}]")
+    # Path is outside all allowed directories
+    raise PathSecurityError(
+        f"Path {resolved} is outside allowed directories [{describe_roots(allowed_dirs)}]"
+    )
 
 
-def _as_named(allowed_dir: Path, base: Path | None) -> str:
-    """An allowed directory as a refusal names it: as written, and when that is
-    relative, with the directory it resolves to."""
-    if allowed_dir.is_absolute():
-        return str(allowed_dir)
-    try:
-        return f"{allowed_dir} ({_anchor(allowed_dir, base).resolve()})"
-    except (OSError, RuntimeError):
-        return str(allowed_dir)
+def describe_roots(allowed_dirs: Sequence[Path]) -> str:
+    """The allowed directories as a refusal and its guidance name them: each
+    as written, and a relative one with the directory it resolves to, since
+    "." alone does not say where the sandbox is."""
+
+    def named(allowed_dir: Path) -> str:
+        if allowed_dir.is_absolute():
+            return str(allowed_dir)
+        try:
+            return f"{allowed_dir} ({_anchor(allowed_dir, _relative_base.get()).resolve()})"
+        except (OSError, RuntimeError):
+            return str(allowed_dir)
+
+    return ", ".join(named(allowed_dir) for allowed_dir in allowed_dirs)

@@ -103,6 +103,19 @@ def failure_row(case: ExperimentCase) -> dict[str, Any]:
     return row
 
 
+def failure_summary(case: ExperimentCase) -> str:
+    """A case's ``failure_row`` as one line: its status, its code where that
+    says more, and its message where there is one. What a read of a case with
+    no raw says of it, so the read and the receipt say the same."""
+    row = failure_row(case)
+    summary = f"status {case.status!r}"
+    if row["code"] != case.status:
+        summary += f" ({row['code']})"
+    if row["message"] != case.status:
+        summary += f": {row['message']}"
+    return summary
+
+
 @dataclass
 class Completeness:
     """Experiment accounting counters.

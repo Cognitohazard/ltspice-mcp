@@ -631,12 +631,10 @@ async def handle_run_experiments(
                 "recovery_seed_unsupported",
                 "Explicit seed requires recoverable ngspice without native statistics",
             )
-        circuit_inputs, id_notes = _circuit_decks_for_validation(args.circuits)
+        circuit_inputs, id_notes = await asyncio.to_thread(
+            _circuit_decks_for_validation, args.circuits, state
+        )
         normalize_circuit_decks(circuit_inputs)
-        # Each circuit's path is resolved once, here, before a job exists: a
-        # path the sandbox refuses is the request's to fix, refused with the
-        # allowed roots named, not a failure met again in each of its cases.
-        source_paths = [safe_path(circuit.path, state) for circuit in args.circuits]
         validate_variation_circuit_ids(circuit_inputs, args.variations)
         native_ids = [
             item.id.casefold() for item in args.variations if isinstance(item, PdkNativeVariation)
@@ -688,19 +686,8 @@ async def handle_run_experiments(
             sources: list[SourceRecord] = []
             preparations = await asyncio.gather(
                 *(
-                    _prepare_circuit(
-                        circuit_input,
-                        source_path,
-                        args,
-                        state,
-                        simulator,
-                        job_id,
-                    )
-                    for circuit_input, source_path in zip(
-                        circuit_inputs,
-                        source_paths,
-                        strict=True,
-                    )
+                    _prepare_circuit(circuit_input, args, state, simulator, job_id)
+                    for circuit_input in circuit_inputs
                 ),
                 # Admission can refuse a frozen-input capture. Wait for every
                 # staging worker before the coordinator cleans an unclaimed tree.
@@ -892,7 +879,6 @@ async def _render_static_run_receipt(
 
 async def _prepare_circuit(
     circuit_input: CircuitDeck,
-    source_path: Path,
     args: RunExperimentsInput,
     state: SessionState,
     simulator: type,
@@ -900,8 +886,9 @@ async def _prepare_circuit(
 ) -> _CircuitPreparation:
     """Stage, lint, and materialize one circuit with isolated failures.
 
-    ``source_path`` is the circuit's path as admission resolved it."""
+    The circuit's path is the one admission resolved."""
     circuit_id = circuit_input.circuit_id
+    source_path = circuit_input.path
     native = _native_family(circuit_id, args.variations)
     expected_count = projected_case_count(circuit_id, args.variations)
     runnable: Path | None = None
@@ -920,11 +907,7 @@ async def _prepare_circuit(
         if not await asyncio.to_thread(source_path.is_file):
             raise FileNotFoundError(f"Circuit file not found: {source_path}")
         await state.note_recent_circuit(source_path)
-        runnable = await resolve_runnable_netlist(
-            str(source_path),
-            state,
-            simulator=simulator,
-        )
+        runnable = await resolve_runnable_netlist(source_path, state, simulator=simulator)
         paths = await asyncio.to_thread(
             resolve_experiment_paths,
             state.working_dir,
@@ -1260,13 +1243,17 @@ def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
 
 
 def _circuit_decks_for_validation(
-    circuits: list[ExperimentCircuit],
+    circuits: list[ExperimentCircuit], state: SessionState
 ) -> tuple[list[CircuitDeck], dict[str, dict[str, Any]]]:
     """The circuits as decks to validate, and an observation per derived id.
 
+    Each deck's path is the circuit's, resolved here, once, before a job
+    exists: a path the sandbox refuses is the request's to fix, refused with
+    the allowed roots named, not a failure met again in each of its cases.
+
     A circuit with no ``id`` takes its file stem, made valid and unique rather
     than refused (see ``derive_circuit_ids``); the observation, keyed by the id
-    it ran under, says so on every case of that circuit.
+    it ran under, says so on every case of that circuit. Blocking.
     """
     derived = derive_circuit_ids(
         [circuit.path for circuit in circuits], [circuit.id for circuit in circuits]
@@ -1274,7 +1261,9 @@ def _circuit_decks_for_validation(
     decks: list[CircuitDeck] = []
     notes: dict[str, dict[str, Any]] = {}
     for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
-        decks.append(CircuitDeck(circuit_id=circuit_id, path=Path(circuit.path), text=""))
+        decks.append(
+            CircuitDeck(circuit_id=circuit_id, path=safe_path(circuit.path, state), text="")
+        )
         if note is not None:
             notes[circuit_id] = {
                 "code": "circuit_id_derived",
@@ -1462,9 +1451,7 @@ def _append_terminal_cases(
 
 
 def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
-    if isinstance(exc, VariationError):
-        return exc.code, str(exc)
-    if isinstance(exc, DeckStagingError):
+    if isinstance(exc, (VariationError, DeckStagingError)):
         return exc.code, str(exc)
     if source_path.suffix.casefold() == ".asc" and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)

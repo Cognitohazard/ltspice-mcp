@@ -116,7 +116,8 @@ async def test_journal_only_commit_blocks_ordinary_request_and_retains_inputs(
     assert not store.request_index(request.request_id).exists()
     assert not store.job_record(journal.root_job_id).exists()
     assert store.run_dir(journal.root_job_id).joinpath("case.cir").is_file()
-    with pytest.raises(IdempotencyConflictError):
+    # The refusal names the job the id made, which is read by its job_id.
+    with pytest.raises(IdempotencyConflictError, match=f"made experiment {journal.head_job_id}"):
         await runner._durable_barrier(replace(request, recoverable=False))
     assert stages == [journal.root_job_id]
 

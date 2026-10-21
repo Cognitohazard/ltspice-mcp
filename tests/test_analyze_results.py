@@ -1287,7 +1287,10 @@ async def test_analyzing_experiment_reads_its_own_produced_cases(
     assert data["results"]["v"]["groups"][0]["by"] == {"R": "1k"}
     # The per-case gate still does the real work: the failed case is missing,
     # the produced one is analyzed.
-    assert data["coverage"]["missing_cases"]["items"][0]["case_id"] == "case_bad"
+    (missing,) = data["coverage"]["missing_cases"]["items"]
+    assert missing["case_id"] == "case_bad"
+    # It says why, as the receipt's failure row does, not only its status.
+    assert missing["detail"] == "status 'failed': simulator failed"
     assert data["coverage"]["runs_analyzed"] == 1
 
 

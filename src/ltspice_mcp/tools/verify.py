@@ -78,7 +78,7 @@ from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
-from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_beside, staging_cap_note
+from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
@@ -1459,20 +1459,6 @@ def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _stage_export_inputs(asc_path: Path, dest: Path) -> tuple[Path, bool]:
-    """Copy a schematic and its project-local dependencies into ``dest``.
-
-    Returns the staged ``.asc`` and whether the file cap was hit
-    (``deck_prep.stage_beside``).
-    """
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True, exist_ok=True)
-    staged_asc = dest / asc_path.name
-    shutil.copy2(asc_path, staged_asc)
-    return staged_asc, stage_beside(asc_path.parent, dest)
-
-
 async def _stage_for_export(asc_path: Path, dest: Path) -> tuple[Path, str | None]:
     """Stage ``asc_path`` in ``dest`` under its circuit lock, for a managed export.
 
@@ -1480,8 +1466,7 @@ async def _stage_for_export(asc_path: Path, dest: Path) -> tuple[Path, str | Non
     saying so.
     """
     async with circuit_file_lock(asc_path):
-        staged_asc, truncated = await asyncio.to_thread(_stage_export_inputs, asc_path, dest)
-    return staged_asc, staging_cap_note(asc_path.name) if truncated else None
+        return await asyncio.to_thread(stage_sheet, asc_path, dest)
 
 
 def _create_netlist(simulator_cls: Any, asc_path: Path, timeout: float) -> Path:
