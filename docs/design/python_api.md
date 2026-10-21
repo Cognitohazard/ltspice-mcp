@@ -359,6 +359,7 @@ raw = api.load_raw(raw_path=..., plot_index=0, dialect=None)  # XOR: raw_path | 
 raw = api.load_raw(job_id=..., run_index=0, case_id=None)
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
+raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
 raw.axis(step=0)               # real sampled axis; refuses a native table
 raw.step_count; raw.steps      # captured metadata aligned per step
 raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
@@ -366,9 +367,20 @@ raw.table(step=0)              # native table rows; complex values use real/imag
 raw.analysis_type; raw.dialect; raw.source          # provenance
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements(log_path="result.log")  # XOR: log_path | job_id; RAW is optional
+api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- `value` reads a plot of one point a step, such as an operating point, as a
+  number: a float, or a complex for a complex trace. A trace of more points
+  is refused rather than cut to its first; read it with `trace`.
+- `device_op_points` reads the semiconductor operating points LTspice prints in
+  the log of an `.op` run under `.options logopinfo`, by device and parameter.
+  The table holds three significant digits; a node voltage or a device current
+  read from the raw with `value` holds the raw's own precision (single, about
+  seven digits, in both builds' operating-point recordings). A device in a
+  subcircuit keeps LTspice's name for it (`x1:m1` on LTspice 26, `m:1:1` on
+  XVII). Empty when the log has no table.
 - `plot_index` is a strict nonnegative integer, independent of case/run and
   step selection. `dialect` is `None` or `ltspice`, `ngspice`, `qspice`,
   `xyce`; an explicit dialect must agree with the producing simulator and the

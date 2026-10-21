@@ -921,6 +921,14 @@ recording that showed it.
 
 ### Added
 
+- `RawResult.value(name, step=0)` reads a plot of one point a step, such as
+  an operating point, as a number: a float, or a complex for a complex trace.
+  A trace of more points is refused rather than cut to its first.
+- `api.device_op_points(job_id=..., case_id=...)` (or `log_path=`) returns
+  the semiconductor operating points LTspice prints in an `.op` run's log, by
+  device and parameter (`ops["m1"]["gm"]`), and says that the table holds
+  three significant digits. The guide's Python section shows a run's
+  operating point, device table and an AC trace kept in a JSON file.
 - `edit_schematic` op `move`: shifts any mix of parts, wires, net labels,
   directives and comments by one offset (`dx`, `dy`). Parts are chosen by
   reference, labels by point, wires by their two ends, and texts by exact text

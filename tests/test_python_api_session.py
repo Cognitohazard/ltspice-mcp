@@ -92,6 +92,7 @@ def test_exception_hierarchy_and_python_api_method_surface() -> None:
             "verify_circuit",
             "load_raw",
             "measurements",
+            "device_op_points",
         )
     )
 

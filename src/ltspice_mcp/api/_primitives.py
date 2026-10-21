@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.state import SessionState
 
@@ -52,6 +54,25 @@ class RawResult:
         signal = services.resolve_signal(self._raw, name)
         self._validate_step(step)
         return np.array(signal.wave(self._raw, step), copy=True)
+
+    def value(self, name: str, *, step: int = 0) -> float | complex:
+        """The one value of ``name`` in this step, for a plot of one point a
+        step, such as an operating point (``.op``, one point for each step of a
+        stepped one): a float, or a complex for a complex trace.
+
+        ``name`` is read as :meth:`trace` reads it. A trace of more than one
+        point in the step is refused rather than cut to its first; read it
+        with :meth:`trace`.
+        """
+        samples = self.trace(name, step=step)
+        if samples.size != 1:
+            raise ResultError(
+                f"{name!r} has {samples.size} points in step {step}; value() reads a "
+                "plot of one point a step, such as an operating point's. Read this "
+                "one with trace()."
+            )
+        sample = samples.reshape(-1)[0]
+        return complex(sample) if np.iscomplexobj(samples) else float(sample)
 
     def axis(self, *, step: int = 0) -> np.ndarray:
         """Return the selected plot's real sampled coordinates as a detached array."""
@@ -168,18 +189,21 @@ async def load_raw_result(
     )
 
 
-async def load_measurement_results(
+async def _log_section(
+    name: LogSectionName,
     *,
     state: SessionState,
     job_id: str | None,
     run_index: int,
     case_id: str | None,
-    log_path: str | Path | None = None,
-) -> dict[str, Any]:
-    """Read detached measurement facts through the shared log capture."""
+    log_path: str | Path | None,
+) -> tuple[Any, str]:
+    """One section of a log read through the shared log capture: of the log at
+    ``log_path``, or of one experiment case's. Returns its value, None when the
+    log has no such section, and what to say then."""
     if log_path is not None:
         source = services.resolve_analysis_source(state, log_file=str(log_path))
-        absent_message = "Measurement source has no log file"
+        absent_message = "The log has no such section"
     else:
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
@@ -191,9 +215,58 @@ async def load_measurement_results(
             raise ResultError(absent_message)
         source = services.source_for_run(context)
     logs = await services.load_logs(source, state)
-    section = logs.section("measurements")
+    section = logs.section(name)
     if section["status"] == "error":
         raise ResultError(section["error"]["message"])
-    if section["value"] is None:
-        raise ResultError(absent_message)
-    return dict(section["value"])
+    return section["value"], absent_message
+
+
+async def load_measurement_results(
+    *,
+    state: SessionState,
+    job_id: str | None,
+    run_index: int,
+    case_id: str | None,
+    log_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read detached measurement facts through the shared log capture."""
+    value, absent = await _log_section(
+        "measurements",
+        state=state,
+        job_id=job_id,
+        run_index=run_index,
+        case_id=case_id,
+        log_path=log_path,
+    )
+    if value is None:
+        raise ResultError("Measurement source has no log file" if log_path is not None else absent)
+    return dict(value)
+
+
+#: A device op-point key as the log reader gives it: ``@m1[gm]``.
+_DEVICE_PARAM = re.compile(r"@(?P<device>.+)\[(?P<param>[^\]]+)\]")
+
+
+async def load_device_op_points(
+    *,
+    state: SessionState,
+    job_id: str | None,
+    run_index: int,
+    case_id: str | None,
+    log_path: str | Path | None = None,
+) -> dict[str, dict[str, float]]:
+    """The log's semiconductor operating points, by device and parameter."""
+    value, _absent = await _log_section(
+        "device_op",
+        state=state,
+        job_id=job_id,
+        run_index=run_index,
+        case_id=case_id,
+        log_path=log_path,
+    )
+    by_device: dict[str, dict[str, float]] = {}
+    for key, number in (value or {}).items():
+        named = _DEVICE_PARAM.fullmatch(key)
+        if named is not None:
+            by_device.setdefault(named["device"], {})[named["param"]] = float(number)
+    return by_device

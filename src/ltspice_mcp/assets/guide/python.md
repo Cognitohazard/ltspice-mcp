@@ -101,7 +101,9 @@ r.signals  # trace names
 r.steps  # one entry per .step iteration
 t = r.axis(step=0)  # time or frequency
 v = r.trace("V(out)", step=0)  # numpy array, complex on an .AC run
+vop = r.value("V(out)", step=0)  # one number, from an operating point (.op)
 meas = api.measurements(job_id=job_id, case_id=case_id)  # parsed .meas values
+ops = api.device_op_points(job_id=job_id, case_id=case_id)  # ops["m1"]["gm"], .op log table
 ```
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot independently of
@@ -146,6 +148,33 @@ Arrays are copies, safe to modify. Trace math across steps and its statistics
 are in guide section 'signals'. `api.analyze_results(...)` returns every row of
 every recipe; name `include={"per_run": True}` for the per-run rows. Variation
 values are SPICE literals (`"5p"`): `parse_spice_value` reads one.
+
+Keeping one run's numbers for later, in a file of your own choosing: what to
+keep and the file's layout are yours, and the reads are each one line.
+
+```python
+import json
+import numpy as np
+
+op = api.load_raw(job_id=op_job, case_id=case_id)  # an .op run
+ac = api.load_raw(job_id=ac_job, case_id=case_id)  # an .ac run
+h = ac.trace("V(out)")  # complex; JSON takes it as magnitude and phase
+row = {
+    "case_id": case_id,
+    "op": {name: op.value(name) for name in ("V(out)", "I(R1)")},
+    "devices": api.device_op_points(job_id=op_job, case_id=case_id),
+    "ac": {
+        "f": ac.axis().tolist(),
+        "db": (20 * np.log10(np.abs(h))).tolist(),
+        "deg": np.degrees(np.unwrap(np.angle(h))).tolist(),
+    },
+}
+with open("results.jsonl", "a", encoding="utf-8") as out:
+    out.write(json.dumps(row) + "\n")
+```
+
+A stepped run keeps a value a step: read each with `step=k`, and keep
+`op.steps[k]`, the step's parameters, beside it.
 
 ## Analysis primitives
 

@@ -24,7 +24,12 @@ from ltspice_mcp.api._exceptions import (
     ApiInterrupted,
     ApiValidationError,
 )
-from ltspice_mcp.api._primitives import RawResult, load_measurement_results, load_raw_result
+from ltspice_mcp.api._primitives import (
+    RawResult,
+    load_device_op_points,
+    load_measurement_results,
+    load_raw_result,
+)
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.pathutil import relative_paths_from
@@ -1208,6 +1213,39 @@ class ApiMethodsMixin(ABC):
             raise TypeError("run_index and case_id are only valid with job_id")
         return self._marshal(
             load_measurement_results(
+                state=self._state,
+                log_path=log_path,
+                job_id=job_id,
+                run_index=run_index,
+                case_id=case_id,
+            ),
+            cancelable=True,
+            cancel_on_interrupt=True,
+        )
+
+    def device_op_points(
+        self,
+        log_path: str | Path | None = None,
+        *,
+        job_id: str | None = None,
+        run_index: int = 0,
+        case_id: str | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """Return the semiconductor operating points of a log or one experiment
+        case, by device and parameter: ``ops["m1"]["gm"]``.
+
+        LTspice prints them in the log of an ``.op`` run whose deck carries
+        ``.options logopinfo``, to three significant digits; a device inside a
+        subcircuit keeps LTspice's colon-qualified name. Empty when the log has
+        no such table.
+        """
+        self._check_process_and_thread()
+        if (log_path is None) == (job_id is None):
+            raise TypeError("Pass exactly one of log_path or job_id")
+        if log_path is not None and (run_index != 0 or case_id is not None):
+            raise TypeError("run_index and case_id are only valid with job_id")
+        return self._marshal(
+            load_device_op_points(
                 state=self._state,
                 log_path=log_path,
                 job_id=job_id,
