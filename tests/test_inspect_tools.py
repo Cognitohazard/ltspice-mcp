@@ -389,6 +389,52 @@ async def test_net_netlist_has_no_geometry_keys(netlist: Path, state_no_sim: Ses
         assert set(member) == {"reference", "terminal"}
 
 
+async def test_net_netlist_lists_the_decks_own_cards_only(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """A card in a ``.subckt`` body is on the subcircuit's own nodes: its ``a``
+    is not the deck's ``a``. Such cards were listed as the deck's, and one that
+    shared a reference with a deck card replaced it."""
+    deck = work_dir / "scoped.cir"
+    deck.write_text(
+        "* scoped\nR1 a 0 1k\n.subckt cell a b\nR1 a b 1k\nR9 a b 1k\n.ends\nX1 a 0 cell\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    by_name, by_pin = await _run(
+        state_no_sim,
+        [
+            {"kind": "net", "path": str(deck), "at": "a"},
+            {"kind": "net", "path": str(deck), "at": "R1.2"},
+        ],
+    )
+    assert {(m["reference"], m["terminal"]) for m in by_name["data"]["members"]} == {
+        ("R1", 1),
+        ("X1", 1),
+    }
+    assert by_pin["data"]["node"] == "0"
+    assert {(m["reference"], m["terminal"]) for m in by_pin["data"]["members"]} == {
+        ("R1", 2),
+        ("X1", 2),
+    }
+    # Node 0 with no gnd spelling on it needs no note.
+    assert "warnings" not in by_pin["data"]
+
+
+async def test_net_netlist_carries_the_lexers_warnings(work_dir: Path, state_no_sim: SessionState):
+    """The lexer's notes on a deck it had to guess about reach the reply, as
+    they do for ``components``; they were dropped."""
+    deck = work_dir / "unclosed.cir"
+    deck.write_text(
+        "* unclosed\nR1 a 0 1k\n.subckt cell p q\nR2 p q 1k\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(deck), "at": "a"}])
+    assert res["ok"] is True, res
+    assert any(w.startswith("netlist lexer:") for w in res["data"]["warnings"])
+
+
 @pytest.fixture
 def wide_net_asc(work_dir: Path, asc_state: SessionState) -> Path:
     """A schematic whose one net carries more wire vertices than a single page.

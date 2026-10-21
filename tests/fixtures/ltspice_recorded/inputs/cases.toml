@@ -266,7 +266,7 @@ inputs = [
 
 [behaviour.deck-structure]
 summary = "How a deck's lines are read: the title line, ; and $ comments, + continuations, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
-model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py"]
+model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py"]
 inputs = [
     "deck/comment_semicolon.cir",
     "deck/comment_dollar.cir",

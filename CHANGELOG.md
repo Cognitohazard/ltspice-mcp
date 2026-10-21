@@ -10,6 +10,18 @@ tool-surface changes.
 
 ### Fixed
 
+- `inspect(kind="net")` on a netlist kept `gnd` apart from node `0`, although
+  both LTspice builds run a deck's `gnd` as ground, so a query for either
+  missed the cards on the other. `gnd`, in any case, is now node `0` there, as
+  on a sheet; the reply's `warnings` say that ngspice's kiltpsa mode does not
+  read it so on every version, and to write `0` in a portable deck.
+- `inspect(kind="net")` on a netlist listed the cards inside a `.subckt` body
+  as if they were on the deck's nodes of the same name, and a body card that
+  shared a reference with a deck card replaced it. Only the deck's own cards
+  are members now.
+- `inspect(kind="net")` on a netlist dropped the lexer's `warnings` about a
+  deck it had to guess at (an unclosed `.SUBCKT`, a stray continuation),
+  which `components` reports; the net reply now carries them too.
 - A `GND` label, in any case, was a net name to the server, although both
   LTspice builds export it as node `0`. The net trace kept it apart from the
   sheet's other grounds, and `add_net_label` and `wire_pins` counted it as a

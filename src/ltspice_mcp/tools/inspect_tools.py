@@ -23,8 +23,10 @@ and the circuits it can reach. Each query names one supported kind:
 * ``net`` — everything on a net. On a ``.asc`` this is a geometric trace
   (``trace_net`` internals: pins, wire vertices, labels, shorts); an ``[x, y]``
   on a wire's interior traces that wire and reports it as ``snapped_to_wire``. On a
-  ``.cir``/``.net``/``.sp`` netlist it is card-membership — which element cards
-  reference the node — carrying **no geometry** at all.
+  ``.cir``/``.net``/``.sp`` netlist it is card-membership — which of the deck's
+  own element cards (not those in a ``.subckt`` body) reference the node, its
+  name compared without case and ``gnd`` read as node 0 — carrying **no
+  geometry** at all.
 * ``components`` — the component list (``detail:"list"``) or full per-component
   detail (``detail:"full"``) of any circuit file.
 * ``hierarchy`` — bounded netlist instance expansion, scoped ports, numeric
@@ -37,7 +39,9 @@ and the circuits it can reach. Each query names one supported kind:
 On a netlist, ``net`` and ``components`` add ``warnings`` when the lexer had to
 guess about the deck (an unclosed ``.SUBCKT``, an ``.ENDS`` matching nothing, a
 stray continuation) — the answer was read from cards that mean something other
-than the file says, and the key is absent when it read cleanly.
+than the file says, and the key is absent when it read cleanly. On a netlist
+``net`` also adds one when it reads ``gnd`` as node 0, which ngspice's kiltpsa
+mode does not do on every version.
 
 Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
 — the token ``edit_schematic`` requires as ``expected_sha256``. Reading it here
@@ -136,6 +140,7 @@ from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
+    GROUND,
     fold_case,
     label_folded_nets,
     name_key,
@@ -1431,11 +1436,27 @@ def _lex_warnings(lexed: LexResult) -> list[str]:
     return [f"netlist lexer: {note}" for note in lexed.warnings]
 
 
+#: Said when a netlist net query joins ``gnd`` to node 0: both LTspice builds
+#: read it so (the ``deck-structure`` recording), and so does ngspice in its
+#: native and hsa modes, but not every ngspice version does in kiltpsa mode
+#: (``hierarchy`` refuses ``gnd`` there for that reason).
+_GND_IN_A_DECK = (
+    "gnd is read as node 0, as LTspice and ngspice in its native and hsa modes read "
+    "it; in ngspice's kiltpsa mode that differs across ngspice versions, so write "
+    "node 0 in a deck that must read the same everywhere."
+)
+
+
 def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
-    """Card-membership for a node in a netlist — no geometry keys (by contract)."""
+    """Card-membership for a node in a netlist — no geometry keys (by contract).
+
+    The members are the deck's own cards: a card in a ``.subckt`` body is on
+    the subcircuit's nodes, not the deck's. Node names are compared as
+    ``connectivity.name_key`` has them, as on a sheet: without case (the
+    ``node-name-case`` recording) and with ``gnd`` as node 0.
+    """
     lexed = lex(text)
-    cards = lexed.cards
-    by_ref = instances_by_ref(cards)
+    by_ref = instances_by_ref(card for card in lexed.cards if not card.scope)
     parsed: dict[str, InstanceLine] = {}
     nodes_of: dict[str, list[str]] = {}
     unparseable = 0
@@ -1449,21 +1470,25 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
         nodes_of[ref_lower] = line.nodes
 
     node = _netlist_node_from_at(at, nodes_of)
-    # Node names that differ only in case are one node, as on a sheet.
-    node_key = fold_case(node)
+    node_key = name_key(node)
     members: list[dict[str, Any]] = []
+    spellings = {node}
     for line in parsed.values():
         for i, n in enumerate(line.nodes, start=1):
-            if fold_case(n) == node_key:
+            if name_key(n) == node_key:
                 members.append({"reference": line.ref, "terminal": i})
+                spellings.add(n)
     members.sort(key=lambda m: (m["reference"], m["terminal"]))
     payload: dict[str, Any] = {
         "node": node,
         "members": members,
         "unparseable_cards": unparseable,
     }
-    if lexed.warnings:
-        payload["warnings"] = _lex_warnings(lexed)
+    warnings = _lex_warnings(lexed)
+    if node_key == GROUND and any(fold_case(spelling) == "gnd" for spelling in spellings):
+        warnings.append(_GND_IN_A_DECK)
+    if warnings:
+        payload["warnings"] = warnings
     return payload
 
 
@@ -1490,6 +1515,9 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
                 "total_members": page["total"],
                 "returned": page["returned"],
                 "unparseable_cards": payload["unparseable_cards"],
+                # Every page carries them, as for components: they are about
+                # the read every page comes from.
+                **({"warnings": payload["warnings"]} if "warnings" in payload else {}),
             },
             "next_cursor": page["next_cursor"],
             "page": _page_meta(page, "members"),
