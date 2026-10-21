@@ -997,6 +997,17 @@ class TestExportEncoding:
         assert finding["severity"] == "observation"
         assert finding["evidence"]["reason"].startswith("LTspice's export wrote 1 value(s)")
 
+    def test_a_comment_keeps_its_line_breaks_as_text_and_a_directive_splits(self, build: str):
+        """A sheet holds a line break in a TEXT as the two characters ``\\n``.
+        Exported, a comment of two lines stays one line with them kept, and a
+        directive of two lines becomes two cards: LTspice writes the literal
+        ``\\n``, not the server."""
+        sheet = (INPUTS / "export/multiline_text.asc").read_text(encoding="utf-8")
+        assert "TEXT 0 300 Left 2 ;first line\\nsecond line\n" in sheet
+        exported = rec.export_text(build, "export/multiline_text").splitlines()
+        assert "* first line\\nsecond line" in exported
+        assert exported.index(".param second=2") == exported.index(".param first=1") + 1
+
     def test_the_setting_that_asks_for_u_writes_u(self, build: str):
         assert self.value(build, "micro_cp1252_as_u") == "1u"
 

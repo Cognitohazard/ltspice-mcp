@@ -74,6 +74,14 @@ tool-surface changes.
   later `net:NAME` could not tell the labels apart, which that refusal now
   answers itself, so the warning is gone. A second name for one net is still
   warned of.
+- The results file of an LTspice frequency response analysis
+  (`<run>.fra_1.raw`) could not be read: the raw reader refused its layout.
+  It is the AC layout, every value a complex double, and now reads as complex
+  values over frequency, with the analysis named `fra`. The AC recipes,
+  plots and samples take it like an AC result. LTspice's `gain_N` is the
+  negative of the loop gain the `stability` recipe takes, so `stability` on
+  `-gain_1` gives the crossover and phase margin LTspice prints in the log
+  (recorded on LTspice 26; XVII 17.0 refuses the analyzer).
 - `edit_schematic`'s `remove_directive` did not find a directive or comment
   of more than one line given as the text it was added with. A sheet holds
   each line break as a `\n` escape, and the text given was compared with the

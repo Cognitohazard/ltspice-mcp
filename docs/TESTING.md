@@ -158,9 +158,9 @@ These tests run on any machine, without LTspice:
 
 |test module|checks|
 |-|-|
-|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, node names that differ only in case and a `GND` label as ground, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, an export's spelling and encoding, and the effect on an export of a data label, a bus tap, a bus label, an empty line and an unknown keyword|
+|`test_recorded_ltspice_schematics.py`|pin positions in all eight placements, wire and label connectivity, node names that differ only in case and a `GND` label as ground, the same-instance wire rule, the pins of one part that share a point, where a symbol is found beside a sheet and in a library, an export's spelling and encoding, how text of more than one line is exported, and the effect on an export of a data label, a bus tap, a bus label, an empty line and an unknown keyword|
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms that lint and arity checks accept or refuse, how a deck is interpreted where simulators differ, and how a three-node transistor card is read|
-|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, and how a failed run is classified|
+|`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, a frequency response analysis's results file, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes on save (line endings, encoding, record order), and that `asc_document` reads it, writes it back byte-identical, and formats a record as the build does|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
@@ -402,6 +402,12 @@ stepped run split at the same points, and the same parameter values per step.
 When a results file in the main recordings is added or re-recorded, run the
 bridge recorder again on Windows with LTspice 26.1 or later; until then one
 test fails and names the script.
+
+The replies for `raw/fra` and its `fra_1` results file were made under Wine 11,
+by the recorder's own reading code with the same pinned executables, and the
+bridge manifest has no field that says so. Made the same way, the replies for
+four files already recorded on Windows (`ac`, `step_tran`, XVII's `tran`, and
+the refused `op`) were byte-identical to the committed ones.
 
 The two readers agree on every file's content. They present five kinds of file
 differently, and the tests pin LTspice's reading of each:

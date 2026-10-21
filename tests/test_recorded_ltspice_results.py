@@ -38,7 +38,7 @@ from ltspice_mcp.lib.raw_parser import (
     raw_writer_command,
     read_partial_raw_progress,
 )
-from ltspice_mcp.lib.recipes import MeasurementsRecipe
+from ltspice_mcp.lib.recipes import MeasurementsRecipe, StabilityRecipe
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -952,3 +952,61 @@ def test_the_analyses_ltspice_does_not_have_are_refused(build: str):
     for case_id in ("log/sens", "log/pz", "log/disto"):
         assert rec.entry(build, case_id)["exit_code"] == 1
         assert extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))["errors"], case_id
+
+
+# --------------------------------------------------------------------------
+# Frequency response analysis
+# --------------------------------------------------------------------------
+
+#: The result LTspice 26 prints at the end of a frequency response analysis's log.
+_FRA_RESULT = re.compile(r"F\(0dB\) = ([0-9.]+) kHz, Phase Margin = ([0-9.]+) degrees")
+
+
+def _fra_results(work_dir: Path, state: SessionState) -> services.AnalysisSource:
+    raw = work_dir / "fra.fra_1.raw"
+    raw.write_bytes(rec.recorded("ltspice26", "raw/fra.fra_1.raw").read_bytes())
+    return services.source_for_raw_path(raw, state)
+
+
+async def test_an_fra_results_file_reads_as_complex_values_over_frequency(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 writes a frequency response analysis's results beside the
+    transient raw, in the AC layout; the server refused to read it."""
+    source = _fra_results(work_dir, state_no_sim)
+    raw = await services.load_raw(source, state_no_sim)
+    assert raw.descriptor.analysis == "fra"
+    assert raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"
+    assert raw.get_trace_names() == ["frequency", "gain_1", "V(stimulus_1)"]
+    assert np.iscomplexobj(raw.get_wave("gain_1"))
+    # The four frequencies the deck asks for, an octave apart, ascending.
+    assert list(np.real(raw.get_axis())) == [4e3, 8e3, 16e3, 32e3]
+
+
+async def test_the_stability_recipe_on_the_negated_fra_gain_gives_ltspices_margin(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice prints the crossover and phase margin it reads off ``gain_1``.
+    ``gain_1`` is the negative of the loop gain as the stability recipe takes it
+    (its phase at crossover is LTspice's phase margin), so the recipe on
+    ``-gain_1`` says what LTspice said."""
+    said = _FRA_RESULT.search(read_spice_text(rec.recorded("ltspice26", "raw/fra.log")))
+    assert said is not None
+    crossover_khz, margin_deg = (float(value) for value in said.groups())
+    source = _fra_results(work_dir, state_no_sim)
+    result = await metrics.stability(
+        source, StabilityRecipe(key="loop", metric="stability", signal="-gain_1"), 0, state_no_sim
+    )
+    (margin,) = result["phase_margins"]
+    assert margin["frequency_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
+    assert margin["margin_deg"] == pytest.approx(margin_deg, abs=0.5)
+
+
+def test_ltspice_xvii_refuses_a_frequency_response_analysis():
+    """The analysis came with LTspice 17.1: XVII 17.0 names the analyzer as a
+    device it does not know, writes no results, and the server reads that as
+    the run's error."""
+    log = rec.recorded("ltspice17", "raw/fra.log")
+    errors = extract_log_diagnostics(log)["errors"]
+    assert any('Unknown SPICE device type "@"' in error for error in errors)
+    assert not rec.recorded("ltspice17", "raw/fra.fra_1.raw").exists()

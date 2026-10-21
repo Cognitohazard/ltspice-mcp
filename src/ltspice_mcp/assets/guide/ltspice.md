@@ -238,6 +238,19 @@ C1 out 0 {C}
   every such zero on a run XVII wrote (`measurement_zero_or_failed`).
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
+- **Frequency response analysis** (`.fra` with an analyzer `@N`): the run
+  writes its transient raw and, beside it, `<run>.fra_N.raw`, complex values
+  over frequency that read like an AC result (its analysis reads `fra`). A
+  run's row names only the transient raw, so read the FRA file by path
+  (`raw_file`). A stepped FRA run is not recorded, so how its results file
+  splits into steps is not modelled. Its `gain_N` is the negative of the loop
+  gain the `stability` recipe takes: `stability` on `-gain_1` gives the crossover and phase margin
+  LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
+  refuses the analyzer.
+- **Text of more than one line**: a sheet holds a line break in a TEXT as
+  `\n`. On export, both builds write a comment of several lines as one netlist
+  comment with the `\n` kept as it is, and split a directive at each `\n` into
+  cards of its own.
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)
   are LTspice's own, netlisted with prefix `A`. What one is and the
   parameters it takes are attributes of its symbol, which

@@ -204,6 +204,16 @@ model = ["lib/netlist_diff.py", "lib/deck_staging.py", "lib/schematic_scene.py"]
 inputs = ["export/directives.asc"]
 extra = ["export/res.asy"]
 
+[behaviour.export-multiline-text]
+summary = "How a directive and a comment of more than one line are written into the netlist each build exports."
+model = ["lib/schematic_ops.py", "lib/netlist_diff.py"]
+# A sheet's TEXT record holds each line break of its text as the two
+# characters \n. The sheet holds a comment of two lines and a directive of
+# two lines, beside a resistor and a voltage source drawn with the suite's
+# stand-in symbols, so the suite reads the sheet as the builds do.
+inputs = ["export/multiline_text.asc"]
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+
 [behaviour.sheet-records]
 summary = "The lines a sheet holds besides its symbols, wires, labels and text: a data label (DATAFLAG) and a bus tap (BUSTAP) are read by both builds and put nothing in the netlist, an empty line is read past, and a keyword a build does not know stops the export."
 model = ["lib/schematic_ops.py", "tools/schematic_edit.py", "lib/schematic_scene.py"]
@@ -371,6 +381,18 @@ inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_d
 summary = "A .tf run: the Transfer Function plot and what the log says."
 model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tf.cir"]
+
+[behaviour.raw-fra]
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout."
+model = ["lib/raw_header.py", "lib/raw_parser.py"]
+# One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
+# analyzer @1 in series between the amplifier's output and the pole. Four
+# frequencies an octave apart and a short settling time keep the run, and the
+# transient raw it also writes, small. The results file is named for the
+# analyzer's instance, <deck>.fra_1.raw, which keep names. The analysis came
+# with LTspice 17.1, and XVII 17.0.37 refuses the deck.
+inputs = ["raw/fra.cir"]
+keep = ["log", "raw", "fra_1.raw"]
 
 [behaviour.raw-ascii]
 summary = "A raw written as text (Values:): 8-bit with CRLF line ends, header included, where every other raw has a UTF-16 header."

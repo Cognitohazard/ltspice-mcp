@@ -1,0 +1,20 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\fra.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+FRA @1 - Simultaneous frequencies [32000] Hz applied from time 0 to 9.15625e-05 sec
+FRA @1 - Simultaneous frequencies [16000] Hz applied from time 9.15625e-05 to 0.000209063 sec
+FRA @1 - Simultaneous frequencies [8000] Hz applied from time 0.000209063 to 0.000394063 sec
+FRA @1 - Simultaneous frequencies [4000] Hz applied from time 0.000394063 to 0.000714063 sec
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 2465
+
+Files loaded:
+C:\recording\fra.cir
+
+FRA Instance @1: F(0dB) = 15.900 kHz, Phase Margin = 90.6 degrees, Gain Margin not found (phase does not cross 0 degrees).

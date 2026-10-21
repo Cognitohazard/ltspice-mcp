@@ -2213,6 +2213,30 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/multiline_text.asc": {
+   "labels": {
+    "proposals": 27,
+    "sha256": "6dd1651469244c1d69cdbb08f7c2cdaa3ab19da73b0193146595dc92580d3fef",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed: (#,#) is on the net already labelled ['\u2026']; '\u2026' becomes a second name for it. LTspice netlists the node under one name, so a directive or probe that uses another may not find it. [a new name; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 30,
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "shapes": {
+     "moved": 30
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/export/orientation_cell4.asc": {
    "labels": {
     "proposals": 594,

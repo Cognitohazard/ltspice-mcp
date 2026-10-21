@@ -14284,6 +14284,64 @@
   },
   "verify": []
  },
+ "fixtures/ltspice_recorded/inputs/export/multiline_text.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'a' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "a",
+     "points": [
+      {
+       "x": 0,
+       "y": 112
+      },
+      {
+       "x": 96,
+       "y": 96
+      }
+     ],
+     "x": 0,
+     "y": 112
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "multiline_text.asc",
+     "x": 0,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       112
+      ],
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "Net 'a' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "a",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "a"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/export/orientation_cell4.asc": {
   "dropped_wire": [],
   "edit": {
