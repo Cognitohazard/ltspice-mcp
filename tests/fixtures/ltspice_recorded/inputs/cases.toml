@@ -347,6 +347,11 @@ summary = "A transient raw: UTF-16LE header, 8-byte time axis, 4-byte traces; th
 model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tran.cir", "raw/tran_uncompressed.cir", "raw/tran_double.cir"]
 
+[behaviour.raw-compression]
+summary = "What waveform compression keeps of a transient: a 1 mV RC charge compressed, uncompressed and with a maximum step, the same charge at 1 V, and what a .meas reads from each."
+model = ["lib/raw_parser.py", "lib/result_observations.py"]
+inputs = ["raw/compress_1mv.cir", "raw/compress_1mv_off.cir", "raw/compress_1mv_maxstep.cir", "raw/compress_1v.cir"]
+
 [behaviour.raw-window-offset]
 summary = "A transient saved from a later start time: the Offset field and the stored time axis."
 model = ["lib/raw_parser.py", "lib/decoded_raw.py"]

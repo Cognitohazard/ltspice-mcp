@@ -929,6 +929,14 @@ recording that showed it.
 
 ### Added
 
+- `analyze_results` reports a compressed LTspice transient stored in few
+  points, as the `value` observation `coarse_compressed_waveform`, when a
+  recipe reads its samples: the points stored, the span and where the widest
+  gap between two stored points lies, when that gap spans more than a
+  twentieth of the run. Recorded on both builds
+  (`raw/compress_*`): LTspice XVII compresses by default, and stored a 1 mV RC
+  charge over 5 ms in 13 points where the same run uncompressed stored 1078,
+  with its own `.meas` results moved; LTspice 26 stored every point.
 - `RawResult.value(name, step=0)` reads a plot of one point a step, such as
   an operating point, as a number: a float, or a complex for a complex trace.
   A trace of more points is refused rather than cut to its first.

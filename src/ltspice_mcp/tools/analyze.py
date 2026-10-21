@@ -70,6 +70,7 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,
 )
+from ltspice_mcp.lib.result_observations import coarse_compressed_waveform
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -1142,6 +1143,54 @@ async def _resolve_sources(
 
 _SOLVE_FAILURE_RUN_CAP = 10
 """How many run labels a relayed solve failure names before deferring to ``runs``."""
+
+
+def _coarse_waveform_observations(
+    runs: list[_ResolvedRun], captures: Mapping[_CaptureKey, ParsedArtifacts]
+) -> list[Observation]:
+    """The transient runs a unit read that waveform compression left coarse.
+
+    Every value read from such a run is interpolated across its gaps. Only a
+    run whose samples were read has them to look at; the evidence is the first
+    such run's.
+    """
+    coarse: list[tuple[str, dict[str, float]]] = []
+    for run in runs:
+        artifacts = captures.get(_capture_key(run.source))
+        if artifacts is None or artifacts.raw is None:
+            continue
+        with contextlib.suppress(ResultError):
+            raw = services.select_raw(artifacts, run.source.plot_index)
+            if (found := coarse_compressed_waveform(raw)) is not None:
+                coarse.append((run.label, found))
+    if not coarse:
+        return []
+    label, first = coarse[0]
+    span = first["span_s"]
+    gap = first["gap_to_s"] - first["gap_from_s"]
+    labels = [label for label, _ in coarse]
+    return [
+        Observation(
+            code="coarse_compressed_waveform",
+            kind="value",
+            detail=(
+                f"{len(labels)} LTspice transient run(s) read here were saved with "
+                f"waveform compression on and store few points. In {label}, "
+                f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
+                f"between two, from {first['gap_from_s']:.3g} s to "
+                f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
+                "read between stored points is interpolated across the gap, and "
+                "LTspice's own .meas results can differ from an uncompressed run's "
+                "too. '.options plotwinsize=0' stores every point."
+            ),
+            evidence={
+                "run": label,
+                **first,
+                "runs": labels[:_SOLVE_FAILURE_RUN_CAP],
+                "run_count": len(labels),
+            },
+        )
+    ]
 
 
 def _relay_solve_failures(
@@ -3004,7 +3053,12 @@ def _assemble(
     # A rejection for work this response no longer reaches belongs to the call
     # that resumes it, not to this one.
     failures = [failure for at, failure in a.skipped if at < position]
-    observations = [*a.base_observations, *(o for unit in units for o in unit.observations)]
+    observations: list[Observation] = []
+    for observation in (*a.base_observations, *(o for unit in units for o in unit.observations)):
+        # A fact about a run, such as its compression, comes from each unit
+        # that read it; it is said once.
+        if observation not in observations:
+            observations.append(observation)
     results: dict[str, Any] = {}
     analyzed_identities: set[tuple[Any, Any, Any]] = set()
 
@@ -3681,6 +3735,9 @@ async def _evaluate_unit(
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
+    observations.extend(
+        await asyncio.to_thread(_coarse_waveform_observations, eligible_runs, captures)
+    )
     return WorkUnit(
         key=key,
         recipe=recipe,

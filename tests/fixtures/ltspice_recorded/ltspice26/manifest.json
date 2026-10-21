@@ -6131,6 +6131,146 @@
         ".raw"
       ]
     },
+    "raw/compress_1mv": {
+      "behaviour": "raw-compression",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1mv.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1mv.cir": "b723ffd9190e0fceacd5af047b04788cf183f9c7ea2893be7982d0247d0a87fe"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1mv.log": {
+          "bytes": 436,
+          "sha256": "17e12e209652d5fcb7d613a0a7d725ec9145bb5207588d1449797fd2273fcc75"
+        },
+        "raw/compress_1mv.raw": {
+          "bytes": 30046,
+          "sha256": "dabc102a6a181e503c72f3131c3885a8226d9df6a824fe85d93534824cbaede5"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_1mv_maxstep": {
+      "behaviour": "raw-compression",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1mv_maxstep.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1mv_maxstep.cir": "ccb0909efcd34f6b412621d37a4442c9dd81400df8c95e942ff292d52caf8667"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1mv_maxstep.log": {
+          "bytes": 450,
+          "sha256": "e63d3bee0e6d6c4bd4194e04bc7865b1b31caa85e7fa9b3b44a8d41d26606d26"
+        },
+        "raw/compress_1mv_maxstep.raw": {
+          "bytes": 4190,
+          "sha256": "de35639c167e79573c6c355bfdd5a66fd0e1b694876eceda97df96ce14bcf4ed"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_1mv_off": {
+      "behaviour": "raw-compression",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1mv_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1mv_off.cir": "db80663a7a264c1a6ddff534c1fef064fea9410ce13b86a99af34c03ef56556b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1mv_off.log": {
+          "bytes": 466,
+          "sha256": "43b43872c044dd0e525c4a1560370ce312eb5588065feca9e8cfc548dede3322"
+        },
+        "raw/compress_1mv_off.raw": {
+          "bytes": 30082,
+          "sha256": "f1c28474630a2652033508e0252fa270de1f0155b29dc9e0b5c94b621c9bcd4c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_1v": {
+      "behaviour": "raw-compression",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1v.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1v.cir": "5ecbb03b03288336ab6b383692bff099010c77d3358d8603330a39ff9cd80aab"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1v.log": {
+          "bytes": 428,
+          "sha256": "09e09700400138697c423edea877a7af35acce87734f338209ddcf784a66ee41"
+        },
+        "raw/compress_1v.raw": {
+          "bytes": 30044,
+          "sha256": "68673ac2261a41e24cc89e3db99f1709a733df99f76d3b753e2a9f68802ae0e0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/dc": {
       "behaviour": "raw-dc",
       "command": [

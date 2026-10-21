@@ -439,6 +439,7 @@ FROZEN_ERROR_CODES = (
     "circuit_id_derived",
     "circuits_empty",
     "clone_include_unsupported",
+    "coarse_compressed_waveform",
     "commit_failed",
     "completeness_mismatch",
     "constant_window",

@@ -205,6 +205,9 @@ def test_only_xvii_marks_time_points_by_their_sign_and_ltspices_reader_leaves_th
         )
     }
     assert marked == {
+        ("ltspice17", "compress_1mv"),
+        ("ltspice17", "compress_1mv_maxstep"),
+        ("ltspice17", "compress_1v"),
         ("ltspice17", "tran"),
         ("ltspice17", "tran_double"),
         ("ltspice17", "tran_fastaccess"),

@@ -252,6 +252,17 @@ def _stock_symbol(name: str, facts: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def stage_run(build: str, case_id: str, directory: Path) -> Path:
+    """Copy a recorded run's raw, and its log where it has one, into
+    ``directory``, and return the raw."""
+    directory.mkdir(parents=True, exist_ok=True)
+    raw = directory / f"{Path(case_id).name}.raw"
+    for suffix in (".raw", ".log"):
+        if has(build, f"{case_id}{suffix}"):
+            shutil.copyfile(recorded(build, f"{case_id}{suffix}"), raw.with_suffix(suffix))
+    return raw
+
+
 def stage_sheet(build: str, case_id: str, directory: Path) -> Path:
     """Copy a recorded sheet into ``directory`` with the symbols LTspice resolved.
 

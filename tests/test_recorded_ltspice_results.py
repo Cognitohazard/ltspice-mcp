@@ -40,9 +40,14 @@ from ltspice_mcp.lib.raw_parser import (
     raw_writer_command,
     read_partial_raw_progress,
 )
-from ltspice_mcp.lib.recipes import MeasurementsRecipe, StabilityRecipe, ValueRecipe
+from ltspice_mcp.lib.recipes import (
+    MeasurementsRecipe,
+    StabilityRecipe,
+    ValueRecipe,
+)
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
 from tests._ltspice_recorded import declared_points, header_fields
 from tests.conftest import SyncApi
@@ -375,11 +380,7 @@ class TestSteppedRuns:
         """No frequency is stored, so ``value`` reads a step's one point as it
         reads an operating point's, and a read at a frequency says to leave
         ``at`` out rather than calling the run an operating point."""
-        raw = work_dir / "step_ac_one_freq.raw"
-        for suffix in (".raw", ".log"):
-            raw.with_suffix(suffix).write_bytes(
-                rec.recorded(build, f"raw/step_ac_one_freq{suffix}").read_bytes()
-            )
+        raw = rec.stage_run(build, "raw/step_ac_one_freq", work_dir)
         source = services.source_for_raw_path(raw, state_no_sim)
         for step, gain in enumerate(ONE_FREQUENCY_GAINS):
             result = await metrics.value(
@@ -397,6 +398,81 @@ class TestSteppedRuns:
         summary = build_simulation_summary(parsed.raw, parsed.logs, step=2)
         assert summary["step_count"] == 3
         assert not any("Stepped .op" in warning for warning in summary.get("warnings", []))
+
+
+#: What each build stored of ``raw/compress_*``, an RC charge over 5 ms: the
+#: points, and for a run reported as coarse, its widest gap (from, to) in s.
+COMPRESSION: dict[tuple[str, str], tuple[int, tuple[float, float] | None]] = {
+    ("ltspice26", "raw/compress_1mv"): (1046, None),
+    ("ltspice26", "raw/compress_1mv_off"): (1046, None),
+    ("ltspice26", "raw/compress_1mv_maxstep"): (122, None),
+    ("ltspice26", "raw/compress_1v"): (1046, None),
+    ("ltspice17", "raw/compress_1mv"): (13, (2.7415e-3, 3.5569e-3)),
+    ("ltspice17", "raw/compress_1mv_off"): (1078, None),
+    ("ltspice17", "raw/compress_1mv_maxstep"): (13, (3.8243e-3, 4.6993e-3)),
+    ("ltspice17", "raw/compress_1v"): (24, (3.3177e-3, 3.6400e-3)),
+}
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(COMPRESSION))
+def test_xvii_stores_a_compressed_transient_in_a_few_points_and_26_in_all(
+    build: str, case_id: str
+):
+    """With compression on, XVII kept a few points of the charge, at 1 mV and
+    1 V and even under a 50 us maximum step; LTspice 26 kept every point. Off,
+    both keep every point and say so in the flags."""
+    points, _ = COMPRESSION[build, case_id]
+    assert declared_points(build, case_id) == points
+    flags = header_fields(build, case_id)["Flags"][0].split()
+    assert ("nocompression" in flags) == case_id.endswith("_off")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_xvii_measures_a_compressed_run_apart_from_an_uncompressed_one(build: str):
+    """XVII's own .meas results move with compression, though less than a
+    straight line between the stored points would; 26's do not move."""
+    compressed = first_values(build, "raw/compress_1mv")
+    uncompressed = first_values(build, "raw/compress_1mv_off")
+    # A 1 mV charge with a 1 ms time constant from a 1 us ramp, read at 1 ms.
+    assert uncompressed["vat"] == pytest.approx(1e-3 * (1 - math.exp(-0.9995)), rel=1e-5)
+    if rec.generation(build) == "xvii":
+        assert compressed["vat"] != pytest.approx(uncompressed["vat"], rel=1e-3)
+        assert compressed["vavg"] != pytest.approx(uncompressed["vavg"], rel=1e-5)
+    else:
+        assert compressed == uncompressed
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(COMPRESSION))
+async def test_analyze_results_reports_a_transient_compression_left_coarse(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A recipe that reads the run's samples says where compression left it
+    coarse, once however many recipes read it."""
+    points, gap = COMPRESSION[build, case_id]
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [
+                {"raw_path": str(rec.stage_run(build, case_id, work_dir)), "label": "dut"}
+            ],
+            "recipes": [
+                {"key": "v", "metric": "value", "expr": "V(out)", "at": "1m"},
+                {"key": "s", "metric": "signal_stats", "signal": "V(out)"},
+            ],
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None
+    assert data["failures"] == []
+    found = [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"]
+    if gap is None:
+        assert found == []
+        return
+    (observation,) = found
+    evidence = observation["evidence"]
+    assert (evidence["run"], evidence["step"], evidence["points"]) == ("dut", 0, points)
+    assert evidence["span_s"] == pytest.approx(5e-3)
+    assert (evidence["gap_from_s"], evidence["gap_to_s"]) == pytest.approx(gap, rel=1e-4)
+    assert "plotwinsize=0" in observation["detail"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
