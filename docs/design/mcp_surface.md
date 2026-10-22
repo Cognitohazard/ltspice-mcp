@@ -1079,11 +1079,13 @@ reported.
 
 Ops do not repeat sheet findings, and what an op makes of the sheet is said
 by the sheet, once: a route through a part, a part placed or moved over
-another, a label on nothing, a crossing left unjoined, a pin or label that
-joins wires where they cross, a wire left diagonal, and a net given a second
-name are each reported by the sheet finding (`wire_through_symbol`,
-`symbol_overlap`, `dangling_label`, `unjoined_crossing`, `joined_at_crossing`,
-`diagonal_wire`, `net_with_two_names`), whichever op made it. Findings are
+another, a part's text drawn across a wire, a part or other text, a label on
+nothing, a crossing left unjoined, a pin or label that joins wires where they
+cross, a wire left diagonal, and a net given a second name are each reported
+by the sheet finding (`wire_through_symbol`, `symbol_overlap`,
+`attribute_text_overlap`, `dangling_label`, `unjoined_crossing`,
+`joined_at_crossing`, `diagonal_wire`, `net_with_two_names`), whichever op
+made it. Findings are
 computed on the sheet the batch leaves, so a state the batch only passes
 through is not reported: a label placed before the wire that reaches it is not
 dangling, and a net relabelled in remove-and-add pairs has one name at the
@@ -1197,7 +1199,12 @@ the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
-a file. The file is written to the per-user folder's `renders/`, never to the
+a file. Text is drawn as LTspice draws it, from screenshots of both builds:
+in Tahoma Bold at LTspice's size for each text size, and each justification
+laid out on the part's placement, so a `Left` window on a part placed `R180`
+or `M0` ends at its point, and one on a part turned a quarter turn reads
+bottom to top. A multi-line comment's lines are one line apart, and a `Bottom`
+one ends at its point. The file is written to the per-user folder's `renders/`, never to the
 working directory or beside the sheet, and is deleted a week later; a render
 regenerates it. `inline` and `both` return a PNG as an image block, and an SVG as
 its markup in `render.svg`. A PNG needs the `raster` extra
@@ -1250,6 +1257,14 @@ another session sharing the working directory may commit between
 `edit_schematic` returning and this call running; compare `source_sha256` with
 the `sha256` `edit_schematic` returned to confirm the image shows that
 revision. The export block's `sha256` is the netlist's.
+
+The layout check reads a part's attribute text where LTspice draws it, with
+its extent estimated from the font's widths rather than measured off its
+glyphs: `attribute_text_overlap` reports text that a wire or a line another
+part draws passes through, or that lies over a rectangle or circle another
+part draws or over other text, by more than the estimate's slack. Comments,
+directives and labels are checked only where attribute text crosses them, and
+the layout check says so in `observations`.
 
 A per-rule finding cap applies only to layout and quality issue rules and to
 `dropped_wire`; `dropped_wire` carries no truncation observation.

@@ -464,6 +464,34 @@ that varies. Add a path, date or duration to the scrubber (`Scrubber` in
 same build comes from one of their settings; add its key to `BEHAVIOUR_KEYS`
 (the waveform grid was one, *Plot settings* above).
 
+### How LTspice draws text
+
+Where LTspice draws a sheet's text is not in any file it writes, so the
+evidence is its own drawing. `tests/fixtures/ltspice_screenshots/` holds
+sheets that place text every way LTspice justifies it (each token at each of
+the eight placements, a symbol's own window, comments and directives of one
+and several lines, net labels, and every text size), and LTspice 26's and
+XVII's drawing of each (`ltspice26/`, `ltspice17/`). Each sheet marks the
+point every text is placed by with a small cross, and draws two larger crosses
+beyond its content. `res.asy` beside them stands in for LTspice's resistor,
+with its pins and windows; the sheets are left out of the records below,
+since they are not circuits.
+
+`test_ltspice_screenshots.py` reads each picture back: the two outer crosses
+give the scale from sheet units to pixels, and every other colour than the
+sheet's, the wires' and the symbols' is text. It checks that the scene puts
+each text on the same sides of its point as LTspice drew it, and as long and as
+thick to a pixel or two. Both builds draw every case alike, in Tahoma Bold
+asked for by its line height, which scales with the size index by LTspice's
+multiples (0.625x to 7x); the widths the scene uses are Tahoma Bold's.
+
+To capture again, open each sheet in each build with the window at
+1600x1200, fit the drawing to the window (View > Zoom to Fit), and save the
+drawing area alone as PNG, untouched by scaling: the reader needs the exact
+colours. The fit leaves the outer crosses inside the picture. A sheet added
+here needs both builds' pictures, and a case whose texts stand closer than an
+em apart cannot be read back.
+
 ## Re-recording the suite's records
 
 Several tests check the code against a committed JSON record of its answers on

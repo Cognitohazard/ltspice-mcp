@@ -5,7 +5,9 @@ collect it. The inline ``.asy``/``.asc`` content is authored here and written to
 a ``tmp_path`` by the tests — nothing depends on a stock LTspice library
 install. ``SUITE_SHEETS`` and ``SUITE_SYMBOLS`` are the other kind: every sheet
 and symbol file the suite holds, which the document, symbol, connectivity and
-finding tests are each run over.
+finding tests are each run over. The sheets behind LTspice's screenshots are
+left out: they mark points with crosses for the drawing to be read back
+(``test_ltspice_screenshots.py``), and are not circuits.
 """
 
 from __future__ import annotations
@@ -26,7 +28,11 @@ def suite_name(path: Path) -> str:
 # In the order of their names as text, which is one order on every platform. A
 # path's own order ignores case on Windows and not elsewhere, and a record that
 # keeps the first sheet to show something would keep a different one.
-SUITE_SHEETS = sorted(TESTS.rglob("*.asc"), key=suite_name)
+SCREENSHOT_SHEETS = TESTS / "fixtures" / "ltspice_screenshots"
+SUITE_SHEETS = sorted(
+    (path for path in TESTS.rglob("*.asc") if SCREENSHOT_SHEETS not in path.parents),
+    key=suite_name,
+)
 SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"), key=suite_name)
 
 
@@ -67,8 +73,8 @@ SYMATTR Prefix X
 
 
 # A two-terminal symbol whose attribute windows are stacked in the symbol's own
-# y, 16 units apart — the stock `cap` arrangement. That gap is narrower than a
-# four-character value, so it is the spacing that exposes how a sideways
+# y, 48 units apart as LTspice's own `cap` stacks them. That gap is narrower
+# than a four-character value, so it is the spacing that exposes how a sideways
 # placement lays the two strings out.
 STACKED_ATTRS_ASY = """\
 Version 4
@@ -81,8 +87,8 @@ PINATTR SpiceOrder 1
 PIN 0 32 NONE 0
 PINATTR PinName 2
 PINATTR SpiceOrder 2
-WINDOW 0 24 -8 Left 2
-WINDOW 3 24 8 Left 2
+WINDOW 0 24 -24 Left 2
+WINDOW 3 24 24 Left 2
 SYMATTR Prefix C
 SYMATTR Value cap
 """

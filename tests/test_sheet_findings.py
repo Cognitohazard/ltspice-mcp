@@ -65,6 +65,7 @@ class TestTheRegistry:
                 "duplicate_wire",
                 "symbol_overlap",
                 "wire_through_symbol",
+                "attribute_text_overlap",
                 "label_over_component",
                 "text_in_symbol_body",
                 "stacked_directive",
@@ -94,6 +95,7 @@ class TestTheRegistry:
                 "duplicate_wire",
                 "symbol_overlap",
                 "wire_through_symbol",
+                "attribute_text_overlap",
             },
             "quality": {
                 "duplicate_parameter",
@@ -562,6 +564,80 @@ class TestHowTheSheetReads:
             (("R1",), {"text": "1k"}, "Text '1k' at (16,48) is anchored inside R1's body"),
             (("R2",), {"text": ".op"}, "Text '.op' at (110,48) is anchored inside R2's body"),
         ]
+
+    def test_attribute_text_across_a_wire_names_the_wire(self) -> None:
+        value = Part("R1", texts=((0, 0, "10k"),), text_extents=(BBox(0, -8, 60, 14),))
+        view = SheetView(parts=(value,), wires=((30, -40, 30, 40), (100, -40, 100, 40)))
+        (found,) = only(view, "attribute_text_overlap")
+        assert (found.refs, found.points, found.facts) == (
+            ("R1",),
+            ((0, 0), (30, -40), (30, 40)),
+            {"text": "10k", "across": "wire"},
+        )
+
+    def test_attribute_text_across_what_another_part_draws(self) -> None:
+        """A line the part draws, or a rectangle or circle; not an empty corner
+        of its body, such as the space beside an amplifier's triangle."""
+        text = Part("R1", texts=((0, 0, "10k"),), text_extents=(BBox(0, -8, 60, 14),))
+        triangle = Part(
+            "U1",
+            box=BBox(-40, -60, 100, 60),
+            body=BBox(-40, -60, 100, 60),
+            strokes=(((-40, -60), (100, -60)), ((100, -60), (100, 60))),
+        )
+        assert only(SheetView(parts=(text, triangle)), "attribute_text_overlap") == []
+        lead = Part("C1", body=BBox(20, -40, 40, 40), strokes=(((30, -40), (30, 40)),))
+        plate = Part("C2", body=BBox(20, -40, 40, 40), areas=(BBox(20, -4, 40, 4),))
+        for other in (lead, plate):
+            (found,) = only(SheetView(parts=(text, other)), "attribute_text_overlap")
+            assert (found.refs, found.facts) == (
+                ("R1", other.ref),
+                {"text": "10k", "across": "body"},
+            )
+        # A part with nothing but its body known reaches all of it.
+        boxed = Part("X1", body=BBox(20, -40, 40, 40))
+        assert len(only(SheetView(parts=(text, boxed)), "attribute_text_overlap")) == 1
+        # Its own drawing is the part's to draw text over.
+        own = Part(
+            "R1",
+            texts=((0, 0, "10k"),),
+            text_extents=(BBox(0, -8, 60, 14),),
+            body=BBox(20, -40, 40, 40),
+            strokes=(((30, -40), (30, 40)),),
+        )
+        assert only(SheetView(parts=(own,)), "attribute_text_overlap") == []
+
+    def test_attribute_texts_that_only_graze_do_not_overlap(self) -> None:
+        """Extents are estimated from the font, not the string's own glyphs, so
+        one line's descender band on the next line's caps is no overlap."""
+        stacked = Part(
+            "C1",
+            texts=((0, 0, "C1"), (0, 20, "47n")),
+            text_extents=(BBox(0, -8, 30, 14), BBox(0, 12, 40, 34)),
+        )
+        assert only(SheetView(parts=(stacked,)), "attribute_text_overlap") == []
+        printed = Part(
+            "C1",
+            texts=((0, 0, "C1"), (0, 4, "100n")),
+            text_extents=(BBox(0, -8, 30, 14), BBox(0, -4, 60, 18)),
+        )
+        (found,) = only(SheetView(parts=(printed,)), "attribute_text_overlap")
+        assert (found.points, found.facts) == (
+            ((0, 0), (0, 4)),
+            {"text": "C1", "across": "text", "other_text": "100n"},
+        )
+
+    def test_attribute_text_across_a_label_or_a_comment(self) -> None:
+        value = Part("R1", texts=((0, 0, "10k"),), text_extents=(BBox(0, -8, 60, 14),))
+        view = SheetView(parts=(value,), text_extents=((40, 0, "OUT", BBox(40, -8, 90, 14)),))
+        (found,) = only(view, "attribute_text_overlap")
+        assert found.detail == "R1's text '10k' at (0,0) is drawn across the text 'OUT' at (40,0)"
+        # A view that carries no extents has nothing for the rule to read.
+        bare = Part("R1", texts=((0, 0, "10k"),))
+        assert (
+            only(SheetView(parts=(bare,), wires=((30, -40, 30, 40),)), "attribute_text_overlap")
+            == []
+        )
 
     def test_text_at_one_anchor(self) -> None:
         view = SheetView(texts=((16, 16, ".op"), (16, 16, ".tran 1"), (16, 32, "a note")))

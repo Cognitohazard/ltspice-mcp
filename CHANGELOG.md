@@ -10,6 +10,17 @@ tool-surface changes.
 
 ### Fixed
 
+- A rendered sheet placed text where LTspice does not, so it could not show
+  whether text collides. A `Left` window on a part placed `R180` or `M0` was
+  drawn starting at its point where LTspice ends it there, a plain window on a
+  part turned a quarter turn stayed horizontal, and `Top`, `Bottom` and
+  `Center` lined up the baseline rather than the line; every text was drawn
+  two thirds of LTspice's size, in a monospace face, and comments and
+  directives ignored their justification. Text is now laid out as both
+  builds draw it, from screenshots of each (`docs/TESTING.md`, "How LTspice
+  draws text"): each justification on the part's placement, in Tahoma Bold
+  at LTspice's size for each text size, a multi-line comment's lines one line
+  apart, and a net label starting or ending at its point.
 - `inspect(kind="hierarchy")` told LTspice users to add `.options logopinfo`
   to read a nested MOSFET's operating point, which LTspice XVII ends the run
   on, and spelled a nested resistor's `.save I(xa:xin:r1)` and a node's trace
@@ -984,6 +995,12 @@ recording that showed it.
 
 ### Added
 
+- `verify_circuit`'s layout check, and `edit_schematic`'s reply, report a
+  part's name or value drawn across a wire, across what another part draws or
+  across other text (`attribute_text_overlap`), where the layout scan used to
+  leave attribute text out. The text is placed where LTspice draws it, its
+  extent estimated from the font's widths; a bounding box's empty corner, or
+  two lines that only graze, are not counted.
 - `analyze_results` reads a case's other raw by job and case: a job source
   with `other_raw: "fra_1"` reads each case's frequency response analysis
   results, and `other_raw: "op"` a transient's operating point, where only a

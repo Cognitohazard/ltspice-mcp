@@ -182,6 +182,13 @@ _RULES = (
         check="layout",
     ),
     Rule(
+        "attribute_text_overlap",
+        "drawing",
+        "part",
+        "A part's attribute text drawn across a wire, another part's body, or other text.",
+        check="layout",
+    ),
+    Rule(
         "label_over_component",
         "drawing",
         "part",
@@ -248,8 +255,11 @@ class Part:
     either is ``None`` when the part has none. ``at`` is where the part is
     placed. ``pins`` are ``(name, x, y)`` in SpiceOrder, the order a symbol
     gives them in, and ``texts`` the anchors of its drawn attributes as
-    ``(x, y, first line)``. ``missing`` says its symbol was not found: whatever
-    box it carries is then a placeholder's, and no rule reads it.
+    ``(x, y, first line)``, with ``text_extents`` the extent each is drawn
+    over, in the same order. ``strokes`` are the lines it draws, as segments,
+    and ``areas`` the rectangles and circles it draws, as boxes. ``missing``
+    says its symbol was not found: whatever box it carries is then a
+    placeholder's, and no rule reads it.
     """
 
     ref: str
@@ -257,6 +267,9 @@ class Part:
     box: BBox | None = None
     pins: tuple[tuple[str, int, int], ...] = ()
     texts: tuple[tuple[int, int, str], ...] = ()
+    text_extents: tuple[BBox, ...] = ()
+    strokes: tuple[tuple[Point, Point], ...] = ()
+    areas: tuple[BBox, ...] = ()
     missing: bool = False
     body: BBox | None = None
     at: Point | None = None
@@ -284,13 +297,15 @@ class SheetView:
 
     ``wires`` are ``(x1, y1, x2, y2)``, ``labels`` are ``(x, y, name)`` with
     ground among them, and ``texts`` are the sheet's directives and comments as
-    ``(x, y, first line)``.
+    ``(x, y, first line)``. ``text_extents`` are the labels', directives' and
+    comments' text as drawn, as ``(x, y, first line, extent)``.
     """
 
     parts: tuple[Part, ...] = ()
     wires: tuple[tuple[int, int, int, int], ...] = ()
     labels: tuple[tuple[int, int, str], ...] = ()
     texts: tuple[tuple[int, int, str], ...] = ()
+    text_extents: tuple[tuple[int, int, str, BBox], ...] = ()
 
 
 class _Index:
@@ -773,6 +788,85 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
     ]
 
 
+def _core(extent: BBox) -> BBox:
+    """What a text's glyphs surely cover: its extent, which is estimated from
+    its font's metrics rather than its own glyphs, less a quarter of its
+    thickness all round. Two lines that only graze, one's descender band on
+    the other's cap height, do not overlap."""
+    inset = min(extent.width, extent.height) // 4
+    return BBox(extent.x1 + inset, extent.y1 + inset, extent.x2 - inset, extent.y2 - inset)
+
+
+def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
+    """True if what ``part`` draws reaches into ``box``: one of its lines, or
+    one of its rectangles or circles, rather than an empty corner of its body
+    such as the space beside an amplifier's triangle. A part drawn without
+    those reaches wherever its body does."""
+    if not (part.strokes or part.areas):
+        return body.overlaps(box)
+    return any(_through(a, b, box) for a, b in part.strokes) or any(
+        area.overlaps(box) for area in part.areas
+    )
+
+
+@_finds("attribute_text_overlap")
+def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
+    # Where the text lies is LTspice's own layout of it, so a part whose symbol
+    # was not found has none to report, and nor has a view that carries no
+    # extents.
+    drawn = [
+        (index, part, (x, y), text, _core(extent))
+        for index, part in enumerate(ix.view.parts)
+        if not part.missing
+        for (x, y, text), extent in zip(part.texts, part.text_extents, strict=False)
+    ]
+    found: list[Finding] = []
+    for n, (index, part, at, text, extent) in enumerate(drawn):
+        # What the text is drawn across: words for it, the parts and the
+        # points it names, and its own facts.
+        across: list[tuple[str, tuple[str, ...], tuple[Point, ...], dict[str, str]]] = [
+            (f"wire {_wire(a, b)}", (), (a, b), {"across": "wire"})
+            for a, b in ix.wires
+            if _through(a, b, extent)
+        ]
+        across += [
+            (f"{other.name}'s body", (other.name,), (), {"across": "body"})
+            for other_index, other, body in ix.drawn
+            if other_index != index and _draws_over(other, body, extent)
+        ]
+        across += [
+            (
+                f"{other.name}'s text {other_text!r} at {_at(other_at)}",
+                (other.name,),
+                (other_at,),
+                {"across": "text", "other_text": other_text},
+            )
+            for _index, other, other_at, other_text, other_extent in drawn[n + 1 :]
+            if other_extent.overlaps(extent)
+        ]
+        across += [
+            (
+                f"the text {other_text!r} at {_at((x, y))}",
+                (),
+                ((x, y),),
+                {"across": "text", "other_text": other_text},
+            )
+            for x, y, other_text, other_extent in ix.view.text_extents
+            if _core(other_extent).overlaps(extent)
+        ]
+        found += [
+            Finding(
+                "attribute_text_overlap",
+                f"{part.name}'s text {text!r} at {_at(at)} is drawn across {what}",
+                refs=(part.name, *others),
+                points=(at, *points),
+                facts={"text": text, **facts},
+            )
+            for what, others, points, facts in across
+        ]
+    return found
+
+
 @_finds("label_over_component")
 def _labels_over_components(ix: _Index) -> list[Finding]:
     return [
@@ -897,6 +991,11 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``wire_through_symbol``: a wire through what a part draws, without its
       pins. A pin drawn apart from the body leaves room between them that an
       ordinary wire to a nearer pin crosses.
+    - ``attribute_text_overlap``: a part's attribute text, laid out as
+      LTspice lays it out with its extent estimated from LTspice's font,
+      that a wire or a line another part draws passes through, or that shares
+      an area with a rectangle or circle another part draws or with other
+      text, by more than the estimate's slack (:func:`_core`).
     - ``label_over_component``: a label strictly inside a part's box and on no
       pin. A label on a pin, any part's, is the ordinary flag.
     - ``text_in_symbol_body``: text anchored inside what another part draws.

@@ -341,7 +341,7 @@ def _common_source() -> Build:
     d.label("out", "RD.2")
     d.ground("Vdd.-", "Vin.-", "RS.2")
     d.directives((96, rs["2"][1] + 80))
-    return d.build({"label_island": 1})
+    return d.build({"label_island": 1, "attribute_text_overlap": 2})
 
 
 def _vcvs_stage() -> Build:
@@ -421,7 +421,7 @@ def _diff_pair() -> Build:
     d.label("tail", "Itail.In")
     d.ground("Vdd.-", "Vinp.-", "Vinn.-", "M1.B", "M2.B", "Itail.Out")
     d.directives((64, tail["Out"][1] + 64))
-    return d.build({"label_island": 1})
+    return d.build({"label_island": 1, "attribute_text_overlap": 4})
 
 
 def _r2r_ladder(k: int = 25) -> Build:
@@ -485,7 +485,7 @@ def _rlc_line(sections: int = 50, per_row: int = 10) -> Build:
             d.wire(f"R{i}.1", (x + 64, y))
         d.ground(f"C{i}.2", f"R{i}.2")
     d.directives((96, 96 + 352 * ((sections - 1) // per_row) + 256))
-    return d.build()
+    return d.build({"attribute_text_overlap": 40})
 
 
 def _sallen_key() -> Build:
@@ -515,7 +515,7 @@ def _sallen_key() -> Build:
     d.label("in", "Vin.+")
     d.ground("Vin.-", "C2.2", "E1.-")
     d.directives((96, below + 80))
-    return d.build()
+    return d.build({"attribute_text_overlap": 1})
 
 
 def _two_stage_opamp_drawing(sources_dy: int = 0) -> Drawing:
@@ -583,7 +583,7 @@ def _two_stage_opamp_drawing(sources_dy: int = 0) -> Drawing:
 
 def _two_stage_opamp() -> Build:
     # The inputs are ports, each joined to its source by a label alone.
-    return _two_stage_opamp_drawing().build({"label_island": 2})
+    return _two_stage_opamp_drawing().build({"label_island": 2, "attribute_text_overlap": 9})
 
 
 def _two_stage_opamp_moved() -> Build:
@@ -599,7 +599,7 @@ def _two_stage_opamp_moved() -> Build:
         "references": ["Vdd", "Vinp", "Vinn"],
         "drag": True,
     }
-    drawn = d.build({"label_island": 2})
+    drawn = d.build({"label_island": 2, "attribute_text_overlap": 9})
     return replace(drawn, style="moved", calls=(*drawn.calls, (lift,)))
 
 

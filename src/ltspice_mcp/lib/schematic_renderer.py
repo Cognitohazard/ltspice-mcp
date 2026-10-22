@@ -15,7 +15,6 @@ from xml.sax.saxutils import escape
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_scene import (
     FLAG_LABEL_SIZE,
-    LINE_GAP,
     UNCONNECTED_MARKER,
     DrawEllipse,
     DrawLine,
@@ -24,10 +23,11 @@ from ltspice_mcp.lib.schematic_scene import (
     Graphic,
     NetFlag,
     Scene,
-    decode_text_lines,
-    flag_label_anchor,
+    TextLayout,
+    flag_label_layout,
     font_px,
     ground_polygon,
+    line_height,
 )
 
 _STYLE = """
@@ -37,7 +37,7 @@ _STYLE = """
 .pin { stroke: #b00020; stroke-width: 1; fill: none; }
 .gnd { stroke: #0a4bd8; stroke-width: 1.5; fill: none; }
 .unconnected { stroke: #0a4bd8; stroke-width: 1; fill: none; }
-text { font-family: 'DejaVu Sans Mono', monospace; }
+text { font-family: Tahoma, 'DejaVu Sans', sans-serif; font-weight: bold; }
 .t-attr { fill: #101010; }
 .t-flag { fill: #0a4bd8; }
 .t-directive { fill: #106010; }
@@ -97,16 +97,37 @@ def _flag_svg(flag: NetFlag) -> list[str]:
         out.append(f'<polygon class="gnd" points="{pts}"/>')
     else:
         # No connection dot: LTspice does not draw one on a net label.
-        size = font_px(FLAG_LABEL_SIZE)
-        lx, ly, anchor, rotation = flag_label_anchor(flag)
-        transform = (
-            f' transform="rotate({_fmt(rotation)},{_fmt(lx)},{_fmt(ly)})"' if rotation else ""
-        )
         out.append(
-            f'<text class="t-flag" x="{_fmt(lx)}" y="{_fmt(ly)}" '
-            f'text-anchor="{anchor}" font-size="{size}"{transform}>{escape(flag.text)}</text>'
+            _text_svg("t-flag", x, y, [flag.text], FLAG_LABEL_SIZE, flag_label_layout(flag))
         )
     return out
+
+
+def _text_svg(cls: str, x: int, y: int, lines: list[str], size: int, layout: TextLayout) -> str:
+    """One ``<text>`` laid out by ``layout`` from the point ``(x, y)``.
+
+    A block of several lines gets a ``<tspan>`` per line, each restating x so
+    the lines stack instead of running on; a turned block turns as a whole, so
+    its lines stack along the glyphs' own "down".
+    """
+    bx, by = x + layout.dx, y + layout.dy
+    transform = (
+        f' transform="rotate({_fmt(layout.rotation)},{_fmt(bx)},{_fmt(by)})"'
+        if layout.rotation
+        else ""
+    )
+    if len(lines) == 1:
+        body = escape(lines[0])
+    else:
+        step = line_height(size)
+        body = "".join(
+            f'<tspan x="{_fmt(bx)}" dy="{_fmt(0 if k == 0 else step)}">{escape(line)}</tspan>'
+            for k, line in enumerate(lines)
+        )
+    return (
+        f'<text class="{cls}" x="{_fmt(bx)}" y="{_fmt(by)}" text-anchor="{layout.anchor}" '
+        f'font-size="{font_px(size)}"{transform}>{body}</text>'
+    )
 
 
 def render_svg(scene: Scene, margin: int = 16) -> str:
@@ -157,31 +178,12 @@ def render_svg(scene: Scene, margin: int = 16) -> str:
     # Text on top: symbol attributes / placeholders, then sheet directives.
     for sym in scene.symbols:
         for t in sym.texts:
-            px = font_px(t.size)
             cls = "t-placeholder" if t.role == "placeholder" else "t-attr"
-            transform = (
-                f' transform="rotate({_fmt(t.rotation)},{_fmt(t.x)},{_fmt(t.y)})"'
-                if t.rotation
-                else ""
-            )
-            parts.append(
-                f'<text class="{cls}" x="{_fmt(t.x)}" y="{_fmt(t.y)}" '
-                f'text-anchor="{t.anchor}" font-size="{px}"{transform}>{escape(t.text)}</text>'
-            )
+            parts.append(_text_svg(cls, t.x, t.y, [t.text], t.size, t.layout))
     for d in scene.directives:
-        px = font_px(d.size)
-        cls = "t-directive" if d.is_directive else "t-comment"
-        # A multi-line TEXT record becomes one <text> with a <tspan> per line;
-        # each tspan restates x so lines stack instead of running on.
-        spans = "".join(
-            f'<tspan x="{_fmt(d.x)}" dy="{_fmt(0 if k == 0 else px + LINE_GAP)}">'
-            f"{escape(line)}</tspan>"
-            for k, line in enumerate(decode_text_lines(d.text))
-        )
-        parts.append(
-            f'<text class="{cls}" x="{_fmt(d.x)}" y="{_fmt(d.y)}" '
-            f'text-anchor="start" font-size="{px}">{spans}</text>'
-        )
+        if (layout := d.layout) is not None:
+            cls = "t-directive" if d.is_directive else "t-comment"
+            parts.append(_text_svg(cls, d.x, d.y, d.lines, d.size, layout))
 
     parts.append("</svg>")
     return "\n".join(parts) + "\n"

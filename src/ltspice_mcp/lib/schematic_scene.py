@@ -26,6 +26,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import NamedTuple
 
 from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.connectivity import point_on_segment
@@ -63,39 +64,68 @@ _PLACEHOLDER = BBox(0, 0, 64, 48)
 _ARC_SEGMENTS = 24
 
 # --- Text metrics, shared with schematic_renderer ---------------------------
-# LTspice stores a text *size index*; map it to a pixel height. Index 2 is the
-# schematic default.
-FONT_PX = {0: 8, 1: 11, 2: 14, 3: 18, 4: 24, 5: 32, 6: 42, 7: 56}
-DEFAULT_FONT_PX = 14
+# LTspice draws all schematic text (attributes, net labels, comments and
+# directives) in Tahoma Bold. It stores a text *size index* and draws index i at
+# a multiple of one base size, index 2 being the schematic default; a 1x line of
+# text is _BASE_LINE sheet units tall. Both builds were measured drawing every
+# index, by the font height each asks for and the text it draws.
+_SIZE_MULTIPLES = {0: 0.625, 1: 1.0, 2: 1.5, 3: 2.0, 4: 2.5, 5: 3.5, 6: 5.0, 7: 7.0}
+_BASE_LINE = 18.4
+# Tahoma Bold's ascent and descent in ems, which make up the height of a line,
+# and how far its glyphs reach above and below the baseline.
+_ASCENT = 2049 / 2048
+_DESCENT = 423 / 2048
+_INK_ASCENT = 0.76
+_INK_DESCENT = 0.21
 
-# Extra pixels between stacked lines of a multi-line text block.
-LINE_GAP = 2
+#: The font size (em) in sheet units of each text size index.
+FONT_PX = {
+    size: round(_BASE_LINE * multiple / (_ASCENT + _DESCENT))
+    for size, multiple in _SIZE_MULTIPLES.items()
+}
+DEFAULT_FONT_PX = FONT_PX[2]
 
-# Placement of a net-label glyph relative to its FLAG coordinate, and the
-# ground glyph's extent below it. Shared so the crop box and the drawn output
-# cannot drift apart.
-FLAG_LABEL_DY = 4
-FLAG_LABEL_SIZE = 1
+# Tahoma Bold's advance widths in thousandths of an em for printable ASCII,
+# space to tilde, and for anything else.
+# fmt: off
+_ADVANCES = (
+    293, 343, 489, 818, 637, 1199, 781, 275, 454, 454, 637, 818, 312, 431, 312, 577,
+    637, 637, 637, 637, 637, 637, 637, 637, 637, 637, 363, 363, 818, 818, 818, 566,
+    920, 685, 686, 667, 757, 615, 581, 745, 764, 483, 500, 696, 572, 893, 771, 770,
+    657, 770, 726, 633, 612, 739, 675, 1028, 685, 670, 623, 454, 577, 454, 818, 637,
+    546, 599, 632, 527, 629, 594, 382, 629, 640, 302, 363, 603, 302, 954, 640, 617,
+    629, 629, 434, 515, 416, 640, 579, 890, 604, 576, 503, 623, 637, 623, 818,
+)
+# fmt: on
+_OTHER_ADVANCE = 637
+
+# Placement of the ground glyph relative to its FLAG coordinate, and its
+# extent. Shared so the crop box and the drawn output cannot drift apart.
+# A net label is size-2 text like the rest.
+FLAG_LABEL_SIZE = 2
 GND_HALF_W = 6
 GND_DEPTH = 10
 
 # Side of the small square LTspice draws at a flag that connects to nothing.
 UNCONNECTED_MARKER = 4
 
-# Glyph-extent approximation. Text is drawn in a monospace family, so a line's
-# width is estimated as (character count x font height x _ADVANCE_RATIO) and its
-# vertical span as one ascent above the baseline plus one descent below. This is
-# deliberately an estimate — measuring real advances would need font metrics we
-# do not carry — and it feeds only the crop box, where running a few pixels wide
-# is harmless while running narrow clips visible text.
-_ADVANCE_RATIO = 0.62
-_ASCENT_RATIO = 1.0
-_DESCENT_RATIO = 0.3
-
 
 def font_px(size: int) -> int:
-    """Pixel height for an LTspice text-size index."""
+    """Font size (em), in sheet units, for an LTspice text-size index."""
     return FONT_PX.get(size, DEFAULT_FONT_PX)
+
+
+def line_height(size: int) -> int:
+    """How far apart, in sheet units, LTspice sets the lines of a text block."""
+    return round(font_px(size) * (_ASCENT + _DESCENT))
+
+
+def text_width(text: str, size: int) -> int:
+    """Width in sheet units of one line of ``text`` set at ``size``."""
+    advance = sum(
+        _ADVANCES[code - 32] if 32 <= (code := ord(ch)) < 127 else _OTHER_ADVANCE for ch in text
+    )
+    return round(advance * font_px(size) / 1000)
 
 
 def decode_text_lines(raw: str) -> list[str]:
@@ -235,79 +265,139 @@ def ground_polygon(flag: NetFlag) -> tuple[tuple[int, int], ...]:
     return ((x, y - GND_HALF_W), (x, y + GND_HALF_W), (x + sign * GND_DEPTH, y))
 
 
-def flag_label_anchor(flag: NetFlag) -> tuple[int, int, str, int]:
-    """Anchor ``(x, y, svg_text_anchor, rotation_degrees)`` for a net label.
+#: How a justification lays text out in the frame it is given in (a symbol's
+#: own, or the sheet's): whether it runs up that frame (a V token) rather than
+#: along its x axis, which way along that run it extends from its point (1 for
+#: Left, -1 for Right, 0 centred), and on which side of the point it lies across
+#: the run (-1 for Top, the point being its top edge; 1 for Bottom; 0 centred).
+_JUSTIFICATIONS: dict[str, tuple[bool, int, int]] = {
+    "left": (False, 1, 0),
+    "right": (False, -1, 0),
+    "center": (False, 0, 0),
+    "top": (False, 0, -1),
+    "bottom": (False, 0, 1),
+    "vleft": (True, 1, 0),
+    "vright": (True, -1, 0),
+    "vcenter": (True, 0, 0),
+    "vtop": (True, 0, -1),
+    "vbottom": (True, 0, 1),
+}
 
-    The text is pushed ``FLAG_LABEL_DY`` clear of the connection point on the
-    side given by ``flag.orientation``. When ``flag.text_vertical`` is set the
-    text is rotated a quarter turn anticlockwise so it reads bottom-to-top; the
-    anchor end is then chosen so the string still grows away from the point
-    (SVG rotates the advance direction with the glyphs, so "start" grows upward
-    and "end" grows downward once rotated).
+#: The direction text reads along and its glyphs' "up", on the sheet, for
+#: each turn it is drawn at: upright, or a quarter turn to read bottom to top.
+_READING = {0: ((1, 0), (0, -1)), -90: ((0, -1), (-1, 0))}
+
+
+class TextLayout(NamedTuple):
+    """How a text is drawn from its point: turned ``rotation`` degrees, its
+    lines aligned on SVG ``anchor``, and its first line's baseline ``(dx, dy)``
+    from the point. Later lines follow one :func:`line_height` apart along the
+    glyphs' "down"."""
+
+    rotation: int
+    anchor: str
+    dx: int
+    dy: int
+
+
+def text_layout(align: str, size: int, rot: str = "R0", lines: int = 1) -> TextLayout | None:
+    """How LTspice lays out ``lines`` lines of text justified ``align`` in a
+    frame placed ``rot`` (a symbol's placement, or ``R0`` for the sheet's own
+    text). None for ``Invisible``, which LTspice does not draw.
+
+    Read off LTspice's own drawing of every justification at every placement,
+    which the suite checks against screenshots of both builds
+    (``test_ltspice_screenshots.py``). The token lays the text out in its frame
+    and the placement turns that frame onto the sheet; the glyphs are then
+    drawn readable, left to right or bottom to top. So text is sideways
+    exactly when its run ends up vertical, a ``Left`` window whose run the
+    placement points left or down ends at its point instead of starting there,
+    and a ``Top`` window's text lies on whichever side of its point the
+    placement turns the frame's "down" to.
+
+    Each line is set in a box one line high, which the token puts on the point
+    by its edge or its middle: its top edge for ``Top``, the bottom edge of the
+    last line for ``Bottom``, and the middle of the first line otherwise.
     """
-    x, y, o = flag.x, flag.y, flag.orientation
-    px = font_px(FLAG_LABEL_SIZE)
-    if flag.text_vertical:
-        # Rotated: the glyph band grows to the left of the anchor, so shift
-        # right by a third of the height to straddle the wire.
-        if o == "down":
-            return (x + px // 3, y + FLAG_LABEL_DY, "end", -90)
-        return (x + px // 3, y - FLAG_LABEL_DY, "start", -90)
-    if o == "up":
-        return (x, y - FLAG_LABEL_DY, "middle", 0)
-    if o == "down":
-        return (x, y + FLAG_LABEL_DY + px, "middle", 0)
-    # Sideways: nudge the baseline down by a third of the height so the glyph
-    # box straddles the connection point rather than sitting on top of it.
-    if o == "left":
-        return (x - FLAG_LABEL_DY, y + px // 3, "end", 0)
-    return (x + FLAG_LABEL_DY, y + px // 3, "start", 0)
+    token = align.lower()
+    if token == "invisible":
+        return None
+    sideways_token, along, across = _JUSTIFICATIONS.get(token, _JUSTIFICATIONS["left"])
+    run = _apply_rotation(0, -1, rot) if sideways_token else _apply_rotation(1, 0, rot)
+    up = _apply_rotation(-1, 0, rot) if sideways_token else _apply_rotation(0, -1, rot)
+    rotation = -90 if run[0] == 0 else 0
+    readable_run, readable_up = _READING[rotation]
+    if along == 0:
+        anchor = "middle"
+    else:
+        anchor = "start" if (run[0] * along, run[1] * along) == readable_run else "end"
+    em = font_px(size)
+    # How far the first baseline lies from the point along the glyphs' "down".
+    if across == 0:
+        drop = (_ASCENT - _DESCENT) / 2 * em
+    elif (up[0] * across, up[1] * across) == readable_up:
+        drop = -_DESCENT * em - (lines - 1) * line_height(size)  # the block ends at the point
+    else:
+        drop = _ASCENT * em  # the block starts at the point
+    shift = round(drop)
+    return TextLayout(rotation, anchor, -readable_up[0] * shift, -readable_up[1] * shift)
+
+
+def text_extent(x: int, y: int, lines: Sequence[str], size: int, layout: TextLayout) -> BBox:
+    """Where the glyphs of ``lines`` reach when laid out by ``layout`` from the
+    point ``(x, y)``: the text's estimated ink, from its font's widths."""
+    em = font_px(size)
+    (rx, ry), (ux, uy) = _READING[layout.rotation]
+    corners: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        width = text_width(line, size)
+        start = {"start": 0, "middle": -width // 2, "end": -width}.get(layout.anchor, 0)
+        down = index * line_height(size)
+        bx, by = x + layout.dx - ux * down, y + layout.dy - uy * down
+        for along in (start, start + width):
+            for rise in (_INK_ASCENT * em, -_INK_DESCENT * em):
+                corners.append(
+                    (round(bx + rx * along + ux * rise), round(by + ry * along + uy * rise))
+                )
+    return BBox.from_points(corners) or BBox(x, y, x, y)
+
+
+#: The justification that puts a net label's text on the side of its point
+#: given by ``(orientation, text_vertical)``: a label's text starts or ends at
+#: the point, across a wire's line.
+_FLAG_JUSTIFICATIONS = {
+    ("right", False): "Left",
+    ("left", False): "Right",
+    ("up", False): "Bottom",
+    ("down", False): "Top",
+    ("up", True): "VLeft",
+    ("down", True): "VRight",
+}
+
+
+def flag_label_layout(flag: NetFlag) -> TextLayout:
+    """How a net label's text is laid out from its point.
+
+    A label on a vertical wire has its text turned to read bottom to top (see
+    :func:`resolve_flag_placement`). LTspice starts or ends the text at the
+    point, centred across the wire; with no wire to run along, the text sits
+    centred above or below the point.
+    """
+    align = _FLAG_JUSTIFICATIONS.get((flag.orientation, flag.text_vertical), "Left")
+    layout = text_layout(align, FLAG_LABEL_SIZE)
+    assert layout is not None, "a label's justification is never Invisible"
+    return layout
+
+
+def flag_label_anchor(flag: NetFlag) -> tuple[int, int, str, int]:
+    """Baseline ``(x, y, svg_text_anchor, rotation_degrees)`` for a net label."""
+    layout = flag_label_layout(flag)
+    return (flag.x + layout.dx, flag.y + layout.dy, layout.anchor, layout.rotation)
 
 
 def flag_label_bbox(flag: NetFlag) -> BBox:
     """Estimated extent of a net label's drawn text, rotation included."""
-    ax, ay, anchor, rotation = flag_label_anchor(flag)
-    if rotation == 0:
-        return text_extent(ax, ay, [flag.text], FLAG_LABEL_SIZE, anchor)
-    return turned_text_extent(ax, ay, flag.text, FLAG_LABEL_SIZE, anchor)
-
-
-def turned_text_extent(x: int, y: int, text: str, size: int, anchor: str) -> BBox:
-    """Extent of text given a quarter turn anticlockwise about ``(x, y)``.
-
-    The advance runs along y and the glyph height along x. SVG rotates the run
-    with the glyphs, so a ``start`` anchor grows upward and an ``end`` anchor
-    downward.
-    """
-    px = font_px(size)
-    run = round(len(text) * px * _ADVANCE_RATIO)
-    if anchor == "start":
-        y1, y2 = y - run, y
-    elif anchor == "end":
-        y1, y2 = y, y + run
-    else:
-        y1, y2 = y - run // 2, y + (run - run // 2)
-    return BBox(x - round(px * _ASCENT_RATIO), y1, x + round(px * _DESCENT_RATIO), y2)
-
-
-def text_extent(x: int, y: int, lines: Sequence[str], size: int, anchor: str) -> BBox:
-    """Estimated bounding box of a rendered text block anchored at ``(x, y)``.
-
-    ``(x, y)`` is the first line's baseline/anchor point, matching SVG. See the
-    ratio constants above for the approximation used.
-    """
-    px = font_px(size)
-    longest = max((len(ln) for ln in lines), default=0)
-    width = round(longest * px * _ADVANCE_RATIO)
-    if anchor == "middle":
-        x1, x2 = x - width // 2, x + (width - width // 2)
-    elif anchor == "end":
-        x1, x2 = x - width, x
-    else:
-        x1, x2 = x, x + width
-    top = y - round(px * _ASCENT_RATIO)
-    bottom = y + round(px * _DESCENT_RATIO) + (len(lines) - 1) * (px + LINE_GAP)
-    return BBox(x1, top, x2, bottom)
+    return text_extent(flag.x, flag.y, [flag.text], FLAG_LABEL_SIZE, flag_label_layout(flag))
 
 
 # ---------------------------------------------------------------------------
@@ -370,23 +460,26 @@ class DrawText:
     anchor: str  # "start" | "middle" | "end"
     size: int
     role: str  # "attr" | "flag" | "directive" | "comment" | "placeholder"
-    # Degrees about the anchor; negative is anticlockwise. -90 is the quarter
-    # turn LTspice uses for the attribute text of a sideways symbol.
+    # Degrees about the baseline point; negative is anticlockwise. -90 is the
+    # quarter turn LTspice uses for the attribute text of a sideways symbol.
     rotation: int = 0
+    # From (x, y), the point the text is placed by, to its baseline: LTspice
+    # places text by the edges or the middle of its line (see text_layout).
+    dx: int = 0
+    dy: int = 0
 
     def points(self) -> tuple[tuple[int, int], ...]:
         return ((self.x, self.y),)
 
+    @property
+    def layout(self) -> TextLayout:
+        return TextLayout(self.rotation, self.anchor, self.dx, self.dy)
+
 
 def drawn_text_extent(t: DrawText) -> BBox:
-    """Estimated extent of a single drawn text, upright or turned.
-
-    The one place that picks between the two extent estimates, so a caller
-    reasoning about where a text lands cannot pick differently from the crop.
-    """
-    if t.rotation:
-        return turned_text_extent(t.x, t.y, t.text, t.size, t.anchor)
-    return text_extent(t.x, t.y, [t.text], t.size, t.anchor)
+    """Estimated extent of a single drawn text, upright or turned: the one
+    estimate both the crop and the layout checks read."""
+    return text_extent(t.x, t.y, [t.text], t.size, t.layout)
 
 
 @dataclass(frozen=True)
@@ -467,6 +560,14 @@ class Directive:
     size: int
     is_directive: bool
 
+    @property
+    def lines(self) -> list[str]:
+        return decode_text_lines(self.text)
+
+    @property
+    def layout(self) -> TextLayout | None:
+        return text_layout(self.align, self.size, lines=len(self.lines))
+
 
 @dataclass
 class Scene:
@@ -518,7 +619,8 @@ class Scene:
             elif fl.text:
                 boxes.append(flag_label_bbox(fl))
         for d in self.directives:
-            boxes.append(text_extent(d.x, d.y, decode_text_lines(d.text), d.size, "start"))
+            if (layout := d.layout) is not None:
+                boxes.append(text_extent(d.x, d.y, d.lines, d.size, layout))
         for g in self.sheet_graphics:
             pts.extend(g.points())
 
@@ -652,7 +754,7 @@ def _attr_texts(
     window and without a value are omitted.
 
     The glyphs turn with the symbol, not just the anchor — see
-    :func:`_attr_text_placement`.
+    :func:`text_layout`. A window justified ``Invisible`` draws nothing.
     """
     out: list[DrawText] = []
     overrides = {w.number: w for w in part.record.windows}
@@ -661,9 +763,13 @@ def _attr_texts(
         w = overrides.get(number) or next((w for w in windows if w.number == number), None)
         if w is None:
             return None
+        layout = text_layout(w.align, w.size, rot)
+        if layout is None:
+            return None
         ax, ay = place_point(w.x, w.y, ox, oy, rot)
-        turn, anchor = _attr_text_placement(w.align, rot, explicit=number in overrides)
-        return DrawText(ax, ay, text, anchor, w.size, "attr", rotation=turn)
+        return DrawText(
+            ax, ay, text, layout.anchor, w.size, "attr", layout.rotation, layout.dx, layout.dy
+        )
 
     for number, text in (
         (_WINDOW_INSTNAME, part.reference),
@@ -676,76 +782,6 @@ def _attr_texts(
             out.append(drawn)
 
     return out
-
-
-# The four placements whose symbol axes are swapped relative to the sheet, and
-# which way the symbol's local +x axis — the direction its attribute text runs —
-# then points on the sheet. The upright four are absent because their text stays
-# horizontal, so there is no run direction to derive: R180 reverses that axis and
-# M0 mirrors it, but LTspice draws their text left-to-right all the same, so the
-# axis rule below is scoped to the turns listed here. The direction is read off
-# the shared transform rather than restated, so it cannot disagree with where
-# the same placement puts the pins.
-_QUARTER_TURNS = {
-    rot: "down" if _apply_rotation(1, 0, rot)[1] > 0 else "up"
-    for rot in ("R90", "R270", "M90", "M270")
-}
-
-
-def _attr_text_placement(align: str, rot: str, *, explicit: bool) -> tuple[int, str]:
-    """Rotation in degrees and SVG ``text-anchor`` for a symbol attribute.
-
-    LTspice draws the instance name and value of a sideways symbol sideways too,
-    and says so with a ``V``-prefixed justification. Two things make the text
-    turn: such a token, from either the ``.asc`` override or the ``.asy``
-    default, and — for a plain default only — the placement's own rotation. A
-    default is written for the upright symbol and cannot know how the instance
-    was turned, whereas a plain token on an explicit per-instance window is the
-    author saying they want it horizontal, so only the former is overridden.
-
-    Leaving a turned symbol's text horizontal is what collapses the two windows
-    of a stacked-attribute symbol onto one baseline: the defaults separate them
-    along the symbol's local y, and a quarter turn maps that separation onto the
-    direction the text runs, so a value longer than the gap prints straight
-    through the instance name.
-
-    Which way the run then grows is taken from the placement, not from the rest
-    of the token: it follows the symbol's own +x axis after the turn, so a window
-    placed beyond the upright symbol's edge stays beyond the turned one's. What
-    ``VTop``/``VBottom``/``VLeft``/``VRight`` each mean for run direction is not
-    decoded — deriving it from the token instead was tried and put the text back
-    through the bodies on LTspice's own example schematics. The token still
-    chooses the anchor end where nothing is derived, i.e. on upright placements.
-    Glyphs read bottom-to-top in every case, matching net labels on vertical
-    wires.
-    """
-    anchor = _svg_anchor(align)
-    grows = _QUARTER_TURNS.get(rot)
-    if align.lower().startswith("v") or (not explicit and grows is not None):
-        if grows == "down":
-            # A quarter turn anticlockwise makes an SVG run grow upward, so the
-            # opposite anchor end is the one that sends it down the sheet.
-            anchor = {"start": "end", "end": "start"}.get(anchor, anchor)
-        return -90, anchor
-    return 0, anchor
-
-
-def _svg_anchor(align: str) -> str:
-    """Map an LTspice justification to an SVG ``text-anchor``.
-
-    Only the horizontal component maps. A ``V`` prefix says the text is turned,
-    which is a rotation rather than an anchor, so it is stripped here and decided
-    by :func:`_attr_text_placement` — ``VRight`` must anchor like ``Right``, not
-    fall through to the default the way it would if the prefix were left on.
-    Vertical-alignment tokens (Top/Bottom) name no horizontal component and take
-    the left-aligned default.
-    """
-    a = align.lower().removeprefix("v")
-    if a == "right":
-        return "end"
-    if a == "center":
-        return "middle"
-    return "start"
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +903,17 @@ def scene_of_sheet(
 # ---------------------------------------------------------------------------
 
 
+def _strokes(graphics: Sequence[Graphic]) -> tuple[tuple[tuple[int, int], tuple[int, int]], ...]:
+    """The segments a part's lines, arcs and polylines are drawn as."""
+    out: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for g in graphics:
+        if isinstance(g, DrawLine):
+            out.append(((g.x1, g.y1), (g.x2, g.y2)))
+        elif isinstance(g, DrawPolyline):
+            out.extend(zip(g.pts, g.pts[1:], strict=False))
+    return tuple(out)
+
+
 def sheet_view(scene: Scene) -> SheetView:
     """``scene`` as the checks in ``lib/sheet_findings.py`` read it.
 
@@ -885,6 +932,13 @@ def sheet_view(scene: Scene) -> SheetView:
                 body=sym.body,
                 pins=tuple((pin.name, pin.x, pin.y) for pin in sym.pins),
                 texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
+                text_extents=tuple(drawn_text_extent(t) for t in sym.texts),
+                strokes=_strokes(sym.graphics),
+                areas=tuple(
+                    BBox(min(g.x1, g.x2), min(g.y1, g.y2), max(g.x1, g.x2), max(g.y1, g.y2))
+                    for g in sym.graphics
+                    if isinstance(g, DrawRect | DrawEllipse)
+                ),
                 missing=sym.missing,
                 problem=sym.problem,
                 parameters=sym.parameters,
@@ -894,4 +948,16 @@ def sheet_view(scene: Scene) -> SheetView:
         wires=tuple((w.x1, w.y1, w.x2, w.y2) for w in scene.wires),
         labels=tuple((flag.x, flag.y, flag.text) for flag in scene.flags),
         texts=tuple((d.x, d.y, decode_text_lines(d.text)[0]) for d in scene.directives),
+        text_extents=(
+            *(
+                (flag.x, flag.y, flag.text, flag_label_bbox(flag))
+                for flag in scene.flags
+                if not flag.is_ground and flag.text
+            ),
+            *(
+                (d.x, d.y, d.lines[0], text_extent(d.x, d.y, d.lines, d.size, layout))
+                for d in scene.directives
+                if (layout := d.layout) is not None
+            ),
+        ),
     )

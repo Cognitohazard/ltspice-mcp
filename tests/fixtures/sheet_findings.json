@@ -2841,6 +2841,19 @@
      "ref": "V1",
      "x": -48,
      "y": 144
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "V1's text 'V1' at (-16,160) is drawn across R1's body",
+     "ref": "V1",
+     "refs": [
+      "V1",
+      "R1"
+     ],
+     "text": "V1",
+     "x": -16,
+     "y": 160
     }
    ],
    "wiring": {
@@ -3107,6 +3120,30 @@
     "rule_id": "wire_through_symbol",
     "severity": "observation",
     "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -16,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       160
+      ]
+     ],
+     "detail": "V1's text 'V1' at (-16,160) is drawn across R1's body",
+     "refs": [
+      "V1",
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "V1 & R1"
    }
   ]
  },
@@ -4705,6 +4742,19 @@
      "ref": "V1",
      "x": -48,
      "y": 144
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "V1's text 'V1' at (-16,160) is drawn across R1's body",
+     "ref": "V1",
+     "refs": [
+      "V1",
+      "R1"
+     ],
+     "text": "V1",
+     "x": -16,
+     "y": 160
     }
    ],
    "wiring": {
@@ -4971,6 +5021,30 @@
     "rule_id": "wire_through_symbol",
     "severity": "observation",
     "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "text_off_grid.asc",
+     "x": -16,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       160
+      ]
+     ],
+     "detail": "V1's text 'V1' at (-16,160) is drawn across R1's body",
+     "refs": [
+      "V1",
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "V1 & R1"
    }
   ]
  },
@@ -4978,6 +5052,42 @@
   "dropped_wire": [],
   "edit": {
    "warnings": [
+    {
+     "across": "wire",
+     "kind": "attribute_text_overlap",
+     "message": "Vin's text 'SINE(1.5 0.1 1k)' at (208,408) is drawn across wire (320,416)->(320,464)",
+     "points": [
+      {
+       "x": 208,
+       "y": 408
+      },
+      {
+       "x": 320,
+       "y": 416
+      },
+      {
+       "x": 320,
+       "y": 464
+      }
+     ],
+     "ref": "Vin",
+     "text": "SINE(1.5 0.1 1k)",
+     "x": 208,
+     "y": 408
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "Vin's text 'SINE(1.5 0.1 1k)' at (208,408) is drawn across M1's body",
+     "ref": "Vin",
+     "refs": [
+      "Vin",
+      "M1"
+     ],
+     "text": "SINE(1.5 0.1 1k)",
+     "x": 208,
+     "y": 408
+    },
     {
      "kind": "label_island",
      "message": "Net 'vdd' is connected by 2 net-label stubs and no drawn wire segment",
@@ -5004,6 +5114,61 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "common_source_drawn.asc",
+     "x": 208,
+     "y": 408
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       408
+      ],
+      [
+       320,
+       416
+      ],
+      [
+       320,
+       464
+      ]
+     ],
+     "detail": "Vin's text 'SINE(1.5 0.1 1k)' at (208,408) is drawn across wire (320,416)->(320,464)",
+     "refs": [
+      "Vin"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vin"
+   },
+   {
+    "at": {
+     "file": "common_source_drawn.asc",
+     "x": 208,
+     "y": 408
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       408
+      ]
+     ],
+     "detail": "Vin's text 'SINE(1.5 0.1 1k)' at (208,408) is drawn across M1's body",
+     "refs": [
+      "Vin",
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vin & M1"
+   },
    {
     "at": {
      "file": "common_source_drawn.asc",
@@ -5036,6 +5201,19 @@
   "dropped_wire": [],
   "edit": {
    "warnings": [
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "Vin's text 'SINE(1.5 0.1 1k)' at (232,356) is drawn across M1's body",
+     "ref": "Vin",
+     "refs": [
+      "Vin",
+      "M1"
+     ],
+     "text": "SINE(1.5 0.1 1k)",
+     "x": 232,
+     "y": 356
+    },
     {
      "kind": "label_island",
      "message": "Net 'in' is connected by 2 net-label stubs and no drawn wire segment",
@@ -5079,6 +5257,30 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "common_source_labelled.asc",
+     "x": 232,
+     "y": 356
+    },
+    "evidence": {
+     "coords": [
+      [
+       232,
+       356
+      ]
+     ],
+     "detail": "Vin's text 'SINE(1.5 0.1 1k)' at (232,356) is drawn across M1's body",
+     "refs": [
+      "Vin",
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vin & M1"
+   },
    {
     "at": {
      "file": "common_source_labelled.asc",
@@ -5138,6 +5340,69 @@
   "edit": {
    "warnings": [
     {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (312,392) is drawn across M2's body",
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 312,
+     "y": 392
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (312,392) is drawn across M2's text 'NMOS_MOD' at (392,392)",
+     "other_text": "NMOS_MOD",
+     "points": [
+      {
+       "x": 312,
+       "y": 392
+      },
+      {
+       "x": 392,
+       "y": 392
+      }
+     ],
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 312,
+     "y": 392
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS_MOD' at (392,392) is drawn across M1's body",
+     "ref": "M2",
+     "refs": [
+      "M2",
+      "M1"
+     ],
+     "text": "NMOS_MOD",
+     "x": 392,
+     "y": 392
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "Vinp's text 'SINE(2.5 10m 1k)' at (192,488) is drawn across Itail's body",
+     "ref": "Vinp",
+     "refs": [
+      "Vinp",
+      "Itail"
+     ],
+     "text": "SINE(2.5 10m 1k)",
+     "x": 192,
+     "y": 488
+    },
+    {
      "kind": "label_island",
      "message": "Net 'vdd' is connected by 3 net-label stubs and no drawn wire segment",
      "net": "vdd",
@@ -5167,6 +5432,106 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "diff_pair_drawn.asc",
+     "x": 312,
+     "y": 392
+    },
+    "evidence": {
+     "coords": [
+      [
+       312,
+       392
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (312,392) is drawn across M2's body",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "diff_pair_drawn.asc",
+     "x": 312,
+     "y": 392
+    },
+    "evidence": {
+     "coords": [
+      [
+       312,
+       392
+      ],
+      [
+       392,
+       392
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (312,392) is drawn across M2's text 'NMOS_MOD' at (392,392)",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "diff_pair_drawn.asc",
+     "x": 392,
+     "y": 392
+    },
+    "evidence": {
+     "coords": [
+      [
+       392,
+       392
+      ]
+     ],
+     "detail": "M2's text 'NMOS_MOD' at (392,392) is drawn across M1's body",
+     "refs": [
+      "M2",
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2 & M1"
+   },
+   {
+    "at": {
+     "file": "diff_pair_drawn.asc",
+     "x": 192,
+     "y": 488
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       488
+      ]
+     ],
+     "detail": "Vinp's text 'SINE(2.5 10m 1k)' at (192,488) is drawn across Itail's body",
+     "refs": [
+      "Vinp",
+      "Itail"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vinp & Itail"
+   },
    {
     "at": {
      "file": "diff_pair_drawn.asc",
@@ -5203,6 +5568,76 @@
   "dropped_wire": [],
   "edit": {
    "warnings": [
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "Vinp's text 'SINE(2.5 10m 1k)' at (352,216) is drawn across Vinn's text '2.5' at (512,216)",
+     "other_text": "2.5",
+     "points": [
+      {
+       "x": 352,
+       "y": 216
+      },
+      {
+       "x": 512,
+       "y": 216
+      }
+     ],
+     "ref": "Vinp",
+     "refs": [
+      "Vinp",
+      "Vinn"
+     ],
+     "text": "SINE(2.5 10m 1k)",
+     "x": 352,
+     "y": 216
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (1016,232) is drawn across M2's body",
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 1016,
+     "y": 232
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (1016,232) is drawn across the text 'inn' at (1120,240)",
+     "other_text": "inn",
+     "points": [
+      {
+       "x": 1016,
+       "y": 232
+      },
+      {
+       "x": 1120,
+       "y": 240
+      }
+     ],
+     "ref": "M1",
+     "text": "NMOS_MOD",
+     "x": 1016,
+     "y": 232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS_MOD' at (1176,232) is drawn across Itail's body",
+     "ref": "M2",
+     "refs": [
+      "M2",
+      "Itail"
+     ],
+     "text": "NMOS_MOD",
+     "x": 1176,
+     "y": 232
+    },
     {
      "kind": "label_island",
      "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
@@ -5322,6 +5757,109 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 352,
+     "y": 216
+    },
+    "evidence": {
+     "coords": [
+      [
+       352,
+       216
+      ],
+      [
+       512,
+       216
+      ]
+     ],
+     "detail": "Vinp's text 'SINE(2.5 10m 1k)' at (352,216) is drawn across Vinn's text '2.5' at (512,216)",
+     "refs": [
+      "Vinp",
+      "Vinn"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vinp & Vinn"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 1016,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1016,
+       232
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (1016,232) is drawn across M2's body",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 1016,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1016,
+       232
+      ],
+      [
+       1120,
+       240
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (1016,232) is drawn across the text 'inn' at (1120,240)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 1176,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1176,
+       232
+      ]
+     ],
+     "detail": "M2's text 'NMOS_MOD' at (1176,232) is drawn across Itail's body",
+     "refs": [
+      "M2",
+      "Itail"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2 & Itail"
+   },
    {
     "at": {
      "file": "diff_pair_labelled.asc",
@@ -5559,6 +6097,39 @@
   "edit": {
    "warnings": [
     {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (536,232) is drawn across M2's body",
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 536,
+     "y": 232
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (536,232) is drawn across the text 'ref' at (640,240)",
+     "other_text": "ref",
+     "points": [
+      {
+       "x": 536,
+       "y": 232
+      },
+      {
+       "x": 640,
+       "y": 240
+      }
+     ],
+     "ref": "M1",
+     "text": "NMOS_MOD",
+     "x": 536,
+     "y": 232
+    },
+    {
      "kind": "label_island",
      "message": "Net 'out' is connected by 2 net-label stubs and no drawn wire segment",
      "net": "out",
@@ -5630,6 +6201,57 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "nmos_mirror_labelled.asc",
+     "x": 536,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       536,
+       232
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (536,232) is drawn across M2's body",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "nmos_mirror_labelled.asc",
+     "x": 536,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       536,
+       232
+      ],
+      [
+       640,
+       240
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (536,232) is drawn across the text 'ref' at (640,240)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1"
+   },
    {
     "at": {
      "file": "nmos_mirror_labelled.asc",
@@ -5981,7 +6603,528 @@
  "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_drawn.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C10's text 'C10' at (464,528) is drawn across R10's body",
+     "ref": "C10",
+     "refs": [
+      "C10",
+      "R10"
+     ],
+     "text": "C10",
+     "x": 464,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C11's text 'C11' at (688,528) is drawn across R11's body",
+     "ref": "C11",
+     "refs": [
+      "C11",
+      "R11"
+     ],
+     "text": "C11",
+     "x": 688,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C12's text 'C12' at (912,528) is drawn across R12's body",
+     "ref": "C12",
+     "refs": [
+      "C12",
+      "R12"
+     ],
+     "text": "C12",
+     "x": 912,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C13's text 'C13' at (1136,528) is drawn across R13's body",
+     "ref": "C13",
+     "refs": [
+      "C13",
+      "R13"
+     ],
+     "text": "C13",
+     "x": 1136,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C14's text 'C14' at (1360,528) is drawn across R14's body",
+     "ref": "C14",
+     "refs": [
+      "C14",
+      "R14"
+     ],
+     "text": "C14",
+     "x": 1360,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C15's text 'C15' at (1584,528) is drawn across R15's body",
+     "ref": "C15",
+     "refs": [
+      "C15",
+      "R15"
+     ],
+     "text": "C15",
+     "x": 1584,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C16's text 'C16' at (1808,528) is drawn across R16's body",
+     "ref": "C16",
+     "refs": [
+      "C16",
+      "R16"
+     ],
+     "text": "C16",
+     "x": 1808,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C17's text 'C17' at (2032,528) is drawn across R17's body",
+     "ref": "C17",
+     "refs": [
+      "C17",
+      "R17"
+     ],
+     "text": "C17",
+     "x": 2032,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C18's text 'C18' at (2256,528) is drawn across R18's body",
+     "ref": "C18",
+     "refs": [
+      "C18",
+      "R18"
+     ],
+     "text": "C18",
+     "x": 2256,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C19's text 'C19' at (2480,528) is drawn across R19's body",
+     "ref": "C19",
+     "refs": [
+      "C19",
+      "R19"
+     ],
+     "text": "C19",
+     "x": 2480,
+     "y": 528
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C20's text 'C20' at (464,880) is drawn across R20's body",
+     "ref": "C20",
+     "refs": [
+      "C20",
+      "R20"
+     ],
+     "text": "C20",
+     "x": 464,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C21's text 'C21' at (688,880) is drawn across R21's body",
+     "ref": "C21",
+     "refs": [
+      "C21",
+      "R21"
+     ],
+     "text": "C21",
+     "x": 688,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C22's text 'C22' at (912,880) is drawn across R22's body",
+     "ref": "C22",
+     "refs": [
+      "C22",
+      "R22"
+     ],
+     "text": "C22",
+     "x": 912,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C23's text 'C23' at (1136,880) is drawn across R23's body",
+     "ref": "C23",
+     "refs": [
+      "C23",
+      "R23"
+     ],
+     "text": "C23",
+     "x": 1136,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C24's text 'C24' at (1360,880) is drawn across R24's body",
+     "ref": "C24",
+     "refs": [
+      "C24",
+      "R24"
+     ],
+     "text": "C24",
+     "x": 1360,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C25's text 'C25' at (1584,880) is drawn across R25's body",
+     "ref": "C25",
+     "refs": [
+      "C25",
+      "R25"
+     ],
+     "text": "C25",
+     "x": 1584,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C26's text 'C26' at (1808,880) is drawn across R26's body",
+     "ref": "C26",
+     "refs": [
+      "C26",
+      "R26"
+     ],
+     "text": "C26",
+     "x": 1808,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C27's text 'C27' at (2032,880) is drawn across R27's body",
+     "ref": "C27",
+     "refs": [
+      "C27",
+      "R27"
+     ],
+     "text": "C27",
+     "x": 2032,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C28's text 'C28' at (2256,880) is drawn across R28's body",
+     "ref": "C28",
+     "refs": [
+      "C28",
+      "R28"
+     ],
+     "text": "C28",
+     "x": 2256,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C29's text 'C29' at (2480,880) is drawn across R29's body",
+     "ref": "C29",
+     "refs": [
+      "C29",
+      "R29"
+     ],
+     "text": "C29",
+     "x": 2480,
+     "y": 880
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C30's text 'C30' at (464,1232) is drawn across R30's body",
+     "ref": "C30",
+     "refs": [
+      "C30",
+      "R30"
+     ],
+     "text": "C30",
+     "x": 464,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C31's text 'C31' at (688,1232) is drawn across R31's body",
+     "ref": "C31",
+     "refs": [
+      "C31",
+      "R31"
+     ],
+     "text": "C31",
+     "x": 688,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C32's text 'C32' at (912,1232) is drawn across R32's body",
+     "ref": "C32",
+     "refs": [
+      "C32",
+      "R32"
+     ],
+     "text": "C32",
+     "x": 912,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C33's text 'C33' at (1136,1232) is drawn across R33's body",
+     "ref": "C33",
+     "refs": [
+      "C33",
+      "R33"
+     ],
+     "text": "C33",
+     "x": 1136,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C34's text 'C34' at (1360,1232) is drawn across R34's body",
+     "ref": "C34",
+     "refs": [
+      "C34",
+      "R34"
+     ],
+     "text": "C34",
+     "x": 1360,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C35's text 'C35' at (1584,1232) is drawn across R35's body",
+     "ref": "C35",
+     "refs": [
+      "C35",
+      "R35"
+     ],
+     "text": "C35",
+     "x": 1584,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C36's text 'C36' at (1808,1232) is drawn across R36's body",
+     "ref": "C36",
+     "refs": [
+      "C36",
+      "R36"
+     ],
+     "text": "C36",
+     "x": 1808,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C37's text 'C37' at (2032,1232) is drawn across R37's body",
+     "ref": "C37",
+     "refs": [
+      "C37",
+      "R37"
+     ],
+     "text": "C37",
+     "x": 2032,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C38's text 'C38' at (2256,1232) is drawn across R38's body",
+     "ref": "C38",
+     "refs": [
+      "C38",
+      "R38"
+     ],
+     "text": "C38",
+     "x": 2256,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C39's text 'C39' at (2480,1232) is drawn across R39's body",
+     "ref": "C39",
+     "refs": [
+      "C39",
+      "R39"
+     ],
+     "text": "C39",
+     "x": 2480,
+     "y": 1232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C40's text 'C40' at (464,1584) is drawn across R40's body",
+     "ref": "C40",
+     "refs": [
+      "C40",
+      "R40"
+     ],
+     "text": "C40",
+     "x": 464,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C41's text 'C41' at (688,1584) is drawn across R41's body",
+     "ref": "C41",
+     "refs": [
+      "C41",
+      "R41"
+     ],
+     "text": "C41",
+     "x": 688,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C42's text 'C42' at (912,1584) is drawn across R42's body",
+     "ref": "C42",
+     "refs": [
+      "C42",
+      "R42"
+     ],
+     "text": "C42",
+     "x": 912,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C43's text 'C43' at (1136,1584) is drawn across R43's body",
+     "ref": "C43",
+     "refs": [
+      "C43",
+      "R43"
+     ],
+     "text": "C43",
+     "x": 1136,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C44's text 'C44' at (1360,1584) is drawn across R44's body",
+     "ref": "C44",
+     "refs": [
+      "C44",
+      "R44"
+     ],
+     "text": "C44",
+     "x": 1360,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C45's text 'C45' at (1584,1584) is drawn across R45's body",
+     "ref": "C45",
+     "refs": [
+      "C45",
+      "R45"
+     ],
+     "text": "C45",
+     "x": 1584,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C46's text 'C46' at (1808,1584) is drawn across R46's body",
+     "ref": "C46",
+     "refs": [
+      "C46",
+      "R46"
+     ],
+     "text": "C46",
+     "x": 1808,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C47's text 'C47' at (2032,1584) is drawn across R47's body",
+     "ref": "C47",
+     "refs": [
+      "C47",
+      "R47"
+     ],
+     "text": "C47",
+     "x": 2032,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C48's text 'C48' at (2256,1584) is drawn across R48's body",
+     "ref": "C48",
+     "refs": [
+      "C48",
+      "R48"
+     ],
+     "text": "C48",
+     "x": 2256,
+     "y": 1584
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "C49's text 'C49' at (2480,1584) is drawn across R49's body",
+     "ref": "C49",
+     "refs": [
+      "C49",
+      "R49"
+     ],
+     "text": "C49",
+     "x": 2480,
+     "y": 1584
+    }
+   ],
    "wiring": {
     "pins_label_only": 106,
     "pins_total": 306,
@@ -5989,7 +7132,968 @@
     "wire_segments": 153
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 464,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       464,
+       528
+      ]
+     ],
+     "detail": "C10's text 'C10' at (464,528) is drawn across R10's body",
+     "refs": [
+      "C10",
+      "R10"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C10 & R10"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 688,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       528
+      ]
+     ],
+     "detail": "C11's text 'C11' at (688,528) is drawn across R11's body",
+     "refs": [
+      "C11",
+      "R11"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C11 & R11"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 912,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       912,
+       528
+      ]
+     ],
+     "detail": "C12's text 'C12' at (912,528) is drawn across R12's body",
+     "refs": [
+      "C12",
+      "R12"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C12 & R12"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1136,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       1136,
+       528
+      ]
+     ],
+     "detail": "C13's text 'C13' at (1136,528) is drawn across R13's body",
+     "refs": [
+      "C13",
+      "R13"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C13 & R13"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1360,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       1360,
+       528
+      ]
+     ],
+     "detail": "C14's text 'C14' at (1360,528) is drawn across R14's body",
+     "refs": [
+      "C14",
+      "R14"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C14 & R14"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1584,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       1584,
+       528
+      ]
+     ],
+     "detail": "C15's text 'C15' at (1584,528) is drawn across R15's body",
+     "refs": [
+      "C15",
+      "R15"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C15 & R15"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1808,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       1808,
+       528
+      ]
+     ],
+     "detail": "C16's text 'C16' at (1808,528) is drawn across R16's body",
+     "refs": [
+      "C16",
+      "R16"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C16 & R16"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2032,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       2032,
+       528
+      ]
+     ],
+     "detail": "C17's text 'C17' at (2032,528) is drawn across R17's body",
+     "refs": [
+      "C17",
+      "R17"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C17 & R17"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2256,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       2256,
+       528
+      ]
+     ],
+     "detail": "C18's text 'C18' at (2256,528) is drawn across R18's body",
+     "refs": [
+      "C18",
+      "R18"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C18 & R18"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2480,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       2480,
+       528
+      ]
+     ],
+     "detail": "C19's text 'C19' at (2480,528) is drawn across R19's body",
+     "refs": [
+      "C19",
+      "R19"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C19 & R19"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 464,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       464,
+       880
+      ]
+     ],
+     "detail": "C20's text 'C20' at (464,880) is drawn across R20's body",
+     "refs": [
+      "C20",
+      "R20"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C20 & R20"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 688,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       880
+      ]
+     ],
+     "detail": "C21's text 'C21' at (688,880) is drawn across R21's body",
+     "refs": [
+      "C21",
+      "R21"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C21 & R21"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 912,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       912,
+       880
+      ]
+     ],
+     "detail": "C22's text 'C22' at (912,880) is drawn across R22's body",
+     "refs": [
+      "C22",
+      "R22"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C22 & R22"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1136,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       1136,
+       880
+      ]
+     ],
+     "detail": "C23's text 'C23' at (1136,880) is drawn across R23's body",
+     "refs": [
+      "C23",
+      "R23"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C23 & R23"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1360,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       1360,
+       880
+      ]
+     ],
+     "detail": "C24's text 'C24' at (1360,880) is drawn across R24's body",
+     "refs": [
+      "C24",
+      "R24"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C24 & R24"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1584,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       1584,
+       880
+      ]
+     ],
+     "detail": "C25's text 'C25' at (1584,880) is drawn across R25's body",
+     "refs": [
+      "C25",
+      "R25"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C25 & R25"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1808,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       1808,
+       880
+      ]
+     ],
+     "detail": "C26's text 'C26' at (1808,880) is drawn across R26's body",
+     "refs": [
+      "C26",
+      "R26"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C26 & R26"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2032,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       2032,
+       880
+      ]
+     ],
+     "detail": "C27's text 'C27' at (2032,880) is drawn across R27's body",
+     "refs": [
+      "C27",
+      "R27"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C27 & R27"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2256,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       2256,
+       880
+      ]
+     ],
+     "detail": "C28's text 'C28' at (2256,880) is drawn across R28's body",
+     "refs": [
+      "C28",
+      "R28"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C28 & R28"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2480,
+     "y": 880
+    },
+    "evidence": {
+     "coords": [
+      [
+       2480,
+       880
+      ]
+     ],
+     "detail": "C29's text 'C29' at (2480,880) is drawn across R29's body",
+     "refs": [
+      "C29",
+      "R29"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C29 & R29"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 464,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       464,
+       1232
+      ]
+     ],
+     "detail": "C30's text 'C30' at (464,1232) is drawn across R30's body",
+     "refs": [
+      "C30",
+      "R30"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C30 & R30"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 688,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       1232
+      ]
+     ],
+     "detail": "C31's text 'C31' at (688,1232) is drawn across R31's body",
+     "refs": [
+      "C31",
+      "R31"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C31 & R31"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 912,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       912,
+       1232
+      ]
+     ],
+     "detail": "C32's text 'C32' at (912,1232) is drawn across R32's body",
+     "refs": [
+      "C32",
+      "R32"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C32 & R32"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1136,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1136,
+       1232
+      ]
+     ],
+     "detail": "C33's text 'C33' at (1136,1232) is drawn across R33's body",
+     "refs": [
+      "C33",
+      "R33"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C33 & R33"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1360,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1360,
+       1232
+      ]
+     ],
+     "detail": "C34's text 'C34' at (1360,1232) is drawn across R34's body",
+     "refs": [
+      "C34",
+      "R34"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C34 & R34"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1584,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1584,
+       1232
+      ]
+     ],
+     "detail": "C35's text 'C35' at (1584,1232) is drawn across R35's body",
+     "refs": [
+      "C35",
+      "R35"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C35 & R35"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1808,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1808,
+       1232
+      ]
+     ],
+     "detail": "C36's text 'C36' at (1808,1232) is drawn across R36's body",
+     "refs": [
+      "C36",
+      "R36"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C36 & R36"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2032,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       2032,
+       1232
+      ]
+     ],
+     "detail": "C37's text 'C37' at (2032,1232) is drawn across R37's body",
+     "refs": [
+      "C37",
+      "R37"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C37 & R37"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2256,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       2256,
+       1232
+      ]
+     ],
+     "detail": "C38's text 'C38' at (2256,1232) is drawn across R38's body",
+     "refs": [
+      "C38",
+      "R38"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C38 & R38"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2480,
+     "y": 1232
+    },
+    "evidence": {
+     "coords": [
+      [
+       2480,
+       1232
+      ]
+     ],
+     "detail": "C39's text 'C39' at (2480,1232) is drawn across R39's body",
+     "refs": [
+      "C39",
+      "R39"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C39 & R39"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 464,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       464,
+       1584
+      ]
+     ],
+     "detail": "C40's text 'C40' at (464,1584) is drawn across R40's body",
+     "refs": [
+      "C40",
+      "R40"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C40 & R40"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 688,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       1584
+      ]
+     ],
+     "detail": "C41's text 'C41' at (688,1584) is drawn across R41's body",
+     "refs": [
+      "C41",
+      "R41"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C41 & R41"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 912,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       912,
+       1584
+      ]
+     ],
+     "detail": "C42's text 'C42' at (912,1584) is drawn across R42's body",
+     "refs": [
+      "C42",
+      "R42"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C42 & R42"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1136,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       1136,
+       1584
+      ]
+     ],
+     "detail": "C43's text 'C43' at (1136,1584) is drawn across R43's body",
+     "refs": [
+      "C43",
+      "R43"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C43 & R43"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1360,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       1360,
+       1584
+      ]
+     ],
+     "detail": "C44's text 'C44' at (1360,1584) is drawn across R44's body",
+     "refs": [
+      "C44",
+      "R44"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C44 & R44"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1584,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       1584,
+       1584
+      ]
+     ],
+     "detail": "C45's text 'C45' at (1584,1584) is drawn across R45's body",
+     "refs": [
+      "C45",
+      "R45"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C45 & R45"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 1808,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       1808,
+       1584
+      ]
+     ],
+     "detail": "C46's text 'C46' at (1808,1584) is drawn across R46's body",
+     "refs": [
+      "C46",
+      "R46"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C46 & R46"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2032,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       2032,
+       1584
+      ]
+     ],
+     "detail": "C47's text 'C47' at (2032,1584) is drawn across R47's body",
+     "refs": [
+      "C47",
+      "R47"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C47 & R47"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2256,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       2256,
+       1584
+      ]
+     ],
+     "detail": "C48's text 'C48' at (2256,1584) is drawn across R48's body",
+     "refs": [
+      "C48",
+      "R48"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C48 & R48"
+   },
+   {
+    "at": {
+     "file": "rlc_line_drawn.asc",
+     "x": 2480,
+     "y": 1584
+    },
+    "evidence": {
+     "coords": [
+      [
+       2480,
+       1584
+      ]
+     ],
+     "detail": "C49's text 'C49' at (2480,1584) is drawn across R49's body",
+     "refs": [
+      "C49",
+      "R49"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C49 & R49"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_labelled.asc": {
   "dropped_wire": [],
@@ -9045,7 +11149,31 @@
  "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_drawn.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "across": "wire",
+     "kind": "attribute_text_overlap",
+     "message": "C2's text '10n' at (496,368) is drawn across wire (528,304)->(528,416)",
+     "points": [
+      {
+       "x": 496,
+       "y": 368
+      },
+      {
+       "x": 528,
+       "y": 304
+      },
+      {
+       "x": 528,
+       "y": 416
+      }
+     ],
+     "ref": "C2",
+     "text": "10n",
+     "x": 496,
+     "y": 368
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 14,
@@ -9053,7 +11181,39 @@
     "wire_segments": 12
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "sallen_key_drawn.asc",
+     "x": 496,
+     "y": 368
+    },
+    "evidence": {
+     "coords": [
+      [
+       496,
+       368
+      ],
+      [
+       528,
+       304
+      ],
+      [
+       528,
+       416
+      ]
+     ],
+     "detail": "C2's text '10n' at (496,368) is drawn across wire (528,304)->(528,416)",
+     "refs": [
+      "C2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C2"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_labelled.asc": {
   "dropped_wire": [],
@@ -9271,6 +11431,176 @@
   "edit": {
    "warnings": [
     {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 312,
+       "y": 120
+      },
+      {
+       "x": 320,
+       "y": 144
+      }
+     ],
+     "ref": "M3",
+     "text": "PMOS_MOD",
+     "x": 312,
+     "y": 120
+    },
+    {
+     "across": "wire",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across wire (528,240)->(528,112)",
+     "points": [
+      {
+       "x": 456,
+       "y": 120
+      },
+      {
+       "x": 528,
+       "y": 240
+      },
+      {
+       "x": 528,
+       "y": 112
+      }
+     ],
+     "ref": "M4",
+     "text": "PMOS_MOD",
+     "x": 456,
+     "y": 120
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 456,
+       "y": 120
+      },
+      {
+       "x": 448,
+       "y": 144
+      }
+     ],
+     "ref": "M4",
+     "text": "PMOS_MOD",
+     "x": 456,
+     "y": 120
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 648,
+       "y": 120
+      },
+      {
+       "x": 640,
+       "y": 144
+      }
+     ],
+     "ref": "M7",
+     "text": "PMOS_MOD",
+     "x": 648,
+     "y": 120
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's body",
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 328,
+     "y": 360
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's text 'NMOS_MOD' at (440,360)",
+     "other_text": "NMOS_MOD",
+     "points": [
+      {
+       "x": 328,
+       "y": 360
+      },
+      {
+       "x": 440,
+       "y": 360
+      }
+     ],
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 328,
+     "y": 360
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS_MOD' at (440,360) is drawn across M1's body",
+     "ref": "M2",
+     "refs": [
+      "M2",
+      "M1"
+     ],
+     "text": "NMOS_MOD",
+     "x": 440,
+     "y": 360
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M5's text 'M5' at (168,480) is drawn across Vinn's text 'Vinn' at (96,480)",
+     "other_text": "Vinn",
+     "points": [
+      {
+       "x": 168,
+       "y": 480
+      },
+      {
+       "x": 96,
+       "y": 480
+      }
+     ],
+     "ref": "M5",
+     "refs": [
+      "M5",
+      "Vinn"
+     ],
+     "text": "M5",
+     "x": 168,
+     "y": 480
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "Vinp's text '1.65 AC 1' at (96,344) is drawn across Ibias's body",
+     "ref": "Vinp",
+     "refs": [
+      "Vinp",
+      "Ibias"
+     ],
+     "text": "1.65 AC 1",
+     "x": 96,
+     "y": 344
+    },
+    {
      "kind": "label_island",
      "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
      "net": "inn",
@@ -9313,6 +11643,246 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 312,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       312,
+       120
+      ],
+      [
+       320,
+       144
+      ]
+     ],
+     "detail": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
+     "refs": [
+      "M3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M3"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 456,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       456,
+       120
+      ],
+      [
+       528,
+       240
+      ],
+      [
+       528,
+       112
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (456,120) is drawn across wire (528,240)->(528,112)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 456,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       456,
+       120
+      ],
+      [
+       448,
+       144
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 648,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       648,
+       120
+      ],
+      [
+       640,
+       144
+      ]
+     ],
+     "detail": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
+     "refs": [
+      "M7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M7"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 328,
+     "y": 360
+    },
+    "evidence": {
+     "coords": [
+      [
+       328,
+       360
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's body",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 328,
+     "y": 360
+    },
+    "evidence": {
+     "coords": [
+      [
+       328,
+       360
+      ],
+      [
+       440,
+       360
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's text 'NMOS_MOD' at (440,360)",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 440,
+     "y": 360
+    },
+    "evidence": {
+     "coords": [
+      [
+       440,
+       360
+      ]
+     ],
+     "detail": "M2's text 'NMOS_MOD' at (440,360) is drawn across M1's body",
+     "refs": [
+      "M2",
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2 & M1"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 168,
+     "y": 480
+    },
+    "evidence": {
+     "coords": [
+      [
+       168,
+       480
+      ],
+      [
+       96,
+       480
+      ]
+     ],
+     "detail": "M5's text 'M5' at (168,480) is drawn across Vinn's text 'Vinn' at (96,480)",
+     "refs": [
+      "M5",
+      "Vinn"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M5 & Vinn"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_drawn.asc",
+     "x": 96,
+     "y": 344
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       344
+      ]
+     ],
+     "detail": "Vinp's text '1.65 AC 1' at (96,344) is drawn across Ibias's body",
+     "refs": [
+      "Vinp",
+      "Ibias"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vinp & Ibias"
+   },
    {
     "at": {
      "file": "two_stage_opamp_drawn.asc",
@@ -9371,6 +11941,324 @@
   "dropped_wire": [],
   "edit": {
    "warnings": [
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M5's text 'NMOS_MOD' at (856,232) is drawn across M6's body",
+     "ref": "M5",
+     "refs": [
+      "M5",
+      "M6"
+     ],
+     "text": "NMOS_MOD",
+     "x": 856,
+     "y": 232
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M5's text 'NMOS_MOD' at (856,232) is drawn across the text 'bias' at (960,240)",
+     "other_text": "bias",
+     "points": [
+      {
+       "x": 856,
+       "y": 232
+      },
+      {
+       "x": 960,
+       "y": 240
+      }
+     ],
+     "ref": "M5",
+     "text": "NMOS_MOD",
+     "x": 856,
+     "y": 232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M6's text 'NMOS_MOD' at (1016,232) is drawn across M1's body",
+     "ref": "M6",
+     "refs": [
+      "M6",
+      "M1"
+     ],
+     "text": "NMOS_MOD",
+     "x": 1016,
+     "y": 232
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M6's text 'NMOS_MOD' at (1016,232) is drawn across the text 'inn' at (1120,240)",
+     "other_text": "inn",
+     "points": [
+      {
+       "x": 1016,
+       "y": 232
+      },
+      {
+       "x": 1120,
+       "y": 240
+      }
+     ],
+     "ref": "M6",
+     "text": "NMOS_MOD",
+     "x": 1016,
+     "y": 232
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (1176,232) is drawn across M2's body",
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 1176,
+     "y": 232
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (1176,232) is drawn across the text 'inp' at (1280,240)",
+     "other_text": "inp",
+     "points": [
+      {
+       "x": 1176,
+       "y": 232
+      },
+      {
+       "x": 1280,
+       "y": 240
+      }
+     ],
+     "ref": "M1",
+     "text": "NMOS_MOD",
+     "x": 1176,
+     "y": 232
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M3's text 'M3' at (216,432) is drawn across the text 'vdd' at (208,448)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 216,
+       "y": 432
+      },
+      {
+       "x": 208,
+       "y": 448
+      }
+     ],
+     "ref": "M3",
+     "text": "M3",
+     "x": 216,
+     "y": 432
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M3's text 'PMOS_MOD' at (216,472) is drawn across M4's body",
+     "ref": "M3",
+     "refs": [
+      "M3",
+      "M4"
+     ],
+     "text": "PMOS_MOD",
+     "x": 216,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M3's text 'PMOS_MOD' at (216,472) is drawn across the text 'vdd' at (208,496)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 216,
+       "y": 472
+      },
+      {
+       "x": 208,
+       "y": 496
+      }
+     ],
+     "ref": "M3",
+     "text": "PMOS_MOD",
+     "x": 216,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M3's text 'PMOS_MOD' at (216,472) is drawn across the text 'x' at (320,480)",
+     "other_text": "x",
+     "points": [
+      {
+       "x": 216,
+       "y": 472
+      },
+      {
+       "x": 320,
+       "y": 480
+      }
+     ],
+     "ref": "M3",
+     "text": "PMOS_MOD",
+     "x": 216,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'M4' at (376,432) is drawn across the text 'vdd' at (368,448)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 376,
+       "y": 432
+      },
+      {
+       "x": 368,
+       "y": 448
+      }
+     ],
+     "ref": "M4",
+     "text": "M4",
+     "x": 376,
+     "y": 432
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (376,472) is drawn across M7's body",
+     "ref": "M4",
+     "refs": [
+      "M4",
+      "M7"
+     ],
+     "text": "PMOS_MOD",
+     "x": 376,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (376,472) is drawn across the text 'vdd' at (368,496)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 376,
+       "y": 472
+      },
+      {
+       "x": 368,
+       "y": 496
+      }
+     ],
+     "ref": "M4",
+     "text": "PMOS_MOD",
+     "x": 376,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (376,472) is drawn across the text 'y' at (480,480)",
+     "other_text": "y",
+     "points": [
+      {
+       "x": 376,
+       "y": 472
+      },
+      {
+       "x": 480,
+       "y": 480
+      }
+     ],
+     "ref": "M4",
+     "text": "PMOS_MOD",
+     "x": 376,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M7's text 'M7' at (536,432) is drawn across the text 'vdd' at (528,448)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 536,
+       "y": 432
+      },
+      {
+       "x": 528,
+       "y": 448
+      }
+     ],
+     "ref": "M7",
+     "text": "M7",
+     "x": 536,
+     "y": 432
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M7's text 'PMOS_MOD' at (536,472) is drawn across M8's body",
+     "ref": "M7",
+     "refs": [
+      "M7",
+      "M8"
+     ],
+     "text": "PMOS_MOD",
+     "x": 536,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M7's text 'PMOS_MOD' at (536,472) is drawn across the text 'vdd' at (528,496)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 536,
+       "y": 472
+      },
+      {
+       "x": 528,
+       "y": 496
+      }
+     ],
+     "ref": "M7",
+     "text": "PMOS_MOD",
+     "x": 536,
+     "y": 472
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M7's text 'PMOS_MOD' at (536,472) is drawn across the text 'bias' at (640,480)",
+     "other_text": "bias",
+     "points": [
+      {
+       "x": 536,
+       "y": 472
+      },
+      {
+       "x": 640,
+       "y": 480
+      }
+     ],
+     "ref": "M7",
+     "text": "PMOS_MOD",
+     "x": 536,
+     "y": 472
+    },
     {
      "kind": "label_island",
      "message": "Net 'bias' is connected by 5 net-label stubs and no drawn wire segment",
@@ -9580,6 +12468,474 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 856,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       856,
+       232
+      ]
+     ],
+     "detail": "M5's text 'NMOS_MOD' at (856,232) is drawn across M6's body",
+     "refs": [
+      "M5",
+      "M6"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M5 & M6"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 856,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       856,
+       232
+      ],
+      [
+       960,
+       240
+      ]
+     ],
+     "detail": "M5's text 'NMOS_MOD' at (856,232) is drawn across the text 'bias' at (960,240)",
+     "refs": [
+      "M5"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M5"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1016,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1016,
+       232
+      ]
+     ],
+     "detail": "M6's text 'NMOS_MOD' at (1016,232) is drawn across M1's body",
+     "refs": [
+      "M6",
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M6 & M1"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1016,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1016,
+       232
+      ],
+      [
+       1120,
+       240
+      ]
+     ],
+     "detail": "M6's text 'NMOS_MOD' at (1016,232) is drawn across the text 'inn' at (1120,240)",
+     "refs": [
+      "M6"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M6"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1176,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1176,
+       232
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (1176,232) is drawn across M2's body",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 1176,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1176,
+       232
+      ],
+      [
+       1280,
+       240
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (1176,232) is drawn across the text 'inp' at (1280,240)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 216,
+     "y": 432
+    },
+    "evidence": {
+     "coords": [
+      [
+       216,
+       432
+      ],
+      [
+       208,
+       448
+      ]
+     ],
+     "detail": "M3's text 'M3' at (216,432) is drawn across the text 'vdd' at (208,448)",
+     "refs": [
+      "M3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M3"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 216,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       216,
+       472
+      ]
+     ],
+     "detail": "M3's text 'PMOS_MOD' at (216,472) is drawn across M4's body",
+     "refs": [
+      "M3",
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M3 & M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 216,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       216,
+       472
+      ],
+      [
+       208,
+       496
+      ]
+     ],
+     "detail": "M3's text 'PMOS_MOD' at (216,472) is drawn across the text 'vdd' at (208,496)",
+     "refs": [
+      "M3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M3"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 216,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       216,
+       472
+      ],
+      [
+       320,
+       480
+      ]
+     ],
+     "detail": "M3's text 'PMOS_MOD' at (216,472) is drawn across the text 'x' at (320,480)",
+     "refs": [
+      "M3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M3"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 376,
+     "y": 432
+    },
+    "evidence": {
+     "coords": [
+      [
+       376,
+       432
+      ],
+      [
+       368,
+       448
+      ]
+     ],
+     "detail": "M4's text 'M4' at (376,432) is drawn across the text 'vdd' at (368,448)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 376,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       376,
+       472
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (376,472) is drawn across M7's body",
+     "refs": [
+      "M4",
+      "M7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4 & M7"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 376,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       376,
+       472
+      ],
+      [
+       368,
+       496
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (376,472) is drawn across the text 'vdd' at (368,496)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 376,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       376,
+       472
+      ],
+      [
+       480,
+       480
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (376,472) is drawn across the text 'y' at (480,480)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 536,
+     "y": 432
+    },
+    "evidence": {
+     "coords": [
+      [
+       536,
+       432
+      ],
+      [
+       528,
+       448
+      ]
+     ],
+     "detail": "M7's text 'M7' at (536,432) is drawn across the text 'vdd' at (528,448)",
+     "refs": [
+      "M7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M7"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 536,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       536,
+       472
+      ]
+     ],
+     "detail": "M7's text 'PMOS_MOD' at (536,472) is drawn across M8's body",
+     "refs": [
+      "M7",
+      "M8"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M7 & M8"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 536,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       536,
+       472
+      ],
+      [
+       528,
+       496
+      ]
+     ],
+     "detail": "M7's text 'PMOS_MOD' at (536,472) is drawn across the text 'vdd' at (528,496)",
+     "refs": [
+      "M7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M7"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_labelled.asc",
+     "x": 536,
+     "y": 472
+    },
+    "evidence": {
+     "coords": [
+      [
+       536,
+       472
+      ],
+      [
+       640,
+       480
+      ]
+     ],
+     "detail": "M7's text 'PMOS_MOD' at (536,472) is drawn across the text 'bias' at (640,480)",
+     "refs": [
+      "M7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M7"
+   },
    {
     "at": {
      "file": "two_stage_opamp_labelled.asc",
@@ -9859,6 +13215,176 @@
   "edit": {
    "warnings": [
     {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 312,
+       "y": 120
+      },
+      {
+       "x": 320,
+       "y": 144
+      }
+     ],
+     "ref": "M3",
+     "text": "PMOS_MOD",
+     "x": 312,
+     "y": 120
+    },
+    {
+     "across": "wire",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across wire (528,240)->(528,112)",
+     "points": [
+      {
+       "x": 456,
+       "y": 120
+      },
+      {
+       "x": 528,
+       "y": 240
+      },
+      {
+       "x": 528,
+       "y": 112
+      }
+     ],
+     "ref": "M4",
+     "text": "PMOS_MOD",
+     "x": 456,
+     "y": 120
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 456,
+       "y": 120
+      },
+      {
+       "x": 448,
+       "y": 144
+      }
+     ],
+     "ref": "M4",
+     "text": "PMOS_MOD",
+     "x": 456,
+     "y": 120
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
+     "other_text": "vdd",
+     "points": [
+      {
+       "x": 648,
+       "y": 120
+      },
+      {
+       "x": 640,
+       "y": 144
+      }
+     ],
+     "ref": "M7",
+     "text": "PMOS_MOD",
+     "x": 648,
+     "y": 120
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's body",
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 328,
+     "y": 360
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's text 'NMOS_MOD' at (440,360)",
+     "other_text": "NMOS_MOD",
+     "points": [
+      {
+       "x": 328,
+       "y": 360
+      },
+      {
+       "x": 440,
+       "y": 360
+      }
+     ],
+     "ref": "M1",
+     "refs": [
+      "M1",
+      "M2"
+     ],
+     "text": "NMOS_MOD",
+     "x": 328,
+     "y": 360
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS_MOD' at (440,360) is drawn across M1's body",
+     "ref": "M2",
+     "refs": [
+      "M2",
+      "M1"
+     ],
+     "text": "NMOS_MOD",
+     "x": 440,
+     "y": 360
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "M5's text 'M5' at (168,480) is drawn across Vinn's text 'Vinn' at (96,480)",
+     "other_text": "Vinn",
+     "points": [
+      {
+       "x": 168,
+       "y": 480
+      },
+      {
+       "x": 96,
+       "y": 480
+      }
+     ],
+     "ref": "M5",
+     "refs": [
+      "M5",
+      "Vinn"
+     ],
+     "text": "M5",
+     "x": 168,
+     "y": 480
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "Vinp's text '1.65 AC 1' at (96,344) is drawn across Ibias's body",
+     "ref": "Vinp",
+     "refs": [
+      "Vinp",
+      "Ibias"
+     ],
+     "text": "1.65 AC 1",
+     "x": 96,
+     "y": 344
+    },
+    {
      "kind": "label_island",
      "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
      "net": "inn",
@@ -9901,6 +13427,246 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 312,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       312,
+       120
+      ],
+      [
+       320,
+       144
+      ]
+     ],
+     "detail": "M3's text 'PMOS_MOD' at (312,120) is drawn across the text 'vdd' at (320,144)",
+     "refs": [
+      "M3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M3"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 456,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       456,
+       120
+      ],
+      [
+       528,
+       240
+      ],
+      [
+       528,
+       112
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (456,120) is drawn across wire (528,240)->(528,112)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 456,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       456,
+       120
+      ],
+      [
+       448,
+       144
+      ]
+     ],
+     "detail": "M4's text 'PMOS_MOD' at (456,120) is drawn across the text 'vdd' at (448,144)",
+     "refs": [
+      "M4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M4"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 648,
+     "y": 120
+    },
+    "evidence": {
+     "coords": [
+      [
+       648,
+       120
+      ],
+      [
+       640,
+       144
+      ]
+     ],
+     "detail": "M7's text 'PMOS_MOD' at (648,120) is drawn across the text 'vdd' at (640,144)",
+     "refs": [
+      "M7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M7"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 328,
+     "y": 360
+    },
+    "evidence": {
+     "coords": [
+      [
+       328,
+       360
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's body",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 328,
+     "y": 360
+    },
+    "evidence": {
+     "coords": [
+      [
+       328,
+       360
+      ],
+      [
+       440,
+       360
+      ]
+     ],
+     "detail": "M1's text 'NMOS_MOD' at (328,360) is drawn across M2's text 'NMOS_MOD' at (440,360)",
+     "refs": [
+      "M1",
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M1 & M2"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 440,
+     "y": 360
+    },
+    "evidence": {
+     "coords": [
+      [
+       440,
+       360
+      ]
+     ],
+     "detail": "M2's text 'NMOS_MOD' at (440,360) is drawn across M1's body",
+     "refs": [
+      "M2",
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2 & M1"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 168,
+     "y": 480
+    },
+    "evidence": {
+     "coords": [
+      [
+       168,
+       480
+      ],
+      [
+       96,
+       480
+      ]
+     ],
+     "detail": "M5's text 'M5' at (168,480) is drawn across Vinn's text 'Vinn' at (96,480)",
+     "refs": [
+      "M5",
+      "Vinn"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M5 & Vinn"
+   },
+   {
+    "at": {
+     "file": "two_stage_opamp_moved.asc",
+     "x": 96,
+     "y": 344
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       344
+      ]
+     ],
+     "detail": "Vinp's text '1.65 AC 1' at (96,344) is drawn across Ibias's body",
+     "refs": [
+      "Vinp",
+      "Ibias"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "Vinp & Ibias"
+   },
    {
     "at": {
      "file": "two_stage_opamp_moved.asc",
@@ -28042,6 +31808,346 @@
      "message": "Dangling label 'x1568y768' at (1568,768)",
      "x": 1568,
      "y": 768
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR0's text 'MR0' at (376,352) is drawn across the text 'x416y368' at (416,368)",
+     "other_text": "x416y368",
+     "points": [
+      {
+       "x": 376,
+       "y": 352
+      },
+      {
+       "x": 416,
+       "y": 368
+      }
+     ],
+     "ref": "MR0",
+     "text": "MR0",
+     "x": 376,
+     "y": 352
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR0's text 'MR0' at (376,352) is drawn across the text 'x368y368' at (368,368)",
+     "other_text": "x368y368",
+     "points": [
+      {
+       "x": 376,
+       "y": 352
+      },
+      {
+       "x": 368,
+       "y": 368
+      }
+     ],
+     "ref": "MR0",
+     "text": "MR0",
+     "x": 376,
+     "y": 352
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR90's text 'MR90' at (688,376) is drawn across the text 'x720y400' at (720,400)",
+     "other_text": "x720y400",
+     "points": [
+      {
+       "x": 688,
+       "y": 376
+      },
+      {
+       "x": 720,
+       "y": 400
+      }
+     ],
+     "ref": "MR90",
+     "text": "MR90",
+     "x": 688,
+     "y": 376
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR90's text 'MR90' at (688,376) is drawn across the text 'x672y416' at (672,416)",
+     "other_text": "x672y416",
+     "points": [
+      {
+       "x": 688,
+       "y": 376
+      },
+      {
+       "x": 672,
+       "y": 416
+      }
+     ],
+     "ref": "MR90",
+     "text": "MR90",
+     "x": 688,
+     "y": 376
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1520y272' at (1520,272)",
+     "other_text": "x1520y272",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1520,
+       "y": 272
+      }
+     ],
+     "ref": "MR270",
+     "text": "MR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1520y240' at (1520,240)",
+     "other_text": "x1520y240",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1520,
+       "y": 240
+      }
+     ],
+     "ref": "MR270",
+     "text": "MR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1568y224' at (1568,224)",
+     "other_text": "x1568y224",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1568,
+       "y": 224
+      }
+     ],
+     "ref": "MR270",
+     "text": "MR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1616y272' at (1616,272)",
+     "other_text": "x1616y272",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1616,
+       "y": 272
+      }
+     ],
+     "ref": "MR270",
+     "text": "MR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1568y272' at (1568,272)",
+     "other_text": "x1568y272",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1568,
+       "y": 272
+      }
+     ],
+     "ref": "MR270",
+     "text": "MR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM0's text 'MM0' at (264,752) is drawn across the text 'x224y768' at (224,768)",
+     "other_text": "x224y768",
+     "points": [
+      {
+       "x": 264,
+       "y": 752
+      },
+      {
+       "x": 224,
+       "y": 768
+      }
+     ],
+     "ref": "MM0",
+     "text": "MM0",
+     "x": 264,
+     "y": 752
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM0's text 'MM0' at (264,752) is drawn across the text 'x272y768' at (272,768)",
+     "other_text": "x272y768",
+     "points": [
+      {
+       "x": 264,
+       "y": 752
+      },
+      {
+       "x": 272,
+       "y": 768
+      }
+     ],
+     "ref": "MM0",
+     "text": "MM0",
+     "x": 264,
+     "y": 752
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM90's text 'MM90' at (752,776) is drawn across the text 'x720y800' at (720,800)",
+     "other_text": "x720y800",
+     "points": [
+      {
+       "x": 752,
+       "y": 776
+      },
+      {
+       "x": 720,
+       "y": 800
+      }
+     ],
+     "ref": "MM90",
+     "text": "MM90",
+     "x": 752,
+     "y": 776
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM90's text 'MM90' at (752,776) is drawn across the text 'x768y816' at (768,816)",
+     "other_text": "x768y816",
+     "points": [
+      {
+       "x": 752,
+       "y": 776
+      },
+      {
+       "x": 768,
+       "y": 816
+      }
+     ],
+     "ref": "MM90",
+     "text": "MM90",
+     "x": 752,
+     "y": 776
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "other_text": "x1520y672",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1520,
+       "y": 672
+      }
+     ],
+     "ref": "MM270",
+     "text": "MM270",
+     "x": 1488,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1520y640' at (1520,640)",
+     "other_text": "x1520y640",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1520,
+       "y": 640
+      }
+     ],
+     "ref": "MM270",
+     "text": "MM270",
+     "x": 1488,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1472y624' at (1472,624)",
+     "other_text": "x1472y624",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1472,
+       "y": 624
+      }
+     ],
+     "ref": "MM270",
+     "text": "MM270",
+     "x": 1488,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1472y672' at (1472,672)",
+     "other_text": "x1472y672",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1472,
+       "y": 672
+      }
+     ],
+     "ref": "MM270",
+     "text": "MM270",
+     "x": 1488,
+     "y": 664
     }
    ],
    "wiring": {
@@ -30739,6 +34845,465 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(1568,768)"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 376,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       376,
+       352
+      ],
+      [
+       416,
+       368
+      ]
+     ],
+     "detail": "MR0's text 'MR0' at (376,352) is drawn across the text 'x416y368' at (416,368)",
+     "refs": [
+      "MR0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR0"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 376,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       376,
+       352
+      ],
+      [
+       368,
+       368
+      ]
+     ],
+     "detail": "MR0's text 'MR0' at (376,352) is drawn across the text 'x368y368' at (368,368)",
+     "refs": [
+      "MR0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR0"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 688,
+     "y": 376
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       376
+      ],
+      [
+       720,
+       400
+      ]
+     ],
+     "detail": "MR90's text 'MR90' at (688,376) is drawn across the text 'x720y400' at (720,400)",
+     "refs": [
+      "MR90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR90"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 688,
+     "y": 376
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       376
+      ],
+      [
+       672,
+       416
+      ]
+     ],
+     "detail": "MR90's text 'MR90' at (688,376) is drawn across the text 'x672y416' at (672,416)",
+     "refs": [
+      "MR90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR90"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1520,
+       272
+      ]
+     ],
+     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1520y272' at (1520,272)",
+     "refs": [
+      "MR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1520,
+       240
+      ]
+     ],
+     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1520y240' at (1520,240)",
+     "refs": [
+      "MR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1568,
+       224
+      ]
+     ],
+     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1568y224' at (1568,224)",
+     "refs": [
+      "MR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1616,
+       272
+      ]
+     ],
+     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1616y272' at (1616,272)",
+     "refs": [
+      "MR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1568,
+       272
+      ]
+     ],
+     "detail": "MR270's text 'MR270' at (1552,264) is drawn across the text 'x1568y272' at (1568,272)",
+     "refs": [
+      "MR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MR270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 264,
+     "y": 752
+    },
+    "evidence": {
+     "coords": [
+      [
+       264,
+       752
+      ],
+      [
+       224,
+       768
+      ]
+     ],
+     "detail": "MM0's text 'MM0' at (264,752) is drawn across the text 'x224y768' at (224,768)",
+     "refs": [
+      "MM0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM0"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 264,
+     "y": 752
+    },
+    "evidence": {
+     "coords": [
+      [
+       264,
+       752
+      ],
+      [
+       272,
+       768
+      ]
+     ],
+     "detail": "MM0's text 'MM0' at (264,752) is drawn across the text 'x272y768' at (272,768)",
+     "refs": [
+      "MM0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM0"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 752,
+     "y": 776
+    },
+    "evidence": {
+     "coords": [
+      [
+       752,
+       776
+      ],
+      [
+       720,
+       800
+      ]
+     ],
+     "detail": "MM90's text 'MM90' at (752,776) is drawn across the text 'x720y800' at (720,800)",
+     "refs": [
+      "MM90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM90"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 752,
+     "y": 776
+    },
+    "evidence": {
+     "coords": [
+      [
+       752,
+       776
+      ],
+      [
+       768,
+       816
+      ]
+     ],
+     "detail": "MM90's text 'MM90' at (752,776) is drawn across the text 'x768y816' at (768,816)",
+     "refs": [
+      "MM90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM90"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1520,
+       672
+      ]
+     ],
+     "detail": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "refs": [
+      "MM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1520,
+       640
+      ]
+     ],
+     "detail": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1520y640' at (1520,640)",
+     "refs": [
+      "MM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1472,
+       624
+      ]
+     ],
+     "detail": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1472y624' at (1472,624)",
+     "refs": [
+      "MM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM270"
+   },
+   {
+    "at": {
+     "file": "orientation_nmos4.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1472,
+       672
+      ]
+     ],
+     "detail": "MM270's text 'MM270' at (1488,664) is drawn across the text 'x1472y672' at (1472,672)",
+     "refs": [
+      "MM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "MM270"
    }
   ]
  },
@@ -31473,6 +36038,186 @@
      "message": "Dangling label 'x1616y784' at (1616,784)",
      "x": 1616,
      "y": 784
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QR90's text 'QR90' at (688,376) is drawn across the text 'x656y416' at (656,416)",
+     "other_text": "x656y416",
+     "points": [
+      {
+       "x": 688,
+       "y": 376
+      },
+      {
+       "x": 656,
+       "y": 416
+      }
+     ],
+     "ref": "QR90",
+     "text": "QR90",
+     "x": 688,
+     "y": 376
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1520y256' at (1520,256)",
+     "other_text": "x1520y256",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1520,
+       "y": 256
+      }
+     ],
+     "ref": "QR270",
+     "text": "QR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1520y272' at (1520,272)",
+     "other_text": "x1520y272",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1520,
+       "y": 272
+      }
+     ],
+     "ref": "QR270",
+     "text": "QR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1584y224' at (1584,224)",
+     "other_text": "x1584y224",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1584,
+       "y": 224
+      }
+     ],
+     "ref": "QR270",
+     "text": "QR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1616y256' at (1616,256)",
+     "other_text": "x1616y256",
+     "points": [
+      {
+       "x": 1552,
+       "y": 264
+      },
+      {
+       "x": 1616,
+       "y": 256
+      }
+     ],
+     "ref": "QR270",
+     "text": "QR270",
+     "x": 1552,
+     "y": 264
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM90's text 'QM90' at (752,776) is drawn across the text 'x784y816' at (784,816)",
+     "other_text": "x784y816",
+     "points": [
+      {
+       "x": 752,
+       "y": 776
+      },
+      {
+       "x": 784,
+       "y": 816
+      }
+     ],
+     "ref": "QM90",
+     "text": "QM90",
+     "x": 752,
+     "y": 776
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1520y656' at (1520,656)",
+     "other_text": "x1520y656",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1520,
+       "y": 656
+      }
+     ],
+     "ref": "QM270",
+     "text": "QM270",
+     "x": 1488,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "other_text": "x1520y672",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1520,
+       "y": 672
+      }
+     ],
+     "ref": "QM270",
+     "text": "QM270",
+     "x": 1488,
+     "y": 664
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1456y624' at (1456,624)",
+     "other_text": "x1456y624",
+     "points": [
+      {
+       "x": 1488,
+       "y": 664
+      },
+      {
+       "x": 1456,
+       "y": 624
+      }
+     ],
+     "ref": "QM270",
+     "text": "QM270",
+     "x": 1488,
+     "y": 664
     }
    ],
    "wiring": {
@@ -33666,6 +38411,249 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(1616,784)"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 688,
+     "y": 376
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       376
+      ],
+      [
+       656,
+       416
+      ]
+     ],
+     "detail": "QR90's text 'QR90' at (688,376) is drawn across the text 'x656y416' at (656,416)",
+     "refs": [
+      "QR90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QR90"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1520,
+       256
+      ]
+     ],
+     "detail": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1520y256' at (1520,256)",
+     "refs": [
+      "QR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QR270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1520,
+       272
+      ]
+     ],
+     "detail": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1520y272' at (1520,272)",
+     "refs": [
+      "QR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QR270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1584,
+       224
+      ]
+     ],
+     "detail": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1584y224' at (1584,224)",
+     "refs": [
+      "QR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QR270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1552,
+     "y": 264
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       264
+      ],
+      [
+       1616,
+       256
+      ]
+     ],
+     "detail": "QR270's text 'QR270' at (1552,264) is drawn across the text 'x1616y256' at (1616,256)",
+     "refs": [
+      "QR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QR270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 752,
+     "y": 776
+    },
+    "evidence": {
+     "coords": [
+      [
+       752,
+       776
+      ],
+      [
+       784,
+       816
+      ]
+     ],
+     "detail": "QM90's text 'QM90' at (752,776) is drawn across the text 'x784y816' at (784,816)",
+     "refs": [
+      "QM90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM90"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1520,
+       656
+      ]
+     ],
+     "detail": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1520y656' at (1520,656)",
+     "refs": [
+      "QM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1520,
+       672
+      ]
+     ],
+     "detail": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1520y672' at (1520,672)",
+     "refs": [
+      "QM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM270"
+   },
+   {
+    "at": {
+     "file": "orientation_npn.asc",
+     "x": 1488,
+     "y": 664
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       664
+      ],
+      [
+       1456,
+       624
+      ]
+     ],
+     "detail": "QM270's text 'QM270' at (1488,664) is drawn across the text 'x1456y624' at (1456,624)",
+     "refs": [
+      "QM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "QM270"
    }
   ]
  },
@@ -34472,6 +39460,246 @@
      "message": "Dangling label 'x1616y736' at (1616,736)",
      "x": 1616,
      "y": 736
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR0's text 'RR0' at (352,288) is drawn across the text 'x336y304' at (336,304)",
+     "other_text": "x336y304",
+     "points": [
+      {
+       "x": 352,
+       "y": 288
+      },
+      {
+       "x": 336,
+       "y": 304
+      }
+     ],
+     "ref": "RR0",
+     "text": "RR0",
+     "x": 352,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR0's text 'RR0' at (352,288) is drawn across the text 'x416y304' at (416,304)",
+     "other_text": "x416y304",
+     "points": [
+      {
+       "x": 352,
+       "y": 288
+      },
+      {
+       "x": 416,
+       "y": 304
+      }
+     ],
+     "ref": "RR0",
+     "text": "RR0",
+     "x": 352,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR90's text 'RR90' at (752,352) is drawn across the text 'x704y416' at (704,416)",
+     "other_text": "x704y416",
+     "points": [
+      {
+       "x": 752,
+       "y": 352
+      },
+      {
+       "x": 704,
+       "y": 416
+      }
+     ],
+     "ref": "RR90",
+     "text": "RR90",
+     "x": 752,
+     "y": 352
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR90's text 'RR90' at (752,352) is drawn across the text 'x736y416' at (736,416)",
+     "other_text": "x736y416",
+     "points": [
+      {
+       "x": 752,
+       "y": 352
+      },
+      {
+       "x": 736,
+       "y": 416
+      }
+     ],
+     "ref": "RR90",
+     "text": "RR90",
+     "x": 752,
+     "y": 352
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR270's text 'RR270' at (1488,288) is drawn across the text 'x1504y224' at (1504,224)",
+     "other_text": "x1504y224",
+     "points": [
+      {
+       "x": 1488,
+       "y": 288
+      },
+      {
+       "x": 1504,
+       "y": 224
+      }
+     ],
+     "ref": "RR270",
+     "text": "RR270",
+     "x": 1488,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RR270's text 'RR270' at (1488,288) is drawn across the text 'x1536y224' at (1536,224)",
+     "other_text": "x1536y224",
+     "points": [
+      {
+       "x": 1488,
+       "y": 288
+      },
+      {
+       "x": 1536,
+       "y": 224
+      }
+     ],
+     "ref": "RR270",
+     "text": "RR270",
+     "x": 1488,
+     "y": 288
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM0's text 'RM0' at (288,688) is drawn across the text 'x304y704' at (304,704)",
+     "other_text": "x304y704",
+     "points": [
+      {
+       "x": 288,
+       "y": 688
+      },
+      {
+       "x": 304,
+       "y": 704
+      }
+     ],
+     "ref": "RM0",
+     "text": "RM0",
+     "x": 288,
+     "y": 688
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM0's text 'RM0' at (288,688) is drawn across the text 'x224y704' at (224,704)",
+     "other_text": "x224y704",
+     "points": [
+      {
+       "x": 288,
+       "y": 688
+      },
+      {
+       "x": 224,
+       "y": 704
+      }
+     ],
+     "ref": "RM0",
+     "text": "RM0",
+     "x": 288,
+     "y": 688
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM90's text 'RM90' at (688,752) is drawn across the text 'x704y816' at (704,816)",
+     "other_text": "x704y816",
+     "points": [
+      {
+       "x": 688,
+       "y": 752
+      },
+      {
+       "x": 704,
+       "y": 816
+      }
+     ],
+     "ref": "RM90",
+     "text": "RM90",
+     "x": 688,
+     "y": 752
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM90's text 'RM90' at (688,752) is drawn across the text 'x736y816' at (736,816)",
+     "other_text": "x736y816",
+     "points": [
+      {
+       "x": 688,
+       "y": 752
+      },
+      {
+       "x": 736,
+       "y": 816
+      }
+     ],
+     "ref": "RM90",
+     "text": "RM90",
+     "x": 688,
+     "y": 752
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM270's text 'RM270' at (1552,688) is drawn across the text 'x1504y624' at (1504,624)",
+     "other_text": "x1504y624",
+     "points": [
+      {
+       "x": 1552,
+       "y": 688
+      },
+      {
+       "x": 1504,
+       "y": 624
+      }
+     ],
+     "ref": "RM270",
+     "text": "RM270",
+     "x": 1552,
+     "y": 688
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "RM270's text 'RM270' at (1552,688) is drawn across the text 'x1536y624' at (1536,624)",
+     "other_text": "x1536y624",
+     "points": [
+      {
+       "x": 1552,
+       "y": 688
+      },
+      {
+       "x": 1536,
+       "y": 624
+      }
+     ],
+     "ref": "RM270",
+     "text": "RM270",
+     "x": 1552,
+     "y": 688
     }
    ],
    "wiring": {
@@ -36865,6 +42093,330 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(1616,736)"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 352,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       352,
+       288
+      ],
+      [
+       336,
+       304
+      ]
+     ],
+     "detail": "RR0's text 'RR0' at (352,288) is drawn across the text 'x336y304' at (336,304)",
+     "refs": [
+      "RR0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR0"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 352,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       352,
+       288
+      ],
+      [
+       416,
+       304
+      ]
+     ],
+     "detail": "RR0's text 'RR0' at (352,288) is drawn across the text 'x416y304' at (416,304)",
+     "refs": [
+      "RR0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR0"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 752,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       752,
+       352
+      ],
+      [
+       704,
+       416
+      ]
+     ],
+     "detail": "RR90's text 'RR90' at (752,352) is drawn across the text 'x704y416' at (704,416)",
+     "refs": [
+      "RR90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR90"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 752,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       752,
+       352
+      ],
+      [
+       736,
+       416
+      ]
+     ],
+     "detail": "RR90's text 'RR90' at (752,352) is drawn across the text 'x736y416' at (736,416)",
+     "refs": [
+      "RR90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR90"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1488,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       288
+      ],
+      [
+       1504,
+       224
+      ]
+     ],
+     "detail": "RR270's text 'RR270' at (1488,288) is drawn across the text 'x1504y224' at (1504,224)",
+     "refs": [
+      "RR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR270"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1488,
+     "y": 288
+    },
+    "evidence": {
+     "coords": [
+      [
+       1488,
+       288
+      ],
+      [
+       1536,
+       224
+      ]
+     ],
+     "detail": "RR270's text 'RR270' at (1488,288) is drawn across the text 'x1536y224' at (1536,224)",
+     "refs": [
+      "RR270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RR270"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 288,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       688
+      ],
+      [
+       304,
+       704
+      ]
+     ],
+     "detail": "RM0's text 'RM0' at (288,688) is drawn across the text 'x304y704' at (304,704)",
+     "refs": [
+      "RM0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM0"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 288,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       688
+      ],
+      [
+       224,
+       704
+      ]
+     ],
+     "detail": "RM0's text 'RM0' at (288,688) is drawn across the text 'x224y704' at (224,704)",
+     "refs": [
+      "RM0"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM0"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 688,
+     "y": 752
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       752
+      ],
+      [
+       704,
+       816
+      ]
+     ],
+     "detail": "RM90's text 'RM90' at (688,752) is drawn across the text 'x704y816' at (704,816)",
+     "refs": [
+      "RM90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM90"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 688,
+     "y": 752
+    },
+    "evidence": {
+     "coords": [
+      [
+       688,
+       752
+      ],
+      [
+       736,
+       816
+      ]
+     ],
+     "detail": "RM90's text 'RM90' at (688,752) is drawn across the text 'x736y816' at (736,816)",
+     "refs": [
+      "RM90"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM90"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1552,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       688
+      ],
+      [
+       1504,
+       624
+      ]
+     ],
+     "detail": "RM270's text 'RM270' at (1552,688) is drawn across the text 'x1504y624' at (1504,624)",
+     "refs": [
+      "RM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM270"
+   },
+   {
+    "at": {
+     "file": "orientation_res.asc",
+     "x": 1552,
+     "y": 688
+    },
+    "evidence": {
+     "coords": [
+      [
+       1552,
+       688
+      ],
+      [
+       1536,
+       624
+      ]
+     ],
+     "detail": "RM270's text 'RM270' at (1552,688) is drawn across the text 'x1536y624' at (1536,624)",
+     "refs": [
+      "RM270"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "RM270"
    }
   ]
  },
@@ -37456,6 +43008,26 @@
      "y": 96
     },
     {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "C1's text 'C1' at (208,16) is drawn across the text 'out' at (208,32)",
+     "other_text": "out",
+     "points": [
+      {
+       "x": 208,
+       "y": 16
+      },
+      {
+       "x": 208,
+       "y": 32
+      }
+     ],
+     "ref": "C1",
+     "text": "C1",
+     "x": 208,
+     "y": 16
+    },
+    {
      "kind": "label_over_component",
      "label": "in",
      "message": "Label 'in' at (0,16) is inside V1's bounding box",
@@ -37769,6 +43341,33 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "rc_ac.asc",
+     "x": 208,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       16
+      ],
+      [
+       208,
+       32
+      ]
+     ],
+     "detail": "C1's text 'C1' at (208,16) is drawn across the text 'out' at (208,32)",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C1"
    },
    {
     "at": {
@@ -37942,6 +43541,26 @@
      "y": 96
     },
     {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "C1's text 'C1' at (208,16) is drawn across the text 'out' at (208,32)",
+     "other_text": "out",
+     "points": [
+      {
+       "x": 208,
+       "y": 16
+      },
+      {
+       "x": 208,
+       "y": 32
+      }
+     ],
+     "ref": "C1",
+     "text": "C1",
+     "x": 208,
+     "y": 16
+    },
+    {
      "kind": "label_over_component",
      "label": "in",
      "message": "Label 'in' at (0,16) is inside V1's bounding box",
@@ -38255,6 +43874,33 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "rc_noise.asc",
+     "x": 208,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       16
+      ],
+      [
+       208,
+       32
+      ]
+     ],
+     "detail": "C1's text 'C1' at (208,16) is drawn across the text 'out' at (208,32)",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C1"
    },
    {
     "at": {
@@ -38428,6 +44074,63 @@
      "y": 96
     },
     {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "V1's text 'PULSE(0 1 0 1u 1u 1 2)' at (32,56) is drawn across C1's body",
+     "ref": "V1",
+     "refs": [
+      "V1",
+      "C1"
+     ],
+     "text": "PULSE(0 1 0 1u 1u 1 2)",
+     "x": 32,
+     "y": 56
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "V1's text 'PULSE(0 1 0 1u 1u 1 2)' at (32,56) is drawn across C1's text '100n' at (208,48)",
+     "other_text": "100n",
+     "points": [
+      {
+       "x": 32,
+       "y": 56
+      },
+      {
+       "x": 208,
+       "y": 48
+      }
+     ],
+     "ref": "V1",
+     "refs": [
+      "V1",
+      "C1"
+     ],
+     "text": "PULSE(0 1 0 1u 1u 1 2)",
+     "x": 32,
+     "y": 56
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "C1's text 'C1' at (208,16) is drawn across the text 'out' at (208,32)",
+     "other_text": "out",
+     "points": [
+      {
+       "x": 208,
+       "y": 16
+      },
+      {
+       "x": 208,
+       "y": 32
+      }
+     ],
+     "ref": "C1",
+     "text": "C1",
+     "x": 208,
+     "y": 16
+    },
+    {
      "kind": "label_over_component",
      "label": "in",
      "message": "Label 'in' at (0,16) is inside V1's bounding box",
@@ -38741,6 +44444,85 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "rc_tran.asc",
+     "x": 32,
+     "y": 56
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       56
+      ]
+     ],
+     "detail": "V1's text 'PULSE(0 1 0 1u 1u 1 2)' at (32,56) is drawn across C1's body",
+     "refs": [
+      "V1",
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "V1 & C1"
+   },
+   {
+    "at": {
+     "file": "rc_tran.asc",
+     "x": 32,
+     "y": 56
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       56
+      ],
+      [
+       208,
+       48
+      ]
+     ],
+     "detail": "V1's text 'PULSE(0 1 0 1u 1u 1 2)' at (32,56) is drawn across C1's text '100n' at (208,48)",
+     "refs": [
+      "V1",
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "V1 & C1"
+   },
+   {
+    "at": {
+     "file": "rc_tran.asc",
+     "x": 208,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       16
+      ],
+      [
+       208,
+       32
+      ]
+     ],
+     "detail": "C1's text 'C1' at (208,16) is drawn across the text 'out' at (208,32)",
+     "refs": [
+      "C1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "C1"
    },
    {
     "at": {
