@@ -20,7 +20,7 @@ uv run pytest -n0 tests/test_pathutil.py::TestName::test_case -v   # one test, r
 python -m ltspice_mcp            # run the server without the console script
 ```
 
-There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, pyright, the suite with coverage, and the suite under two jitter seeds) on pushes and pull requests to `master`; `publish.yml` runs the same checks and publishes to PyPI on version tags.
+There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, pyright, the suite with coverage on Linux, the suite on Windows, and a dependency audit) on pushes and pull requests to `master`; `publish.yml` runs the same checks and publishes to PyPI on version tags.
 
 ### Working practice
 
@@ -28,7 +28,7 @@ There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, py
 - A regression test must fail before the fix and pass after. Run it against the unfixed code to confirm it fails.
 - Test through real code paths, never a bypass, and assert on real values. Never stub the mechanism a test claims to cover.
 - Re-run a passing suite only after the tree changes.
-- In tests, wait for the value the assertion reads, never for a side effect or a fixed time. Await work the server started through its owner (`await runner.settled(job)`, `await state.settled()`), and anything else (a thread, a fake simulator's callback, another process) through an event or a handshake. A timeout on a wait only caps a hang (`LIVENESS_S` in `tests/conftest.py`); it is not a speed requirement. `tests/test_test_hygiene.py` checks part of this rule mechanically. `--jitter-seed=N` reruns the suite with thread hand-offs, timers and process starts perturbed to imitate Windows scheduling (`tests/schedule_jitter.py`). A test that fails only under a seed has a race.
+- In tests, wait for the value the assertion reads, never for a side effect or a fixed time. Await work the server started through its owner (`await runner.settled(job)`, `await state.settled()`), and anything else (a thread, a fake simulator's callback, another process) through an event or a handshake. A timeout on a wait only caps a hang (`LIVENESS_S` in `tests/conftest.py`); it is not a speed requirement. `tests/test_test_hygiene.py` checks part of this rule mechanically. To reproduce on Linux a test that fails only on Windows, rerun it with `--jitter-seed=random`, which perturbs thread hand-offs, timers and process starts as Windows scheduling does (`tests/schedule_jitter.py`) and prints the seed that reproduces a failure. A test that fails only under a seed has a race. No gate runs it; it is a tool for chasing a flake.
 
 Read `docs/TESTING.md` before adding a tool or an op. Some tests check the code against a committed snapshot. After a deliberate change, regenerate the snapshot by running the test with its variable set to `1`: `LTSPICE_MCP_RECORD_SHEET_FINDINGS`, `LTSPICE_MCP_RECORD_ROUTE_PLANNER`, `LTSPICE_MCP_RECORD_LABELS_AND_MOVES`, `LTSPICE_MCP_RECORD_BUILD_BENCHMARK`, `LTSPICE_MCP_RECORD_INSPECT_SHEETS`. `LTSPICE_MCP_RECORD_SHEET_EDITS` is different: it re-records what every `edit_schematic` call in the suite answers (`tests/sheet_edit_record.py`), so it needs a run of the whole suite with no LTspice library installed or visible.
 

@@ -45,7 +45,6 @@ push in each configuration the CI runners and the users have:
 |-|-|
 | Linux, serially | CI runs one xdist worker per core; a serial run puts every test in one process, so state a test leaves behind reaches every later test |
 | Linux with WSL detection forced off (`scripts/nonwsl_plugin.py`) | Linux CI is not WSL; on a WSL2 machine the non-WSL branches otherwise never run |
-| Linux under schedule jitter, seeds 1 and 2 (`--jitter-seed=N`, `tests/schedule_jitter.py`) | delays thread hand-offs and process starts and fires timers early, as Windows does, so a race fails on Linux too. CI runs the same two seeds. A failure under a seed usually reproduces under the same seed; `--jitter-seed=random` picks a seed and prints it |
 | Ubuntu container, non-root, `--init` | a fresh machine with ngspice and libcairo2. `--init` is needed because a container whose PID 1 is `bash` never reaps a killed child, and `os.kill(pid, 0)` succeeds on a zombie |
 | Windows native, Python 3.12 and 3.13, checkout with line-ending conversion on | the primary platform; both supported interpreters (3.13 changed how `Path.resolve` handles a NUL byte); and the files as a checkout with `core.autocrlf=true` writes them |
 | the publisher's own metadata check | the PyPI action's bundled `twine` can reject a metadata version the build backend emits by default |
@@ -561,3 +560,10 @@ uv run python scripts/build_benchmark.py score SHEET.asc NETLIST.cir
   this doc describe a bug by its actual behavior in plain technical terms, with
   no internal severity codes, codenames or pass numbers.
 - **Tables** use minimal separators (`|-|-|`); no box-drawing characters.
+- **A test that fails only on Windows** usually waits on a side effect or a
+  fixed time instead of the value it reads; `tests/test_test_hygiene.py`
+  checks part of that rule. To reproduce one on Linux, run it with
+  `--jitter-seed=random`, which delays thread hand-offs and process starts and
+  fires timers early, as Windows does (`tests/schedule_jitter.py`), and prints
+  the seed it drew; the same seed usually fails again. No CI job or gate runs
+  it.
