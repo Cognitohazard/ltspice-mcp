@@ -256,6 +256,9 @@ _OUTSIDE_THE_STORE: dict[str, str] = {
     "circuit_lock": (
         "per user: every session editing the file contends on it, whatever its working directory"
     ),
+    "renders_dir": (
+        "per user: a drawing is a view of a sheet, not a record of the server's working directory"
+    ),
     "artifact_base": "returns the routing decision, not a path",
     "lineage_run_dir": "validates an already recorded Store run directory",
 }

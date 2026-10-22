@@ -50,9 +50,11 @@ outside the root, each for a reason:
   writer asks it rather than re-deciding.
 * **Per-user state lives in** :func:`user_home`, shared by every session this
   user runs wherever it was started: the recent-circuits index
-  (``lib/recent.py``), so a session can surface prior work, and one lock file
-  per circuit (:meth:`Store.circuit_lock`), so two sessions editing one file
-  contend on one lock whatever their working directories.
+  (``lib/recent.py``), so a session can surface prior work, one lock file per
+  circuit (:meth:`Store.circuit_lock`), so two sessions editing one file
+  contend on one lock whatever their working directories, and the drawings
+  ``verify_circuit`` renders (:meth:`Store.renders_dir`), which belong to no
+  working directory.
 
 Record shape: one schema name and one version for the whole store. Every
 durable record this build writes carries ``{"schema": "ltspice-mcp/store",
@@ -822,6 +824,16 @@ class Store:
         """
         resolved = _resolved(circuit_path)
         return user_home() / "locks" / "circuits" / path_digest(str(resolved).casefold())
+
+    @staticmethod
+    def renders_dir() -> Path:
+        """Where ``verify_circuit`` writes the drawings it renders.
+
+        Per user: a drawing is a view of a sheet, not a record of any working
+        directory, so a server started in one project does not collect drawings
+        of sheets in others. ``verify_circuit`` deletes a drawing a week old.
+        """
+        return user_home() / "renders"
 
 
 def run_dir_in(runs_root: Path, job_id: str) -> Path:

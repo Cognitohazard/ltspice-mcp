@@ -185,8 +185,9 @@ Everything else goes in two places:
 
 - **`.ltspice-mcp/` in the working directory:** job records, runs, results,
   export snapshots and plots. Add it to `.gitignore`.
-- **A per-user folder:** the recent-circuits list and lock files that keep
-  two sessions from editing one file at once. It is
+- **A per-user folder:** the recent-circuits list, lock files that keep two
+  sessions from editing one file at once, and the drawings `verify_circuit`
+  renders, each deleted a week after it was made. It is
   `%LOCALAPPDATA%\ltspice-mcp` on Windows and `~/.local/state/ltspice-mcp`
   (or under `$XDG_STATE_HOME`) elsewhere; `LTSPICE_MCP_HOME` moves it.
 

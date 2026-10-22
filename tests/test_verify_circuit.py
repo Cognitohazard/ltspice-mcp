@@ -21,7 +21,9 @@ undeclared keys past both the suite and the session-wide conformance hook.
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
+import time
 import typing
 from pathlib import Path
 from types import NoneType
@@ -38,11 +40,13 @@ from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
 from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import Finding
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
 from ltspice_mcp.tools._base import CompareSpec, RenderPolicy
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from ltspice_mcp.tools.verify import (
+    RENDER_RETENTION_S,
     STRUCTURAL_DELTA_PROPS,
     VerifyCircuitInput,
     evaluate_verify_circuit,
@@ -1681,6 +1685,47 @@ async def test_artifact_delivery_returns_no_markup(state_no_sim, work_dir, asc_s
     assert "svg" not in data["render"]
     assert data["render"]["note"] is None
     assert [c.type for c in result.content] == ["text"]
+
+
+def _names(directory: Path) -> set[str]:
+    return {entry.name for entry in directory.iterdir()} if directory.exists() else set()
+
+
+def _drawings_aged(renders: Path, ages_s: dict[str, float]) -> None:
+    """Earlier drawings in ``renders``, each last written ``ages_s`` ago."""
+    renders.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for name, age in ages_s.items():
+        drawing = renders / name
+        drawing.write_bytes(b"<svg/>")
+        os.utime(drawing, (now - age, now - age))
+
+
+async def test_a_render_is_written_to_the_per_user_render_folder(
+    state_no_sim, work_dir, asc_symbols
+):
+    """A drawing belongs to no working directory. It was written into the
+    server's working-directory store, so a server started in one project
+    collected drawings of sheets in others."""
+    asc = _write(work_dir, "rw.asc", _RES_ASC)
+    data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
+    drawing = Path(data["render"]["path"])
+    assert drawing.parent == Store.renders_dir()
+    assert drawing.name in _names(Store.renders_dir())
+    assert _names(state_no_sim.store.root / "verify") == set()
+
+
+async def test_a_render_deletes_drawings_a_week_old(
+    state_no_sim, work_dir, asc_symbols, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
+    _drawings_aged(
+        Store.renders_dir(),
+        {"old.svg": RENDER_RETENTION_S + 60, "recent.svg": RENDER_RETENTION_S - 3600},
+    )
+    asc = _write(work_dir, "ro.asc", _RES_ASC)
+    data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
+    assert _names(Store.renders_dir()) == {"recent.svg", Path(data["render"]["path"]).name}
 
 
 @needs_raster

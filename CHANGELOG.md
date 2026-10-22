@@ -1369,6 +1369,13 @@ recording that showed it.
 
 ### Changed
 
+- `verify_circuit` wrote its drawings into the server's working directory
+  (`.ltspice-mcp/verify/renders`), so a server started in one project
+  collected drawings of sheets in others. They now go to the per-user folder's
+  `renders/` (`%LOCALAPPDATA%\ltspice-mcp` on Windows,
+  `~/.local/state/ltspice-mcp` elsewhere, moved by `LTSPICE_MCP_HOME`), and a
+  render deletes the drawings there a week old. The reply gives the path as
+  before.
 - `edit_schematic` reports what its ops make of the sheet once, on the sheet
   the batch commits, through four new sheet rules that `verify_circuit`
   reports too: `net_with_two_names` (a net whose labels carry two or more

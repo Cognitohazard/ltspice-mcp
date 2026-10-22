@@ -64,8 +64,10 @@ import asyncio
 import contextlib
 import functools
 import hashlib
+import os
 import re
 import shutil
+import time
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator, Collection, Mapping, Sequence
@@ -1921,14 +1923,31 @@ def _render_scene(
     scale: float,
     max_pixels: int | None,
 ) -> tuple[RenderedImage, Path, bool]:
-    """Render a scene into the verify scratch dir. Returns (image, path, downscaled)."""
-    return render_scene_artifact(
-        scene,
-        _scratch_dir(state, "renders"),
-        image_format=image_format,
-        scale=scale,
-        max_pixels=max_pixels,
+    """Render a scene into the per-user render folder. Returns (image, path,
+    downscaled)."""
+    renders = state.store.renders_dir()
+    rendered = render_scene_artifact(
+        scene, renders, image_format=image_format, scale=scale, max_pixels=max_pixels
     )
+    _delete_old_renders(renders)
+    return rendered
+
+
+#: How long a drawing stays in the render folder. It is regenerated from its
+#: sheet on the next render, and a session reads it back within minutes.
+RENDER_RETENTION_S = 7 * 24 * 3600
+
+
+def _delete_old_renders(renders: Path) -> None:
+    """Delete the drawings older than :data:`RENDER_RETENTION_S`, so a folder
+    every session shares does not grow for ever."""
+    cutoff = time.time() - RENDER_RETENTION_S
+    for entry in os.scandir(renders):
+        # A drawing another session is deleting, or a viewer holds open on
+        # Windows, is left to a later render.
+        with contextlib.suppress(OSError):
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                os.unlink(entry.path)
 
 
 #: What the render check produces: ``(payload, inline image, failures,

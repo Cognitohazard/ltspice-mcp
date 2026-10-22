@@ -1175,7 +1175,9 @@ the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
-a file. `inline` and `both` return a PNG as an image block, and an SVG as
+a file. The file is written to the per-user folder's `renders/`, never to the
+working directory or beside the sheet, and is deleted a week later; a render
+regenerates it. `inline` and `both` return a PNG as an image block, and an SVG as
 its markup in `render.svg` and in a text block. A PNG needs the `raster` extra
 (`resvg-py`), or `cairosvg` with the native Cairo library it loads; without
 either the render falls back to SVG, and `render.note` names what is missing
