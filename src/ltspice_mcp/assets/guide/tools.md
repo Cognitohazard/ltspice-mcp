@@ -121,6 +121,9 @@ lint blocks a mismatch. A case that produced nothing is counted in
   rather than setting `lint: "warn"`.
 - `jobs`: `{"action": "status", "request_id": "ldo-load-1"}` finds a job whose
   id you lost. A `wait` that returns `timed_out` ended the wait, not the job.
+  A receipt's `status` is the job's (`completed`, `completed_with_failures`,
+  `failed`, ...); each run row's `status` is its case's (`produced` when it
+  ran, `failed`, `cancelled` or `skipped` when it did not).
 - `analyze_results`: the default reply is the answer (`results`, `coverage`,
   `observations`, `failures`); ask for more under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). A failure row is one reason:

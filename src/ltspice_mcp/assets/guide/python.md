@@ -62,9 +62,10 @@ Read it before guessing an argument. From a shell, without starting the engine:
 - `run_experiments` waits until the job is terminal and returns the whole
   receipt: `outcome` (`"complete"`, `"partial"` or `"failed"`), `completeness`
   (declared, produced, failed, cancelled, skipped, reused), one row per case under
-  `runs["items"]` (`case_id`, `assignments`, and a `status` of `"produced"`
-  when the case ran), `failures`, `observations`, and the `analysis` block
-  when you attached `analyze`.
+  `runs["items"]` (`case_id`, `assignments`, and the case's `status`),
+  `failures`, `observations`, and the `analysis` block when you attached
+  `analyze`. A row's status is the case's, not the job's: a case that ran is
+  `"produced"` while the job is `"completed"`, so select rows on `"produced"`.
 - `wait=False` returns the receipt at once; `api.wait(job_id, timeout_s=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with
   `timed_out: true`; the job keeps running.

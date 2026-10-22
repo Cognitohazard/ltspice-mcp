@@ -74,6 +74,7 @@ from ltspice_mcp.tools.experiments import (
 )
 from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
+    JOB_STATUS_SCHEMA,
     JOBS_PAGE_LIMIT,
     OBSERVATION_SCHEMA,
     RECEIPT_DEFAULT_ROUTE,
@@ -408,7 +409,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "job_id": {"type": ["string", "null"]},
     "request_id": {"type": ["string", "null"]},
     "job_type": {"type": "string"},
-    "status": {"type": "string"},
+    "status": JOB_STATUS_SCHEMA,
     "analysis_status": {"type": "string"},
     "dialect": {"type": ["string", "null"]},
     "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
@@ -555,7 +556,7 @@ def _jobs_page_schema(
             {
                 "job_id": {"type": ["string", "null"]},
                 "request_id": {"type": ["string", "null"]},
-                "status": {"type": "string"},
+                "status": JOB_STATUS_SCHEMA,
             }
         )
         required.extend(["job_id", "request_id", "status"])

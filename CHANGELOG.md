@@ -10,6 +10,12 @@ tool-surface changes.
 
 ### Fixed
 
+- A run row's `status` is its case's (`produced` once the simulator wrote its
+  output) while the receipt's `status` is the job's (`completed`), and nothing
+  said so: a caller that selected rows on `completed` got none. The output
+  schemas of `run_experiments` and `jobs` now list a row's statuses and say a
+  receipt's status is the job's; the guide and `docs/design/mcp_surface.md`
+  name both vocabularies.
 - A stepped `.ac` at one frequency could not be split into its steps: reading
   a step was refused with "Step boundaries are unresolved". Both LTspice
   builds store such a run one point a step, the stepped parameter first and

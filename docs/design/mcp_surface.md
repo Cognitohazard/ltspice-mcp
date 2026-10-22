@@ -561,7 +561,12 @@ advancing; the caller decides whether to cancel it.
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, attempt?}`. Every key is optional because a
-run-field projection can remove any of them. `other_raws` maps each kind of
+run-field projection can remove any of them. `status` is the case's own, a
+separate vocabulary from the job's `status` on the receipt: `produced` once
+the simulator wrote its output, `failed`, `cancelled` or `skipped` when the
+case ended without it, and `queued`, `submitted` or `running` before. A job
+whose cases all ran is `completed` while each row says `produced`; the output
+schema lists both vocabularies. `other_raws` maps each kind of
 other raw the run wrote beside its raw to its path (`<run>.<kind>.raw`): `op`,
 a transient's operating point, and `fra_1`, a frequency response analysis's
 results. Only kinds recorded from LTspice are listed, and a run with no raw
