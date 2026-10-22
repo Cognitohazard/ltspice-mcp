@@ -894,6 +894,11 @@ change: those its ops place, move, remove, wire or label. A part whose value or
 attributes alone changed keeps its pins where they were and joined as they
 were, so a batch of value changes lists no pins, in `touched` or in
 `wiring.label_only_pins`; its label-only pins are counted under `preexisting`.
+A pin's `net` is the name a label gives its net, null when none does. LTspice
+names such a net only when it exports the sheet (`N001`, `NC_01` for a pin on
+nothing), so the name comes from an export, never a guess: a batch with a
+`compare` exports the committed sheet, and each pin on a net no label names
+then also carries `net_export`, its node in that export.
 The whole-sheet `pin_legend` is returned only on request, and is the only
 whole-sheet pin-to-net table on the surface:
 `inspect(kind: "components", detail: "full")` gives pin coordinates without

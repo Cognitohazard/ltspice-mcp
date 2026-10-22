@@ -26,12 +26,14 @@ from ltspice_mcp.lib.connectivity import (
 )
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
+from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
 from ltspice_mcp.lib.netlist_diff import parse_directive, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import canon_ref, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     element_class,
+    export_parts,
     make_editor,
     net_partition,
     trace_nets,
@@ -208,6 +210,89 @@ def test_the_net_partition_connects_what_ltspice_connects(
     diagonal wires, pins that only touch, labels of one name on two wires."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     assert modelled_groups(sheet) == exported_groups(build, case_id)
+
+
+#: Recorded sheets the exporter names nets of, unlabelled ones among them.
+EXPORT_NAMED = [
+    *CONNECTIVITY,
+    *rec.cases_of("build-benchmark-export"),
+    "export/instance_names",
+    "export/instance_prefix",
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(EXPORT_NAMED)))
+def test_each_pin_is_given_the_node_ltspice_exported_it_on(
+    build: str, case_id: str, tmp_path: Path
+):
+    """An unlabelled net's name is the exporter's own (N001, NC_01), so it is
+    read off the export: each part's card found by the name the exporter
+    writes for it, its nodes in SpiceOrder. The pins the server puts on one
+    node get one exported node, and two nodes two; a node's name is compared
+    without case, as LTspice reads it."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    editor = make_editor(sheet)
+    assert isinstance(editor, AscEditor)
+    geometry = collect_component_geometry(editor)
+    nodes = exported_pin_nodes(rec.export_text(build, case_id), export_parts(editor, geometry))
+    node_of = label_folded_nets(net_partition(editor))
+    exported: dict[tuple[int, int], set[str]] = {}
+    unmapped = set()
+    for row in geometry:
+        for pin in row["pins"]:
+            node = nodes.get((row["ref"], pin["name"]))
+            if node is None:
+                unmapped.add(row["ref"])
+                continue
+            exported.setdefault(node_of((pin["x"], pin["y"])), set()).add(node.casefold())
+    # An R prefix on a four-pin block symbol writes two nodes: none is read.
+    assert unmapped == ({"U1"} if case_id == "export/instance_prefix" else set())
+    assert all(len(names) == 1 for names in exported.values()), exported
+    names = [name for found in exported.values() for name in found]
+    assert len(set(names)) == len(names)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_an_edit_compared_with_its_export_names_its_unlabelled_nets(
+    build: str, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An edit reply gave a pin on a net no label names ``net: null``. With a
+    compare, the committed sheet is exported, and each such pin also carries
+    the node the export put it on."""
+    from ltspice_mcp.tools import schematic_edit
+
+    case_id = "connectivity/unlabelled_nets"
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    export = rec.export_text(build, case_id)
+
+    async def recorded_export(_copy: Path, _state: SessionState) -> str:
+        # The batch adds a directive, which leaves the recorded cards as they are.
+        return export
+
+    monkeypatch.setattr(schematic_edit, "_export_asc_to_netlist", recorded_export)
+    data = await apply_ops(
+        state_no_sim,
+        sheet,
+        [{"op": "add_directive", "instruction": ".op", "x": 96, "y": 400}],
+        compare={"reference": export},
+        return_views=["pin_legend"],
+    )
+    assert data["commit_state"] == "committed"
+    assert data["verification"]["equivalent"] is True
+    pins = {
+        (row["ref"], pin["name"]): pin
+        for row in data["views"]["pin_legend"]["items"]
+        for pin in row["pins"]
+    }
+    exported = rec.export_instances(build, case_id)
+    for (ref, name), pin in pins.items():
+        node = exported[canon_ref(ref)].nodes[int(name) - 1]
+        if pin["net"] is None:
+            assert pin["net_export"] == node, (ref, name)
+        else:
+            assert "net_export" not in pin
+            assert pin["net"] == node
+    assert pins[("R2", "1")]["net_export"] == pins[("R1", "1")]["net_export"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

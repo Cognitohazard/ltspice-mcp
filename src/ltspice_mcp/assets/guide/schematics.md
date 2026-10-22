@@ -17,7 +17,9 @@ mutation below is an entry in its `ops` list, applied as one guarded
 transaction, so batch a whole build into one call. Place components with the
 `add_component` op; the response's `touched` view gives their placed pins and
 nets, `warnings` any overlap, and `inspect(kind="symbol")` previews the same
-geometry before you place anything. It also lists every attribute the
+geometry before you place anything. A pin on a net no label names has
+`net: null`; with a `compare`, it also has `net_export`, the name LTspice's
+export gives it (`N001`). It also lists every attribute the
 symbol carries (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`):
 the model name and parameters an instance is netlisted with.
 

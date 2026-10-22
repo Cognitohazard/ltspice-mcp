@@ -49,6 +49,7 @@ from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text, stage_sheet
 from ltspice_mcp.lib.encoding import leading_byte_order_mark
+from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
 from ltspice_mcp.lib.pin_legend import (
@@ -82,6 +83,7 @@ from ltspice_mcp.lib.schematic_ops import (
     collapse_result_warnings,
     collect_component_geometry,
     edit_guard,
+    export_parts,
     files_written_beside,
     get_asc_editor,
     make_editor,
@@ -676,6 +678,23 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
         return [], label_only
     nets = trace_nets(editor)
     return build_pin_legend(geometry, lambda c: net_name(nets.get(c, ()))), label_only
+
+
+def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:
+    """Give each legend pin on a net no label names the node ``netlist``, the
+    committed sheet's export, puts it on (``net_export``: ``N001``, ``NC_01``).
+
+    The numbering is the exporter's own, so it comes from an export, never a
+    guess. The rows are the ones the views were paged from, so the pages carry
+    the names too.
+    """
+    if not any(pin["net"] is None for row in legend for pin in row["pins"]):
+        return
+    nodes = exported_pin_nodes(netlist, export_parts(editor))
+    for row in legend:
+        for pin in row["pins"]:
+            if pin["net"] is None and (node := nodes.get((row["ref"], pin["name"]))):
+                pin["net_export"] = node
 
 
 # The ``kind`` a label-only pin carries in the preexisting view, beside the
@@ -1738,6 +1757,8 @@ async def _evaluate_edit_schematic(
                 )
                 exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
+                if exported:
+                    _name_nets_as_exported(legend, editor, exported)
                 mismatch = comparison_mismatch(verification)
                 # The stage is over: a later failure is the response's, never
                 # a second verdict on the reference.

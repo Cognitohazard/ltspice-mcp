@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Fixed
 
+- `edit_schematic` replies gave a pin on a net no label names `net: null`,
+  though LTspice's export names it (`N001`). LTspice's numbering is its own, so
+  the name is read off an export, never predicted: a batch with a `compare`
+  exports the committed sheet, and each such pin now also carries
+  `net_export`, its node there. Each part's card is found by the name the
+  exporter writes for it and its nodes are its pins in SpiceOrder, which
+  agrees with the server's own nets on every recorded sheet of both builds.
 - A device inside a subcircuit is named differently in the log's device table
   and in the raw, and each LTspice build spells both its own way (recorded:
   `log/subckt_names*`, `raw/subckt_names*`): `xa:xin:Mtail` on LTspice 26,

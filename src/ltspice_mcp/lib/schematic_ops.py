@@ -714,6 +714,22 @@ def element_class(editor: AscEditor, reference: str) -> str:
     return prefix[:1].upper()
 
 
+def export_parts(
+    editor: AscEditor, geometry: Iterable[dict] | None = None
+) -> list[tuple[str, str, list[str]]]:
+    """Each placed part's reference, element letter and pin names in
+    SpiceOrder: what ``export_nets.exported_pin_nodes`` finds its card and
+    nodes by. A part with a pin of no SpiceOrder is left out."""
+    parts = []
+    for row in collect_component_geometry(editor) if geometry is None else geometry:
+        pins = row["pins"]
+        if any(pin.get("order") is None for pin in pins):
+            continue
+        ordered = [pin["name"] for pin in sorted(pins, key=lambda pin: pin["order"])]
+        parts.append((row["ref"], element_class(editor, row["ref"]), ordered))
+    return parts
+
+
 def collect_component_geometry(editor: AscEditor) -> list[dict]:
     """Collect bounding boxes and pin positions for all components."""
     result: list[dict] = []
