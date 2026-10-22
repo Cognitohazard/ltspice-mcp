@@ -364,6 +364,7 @@ raw.axis(step=0)               # real sampled axis; refuses a native table
 raw.step_count; raw.steps      # captured metadata aligned per step
 raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
+raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements(log_path="result.log")  # XOR: log_path | job_id; RAW is optional
@@ -374,6 +375,19 @@ api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sour
 - `value` reads a plot of one point a step, such as an operating point, as a
   number: a float, or a complex for a complex trace. A trace of more points
   is refused rather than cut to its first; read it with `trace`.
+- `compare` says how far `other`'s traces are from this result's:
+  `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
+  only_there, span, points}`. Signals match by name without case, and by
+  default every signal both hold is compared, the axis aside. `other_step`
+  defaults to the step of `other` whose parameters are this step's (step 0 of
+  a result that is not stepped); a step with no match is refused. On a sampled
+  axis each signal is compared at this result's points within the span both
+  axes cover, `other` read there by linear interpolation when its axis
+  differs: in log frequency, log magnitude and unwrapped phase on a frequency
+  axis. A plot of no axis compares point by point and needs as many points.
+  `max_rel` is `max_abs` over this result's largest magnitude of the signal,
+  null when that is 0; complex values compare as complex numbers. No
+  tolerance is applied.
 - `device_op_points` reads the semiconductor operating points LTspice prints in
   the log of an `.op` run under `.options logopinfo`, by device and parameter.
   The table holds three significant digits; a node voltage or a device current

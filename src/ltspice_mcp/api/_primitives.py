@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.decoded_log import LogSectionName
-from ltspice_mcp.lib.decoded_raw import DecodedRaw
+from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedRaw
 from ltspice_mcp.lib.log_parser import split_device_key
 from ltspice_mcp.state import SessionState
 
@@ -150,6 +151,140 @@ class RawResult:
                     }
                 )
         return rows
+
+    def _compared_signals(self) -> dict[str, str]:
+        """This plot's traces but its axis, by name without case."""
+        axis = self._raw.descriptor.axis
+        return {
+            trace.name.casefold(): trace.name
+            for trace in self._raw.descriptor.traces
+            if axis is None or trace.name != axis.name
+        }
+
+    def compare(
+        self,
+        other: RawResult,
+        *,
+        signals: Sequence[str] | None = None,
+        step: int = 0,
+        other_step: int | None = None,
+    ) -> dict[str, Any]:
+        """How far ``other``'s traces are from this result's, signal by signal.
+
+        Signals are matched by name without case, as SPICE reads them;
+        ``signals`` names the ones to compare, and by default every signal
+        both hold is, the axis aside. Each is compared at this result's
+        points, ``other`` read there by interpolation when its axis differs
+        (a compressed LTspice raw stores few points, and its values between
+        them are the line drawn through them): linearly on a time or sweep
+        axis, in log frequency, dB and unwrapped phase on a frequency axis.
+        Only the span both axes cover is compared. A plot of no axis, such as
+        an operating point, compares point by point. Complex values compare as
+        complex numbers.
+
+        ``other_step`` defaults to the step of ``other`` whose parameters are
+        this ``step``'s, or step 0 of a result that is not stepped.
+
+        Returns ``{"signals": {name: {"max_abs", "max_rel", "at", "value",
+        "other"}}, "only_here", "only_there", "span", "points"}``: per signal
+        the largest difference, its share of this result's largest magnitude
+        of that signal (None when that is 0), the axis value it is at, and
+        the two values there. How large a difference may be is the caller's.
+        """
+        self._validate_step(step)
+        if other_step is None:
+            other_step = _paired_step(self.steps[step], other)
+        other._validate_step(other_step)
+        here, there = self._compared_signals(), other._compared_signals()
+        if signals is None:
+            keys = [key for key in here if key in there]
+        else:
+            keys = [name.casefold() for name in signals]
+            missing = [name for name in signals if name.casefold() not in here.keys() & there]
+            if missing:
+                raise ResultError(f"Not a signal of both results: {', '.join(missing)}")
+        if (self._raw.descriptor.axis is None) != (other._raw.descriptor.axis is None):
+            raise ResultError("One result has a sampled axis and the other has none.")
+        compared: dict[str, Any] = {}
+        span: list[float] | None = None
+        points: int
+        other_axis = None
+        if self._raw.descriptor.axis is None:
+            at = None
+            select = slice(None)
+            points = len(self.trace(next(iter(here.values())), step=step)) if here else 0
+        else:
+            axis, other_axis = self.axis(step=step), other.axis(step=other_step)
+            low = max(axis.min(), other_axis.min())
+            high = min(axis.max(), other_axis.max())
+            select = (axis >= low) & (axis <= high)
+            points = int(np.count_nonzero(select))
+            if points == 0:
+                raise ResultError("The two results' axes share no point to compare at.")
+            at = axis[select]
+            span = [float(low), float(high)]
+        log_frequency = self._raw.descriptor.analysis in AC_SHAPED
+        for key in keys:
+            ours = self.trace(here[key], step=step)[select]
+            theirs = other.trace(there[key], step=other_step)
+            if at is None:
+                if theirs.size != ours.size:
+                    raise ResultError(
+                        f"{here[key]!r} has {ours.size} points here and {theirs.size} in the "
+                        "other result; a plot of no axis compares point by point."
+                    )
+            elif other_axis is not None and not np.array_equal(at, other_axis):
+                theirs = _resample(other_axis, theirs, at, log_frequency=log_frequency)
+            difference = np.abs(ours - theirs)
+            worst = int(np.argmax(difference))
+            peak = float(np.max(np.abs(ours)))
+            compared[here[key]] = {
+                "max_abs": float(difference[worst]),
+                "max_rel": float(difference[worst]) / peak if peak else None,
+                "at": None if at is None else float(at[worst]),
+                "value": ours[worst].item(),
+                "other": theirs[worst].item(),
+            }
+        return {
+            "signals": compared,
+            "only_here": sorted(name for key, name in here.items() if key not in there),
+            "only_there": sorted(name for key, name in there.items() if key not in here),
+            "span": span,
+            "points": points,
+        }
+
+
+def _paired_step(parameters: dict[str, Any], other: RawResult) -> int:
+    """The step of ``other`` whose parameters are ``parameters``; step 0 of a
+    result that is not stepped."""
+    if other.step_count == 1 and not other.steps[0]:
+        return 0
+    for index, theirs in enumerate(other.steps):
+        if theirs == parameters:
+            return index
+    raise ResultError(
+        f"No step of the other result has this step's parameters ({parameters or 'none'}); "
+        "pass other_step."
+    )
+
+
+def _resample(
+    axis: np.ndarray, values: np.ndarray, at: np.ndarray, *, log_frequency: bool
+) -> np.ndarray:
+    """``values`` on ``axis`` read at ``at`` by linear interpolation: in log
+    frequency, and for a complex value in log magnitude and unwrapped phase, on a
+    frequency axis."""
+    order = np.argsort(axis, kind="stable")
+    axis, values = axis[order], values[order]
+    if log_frequency and axis[0] > 0 and at.min() > 0:
+        axis, at = np.log10(axis), np.log10(at)
+        if np.iscomplexobj(values) and np.all(values != 0):
+            magnitude = np.exp(np.interp(at, axis, np.log(np.abs(values))))
+            phase = np.interp(at, axis, np.unwrap(np.angle(values)))
+            return magnitude * np.exp(1j * phase)
+    if np.iscomplexobj(values):
+        return np.interp(at, axis, np.real(values)) + 1j * np.interp(at, axis, np.imag(values))
+    return np.interp(at, axis, values)
 
 
 async def load_raw_result(

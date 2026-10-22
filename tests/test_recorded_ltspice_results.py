@@ -1353,3 +1353,82 @@ def test_ltspice_xvii_refuses_a_frequency_response_analysis():
     errors = extract_log_diagnostics(log)["errors"]
     assert any('Unknown SPICE device type "@"' in error for error in errors)
     assert not rec.recorded("ltspice17", "raw/fra.fra_1.raw").exists()
+
+
+class TestCompareRuns:
+    """``RawResult.compare``: how far one run's traces are from another's,
+    signal by signal, the tolerance left to the caller."""
+
+    def _load(self, state: SessionState, build: str, case_id: str, directory: Path):
+        return SyncApi(state).load_raw(raw_path=rec.stage_run(build, case_id, directory / build))
+
+    @pytest.mark.parametrize("build", rec.BUILDS)
+    def test_a_compressed_run_is_read_along_its_lines(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """XVII keeps 13 points of the 1 mV charge, LTspice 26 every one.
+        Compared at the uncompressed run's points, the compressed run is read
+        along the lines between its own, which cut the curve by 1.5% of its
+        peak on XVII; LTspice 26's two runs are the same."""
+        full = self._load(state_no_sim, build, "raw/compress_1mv_off", work_dir)
+        compressed = self._load(state_no_sim, build, "raw/compress_1mv", work_dir)
+
+        found = full.compare(compressed, signals=["v(OUT)"])
+
+        assert list(found["signals"]) == ["V(out)"]
+        assert found["span"] == [0.0, pytest.approx(5e-3)]
+        assert found["points"] == full.axis().size
+        row = found["signals"]["V(out)"]
+        if rec.generation(build) == "xvii":
+            assert row["max_rel"] == pytest.approx(0.015, abs=0.002)
+            assert 0 < row["at"] < 1e-3
+            assert row["value"] - row["other"] == pytest.approx(row["max_abs"])
+        else:
+            assert row["max_abs"] == 0.0
+
+    @pytest.mark.parametrize("case_id", ["raw/op", "raw/ac", "raw/tran"])
+    def test_the_two_builds_runs_of_one_deck_compare_signal_by_signal(
+        self, case_id: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The two builds name every signal alike here, and agree to the last
+        bit on the operating point, to rounding on the complex AC response,
+        and on the transient where XVII's compressed run stored its points."""
+        current, xvii = (
+            self._load(state_no_sim, build, case_id, work_dir) for build in rec.BUILDS
+        )
+
+        found = current.compare(xvii)
+
+        assert (found["only_here"], found["only_there"]) == ([], [])
+        assert {"V(in)", "V(out)", "I(R1)", "I(V1)"} <= set(found["signals"])
+        assert {"time", "frequency"}.isdisjoint(found["signals"])
+        rows = found["signals"].values()
+        if case_id == "raw/op":
+            assert found["span"] is None and found["points"] == 1
+            assert all(row["max_abs"] == 0.0 and row["at"] is None for row in rows)
+        elif case_id == "raw/ac":
+            assert isinstance(found["signals"]["V(out)"]["value"], complex)
+            assert all(row["max_rel"] < 1e-12 for row in rows if row["max_rel"] is not None)
+        else:
+            assert found["signals"]["V(out)"]["max_rel"] > 1e-3
+
+    def test_a_stepped_run_is_compared_step_for_step(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Steps pair by their parameters; one that names none is refused
+        until the step to compare with is given."""
+        build = rec.BUILDS[0]
+        stepped = self._load(state_no_sim, build, "raw/step_tran", work_dir)
+        plain = self._load(state_no_sim, build, "raw/tran", work_dir)
+        last = stepped.step_count - 1
+
+        same = stepped.compare(stepped, step=last)
+        across = stepped.compare(stepped, step=last, other_step=0)
+
+        assert all(row["max_abs"] == 0.0 for row in same["signals"].values())
+        assert across["signals"]["V(out)"]["max_abs"] > 0
+        with pytest.raises(ResultError, match="pass other_step"):
+            plain.compare(stepped)
+        assert plain.compare(stepped, other_step=0)["signals"]
+        with pytest.raises(ResultError, match="Not a signal of both results: V\\(nowhere\\)"):
+            plain.compare(stepped, other_step=0, signals=["V(nowhere)"])

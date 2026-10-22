@@ -972,6 +972,15 @@ recording that showed it.
 
 ### Added
 
+- `RawResult.compare(other, signals=None, step=0, other_step=None)` in the
+  Python API says how far another run's traces are from a run's: per signal
+  the largest difference, its share of the run's peak and where it is, and the
+  signals only one run holds. It matches names without case, pairs steps by
+  their parameters, compares over the span both axes cover and reads the other
+  run by interpolation where its axis differs (in log frequency, magnitude and
+  phase on an AC run), so a compressed LTspice raw is read along the lines its
+  points draw. Confirming that a new model library reproduces archived runs
+  needed this written by hand.
 - `analyze_results` says when device operating points it read came from
   LTspice's log table, with the observation `device_op_log_precision`: the
   table prints every value to three significant digits. It is said once for a

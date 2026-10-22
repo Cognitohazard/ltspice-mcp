@@ -105,7 +105,16 @@ v = r.trace("V(out)", step=0)  # numpy array, complex on an .AC run
 vop = r.value("V(out)", step=0)  # one number, from an operating point (.op)
 meas = api.measurements(job_id=job_id, case_id=case_id)  # parsed .meas values
 ops = api.device_op_points(job_id=job_id, case_id=case_id)  # ops["m1"]["gm"], .op log, 3 digits
+d = r.compare(api.load_raw("archived.raw"))  # d["signals"]["V(out)"]["max_abs"], per signal
 ```
+
+`r.compare(other, signals=None, step=0, other_step=None)` says how far another
+run's traces are from these: per signal the largest difference, its share of
+this run's peak, and where it is, plus the signals only one run holds. Names
+match without case, steps pair by their parameters, and the other run is read
+at this one's points over the span both cover, by interpolation where its axis
+differs (a compressed LTspice raw, guide section 'ltspice'). The tolerance is
+yours.
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot independently of
 case/run and step. `plot_index` defaults to zero and takes a nonnegative integer;
