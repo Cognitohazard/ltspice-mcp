@@ -380,6 +380,12 @@ def normalized_log(text: str, scratch_dir: Path | None) -> Iterator[Path]:
             path.unlink()
 
 
+#: Significant digits in each value of LTspice's device operating-point
+#: table: three on both builds, whatever ``.options numdgt`` says
+#: (``log/device_op``, ``log/device_op_numdgt``).
+DEVICE_OP_TABLE_DIGITS = 3
+
+
 def read_device_op_points(
     log_path: Path, *, scratch_dir: Path | None = None, strict: bool = False
 ) -> dict[str, float]:

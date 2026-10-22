@@ -55,7 +55,11 @@ from ltspice_mcp.lib.pdk_native import (
     NativeLaunchPolicy,
     verify_launch,
 )
-from ltspice_mcp.lib.raw_parser import read_partial_raw_progress
+from ltspice_mcp.lib.raw_parser import (
+    OTHER_RAW_KINDS,
+    other_raw_path,
+    read_partial_raw_progress,
+)
 from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
@@ -1745,6 +1749,7 @@ class ExperimentRunner(RunnerBase):
     def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
+        case.other_raws = list(outcome.other_raws)
         case.simulator_version = outcome.simulator_version
         if outcome.observations:
             case.observations.extend(outcome.observations)
@@ -2036,10 +2041,8 @@ class ExperimentRunner(RunnerBase):
         # the same reconstruction the crash reconciliation uses to FIND these.
         run_dir = job.output_folder or run_dir_in(self.output_folder, job.job_id)
         run_netlist = run_dir / f"{case.run_token}{run_suffix}"
-        paths = {
-            run_netlist,
-            run_netlist.with_suffix(raw_extension),
-        }
+        raw = run_netlist.with_suffix(raw_extension)
+        paths = {run_netlist, raw, *(other_raw_path(raw, kind) for kind in OTHER_RAW_KINDS)}
         if case.raw_file is not None:
             paths.add(case.raw_file)
         if case.log_file is not None:

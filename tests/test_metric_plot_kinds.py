@@ -6,7 +6,6 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.lib.metrics import (
-    classify_analysis,
     guarded_axis,
     noise_trace_unit,
     reject_non_transient,
@@ -38,7 +37,9 @@ def test_native_frequency_axes_keep_their_analysis_kind(name, kind):
             )
         ]
     )
-    assert classify_analysis(raw) == (name, kind, "Hz", True)
+    axis = raw.descriptor.axis
+    assert axis is not None
+    assert (raw.descriptor.analysis, axis.unit, axis.quantity) == (kind, "Hz", "frequency")
     with pytest.raises(ResultError, match="transient"):
         reject_non_transient(raw)
 
@@ -53,7 +54,7 @@ def test_native_table_has_no_time_axis_or_operating_point_hint():
             )
         ]
     )
-    assert classify_analysis(raw) == ("Pole-Zero Analysis", "pz", "", False)
+    assert (raw.descriptor.analysis, raw.descriptor.axis) == ("pz", None)
     with pytest.raises(ResultError, match="table") as failure:
         guarded_axis(raw, 0)
     assert "operating_point" not in str(failure.value)

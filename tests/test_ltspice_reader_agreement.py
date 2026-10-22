@@ -62,7 +62,7 @@ SUBJECTS: list[Subject] = [
 READ = [subject for subject in SUBJECTS if "read" in reader_reply(*subject)]
 REFUSED = [subject for subject in SUBJECTS if "refused" in reader_reply(*subject)]
 #: Files of one point: no axis to read along.
-ONE_POINT = {"op", "op_one_subckt", "op_subckt", "tf", "tran_op_raw.op"}
+ONE_POINT = {"op", "op_one_subckt", "op_save_device", "op_subckt", "tf", "tran_op_raw.op"}
 #: Stepped runs stored a point a step, the stepped parameter first, and the
 #: analysis LTspice's reader names each.
 PARAMETERS_FIRST = {"step_op": "Operating Point", "step_ac_one_freq": "AC Analysis"}
@@ -248,7 +248,10 @@ def test_ltspices_reader_refuses_a_file_of_one_point_which_the_server_reads(
 
 def test_every_file_of_one_point_is_refused_and_no_other():
     assert {(written_by, name) for _reader, written_by, name in REFUSED} == {
-        (written_by, name) for written_by in reader_subjects() for name in ONE_POINT
+        (written_by, name)
+        for written_by, names in reader_subjects().items()
+        for name in names
+        if name in ONE_POINT
     }
 
 

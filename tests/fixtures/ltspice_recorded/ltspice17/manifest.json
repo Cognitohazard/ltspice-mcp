@@ -4313,6 +4313,67 @@
         ".log"
       ]
     },
+    "log/device_op_numdgt": {
+      "behaviour": "log-device-op-precision",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/device_op_numdgt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/device_op_numdgt.cir": "acbb4504b92be7fa4a236391b2c8e590df0979a0c5bc3fa78468a645168bbd93"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/device_op_numdgt.log": {
+          "bytes": 262,
+          "sha256": "40df067a280aa3c5251d61afccda69bf857c7d26522620a0bbcd0cdc5b8c905c"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/device_op_numdgt_off": {
+      "behaviour": "log-device-op-precision",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/device_op_numdgt_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/device_op_numdgt_off.cir": "0e90d0c1b2fd78b9378fc1850703d434c2d089d726e2e8d970f9124881ad8186"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/device_op_numdgt_off.log": {
+          "bytes": 1814,
+          "sha256": "847da816dbadc6d3a23bdb96b1e6fa705ff00920b5fcb35d630cdc816dc775af"
+        },
+        "log/device_op_numdgt_off.raw": {
+          "bytes": 1740,
+          "sha256": "a148ca73f4f46cbda2fd233d12741dde4d589fc56f3e8488100f2c32f4054747"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "log/device_op_off": {
       "behaviour": "log-device-op",
       "command": [
@@ -6398,6 +6459,39 @@
         "raw/op_one_subckt.raw": {
           "bytes": 810,
           "sha256": "c6d806d030306c2bcbe9390d246a473cd48f1337ee7ab320eb87df592892ebe7"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "raw/op_save_device": {
+      "behaviour": "log-device-op-precision",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/op_save_device.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/op_save_device.cir": "5419baa431c1023ae9e683a0c0558c8f4dd13bb7b37a268895bb9245e386eeb2"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/op_save_device.log": {
+          "bytes": 1790,
+          "sha256": "8704be37200341a14233b9667ef9637cd01c4893bd51abe6e603fb6312766a4e"
+        },
+        "raw/op_save_device.raw": {
+          "bytes": 582,
+          "sha256": "5544e3b64a729603b36f8224f18853e02083e3b6f62e776a287b09a4b952a4bb"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

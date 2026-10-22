@@ -31,7 +31,7 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import finished, reconcile_experiment_restart
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
-from ltspice_mcp.lib.raw_parser import has_valid_raw_header
+from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
@@ -172,6 +172,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 "status": case.status,
                 "raw_file": str(case.raw_file) if case.raw_file else None,
                 "log_file": str(case.log_file) if case.log_file else None,
+                "other_raws": case.other_raws,
                 "error": case.error,
                 "failure_code": case.failure_code,
                 "failure_evidence": case.failure_evidence,
@@ -381,6 +382,7 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         status=str(data.get("status", "queued")),  # type: ignore[arg-type]
         raw_file=_path_or_none(data.get("raw_file")),
         log_file=_path_or_none(data.get("log_file")),
+        other_raws=[str(kind) for kind in data.get("other_raws") or []],
         error=data.get("error"),
         failure_code=data.get("failure_code"),
         failure_evidence=data.get("failure_evidence"),
@@ -513,6 +515,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
                 status="produced",
                 raw_file=raw,
                 log_file=log,
+                other_raws=other_raws(raw),
                 completed_at=case.completed_at or now(),
                 simulator_version=case.simulator_version or reported_build(log, raw),
             )

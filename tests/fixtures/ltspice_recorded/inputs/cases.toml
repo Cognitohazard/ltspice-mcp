@@ -480,6 +480,11 @@ model = ["lib/log_parser.py", "lib/log_decode.py", "lib/runner_base.py", "lib/me
 inputs = ["log/device_op.cir", "log/device_op_off.cir", "log/device_op_tran.cir"]
 keep = ["log"]
 
+[behaviour.log-device-op-precision]
+summary = "How many digits the device operating-point table prints under .options numdgt=7, with and without logopinfo, and whether .save of a device parameter (@m1[gm]) stores it in the raw."
+model = ["lib/log_parser.py", "lib/metrics.py"]
+inputs = ["log/device_op_numdgt.cir", "log/device_op_numdgt_off.cir", "raw/op_save_device.cir"]
+
 [behaviour.log-diagnostics]
 summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage."
 model = ["lib/log_parser.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]

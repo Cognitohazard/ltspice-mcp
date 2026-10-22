@@ -560,9 +560,13 @@ advancing; the caller decides whether to cancel it.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
-simulator_version?, attempt?}`. Every key is optional because a run-field
-projection can remove any of them. `simulator_version` is the build the run
-reported in its own output: the LTspice log banner
+other_raws?, simulator_version?, attempt?}`. Every key is optional because a
+run-field projection can remove any of them. `other_raws` maps each kind of
+other raw the run wrote beside its raw to its path (`<run>.<kind>.raw`): `op`,
+a transient's operating point, and `fra_1`, a frequency response analysis's
+results. Only kinds recorded from LTspice are listed, and a run with no raw
+lists none. `simulator_version` is the build the run reported in its own
+output: the LTspice log banner
 (`LTspice 26.0.2 for Windows`), the Xyce log banner
 (`Xyce Release 7.8.0-opensource`), the ngspice console banner
 (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when there

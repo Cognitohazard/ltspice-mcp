@@ -543,6 +543,7 @@ class TestExperimentLifecycle:
             (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes() if recorded else b"Title: result"
         )
         (runs / f"{job.cases[0].run_token}.raw").write_bytes(raw_bytes)
+        (runs / f"{job.cases[0].run_token}.op.raw").write_bytes(raw_bytes)
         (runs / f"{job.cases[0].run_token}.log").write_text("ok\n")
         experiment_store.save_job(job)
 
@@ -551,6 +552,7 @@ class TestExperimentLifecycle:
         assert loaded is not None
         assert loaded.cases[0].status == "produced"
         assert loaded.cases[0].raw_file == runs / f"{job.cases[0].run_token}.raw"
+        assert loaded.cases[0].other_raws == ["op"]
         assert loaded.completeness.produced == 1
         assert loaded.failures == []
         assert any(item["code"] == "unpersisted_runs_recovered" for item in loaded.observations)

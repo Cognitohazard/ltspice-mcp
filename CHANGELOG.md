@@ -929,6 +929,17 @@ recording that showed it.
 
 ### Added
 
+- `analyze_results` says when device operating points it read came from
+  LTspice's log table, with the observation `device_op_log_precision`: the
+  table prints every value to three significant digits. It is said once for a
+  recipe, whether the recipe is `operating_point` or a `value` of `m1.gm`. Recorded on both builds: `.options numdgt=7`
+  leaves it at three digits, and neither build stores a device parameter in
+  the raw instead (LTspice 26 refuses `.save @m1[gm]`; XVII ignores it).
+- A run row maps in `other_raws` each kind of other raw the run wrote beside
+  its raw to its path: `op`, a transient's operating point (`.op.raw`), and
+  `fra_1`, a frequency response analysis's results (`.fra_1.raw`), which a
+  row did not name before. A run with no raw lists none, and a stopped run's
+  other raws are removed with its raw.
 - `analyze_results` reports a compressed LTspice transient stored in few
   points, as the `value` observation `coarse_compressed_waveform`, when a
   recipe reads its samples: the points stored, the span and where the widest

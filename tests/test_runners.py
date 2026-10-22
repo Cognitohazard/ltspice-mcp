@@ -27,6 +27,7 @@ from ltspice_mcp.lib.runner_base import (
     discard_generated_netlist,
 )
 from ltspice_mcp.lib.spice_lex import lex
+from tests import _ltspice_recorded as rec
 from tests.conftest import LIVENESS_S, submit_through_spicelib
 from tests.test_completion_logs import captured_completion_facts
 
@@ -910,6 +911,27 @@ class _RecordingSimulator(Simulator):
         return []
 
 
+class _FraSimulator(_RecordingSimulator):
+    """Writes every file LTspice 26 wrote for the recorded ``raw/fra``."""
+
+    @classmethod
+    def run(
+        cls,
+        netlist_file,
+        cmd_line_switches=None,
+        timeout=None,
+        stdout=None,
+        stderr=None,
+        cwd=None,
+        exe_log=False,
+    ) -> int:
+        netlist = Path(netlist_file)
+        for suffix in rec.entry("ltspice26", "raw/fra")["written"]:
+            netlist.with_name(netlist.stem + suffix).write_bytes(b"Title: recorded\n")
+        netlist.with_suffix(".log").write_text("Circuit: recorded\n")
+        return 0
+
+
 class _TimedOutSimulator(_RecordingSimulator):
     """What spicelib's ``subprocess.run`` raises when its own bound runs out."""
 
@@ -926,6 +948,17 @@ class _TimedOutSimulator(_RecordingSimulator):
     ) -> int:
         Path(netlist_file).with_suffix(".log").write_text("Circuit: recorded\n")
         raise subprocess.TimeoutExpired(cmd=["recording-simulator"], timeout=timeout or 0)
+
+
+@pytest.mark.asyncio
+async def test_a_run_names_the_other_raws_ltspice_wrote_beside_its_raw(tmp_path: Path):
+    """LTspice 26 wrote a frequency response analysis's results (``.fra_1.raw``)
+    and the transient's operating point (``.op.raw``) beside the run's raw; the
+    outcome names both kinds."""
+    outcome = await submit_through_spicelib(tmp_path, _FraSimulator)
+
+    assert outcome.error is None
+    assert outcome.other_raws == ("op", "fra_1")
 
 
 @pytest.mark.asyncio

@@ -458,9 +458,12 @@ class TestArtifactCleanup:
             case.log_file = work_dir / f"{case.run_token}.fail"
             run_netlist = work_dir / f"{case.run_token}.cir"
             raw = work_dir / f"{case.run_token}.raw"
+            # What a transient and a frequency response analysis also write.
+            beside = [work_dir / f"{case.run_token}.{kind}.raw" for kind in ("op", "fra_1")]
             unrelated = work_dir / f"{case.run_token}.tmp"
             run_netlist.write_text(".op\n.end\n")
-            raw.write_bytes(b"partial")
+            for heavy in (raw, *beside):
+                heavy.write_bytes(b"partial")
             case.log_file.write_text("killed")
             unrelated.write_text("keep")
 
@@ -468,6 +471,7 @@ class TestArtifactCleanup:
 
             assert not run_netlist.exists()
             assert not raw.exists()
+            assert not any(path.exists() for path in beside)
             assert case.log_file.exists()
             assert unrelated.exists()
         finally:

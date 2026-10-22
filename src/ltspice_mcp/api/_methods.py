@@ -1220,8 +1220,9 @@ class ApiMethodsMixin(ABC):
         case, by device and parameter: ``ops["m1"]["gm"]``.
 
         LTspice prints them in the log of an ``.op`` run whose deck carries
-        ``.options logopinfo``, to three significant digits; a device inside a
-        subcircuit keeps LTspice's name for it. Empty when the log has no such
+        ``.options logopinfo``, to three significant digits whatever
+        ``.options numdgt`` says; a device inside a subcircuit keeps LTspice's
+        name for it. Empty when the log has no such
         table, as an ngspice log never does: ngspice's are traces of its raw,
         read with ``load_raw(...).value("@m1[gm]")``.
         """

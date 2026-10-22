@@ -29,7 +29,14 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError
 from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, PlotDescriptor, RawData
+from ltspice_mcp.lib.decoded_raw import (
+    AC_SHAPED,
+    Analysis,
+    DecodedPlot,
+    DecodedRaw,
+    PlotDescriptor,
+    RawData,
+)
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
 from ltspice_mcp.lib.result_observations import surface_observations
@@ -67,6 +74,26 @@ def _parse_failure(what: str, exc: BaseException) -> str:
 _RAW_HEADER_ASCII = b"Title:"
 _RAW_TITLE_UTF16 = "Title:".encode("utf-16-le")
 _RAW_HEADER_UTF16 = (b"\xff\xfe" + _RAW_TITLE_UTF16, _RAW_TITLE_UTF16)
+
+
+#: The raws LTspice is recorded writing beside a run's raw, as
+#: ``<stem>.<kind>.raw``, by kind: a transient's initial operating point (both
+#: builds) and LTspice 26's frequency response analysis results (the
+#: ``written`` list of the recorded ``raw/fra``).
+OTHER_RAW_KINDS = ("op", "fra_1")
+
+
+def other_raw_path(raw: Path, kind: str) -> Path:
+    """Where a run whose raw is ``raw`` writes its raw of ``kind``."""
+    return raw.with_name(f"{raw.stem}.{kind}.raw")
+
+
+def other_raws(raw: Path) -> list[str]:
+    """The kinds of other raw the run wrote beside ``raw``. Each is probed by
+    name, so a folder of many runs costs no more than one of a few."""
+    if raw.suffix.lower() != ".raw":
+        return []
+    return [kind for kind in OTHER_RAW_KINDS if os.path.isfile(other_raw_path(raw, kind))]
 
 
 def has_valid_raw_header(path: Path | None) -> bool:
@@ -309,42 +336,52 @@ def detect_sim_type(raw: RawData) -> str:
     return "Unknown"
 
 
-def is_ac_analysis(sim_type: str) -> bool:
-    """Check if simulation type is AC-shaped: an AC analysis, or the results
-    of a frequency response analysis, which LTspice writes in the same layout.
+#: A plot's subject: a raw, or the plot name ``detect_sim_type`` gave for one.
+PlotSubject = RawData | str
 
-    Uses a word-boundary match on "AC" so substrings in unrelated words
-    (e.g. "characteristic", "backup", "BACK") don't false-positive.
-    """
-    return bool(_RE_AC.search(sim_type))
-
-
-def is_noise_analysis(sim_type: str) -> bool:
-    """Check if the sim type is a Noise Spectral Density run.
-
-    LTspice's Plotname is ``Noise Spectral Density - (V/Hz½ or A/Hz½)``;
-    the word-boundary match avoids false positives on hypothetical
-    composite types like "DC NOISE ANALYSIS".
-    """
-    return bool(_RE_NOISE.search(sim_type))
+_NOISE: frozenset[Analysis] = frozenset({"noise"})
+_OP: frozenset[Analysis] = frozenset({"op"})
+_DC: frozenset[Analysis] = frozenset({"dc"})
+_TRANSIENT: frozenset[Analysis] = frozenset({"transient"})
 
 
-def is_operating_point(sim_type: str) -> bool:
-    """Check if the sim type is a bias-point solve (``.op``).
+def _classified(
+    subject: PlotSubject, analyses: frozenset[Analysis], pattern: re.Pattern[str]
+) -> bool:
+    """Whether ``subject`` is one of ``analyses``. A decoded raw answers from
+    the analysis its decoder read off the plot; a plot name, or a reader that
+    is not decoded, by ``pattern``'s word-boundary match on the name."""
+    if not isinstance(subject, str):
+        if (descriptor := _selected_descriptor(subject)) is not None:
+            return descriptor.analysis in analyses
+        subject = detect_sim_type(subject)
+    return bool(pattern.search(subject))
 
-    Both simulators name it "Operating Point". Word-boundary matched like its
-    siblings so a composite name cannot false-positive on a substring.
-    """
-    return bool(_RE_OP.search(sim_type))
+
+def is_ac_analysis(subject: PlotSubject) -> bool:
+    """Whether the plot is AC-shaped: an AC analysis, or the results of a
+    frequency response analysis, which LTspice writes in the same layout."""
+    return _classified(subject, AC_SHAPED, _RE_AC)
 
 
-def is_dc_analysis(sim_type: str) -> bool:
-    """Check if the sim type is a .DC sweep (transfer characteristic).
+def is_noise_analysis(subject: PlotSubject) -> bool:
+    """Whether the plot is a noise run."""
+    return _classified(subject, _NOISE, _RE_NOISE)
 
-    Word-boundary match on "DC" so LTspice's "DC transfer characteristic"
-    matches while substrings inside unrelated words do not.
-    """
-    return bool(_RE_DC.search(sim_type))
+
+def is_operating_point(subject: PlotSubject) -> bool:
+    """Whether the plot is a bias-point solve (``.op``)."""
+    return _classified(subject, _OP, _RE_OP)
+
+
+def is_dc_analysis(subject: PlotSubject) -> bool:
+    """Whether the plot is a .DC sweep."""
+    return _classified(subject, _DC, _RE_DC)
+
+
+def is_transient_analysis(subject: PlotSubject) -> bool:
+    """Whether the plot is a transient run."""
+    return _classified(subject, _TRANSIENT, _RE_TRANSIENT)
 
 
 def get_step_count(raw: RawData) -> int:
@@ -832,11 +869,11 @@ def build_simulation_summary(
 
     range_info: dict = {}
     if has_axis and point_count > 0 and axis is not None:
-        if _RE_TRANSIENT.search(sim_type):
+        if is_transient_analysis(raw):
             range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
         elif (
-            is_ac_analysis(sim_type)
-            or is_noise_analysis(sim_type)
+            is_ac_analysis(raw)
+            or is_noise_analysis(raw)
             or (
                 descriptor is not None
                 and descriptor.axis is not None
@@ -850,7 +887,7 @@ def build_simulation_summary(
                 "freq_start": float(axis[0].real),
                 "freq_end": float(axis[-1].real),
             }
-        elif _RE_DC.search(sim_type):
+        elif is_dc_analysis(raw):
             range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
         # Operating Point has no range (single point)
 
@@ -957,7 +994,7 @@ def build_simulation_summary(
                     for d in demoted
                 )
 
-        if op_solve_count > 1 and step_count <= 1 and "operating" in sim_type.lower():
+        if op_solve_count > 1 and step_count <= 1 and is_operating_point(raw):
             if op_log_steps:
                 param_name = next(iter(op_log_steps[0].keys()), "param")
                 suggestion = (

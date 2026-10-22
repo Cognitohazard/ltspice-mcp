@@ -528,6 +528,7 @@ def _make_child(
         )
         case.status = "queued"
         case.raw_file = case.log_file = None
+        case.other_raws = []
         case.error = case.failure_code = None
         case.failure_evidence = None
         case.submitted_at = case.completed_at = None

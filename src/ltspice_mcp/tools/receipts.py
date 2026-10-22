@@ -37,6 +37,7 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.projection import keep_plan, project_row
+from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -190,6 +191,7 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "status": {"type": "string"},
         "raw": {"type": ["string", "null"]},
         "log": {"type": ["string", "null"]},
+        "other_raws": {"type": "object", "additionalProperties": {"type": "string"}},
         "simulator_version": {"type": ["string", "null"]},
         "attempt": {
             "type": "object",
@@ -781,6 +783,11 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         "status": case.status,
         "raw": str(case.raw_file) if case.raw_file else None,
         "log": str(case.log_file) if case.log_file else None,
+        "other_raws": (
+            {kind: str(other_raw_path(case.raw_file, kind)) for kind in case.other_raws}
+            if case.raw_file
+            else {}
+        ),
         "simulator_version": case.simulator_version,
     }
     if case.recovery is not None:

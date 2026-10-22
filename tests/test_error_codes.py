@@ -447,6 +447,7 @@ FROZEN_ERROR_CODES = (
     "dangling_request_index_replaced",
     "deadline",
     "detached_owner",
+    "device_op_log_precision",
     "device_op_points_absent",
     "downsampled",
     "duplicate_assignment_target",

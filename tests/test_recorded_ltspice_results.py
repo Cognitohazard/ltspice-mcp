@@ -52,6 +52,7 @@ from tests import _ltspice_recorded as rec
 from tests._ltspice_recorded import declared_points, header_fields
 from tests.conftest import SyncApi
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
+from tests.test_decoded_raw import assert_classified_as_named
 
 
 def complete_raws(build: str) -> list[str]:
@@ -85,10 +86,12 @@ def test_every_recorded_raw_decodes_to_the_traces_its_header_declares(
     build: str, case_id: str, tmp_path: Path
 ):
     """Binary and text, four-byte and eight-byte, real and complex, stepped,
-    windowed, uncompressed, converted to Fast Access, with subcircuits."""
+    windowed, uncompressed, converted to Fast Access, with subcircuits; and
+    each is classified by its decoded analysis as its plot name is."""
     parsed = rec.decode(build, case_id, tmp_path)
     assert parsed.raw.get_trace_names() == declared_names(build, case_id)
     assert parsed.raw.dialect == "ltspice"
+    assert_classified_as_named(parsed.raw)
     if parsed.raw.descriptor.step_status == "unresolved":
         return  # a stepped operating point: see TestSteppedRuns
     points = declared_points(build, case_id)
@@ -1037,11 +1040,54 @@ class TestDeviceOperatingPoints:
             flat
         )
 
+    def test_the_table_prints_three_significant_digits_whatever_numdgt_says(self, build: str):
+        for case_id in (_device_op_case(build), _device_op_case(build, numdgt=True)):
+            points = read_device_op_points(rec.recorded(build, f"{case_id}.log"))
+            assert len(points) > 20, case_id
+            assert all(value == float(f"{value:.2e}") for value in points.values()), case_id
 
-def _device_op_case(build: str) -> str:
-    """The recording whose log holds the device table: XVII prints it without
-    ``.options logopinfo`` and refuses the option."""
-    return "log/device_op_off" if rec.generation(build) == "xvii" else "log/device_op"
+    def test_save_does_not_store_a_device_parameter_in_the_raw(self, build: str):
+        """LTspice 26 refuses ``@m1[gm]`` in ``.save`` and writes no raw; XVII
+        runs and stores only the node it asked for beside them."""
+        if rec.generation(build) == "xvii":
+            assert declared_names(build, "raw/op_save_device") == ["V(d)"]
+        else:
+            log = read_spice_text(rec.recorded(build, "raw/op_save_device.log"))
+            assert "syntax error" in log
+            assert not rec.has(build, "raw/op_save_device.raw")
+
+    async def test_analyze_results_says_the_device_values_have_three_digits(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Once, for the bias point and for a value read by its device name."""
+        raw = rec.stage_run(build, _device_op_case(build, numdgt=True), work_dir)
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [
+                    {"key": "op", "metric": "operating_point"},
+                    {"key": "gm", "metric": "value", "expr": "m1.gm"},
+                ],
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None
+        assert data["failures"] == []
+        (gm,) = data["results"]["gm"]["values"]
+        assert gm["value"]["value"] == pytest.approx(5.86e-4)
+        (observation,) = [
+            o for o in data["observations"] if o["code"] == "device_op_log_precision"
+        ]
+        assert observation["evidence"]["significant_digits"] == 3
+        assert observation["evidence"]["runs"] == ["dut"]
+
+
+def _device_op_case(build: str, *, numdgt: bool = False) -> str:
+    """The recording whose log holds the device table, with ``.options
+    numdgt=7`` or without: XVII prints it without ``.options logopinfo`` and
+    refuses the option."""
+    variant = "_numdgt" if numdgt else ""
+    return f"log/device_op{variant}" + ("_off" if rec.generation(build) == "xvii" else "")
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

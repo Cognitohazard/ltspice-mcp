@@ -30,6 +30,7 @@ from ltspice_mcp.lib.log_parser import (
 )
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
+from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
 from ltspice_mcp.lib.simulator_build import executable_path, predates_logopinfo, reported_build
 from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
@@ -91,6 +92,8 @@ class RunOutcome(NamedTuple):
     # for every run, stopped ones included: which program ran is a fact about
     # the run whatever became of its results.
     simulator_version: str | None = None
+    # The kinds of other raw the run wrote beside its raw (``other_raws``).
+    other_raws: tuple[str, ...] = ()
 
 
 _REQUESTED_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS) | {
@@ -300,7 +303,8 @@ def _raw_completion_outcome(raw_file: str, log_file: str) -> RunOutcome | None:
                 f"Simulation finished but its raw file is unreadable: {exc}",
             )
     if raw_size > 0:
-        return RunOutcome(raw_file, log_file, raw_size, None)
+        written = tuple(other_raws(Path(raw_file)))
+        return RunOutcome(raw_file, log_file, raw_size, None, other_raws=written)
     return None
 
 

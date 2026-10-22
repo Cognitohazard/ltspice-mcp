@@ -1628,6 +1628,34 @@ async def _adapter_value(
     return sanitize_payload(await metrics.METRICS[type(recipe)](source, recipe, step, state))
 
 
+def _log_precision_observations(records: list[Record]) -> list[Observation]:
+    """Say that device operating points read here came from LTspice's log
+    table, and to how many digits: once for a recipe, whatever it reduces or
+    projects its rows to, the way a run's data facts are said."""
+    marked = [record for record in records if "device_op_significant_digits" in record.value]
+    if not marked:
+        return []
+    digits = marked[0].value["device_op_significant_digits"]
+    runs = sorted({record.source for record in marked})
+    return [
+        Observation(
+            code="device_op_log_precision",
+            kind="value",
+            detail=(
+                f"Device operating points read here come from LTspice's log table, "
+                f"which prints every value to {digits} significant digits: each is "
+                "rounded by up to half a unit in its last digit. Neither "
+                ".options numdgt nor .save @m1[gm] gives more on LTspice."
+            ),
+            evidence={
+                "significant_digits": digits,
+                "runs": runs[:_SOLVE_FAILURE_RUN_CAP],
+                "run_count": len(runs),
+            },
+        )
+    ]
+
+
 def _absence_observations(recipe: Recipe, key: str, records: list[Record]) -> list[Observation]:
     """State what a successful recipe looked for and did not find.
 
@@ -3735,6 +3763,7 @@ async def _evaluate_unit(
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
+    observations.extend(_log_precision_observations(records))
     observations.extend(
         await asyncio.to_thread(_coarse_waveform_observations, eligible_runs, captures)
     )

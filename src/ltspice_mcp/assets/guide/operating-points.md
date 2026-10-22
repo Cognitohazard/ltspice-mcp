@@ -26,8 +26,13 @@ Run it with `run_experiments`, then read
 and the terminal currents at that bias. On LTspice these come from the log's
 *Semiconductor Device Operating Points* block, which LTspice writes only for
 `.op` and only under `.options logopinfo`; the server adds that option to
-every `.op` run. On ngspice, `.save @m1[gm] @m1[gds] @m1[vth] @m1[id]` puts
-them in the raw. The recipe reads either the same way.
+every `.op` run. The block prints every value to three significant digits
+(`4.66e-05`), which rounds it by up to 0.5%; `analyze_results` says so in
+`observations` (`device_op_log_precision`). Neither build
+gives more: `.options numdgt=7` leaves the block at three digits, LTspice 26
+refuses `.save @m1[gm]` and XVII ignores it. On ngspice,
+`.save @m1[gm] @m1[gds] @m1[vth] @m1[id]` puts them in the raw at full
+precision. The recipe reads either the same way.
 
 ## gm/ID against a swept bias (ngspice)
 

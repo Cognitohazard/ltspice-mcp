@@ -52,12 +52,11 @@ from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import scan_op_step_log
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
-    dc_axis_name,
     declared_type,
     detect_sim_type,
     extract_operating_point,
@@ -66,6 +65,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_dc_analysis,
     is_noise_analysis,
     is_operating_point,
+    is_transient_analysis,
     nearest_index,
     query_point_value,
     real_axis,
@@ -224,20 +224,11 @@ def reject_non_transient(raw) -> None:
     axis and is not a sweep; the caller's get_axis call is guarded to surface a
     clean ResultError pointing at operating_point.
     """
-    sim_type = detect_sim_type(raw)
-    if (
-        (
-            isinstance(raw, (DecodedRaw, DecodedPlot))
-            and raw.descriptor.analysis not in {"transient", "op"}
-        )
-        or is_ac_analysis(sim_type)
-        or is_dc_analysis(sim_type)
-        or is_noise_analysis(sim_type)
-    ):
+    if not (is_transient_analysis(raw) or is_operating_point(raw)):
         # show_hint=False: the redirect above is the complete guidance — the
         # generic verify-with-check_job hint would misdirect (errors.py contract).
         raise ResultError(
-            f"This tool requires transient analysis (.tran) data; got {sim_type!r}. "
+            f"This tool requires transient analysis (.tran) data; got {detect_sim_type(raw)!r}. "
             "For a .DC sweep use the value or signal_stats recipe; for frequency-domain "
             "(.AC / .noise) use the bode_* or signal_stats recipes.",
             show_hint=False,
@@ -321,43 +312,6 @@ def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     if np.iscomplexobj(axis):
         axis = np.real(axis)
     return axis
-
-
-def classify_analysis(raw) -> tuple[str, str, str, bool]:
-    """``(plotname, analysis_type, axis_unit, x_is_log)`` for a result raw.
-
-    ``analysis_type`` is one of ``transient``/``ac``/``dc``/``noise``;
-    ``axis_unit`` is the x unit (``s``/``Hz``/``""``); ``x_is_log`` marks a
-    log-frequency x (ac/noise). Shared by the waveform, CSV export and plot
-    paths so the classification lives in one place.
-    """
-    sim_type = detect_sim_type(raw)
-    if isinstance(raw, (DecodedRaw, DecodedPlot)):
-        descriptor = raw.descriptor
-        axis = descriptor.axis
-        return (
-            sim_type,
-            descriptor.analysis,
-            axis.unit or "" if axis is not None else "",
-            axis is not None and axis.quantity == "frequency",
-        )
-    if is_noise_analysis(sim_type):
-        return sim_type, "noise", "Hz", True
-    if is_ac_analysis(sim_type):
-        return sim_type, "ac", "Hz", True
-    if is_dc_analysis(sim_type):
-        return sim_type, "dc", "", False
-    return sim_type, "transient", "s", False
-
-
-def axis_may_descend(sim_type: str) -> bool:
-    """Whether this analysis can legitimately produce a descending axis.
-
-    Sweep analyses (DC, noise) may run high→low (e.g. ``.dc V1 5 0 -0.1``), so
-    their callers opt into the ``window_and_clean`` flip. Time/frequency axes
-    cannot descend, so a non-monotonic one there is corruption, not a sweep.
-    """
-    return is_dc_analysis(sim_type) or is_noise_analysis(sim_type)
 
 
 def window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
@@ -596,11 +550,10 @@ async def load_ac_signal(
         if not signal:
             raise ResultError("Signal is just a '-'; expected '-V(node)' or '-A/B'.")
     raw = await services.load_raw(source, state)
-    sim_type = detect_sim_type(raw)
-    if not is_ac_analysis(sim_type):
+    if not is_ac_analysis(raw):
         # show_hint=False: precise redirect; the generic hint would misdirect.
         raise ResultError(
-            f"This tool requires AC analysis data; got {sim_type!r}. "
+            f"This tool requires AC analysis data; got {detect_sim_type(raw)!r}. "
             "Use signal_stats (transient) or run a .AC sweep first.",
             show_hint=False,
         )
@@ -749,8 +702,7 @@ def filter_operating_point(op_data: dict, device: str) -> bool:
 
 def operating_point_units(raw, op_data: dict) -> dict[str, str]:
     """Units for bias values, or specific types in a derived no-axis result."""
-    sim_type = detect_sim_type(raw)
-    is_bias = is_operating_point(sim_type) or is_dc_analysis(sim_type)
+    is_bias = is_operating_point(raw) or is_dc_analysis(raw)
     units: dict[str, str] = {}
     for bucket in OP_BUCKETS:
         for name in op_data.get(bucket, {}):
@@ -1006,17 +958,6 @@ def unverified_input_noise_warning(unit: str | None) -> str:
     )
 
 
-def query_x_label(raw, sim_type: str) -> str:
-    """Axis label for a point read: ``f`` for AC, ``t`` for transient, and the
-    swept variable's own name for a .dc sweep (not a misleading ``t``)."""
-    if is_ac_analysis(sim_type):
-        return "f"
-    if is_dc_analysis(sim_type):
-        name, _ = dc_axis_name(raw)
-        return name or "x"
-    return "t"
-
-
 def snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
     """True iff ``actual`` is within ``rtol`` (relative) of ``requested``.
 
@@ -1094,7 +1035,7 @@ async def summary(
     # no metrics.
     ac_metrics = None
     ac_signal_used: str | None = None
-    if is_ac_analysis(facts["sim_type"]):
+    if is_ac_analysis(raw):
         ac_signal_used = signal
         if ac_signal_used is None:
             ac_signal_used = next(
@@ -1311,12 +1252,15 @@ async def _value_from_operating_point(
             f"literally. Present here: {present}"
         ) from None
     name, item = match
-    return {
+    data: MetricValue = {
         "signal": name,
         "value": item,
         "unit": op.get("units", {}).get(name),
         "warnings": op.get("warnings", []),
     }
+    if name in op["device_op_points"] and "device_op_significant_digits" in op:
+        data["device_op_significant_digits"] = op["device_op_significant_digits"]
+    return data
 
 
 async def point_value(
@@ -1370,9 +1314,8 @@ async def point_value(
         except Exception as e:
             raise ResultError(f"Failed to query value: {e}") from e
 
-    sim_type = detect_sim_type(raw)
     unit_warnings: list[str] = []
-    if is_noise_analysis(sim_type):
+    if is_noise_analysis(raw):
         # .noise traces are amplitude spectral density (V/√Hz, A/√Hz), not the
         # plain V/A the trace's whattype declares — match noise_integral and the
         # raw's own "Noise Spectral Density" plotname. The input-referred trace
@@ -1434,10 +1377,10 @@ async def signal_stats(
             "api.load_raw(...).trace(signal) and choose the appropriate calculation.",
             show_hint=False,
         )
-    if recipe.quantiles and (run := classify_analysis(raw)[1]) != "transient":
+    if recipe.quantiles and not is_transient_analysis(raw):
         raise ResultError(
             f"quantiles are weighted by time, so they need a transient run; this one is "
-            f"{run!r}. Drop 'quantiles' for this source.",
+            f"{detect_sim_type(raw)!r}. Drop 'quantiles' for this source.",
             show_hint=False,
         )
     # A failed-but-completed solve makes every stat below garbage; relay it.
@@ -1483,9 +1426,8 @@ async def signal_stats(
     # from transient (axis = time). Trapezoidal mean/RMS over a sweep axis
     # is mathematically meaningless; the t_start/t_end labels are misleading
     # too since the units aren't seconds.
-    sim_type_raw = detect_sim_type(raw)
-    is_dc_sweep = is_dc_analysis(sim_type_raw)
-    is_noise = is_noise_analysis(sim_type_raw)
+    is_dc_sweep = is_dc_analysis(raw)
+    is_noise = is_noise_analysis(raw)
 
     if is_noise and (t_start is not None or t_end is not None):
         raise ResultError(
@@ -1499,7 +1441,7 @@ async def signal_stats(
     te = parse_time(t_end, "t_end")
     try:
         t_win, y_win, _ = window_and_clean(
-            axis, wave_real, ts, te, allow_descending=axis_may_descend(sim_type_raw)
+            axis, wave_real, ts, te, allow_descending=is_dc_sweep or is_noise
         )
     except ValueError as e:
         raise ResultError(str(e)) from e
@@ -2140,10 +2082,9 @@ async def noise_integral(
 ) -> MetricValue:
     """Total RMS noise integrated over a band of a .noise spectral density."""
     raw = await services.load_raw(source, state)
-    sim_type = detect_sim_type(raw)
-    if not is_noise_analysis(sim_type):
+    if not is_noise_analysis(raw):
         raise ResultError(
-            f"noise_integral needs a .noise result; got {sim_type!r}. Run a noise "
+            f"noise_integral needs a .noise result; got {detect_sim_type(raw)!r}. Run a noise "
             "analysis (LTspice .noise / ngspice noise) first.",
             show_hint=False,
         )
@@ -2201,15 +2142,14 @@ async def operating_point(
     # frequency point — the "voltages" returned would be AC magnitudes
     # (e.g. ``V(in)=1`` from an ``AC 1`` source). For Transient it's t=0
     # which may include initial conditions, not the converged op-point.
-    sim_lower = sim_type.lower()
-    if is_ac_analysis(sim_type) or "noise" in sim_lower:
+    if is_ac_analysis(raw) or is_noise_analysis(raw):
         raise ResultError(
             f"Cannot extract DC operating point from {sim_type!r}: the first "
             "point in an AC/Noise raw is the magnitude at the lowest frequency, "
             "not the bias. Run a separate ``.OP`` analysis to capture the bias "
             "point, or read it from the simulation .log."
         )
-    if "transient" in sim_lower:
+    if is_transient_analysis(raw):
         raise ResultError(
             f"Cannot extract DC operating point from {sim_type!r}: the first "
             "transient point is at t=0 and reflects initial conditions, not "
@@ -2223,7 +2163,8 @@ async def operating_point(
     # from whatever its traces happened to be named, so a pole in rad/s came
     # back as a node voltage and point 0 of a 251-point distortion sweep came
     # back as the bias.
-    if as_bias_point and not (is_operating_point(sim_type) or is_dc_analysis(sim_type)):
+    is_dc = is_dc_analysis(raw)
+    if as_bias_point and not (is_operating_point(raw) or is_dc):
         hint = (
             "Read native quantities with inspect(kind='results', view='table')."
             if raw.descriptor.axis is None
@@ -2236,12 +2177,6 @@ async def operating_point(
 
     services.validate_step(raw, step)
     op_step_count = get_step_count(raw)
-
-    # The shared matcher, not a substring test: ngspice names a ``.tf`` run
-    # "Transfer Function", which a bare "transfer" match reads as the
-    # "DC transfer characteristic" of a sweep and answers with sweep advice
-    # for a run that has no sweep to point at.
-    is_dc = is_dc_analysis(sim_type)
 
     # For a .dc sweep, at=<value> reads the full bias snapshot at a chosen sweep
     # point (nearest) instead of the sweep's first point.
@@ -2278,10 +2213,11 @@ async def operating_point(
     # the session default. Don't clobber a value the raw gave.
     raw_dialect = raw.dialect
     logs = await _logs_for_raw(source, state, raw)
+    from_raw = set(op_data["device_op_points"])
     if raw_dialect != "ngspice":
         log_op_points = logs.value("device_op")
         if log_op_points:
-            di = op_data.setdefault("device_op_points", {})
+            di = op_data["device_op_points"]
             for key, item in log_op_points.items():
                 di.setdefault(key, item)
 
@@ -2306,6 +2242,11 @@ async def operating_point(
                 show_hint=False,
             )
         op_data["device"] = recipe.device
+
+    # The log's table holds fewer digits than a raw trace: mark a result that
+    # carries a value from it (analyze_results says so in its observations).
+    if any(key not in from_raw for key in op_data["device_op_points"]):
+        op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS
 
     # Unit per trace, only where the simulator declared the type.
     op_data["units"] = operating_point_units(raw, op_data)
