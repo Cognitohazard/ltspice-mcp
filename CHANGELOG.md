@@ -10,6 +10,16 @@ tool-surface changes.
 
 ### Fixed
 
+- `inspect(kind="hierarchy")` told LTspice users to add `.options logopinfo`
+  to read a nested MOSFET's operating point, which LTspice XVII ends the run
+  on, and spelled a nested resistor's `.save I(xa:xin:r1)` and a node's trace
+  LTspice 26's way, which XVII's `.save` refuses, saving everything but the
+  current instead (recorded: `raw/save_subckt_names*`). A MOSFET's address
+  now names no directive, since the server asks LTspice 26 for the device
+  table on every `.op` run and XVII prints it unasked, and names inside
+  subcircuits are spelled for the session's LTspice, each instance without
+  its X on XVII. `simulator: "ltspice:<name>"` spells for a named build, and
+  the reply's `profile.xvii_names` says which spelling it used.
 - A signal inside a subcircuit named by its path (`V(xa.xin.mid)`,
   `Id(xa.xin.mtail)`) resolved on LTspice 26, whose raw writes
   `V(xa:xin:mid)`, and not on XVII, whose raw writes each instance without

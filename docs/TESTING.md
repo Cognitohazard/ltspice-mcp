@@ -405,14 +405,15 @@ bridge recorder again on Windows with LTspice 26.1 or later; until then one
 test fails and names the script.
 
 The replies for `raw/fra` and its `fra_1` results file, for both builds'
-`raw/step_ac_one_freq`, `raw/compress_*` and `raw/subckt_names_*`, and for XVII's
+`raw/step_ac_one_freq`, `raw/compress_*`, `raw/subckt_names_*` and
+`raw/save_subckt_names*`, and for XVII's
 `raw/op_save_device`, were made under Wine 11, by the recorder's own reading
 code with the same pinned executables, and the bridge manifest has no field
 that says so. Made the same way, the replies for
 four files already recorded on Windows (`ac`, `step_tran`, XVII's `tran`, and
 the refused `op`) were byte-identical to the committed ones.
 
-The two readers agree on every file's content. They present five kinds of file
+The two readers agree on every file's content. They present six kinds of file
 differently, and the tests pin LTspice's reading of each:
 
 - XVII stores some time points of a compressed transient with the sign set.
@@ -422,6 +423,9 @@ differently, and the tests pin LTspice's reading of each:
   LTspice's reader; the server adds the header's `Offset`.
 - LTspice's reader refuses a file of one point (an operating point, a transfer
   function); the server reads it.
+- LTspice's reader refuses a file that holds only its axis, a run whose
+  `.save` named nothing it stored, since it reads signals by name; the server
+  reads its axis.
 - LTspice's reader reads a stepped operating point, and a stepped AC analysis
   at one frequency, as one sweep with the stepped parameter as its axis; the
   server keeps one point per step. Both files store one point a step with the

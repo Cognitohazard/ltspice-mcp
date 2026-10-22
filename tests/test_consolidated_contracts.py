@@ -742,7 +742,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # not answer, and a client that cannot read files had no way to the
     # vendor's own account of them. Its name and cursor arguments are most of
     # the cost. Measured 11,246.
-    "inspect": 11250,
+    # Raised by about 85 characters so a hierarchy query can name the LTspice
+    # build its spellings are for ('ltspice:xvii'): XVII's .save takes a name
+    # inside a subcircuit only without each instance's X. Measured 11,331.
+    "inspect": 11350,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

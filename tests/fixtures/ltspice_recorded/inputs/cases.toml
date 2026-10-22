@@ -491,6 +491,11 @@ summary = "How each build names a device, a node and a port current inside named
 model = ["lib/device_names.py", "lib/metrics.py", "lib/log_parser.py"]
 inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
+[behaviour.save-subckt-names]
+summary = "Which spelling of a device current and a node inside nested subcircuit instances each build's .save accepts, with and without the instances' X, and what the raw then holds."
+model = ["lib/hierarchy.py"]
+inputs = ["raw/save_subckt_names.cir", "raw/save_subckt_names_no_x.cir"]
+
 [behaviour.log-device-op-precision]
 summary = "How many digits the device operating-point table prints under .options numdgt=7, with and without logopinfo, and whether .save of a device parameter (@m1[gm]) stores it in the raw."
 model = ["lib/log_parser.py", "lib/metrics.py"]

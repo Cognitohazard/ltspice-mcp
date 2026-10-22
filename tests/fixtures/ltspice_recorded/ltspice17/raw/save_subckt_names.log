@@ -1,0 +1,21 @@
+Circuit: * .save of a current and a node inside nested subcircuit instances, spelled with the instances' X
+
+Direct Newton iteration for .op point succeeded.
+Invalid .save command.  Just saving everything...
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2085
+traniter = 2082
+tranpoints = 1042
+accept = 1042
+rejected = 0
+matrix size = 4
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)

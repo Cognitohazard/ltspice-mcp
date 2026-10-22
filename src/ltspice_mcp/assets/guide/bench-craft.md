@@ -90,7 +90,7 @@ CL   out 0 {CLV}
 LFB  out inn 1T
 CFB  inn 0 1T
 .op
-* LTspice: .options logopinfo
+* LTspice: nothing to add; the server asks LTspice 26 for the device table
 * ngspice: .save V(out) I(VDD) @m1[gm] @m1[gds] @m1[id]
 .end
 ```

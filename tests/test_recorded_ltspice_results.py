@@ -23,6 +23,7 @@ from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
@@ -1092,6 +1093,60 @@ def _raw_variables(build: str, case_id: str) -> list[str]:
 _NESTED_MOSFETS = ["xa.mdrv", "xa.xin.mtail", "xb.mdrv", "xb.xin.mtail"]
 
 
+#: The recorded decks that .save a current and a node inside subcircuits, by
+#: whether they spell each instance with its X.
+_SAVE_SPELLINGS = {True: "raw/save_subckt_names", False: "raw/save_subckt_names_no_x"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+class TestSaveInsideSubcircuits:
+    """Each build's ``.save`` takes a name inside a subcircuit only in the
+    spelling its raw names it: LTspice 26 with each instance's X, XVII
+    without. The other spelling stores nothing on LTspice 26 and makes XVII
+    save everything but what was asked."""
+
+    def _stored(self, build: str, with_x: bool) -> list[str]:
+        """The traces the run stored beside its time axis."""
+        return [name for name in declared_names(build, _SAVE_SPELLINGS[with_x]) if name != "time"]
+
+    def test_each_build_stores_what_its_own_spelling_names(self, build: str):
+        xvii = rec.generation(build) == "xvii"
+        own = self._stored(build, with_x=not xvii)
+        expected = (
+            ["V(a:in:mid)", "I(a:in:Rin)", "I(a:Rd)"]
+            if xvii
+            else ["V(xa:xin:mid)", "I(xa:Rd)", "I(xa:xin:Rin)"]
+        )
+        assert sorted(own) == sorted(expected)
+        other = self._stored(build, with_x=xvii)
+        if xvii:
+            log = read_spice_text(rec.recorded(build, f"{_SAVE_SPELLINGS[True]}.log"))
+            assert "Invalid .save command.  Just saving everything..." in log
+            assert not set(other) & set(expected)
+        else:
+            assert other == []
+
+    def test_the_hierarchy_saves_in_the_builds_own_spelling(self, build: str):
+        """inspect(kind="hierarchy") names each current and node as the build
+        that will run it stores it."""
+        xvii = rec.generation(build) == "xvii"
+        deck = INPUTS / f"{_SAVE_SPELLINGS[True]}.cir"
+        hierarchy = load_hierarchy(str(deck), None, SemanticProfile("ltspice", xvii_names=xvii))
+        rows = {"/".join(row.instance).casefold(): row for row in hierarchy.instances}
+        stored = {name.casefold() for name in self._stored(build, with_x=not xvii)}
+        for path in ("xa/xin/rin", "xa/rd"):
+            save = rows[path].save
+            assert save is not None and save.startswith(".save ")
+            assert save.removeprefix(".save ").casefold() in stored, save
+        (mid,) = {
+            node.voltage_trace
+            for row in hierarchy.instances
+            for node in row.nodes
+            if node.voltage_trace is not None and node.voltage_trace.casefold().endswith(":mid)")
+        }
+        assert mid.casefold() in stored
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 class TestSubcircuitDeviceNames:
     """A device inside a subcircuit has one name in the device table and
@@ -1467,7 +1522,7 @@ async def test_a_case_that_wrote_no_such_raw_is_missing_not_misread(
     assert missing["case_id"] == job.cases[0].case_id
 
 
-def test_ltspice_xvii_refuses_a_frequency_response_analysis():
+def test_xvii_names_refuses_a_frequency_response_analysis():
     """The analysis came with LTspice 17.1: XVII 17.0 names the analyzer as a
     device it does not know, writes no results, and the server reads that as
     the run's error."""

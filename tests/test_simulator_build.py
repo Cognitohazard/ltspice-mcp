@@ -202,7 +202,7 @@ class TestReportedBuild:
             == "ngspice-46, Build Mar 29 2026 15:02:07"
         )
 
-    def test_ltspice_xvii_names_itself_only_in_its_utf16_raw_header(self, tmp_path: Path):
+    def test_xvii_names_names_itself_only_in_its_utf16_raw_header(self, tmp_path: Path):
         log = tmp_path / "run.log"
         log.write_bytes("Circuit: * run.net\r\n\r\n".encode("utf-16-le"))
         raw = tmp_path / "run.raw"

@@ -45,16 +45,24 @@ was issued for, so after an edit, start a new query.
 
 ## Measuring a nested device
 
-Put the row's `address.save` line in the deck, run it with `run_experiments`,
-and pass `address.device` to the `operating_point` recipe:
+Put the row's `address.save` line in the deck, if it has one, run it with
+`run_experiments`, and pass `address.device` to the `operating_point` recipe:
 `{"key": "chosen", "metric": "operating_point", "device": "..."}`. For a MOS at
 `["XA", "Xleaf", "M0"]`:
 
-| | ngspice | LTspice |
-|-|-|-|
-| `device` | `m.xa.xleaf.m0` | `xa:xleaf:m0` |
-| deck line | `.save @m.xa.xleaf.m0[gm]` | `.options logopinfo` (gm comes from the log) |
-| a nested resistor's current | `.save @r.xa.xleaf.r1[i]` | `.save I(xa:xleaf:r1)` |
+| | ngspice | LTspice 26 | LTspice XVII |
+|-|-|-|-|
+| `device` | `m.xa.xleaf.m0` | `xa:xleaf:m0` | `xa:xleaf:m0` |
+| deck line | `.save @m.xa.xleaf.m0[gm]` | none (gm comes from the log) | none (gm comes from the log) |
+| a nested resistor's current | `.save @r.xa.xleaf.r1[i]` | `.save I(xa:xleaf:r1)` | `.save I(a:leaf:r1)` |
+
+LTspice needs no line for a MOS: the server asks LTspice 26 for the log's
+device table on every `.op` run, and XVII prints it unasked and stops on
+`.options logopinfo`. Each build's `.save` takes a name inside a subcircuit
+only as its raw spells it, each instance without its X on XVII; the other
+spelling stores nothing on LTspice 26 and makes XVII save everything but the
+current. `simulator: "ltspice"` spells for the session's LTspice, and
+`"ltspice:<name>"` for a named build; `profile.xvii_names` says which.
 
 Keep the full name: it is what tells repeated peers apart. When a row has no
 address, it gives the reason; do not shorten or guess a selector. A node

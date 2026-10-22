@@ -1308,11 +1308,13 @@ cursors where listed:
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
     but not L1. It is plain text; a wildcard is refused with the plain
     spelling to use
-{kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
+{kind: "hierarchy", path, simulator: "ltspice"|"ngspice"|"ltspice:<name>", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
     selecting a subtree, and `prefix` is the `components` rule applied to
     each instance's own reference (the last segment), so a one-letter
-    prefix still selects an element type
+    prefix still selects an element type. LTspice names are spelled for the
+    session's LTspice, or the named build, as its raw names them
+    (`profile.xvii_names`)
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query and fuzzy-matches it; enumerate requires libs and,
     given a query, lists the names containing it (case-insensitive). A
@@ -1817,13 +1819,19 @@ with Api(working_dir=project) as api:
 
 For a supported nested MOS, ngspice gives `device: "m.xa.xleaf.m0"`
 and `.save @m.xa.xleaf.m0[gm]`; LTspice gives
-`device: "xa:xleaf:m0"` and `.options logopinfo`. Add the given directive to
+`device: "xa:xleaf:m0"` and no directive, since the server asks LTspice 26
+for the device table on every `.op` run and XVII prints it unasked and stops
+on `.options logopinfo`. Add any directive given to
 the deck before `run_experiments`, then pass `address.device` to the
 `analyze_results` `operating_point` recipe. The full ancestral selector
 excludes repeated peers; a selector that would also match another instance
 gets no address. On ngspice, gm comes from saved raw traces; on LTspice, from
 the log through the existing log reader. For a nested resistor the directive
-is `.save @r.xa.xleaf.r1[i]` on ngspice and `.save I(xa:xleaf:r1)` on LTspice.
+is `.save @r.xa.xleaf.r1[i]` on ngspice, `.save I(xa:xleaf:r1)` on LTspice 26
+and `.save I(a:leaf:r1)` on LTspice XVII: each build's `.save` takes a name
+inside a subcircuit only as its raw spells it (recorded:
+`raw/save_subckt_names*`), and a node's `voltage_trace` follows the same
+spelling.
 Addresses are given only for verified resistor and MOS forms with simple
 identifier spellings; other legal source names keep their structural identity
 with a reason the address is unavailable. A node's `voltage_trace` is the

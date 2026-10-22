@@ -82,7 +82,7 @@ def test_each_build_writes_its_own_encoding_with_lf_line_ends(build: str, case_i
     assert text.startswith("[") and text.endswith("}\n")
 
 
-def test_the_server_writes_the_form_ltspice_xvii_writes():
+def test_the_server_writes_the_form_xvii_names_writes():
     """UTF-16 LE without a byte order mark, LF line ends: XVII's own form."""
     own = saved(XVII, "plot/one_trace")
     assert encode_plot_settings(own.decode("utf-16-le")) == own
@@ -188,7 +188,7 @@ def test_a_recording_holds_a_grid_line_only_where_its_case_turned_the_grid_on_or
         assert held == (rec.entry(build, case_id).get("settings") == {"grid": "on"})
 
 
-def test_ltspice_xvii_has_the_grid_off_by_default():
+def test_xvii_names_has_the_grid_off_by_default():
     """XVII wrote that default back for the removed key."""
     assert rec.manifest(XVII)["settings"]["defaults"]["grid"] == "off"
 
@@ -203,7 +203,7 @@ def test_the_pane_ltspice_26_adds_below_is_listed_first():
     assert traces(saved(CURRENT, "plot/pane_below"), TRAN) == [("V(out)",), ("V(in)", "I(R1)")]
 
 
-def test_the_pane_ltspice_xvii_adds_is_above_the_active_one():
+def test_the_pane_xvii_names_adds_is_above_the_active_one():
     """XVII has one Add Plot Pane, with the command id LTspice 26 gives Add Plot
     Pane Above Active Pane. Read with the bottom-first order LTspice 26's own
     file shows, XVII's new pane is on top, where that command puts it."""
@@ -294,7 +294,7 @@ def test_ltspice_26_reads_a_file_in_utf8():
     assert panes(saved(CURRENT, "plot/read_utf8"), TRAN) == panes(written, TRAN)
 
 
-def test_ltspice_xvii_reads_a_file_in_utf8_and_appends_it_to_its_own_when_it_saves():
+def test_xvii_names_reads_a_file_in_utf8_and_appends_it_to_its_own_when_it_saves():
     """XVII shows the panes of a UTF-8 file, then saves its own UTF-16 section
     followed by the old file's bytes. That is the file the server would leave
     behind by writing UTF-8, and why it writes UTF-16; the reader refuses one."""

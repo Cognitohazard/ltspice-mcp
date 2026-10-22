@@ -20,6 +20,9 @@ here with what LTspice's reader says:
   LTspice's reader, and at its real start from the server's;
 - a file of one point (an operating point, a transfer function) is refused by
   LTspice's reader, and read by the server's;
+- a file that holds only its axis, a run whose ``.save`` named nothing it
+  stored, is refused by LTspice's reader, which reads signals by name, and
+  read by the server's;
 - a stepped operating point, and a stepped AC analysis at one frequency, is
   one sweep to LTspice's reader, along the stepped parameter, and a point a
   step to the server's;
@@ -65,6 +68,8 @@ READ = [subject for subject in SUBJECTS if "read" in reader_reply(*subject)]
 REFUSED = [subject for subject in SUBJECTS if "refused" in reader_reply(*subject)]
 #: Files of one point: no axis to read along.
 ONE_POINT = {"op", "op_one_subckt", "op_save_device", "op_subckt", "tf", "tran_op_raw.op"}
+#: Files of the axis alone: LTspice 26 stored nothing a ``.save`` named.
+AXIS_ONLY = {("ltspice26", "save_subckt_names_no_x")}
 #: Stepped runs stored a point a step, the stepped parameter first, and the
 #: analysis LTspice's reader names each.
 PARAMETERS_FIRST = {"step_op": "Operating Point", "step_ac_one_freq": "AC Analysis"}
@@ -234,7 +239,9 @@ def test_a_transient_saved_from_a_later_start_begins_at_zero_for_ltspices_reader
     assert (time[0], time[-1]) == pytest.approx((1e-3, 2e-3))
 
 
-@pytest.mark.parametrize(("reader", "written_by", "name"), REFUSED)
+@pytest.mark.parametrize(
+    ("reader", "written_by", "name"), [s for s in REFUSED if (s[1], s[2]) not in AXIS_ONLY]
+)
 def test_ltspices_reader_refuses_a_file_of_one_point_which_the_server_reads(
     reader: str, written_by: str, name: str, tmp_path: Path
 ):
@@ -248,13 +255,29 @@ def test_ltspices_reader_refuses_a_file_of_one_point_which_the_server_reads(
     )
 
 
-def test_every_file_of_one_point_is_refused_and_no_other():
+def test_every_file_of_one_point_or_of_the_axis_alone_is_refused_and_no_other():
     assert {(written_by, name) for _reader, written_by, name in REFUSED} == {
         (written_by, name)
         for written_by, names in reader_subjects().items()
         for name in names
         if name in ONE_POINT
+    } | AXIS_ONLY
+
+
+@pytest.mark.parametrize(
+    ("reader", "written_by", "name"), [s for s in REFUSED if (s[1], s[2]) in AXIS_ONLY]
+)
+def test_ltspices_reader_refuses_a_file_of_the_axis_alone_which_the_server_reads(
+    reader: str, written_by: str, name: str, tmp_path: Path
+):
+    assert reader_reply(reader, written_by, name) == {
+        "refused": (
+            "the 'signals' parameter is required and must be a non-empty array of signal names"
+        )
     }
+    raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
+    assert raw.get_trace_names() == ["time"]
+    assert len(raw.get_axis(0)) > 1
 
 
 @pytest.mark.parametrize(

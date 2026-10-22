@@ -6736,6 +6736,74 @@
         ".raw"
       ]
     },
+    "raw/save_subckt_names": {
+      "behaviour": "save-subckt-names",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_subckt_names.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/save_subckt_names.cir": "8cce456c56f45e08586e8c1d758978ad4cb54e52249db680a8c043301d1be914"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_subckt_names.log": {
+          "bytes": 353,
+          "sha256": "0dc177fa9074d6549cf3979eb77831dfa3a2de329cf1f3225677bd14da51956b"
+        },
+        "raw/save_subckt_names.raw": {
+          "bytes": 21562,
+          "sha256": "7817a6d5c99b6d8608ae6534d97ae68ad023962050664c88e348be413dd20321"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/save_subckt_names_no_x": {
+      "behaviour": "save-subckt-names",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_subckt_names_no_x.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/save_subckt_names_no_x.cir": "b4f051e791f0e02e1f22b65e922e5610377cebf21ed9543b5b7b261d56b90fd0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_subckt_names_no_x.log": {
+          "bytes": 363,
+          "sha256": "058f1b7390e7a1b0a9fea6f9b2982fef13422635750bf3511afefb6867b4bad7"
+        },
+        "raw/save_subckt_names_no_x.raw": {
+          "bytes": 8900,
+          "sha256": "b2dbbb970f996d02a6ae064bcd08b680f3d4519bd6048fbfab1bf25293debfd6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/step_ac": {
       "behaviour": "raw-stepped",
       "command": [
