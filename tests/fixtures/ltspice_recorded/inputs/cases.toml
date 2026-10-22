@@ -486,6 +486,11 @@ model = ["lib/log_parser.py", "lib/log_decode.py", "lib/runner_base.py", "lib/me
 inputs = ["log/device_op.cir", "log/device_op_off.cir", "log/device_op_tran.cir"]
 keep = ["log"]
 
+[behaviour.subckt-device-names]
+summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
+model = ["lib/device_names.py", "lib/metrics.py", "lib/log_parser.py"]
+inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
+
 [behaviour.log-device-op-precision]
 summary = "How many digits the device operating-point table prints under .options numdgt=7, with and without logopinfo, and whether .save of a device parameter (@m1[gm]) stores it in the raw."
 model = ["lib/log_parser.py", "lib/metrics.py"]
@@ -730,6 +735,31 @@ source = "log/meas_phase.cir"
 ini = { RadianMeasure = "true" }
 keep = ["log"]
 note = "ph() with the same setting."
+
+# The settings keys behind "Save subcircuit node voltages" and "Save
+# subcircuit device currents" (the Save Defaults page of the settings). Both
+# builds default them to off, and then store nothing from inside a
+# subcircuit but its port currents.
+[[case]]
+id = "raw/subckt_names_tran_saved"
+behaviour = "subckt-device-names"
+source = "raw/subckt_names_tran.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+note = "The transient with the settings that store the nodes and device currents inside subcircuits."
+
+[[case]]
+id = "log/subckt_names_saved"
+behaviour = "subckt-device-names"
+source = "log/subckt_names.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+note = "The .op with logopinfo and the same settings, for the operating-point raw beside the device table."
+
+[[case]]
+id = "log/subckt_names_off_saved"
+behaviour = "subckt-device-names"
+source = "log/subckt_names_off.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+note = "The .op without logopinfo and the same settings."
 
 [[case]]
 id = "raw/tran_fastaccess"

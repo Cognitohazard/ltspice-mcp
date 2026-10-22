@@ -1606,7 +1606,7 @@ it, and reported when the caller names it.
 | `resonance` | ac | `signal` | resonant frequency, Q, peak |
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
 | `noise_integral` | noise | — | `signal?`, `from_hz?`, `to_hz?` |
-| `operating_point` | op | — | `device?` scopes the reply to one device |
+| `operating_point` | op | — | `device?` scopes the reply to one device, named by its path (`x1.m1`) on either LTspice build; `device_names` maps each device inside a subcircuit to its name in the log's table and in the raw |
 | `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
 

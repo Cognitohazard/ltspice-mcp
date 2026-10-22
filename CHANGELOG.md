@@ -10,6 +10,20 @@ tool-surface changes.
 
 ### Fixed
 
+- A device inside a subcircuit is named differently in the log's device table
+  and in the raw, and each LTspice build spells both its own way (recorded:
+  `log/subckt_names*`, `raw/subckt_names*`): `xa:xin:Mtail` on LTspice 26,
+  `m:a:in:tail` in XVII's table and `a:in:Mtail` in its raw. The
+  `operating_point` recipe's `device=` split XVII's names wrongly and found no
+  table values for a nested device, and the `value` recipe's `x1.m1.gm`
+  shorthand reached only LTspice 26's spelling. Both now read every name back
+  to the device's path, so `device="xa.xin.mtail"` and `xa.xin.mtail.gm` work
+  on either build, and the `operating_point` result carries `device_names`,
+  each nested device's name in the table and in the raw. A raw holds those
+  devices' currents only under LTspice's "Save subcircuit device currents"
+  setting, and the guide says so. A device current inside a subcircuit now
+  also counts as an active device for the note that says how to get the
+  device table.
 - `set_component_attribute` and `add_component` refused a part's own
   `Prefix` as a symbol property, so making parts subcircuit calls needed new
   symbol files and every part removed and placed again. Both LTspice builds

@@ -1,0 +1,45 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\subckt_names_saved.cir
+Start Time: Thu Jan 15 00:00:00 2026
+Options:logopinfo
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Instance "xa:Mdrv": Length shorter than recommended for a level 1 MOSFET.
+Instance "xa:xin:Mtail": Length shorter than recommended for a level 1 MOSFET.
+Instance "xa:xin:Mtail": Width narrower than recommended for a level 1 MOSFET.
+Instance "xb:Mdrv": Length shorter than recommended for a level 1 MOSFET.
+Instance "xb:xin:Mtail": Length shorter than recommended for a level 1 MOSFET.
+Instance "xb:xin:Mtail": Width narrower than recommended for a level 1 MOSFET.
+Direct Newton iteration succeeded in finding operating point.
+Semiconductor Device Operating Points:
+                        --- MOSFET Transistors ---
+Name:        xa:Mdrv   xa:xin:Mtail   xb:Mdrv   xb:xin:Mtail
+Model:          nm          nm           nm          nm
+Id:          1.78e-04    8.21e-06     1.78e-04    8.21e-06
+Vgs:         1.30e+00    8.81e-01     1.30e+00    8.81e-01
+Vds:         1.30e+00    8.81e-01     1.30e+00    8.81e-01
+Vbs:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Vth:         7.00e-01    7.00e-01     7.00e-01    7.00e-01
+Vdsat:       5.97e-01    1.81e-01     5.97e-01    1.81e-01
+Gm:          5.97e-04    9.06e-05     5.97e-04    9.06e-05
+Gds:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Gmb:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cbd:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cbs:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cgsov:       0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cgdov:       0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cgbov:       0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cgs:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cgd:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+Cgb:         0.00e+00    0.00e+00     0.00e+00    0.00e+00
+
+
+Total elapsed time: 0.000 seconds.
+Total iterations: 7
+
+Files loaded:
+C:\recording\subckt_names_saved.cir
+

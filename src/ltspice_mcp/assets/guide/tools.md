@@ -130,7 +130,8 @@ lint blocks a mismatch. A case that produced nothing is counted in
   one that hit several runs carries `count` and `wheres` (the first 10
   places). `group_by` is a top-level argument, never inside a recipe. Results
   of the `operating_point` recipe are in `device_op_points`, keyed by the
-  simulator's literal names (`@m1[gm]`).
+  simulator's literal names (`@m1[gm]`); a device inside a subcircuit is
+  found by its path (`"device": "x1.m1"`, guide section 'operating-points').
   For a staircase signal (DAC steps, line reflections), read each level with a
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur

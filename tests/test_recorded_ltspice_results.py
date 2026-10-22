@@ -21,6 +21,7 @@ import pytest
 
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.device_names import current_owner_path, path_text, table_device_path
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
@@ -31,6 +32,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_step_iterations,
     parse_temperatures,
     read_device_op_points,
+    split_device_key,
 )
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
@@ -1015,7 +1017,7 @@ class TestDeviceOperatingPoints:
         assert points["@m1[gm]"] == pytest.approx(5.86e-4)
         assert points["@m1[vth]"] == pytest.approx(0.7)
         # The MOSFET inside X1: LTspice 26 names it by its path, XVII by its
-        # element letter, the subcircuit's number and its own.
+        # element letter, X1 without its X and M1 without its letter.
         inner = "@m:1:1[gm]" if rec.generation(build) == "xvii" else "@x1:m1[gm]"
         assert points[inner] == pytest.approx(8.64e-4)
 
@@ -1080,6 +1082,113 @@ class TestDeviceOperatingPoints:
         ]
         assert observation["evidence"]["significant_digits"] == 3
         assert observation["evidence"]["runs"] == ["dut"]
+
+
+def _raw_variables(build: str, case_id: str) -> list[str]:
+    (plot,) = preflight_raw(rec.recorded(build, f"{case_id}.raw"), limits=rec.RAW_LIMITS).plots
+    return [variable.name for variable in plot.variables]
+
+
+#: The devices inside the subcircuits of ``*/subckt_names*``: Mdrv and Rd in
+#: each stage, Mtail and Rin in the inner cell each stage holds.
+_NESTED_MOSFETS = ["xa.mdrv", "xa.xin.mtail", "xb.mdrv", "xb.xin.mtail"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+class TestSubcircuitDeviceNames:
+    """A device inside a subcircuit has one name in the device table and
+    another in the raw, and each build spells both its own way."""
+
+    def _table_case(self, build: str, *, saved: bool = False) -> str:
+        # XVII refuses .options logopinfo and prints the table without it.
+        off = "_off" if rec.generation(build) == "xvii" else ""
+        return f"log/subckt_names{off}" + ("_saved" if saved else "")
+
+    def test_the_table_names_each_device_by_its_path(self, build: str):
+        """LTspice 26 writes the instance path and the device's own name;
+        XVII the device's letter, each instance's name without its X, and the
+        device's name without its letter."""
+        points = read_device_op_points(rec.recorded(build, f"{self._table_case(build)}.log"))
+        names = sorted({split_device_key(key)[0] for key in points})
+        if rec.generation(build) == "xvii":
+            assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
+        else:
+            assert names == ["xa:mdrv", "xa:xin:mtail", "xb:mdrv", "xb:xin:mtail"]
+        xvii = rec.generation(build) == "xvii"
+        assert sorted(path_text(table_device_path(n, xvii=xvii)) for n in names) == (
+            _NESTED_MOSFETS
+        )
+
+    def test_the_raw_holds_a_subcircuits_insides_only_when_the_setting_asks(self, build: str):
+        """By default both builds store a subcircuit instance's port currents
+        and nothing from inside it, stepped or not. With the settings that save
+        subcircuit node voltages and device currents, the raw names each
+        device by its path: LTspice 26 with each instance's X, XVII without."""
+        for case_id in ("raw/subckt_names_tran", "raw/subckt_names_step"):
+            inside = [n for n in _raw_variables(build, case_id) if ":" in n]
+            assert inside and all(n.startswith("Ix(") for n in inside), case_id
+        assert _raw_variables(build, "raw/subckt_names_step") == _raw_variables(
+            build, "raw/subckt_names_tran"
+        )
+        saved = _raw_variables(build, "raw/subckt_names_tran_saved")
+        if rec.generation(build) == "xvii":
+            assert {"Id(a:in:Mtail)", "I(a:Rd)", "V(a:in:mid)", "Ix(a:in:P)"} <= set(saved)
+        else:
+            assert {"Id(xa:xin:Mtail)", "I(xa:Rd)", "V(xa:xin:mid)", "Ix(xa:xin:p)"} <= set(saved)
+        xvii = rec.generation(build) == "xvii"
+        devices = {
+            path_text(path)
+            for name in saved
+            if name.startswith("Id(") and (path := current_owner_path(name, xvii=xvii))
+        }
+        assert sorted(devices) == _NESTED_MOSFETS
+        # The only MOSFETs are inside the subcircuits, and they are found there.
+        assert metrics.has_active_device({name: 0.0 for name in saved if name.startswith("I")})
+        ports = {
+            path_text(path)
+            for name in saved
+            if name.startswith("Ix(") and (path := current_owner_path(name, xvii=xvii))
+        }
+        assert ports == {"xa", "xb", "xa.xin", "xb.xin"}
+
+    async def test_the_bias_point_maps_each_devices_names_and_reads_it_by_path(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = rec.stage_run(build, self._table_case(build, saved=True), work_dir)
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [
+                    {"key": "all", "metric": "operating_point"},
+                    {"key": "tail", "metric": "operating_point", "device": "xa.xin.mtail"},
+                    {"key": "gm", "metric": "value", "expr": "xa.xin.mtail.gm"},
+                ],
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None
+        assert data["failures"] == []
+        (bias,) = data["results"]["all"]["values"]
+        names = bias["value"]["device_names"]
+        # The resistors beside them have currents in the raw and no table entry.
+        resistors = ["xa.rd", "xa.xin.rin", "xb.rd", "xb.xin.rin"]
+        assert sorted(names) == sorted([*_NESTED_MOSFETS, *resistors])
+        assert all(names[r]["op_table"] is None and names[r]["raw"] for r in resistors)
+        if rec.generation(build) == "xvii":
+            assert names["xa.xin.mtail"] == {"op_table": "m:a:in:tail", "raw": "a:in:Mtail"}
+        else:
+            assert names["xa.xin.mtail"] == {"op_table": "xa:xin:mtail", "raw": "xa:xin:Mtail"}
+        (tail,) = data["results"]["tail"]["values"]
+        value = tail["value"]
+        table = names["xa.xin.mtail"]["op_table"]
+        assert value["device_op_points"][f"@{table}[gm]"] == pytest.approx(9.06e-5)
+        (current,) = [v for k, v in value["currents"].items() if k.startswith("Id(")]
+        assert current == pytest.approx(8.21e-6, rel=5e-3)
+        assert value["device_names"] == {"xa.xin.mtail": names["xa.xin.mtail"]}
+        # The value recipe reads the same parameter by the device's path.
+        (gm,) = data["results"]["gm"]["values"]
+        assert gm["value"]["value"] == pytest.approx(9.06e-5)
+        assert gm["value"]["signal"] == f"@{table}[gm]"
 
 
 def _device_op_case(build: str, *, numdgt: bool = False) -> str:

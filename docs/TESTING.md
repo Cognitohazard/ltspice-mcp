@@ -404,7 +404,7 @@ bridge recorder again on Windows with LTspice 26.1 or later; until then one
 test fails and names the script.
 
 The replies for `raw/fra` and its `fra_1` results file, for both builds'
-`raw/step_ac_one_freq` and `raw/compress_*`, and for XVII's
+`raw/step_ac_one_freq`, `raw/compress_*` and `raw/subckt_names_*`, and for XVII's
 `raw/op_save_device`, were made under Wine 11, by the recorder's own reading
 code with the same pinned executables, and the bridge manifest has no field
 that says so. Made the same way, the replies for

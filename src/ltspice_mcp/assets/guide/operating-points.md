@@ -58,3 +58,23 @@ Address an operating-point parameter by the `m1.gm` shorthand or its literal
 `@m1[gm]` name; the recipes resolve the bare, `v()` and `i()` wrappings and a
 subcircuit path such as `x1.m1.gm`. Values carry SI units where the simulator
 declares the type.
+
+## A device inside a subcircuit
+
+Each place names it differently, and each LTspice build its own way. For
+`Mtail` inside `Xin` inside `Xa`:
+
+| | LTspice 26 | LTspice XVII |
+|-|-|-|
+| device table (`device_op_points`) | `@xa:xin:mtail[gm]` | `@m:a:in:tail[gm]` |
+| current in the raw | `Id(xa:xin:Mtail)` | `Id(a:in:Mtail)` |
+
+Name it by its path instead: `{"metric": "operating_point", "device":
+"xa.xin.mtail"}` keeps that device's parameters and currents on either build
+(`mtail` keeps every `Mtail`; `xa` keeps everything inside `Xa`), and
+`{"metric": "value", "expr": "xa.xin.mtail.gm"}` reads one parameter. The
+`operating_point` result's `device_names` maps each path to its name in the
+table (`op_table`) and in the raw (`raw`). By default neither build stores the
+currents of devices inside a subcircuit, only the instance's port currents
+(`Ix(xa:out)`); `raw` is then null. LTspice's "Save subcircuit device
+currents" setting stores them.

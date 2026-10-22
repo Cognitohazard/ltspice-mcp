@@ -5495,6 +5495,136 @@
         ".raw"
       ]
     },
+    "log/subckt_names": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/subckt_names.cir": "7f8bf5aec2cfdd74d0e98d759b4ff9086c4709fc1f23db7967630c7ec49c1701"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/subckt_names.log": {
+          "bytes": 308,
+          "sha256": "6b99a096187a3896ffd4c6af1d893e6b5b2201892622d395f1c5b19b0db091a1"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "log/subckt_names_off": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/subckt_names_off.cir": "27d25ba38844a10cf46b6e7ff5e5ccbb092050afc4f24c750fbc8cf868595e57"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/subckt_names_off.log": {
+          "bytes": 1871,
+          "sha256": "3cf5b22ed62be6ba0f9c899bf9b6707e6194db50de607dc39051ddf7d276a1f2"
+        },
+        "log/subckt_names_off.raw": {
+          "bytes": 936,
+          "sha256": "10a6ad8adc4cdf99d25ef87cb64fd44595fd5b30360baaac905922f89f429983"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/subckt_names_off_saved": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names_off_saved.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/subckt_names_off.cir": "27d25ba38844a10cf46b6e7ff5e5ccbb092050afc4f24c750fbc8cf868595e57"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/subckt_names_off_saved.log": {
+          "bytes": 1871,
+          "sha256": "3cf5b22ed62be6ba0f9c899bf9b6707e6194db50de607dc39051ddf7d276a1f2"
+        },
+        "log/subckt_names_off_saved.raw": {
+          "bytes": 2358,
+          "sha256": "5d9d41362259cd1a646672c9d25bfb12b72b6a2ca4eba432ba6501dd8cc0c896"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/subckt_names_saved": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names_saved.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "host": "Wine 11.0",
+      "inputs": {
+        "log/subckt_names.cir": "7f8bf5aec2cfdd74d0e98d759b4ff9086c4709fc1f23db7967630c7ec49c1701"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/subckt_names_saved.log": {
+          "bytes": 308,
+          "sha256": "6b99a096187a3896ffd4c6af1d893e6b5b2201892622d395f1c5b19b0db091a1"
+        }
+      },
+      "reported_build": null,
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "log/warn_curly": {
       "behaviour": "log-diagnostics",
       "command": [
@@ -6755,6 +6885,112 @@
       "written": [
         ".log",
         ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/subckt_names_step": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/subckt_names_step.cir": "d76b21186c652c79d2275769b43027800a41c30bfed8292e08a4df72ab1f4cb9"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/subckt_names_step.log": {
+          "bytes": 728,
+          "sha256": "d201d15059029bf407ba5a4890bd10b7e5b421dd79ccca64fdd1b9c6fa9c2d05"
+        },
+        "raw/subckt_names_step.raw": {
+          "bytes": 1274,
+          "sha256": "a1cdb6292ba41d82e7cfa5734875920c5fffdc04112528a35d776ccaf01fc896"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/subckt_names_tran": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names_tran.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/subckt_names_tran.cir": "fae9edf14b2f489ad6fb5623a22ab5614405af979b1f50d58875fe0935d6e787"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/subckt_names_tran.log": {
+          "bytes": 756,
+          "sha256": "8ba8476618097083563ebd5133b5377d1675e893d027ffce6629b6b102d6e5e4"
+        },
+        "raw/subckt_names_tran.raw": {
+          "bytes": 1214,
+          "sha256": "1cbd24790a5392e5f12df757b75b65a7f4c0a492d64220e8b203a4edd4acfc32"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/subckt_names_tran_saved": {
+      "behaviour": "subckt-device-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_names_tran_saved.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/subckt_names_tran.cir": "fae9edf14b2f489ad6fb5623a22ab5614405af979b1f50d58875fe0935d6e787"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/subckt_names_tran_saved.log": {
+          "bytes": 756,
+          "sha256": "8ba8476618097083563ebd5133b5377d1675e893d027ffce6629b6b102d6e5e4"
+        },
+        "raw/subckt_names_tran_saved.raw": {
+          "bytes": 2902,
+          "sha256": "cf1efad24cc99b6ef97b7c42aa8b3a7f37815335588e37bebdc32f3ab4c3092c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "settings": {
+        "SaveSubcircuitDeviceCurrents": "true",
+        "SaveSubcircuitNodeVoltages": "true"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
         ".op.raw",
         ".raw"
       ]

@@ -1,0 +1,16 @@
+* the raw names of devices inside named and nested subcircuit instances, in a transient
+V1 vdd 0 3
+Xa vdd outa stage
+Xb vdd outb stage
+.subckt stage top out
+Rd top out 10k
+Mdrv out out 0 0 NM W=20u L=2u
+Xin top out inner
+.ends
+.subckt inner p n
+Rin p mid 100k
+Mtail mid mid n n NM W=10u L=2u
+.ends
+.model NM NMOS(VTO=0.7 KP=100u)
+.tran 1u
+.end
