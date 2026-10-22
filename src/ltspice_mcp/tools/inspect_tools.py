@@ -166,6 +166,7 @@ from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
+from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
     netlist_card_value,
@@ -737,6 +738,13 @@ class ResultsQuery(OptionalRawSelectionFields):
     job_id: str | None = None
     run_index: int = Field(default=0, strict=True, ge=0)
     case_id: str | None = None
+    other_raw: OtherRawKind | None = Field(
+        default=None,
+        description=(
+            "Read the case's raw of this kind from its run row's other_raws instead of "
+            "its raw (an FRA's results, a .tran's .op). Needs job_id; RAW views only."
+        ),
+    )
     prefix: str | None = Field(
         default=None,
         description="Literal signal, measurement or native quantity prefix; omitted lists all.",
@@ -748,12 +756,16 @@ class ResultsQuery(OptionalRawSelectionFields):
     def _source(self) -> ResultsQuery:
         if bool(self.path) == bool(self.job_id):
             raise ValueError("provide exactly one of path or job_id")
-        if self.path is not None and (self.case_id is not None or self.run_index != 0):
-            raise ValueError("run_index and case_id require job_id")
+        if self.path is not None and (
+            self.case_id is not None or self.run_index != 0 or self.other_raw is not None
+        ):
+            raise ValueError("run_index, case_id and other_raw require job_id")
         if self.view == "plots" and self.prefix is not None:
             raise ValueError("prefix does not apply to plot inventory")
-        if self.view in ("measurements", "native_tables") and self.plot_index is not None:
-            raise ValueError("log views do not select a RAW plot")
+        if self.view in ("measurements", "native_tables") and (
+            self.plot_index is not None or self.other_raw is not None
+        ):
+            raise ValueError("log views do not select a RAW plot or an other_raw")
         return self
 
 
@@ -2321,7 +2333,12 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
         assert query.job_id is not None
         job = await services.resolve_job_async(query.job_id, state)
         run = services.experiment_run_context(
-            job, state, run_index=query.run_index, case_id=query.case_id, require_raw=not log_view
+            job,
+            state,
+            run_index=query.run_index,
+            case_id=query.case_id,
+            require_raw=not log_view,
+            other_raw=query.other_raw,
         )
         source = services.source_for_run(
             run, plot_index=query.plot_index or 0, dialect=query.dialect

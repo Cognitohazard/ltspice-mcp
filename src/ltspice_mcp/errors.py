@@ -145,6 +145,13 @@ class JobNotFoundError(ResultError):
     code = "job_not_found"
 
 
+class OtherRawNotWritten(ResultError):
+    """A read asked for an experiment case's other raw (an FRA's results, a
+    transient's operating point) of a kind its run did not write."""
+
+    code = "other_raw_not_written"
+
+
 class AnalysisDeadlineExceeded(ResultError):
     """A read of a result artifact ran past the deadline it was given.
 

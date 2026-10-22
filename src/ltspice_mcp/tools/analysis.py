@@ -36,10 +36,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired
+from typing import Annotated, Any, Literal, NotRequired, Self
 
 import numpy as np
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -75,6 +75,7 @@ from ltspice_mcp.lib.plot_html import (
 from ltspice_mcp.lib.plot_svg import render_plot_svg
 from ltspice_mcp.lib.raster import RasterSupport, RenderedImage, raster_support, render_image
 from ltspice_mcp.lib.raw_parser import (
+    OtherRawKind,
     get_step_count,
     safe_magnitude_db,
 )
@@ -146,6 +147,8 @@ async def _experiment_case(
     run_index: int,
     case_id: str | None,
     state: SessionState,
+    *,
+    other_raw: OtherRawKind | None = None,
 ) -> services.RunContext | None:
     """The case a ``job_id`` names when it is a run_experiments job, else ``None``.
 
@@ -156,7 +159,9 @@ async def _experiment_case(
     """
     job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
     if job is not None:
-        return services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+        return services.experiment_run_context(
+            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
     if case_id is not None:
         raise ResultError(
             "case_id selects a run_experiments case; pass it with that job's job_id."
@@ -988,6 +993,13 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
             "and analysis identities (an alternative to ``run_index``)."
         ),
     )
+    other_raw: OtherRawKind | None = Field(
+        default=None,
+        description=(
+            "Plot the case's raw of this kind from its run row's other_raws instead "
+            "of its raw (an FRA's results). Needs job_id."
+        ),
+    )
     signals: list[str] | Literal["all"] = Field(
         default="all",
         description=(
@@ -1070,6 +1082,14 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
         default=None,
         description=FORMAT_DESCRIPTION,
     )
+
+    @model_validator(mode="after")
+    def _other_raw_of_a_job(self) -> Self:
+        if self.other_raw is not None and self.job_id is None:
+            raise ValueError("other_raw selects a raw of an experiment job's case; pass job_id")
+        if self.other_raw is not None and self.in_ltspice:
+            raise ValueError("in_ltspice opens a run's own raw, not its other_raw")
+        return self
 
 
 _IMAGE_SCHEMA: dict[str, Any] = {
@@ -1446,7 +1466,9 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
     },
 )
 async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
-    case = await _experiment_case(args.raw_file, args.job_id, args.run_index, args.case_id, state)
+    case = await _experiment_case(
+        args.raw_file, args.job_id, args.run_index, args.case_id, state, other_raw=args.other_raw
+    )
     if case is not None:
         source = services.source_for_run(case, plot_index=args.plot_index, dialect=args.dialect)
         run_index = case.identity["run_index"]

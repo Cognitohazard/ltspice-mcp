@@ -35,6 +35,7 @@ from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.pathutil import relative_paths_from
+from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS
 from ltspice_mcp.state import SessionState
 
 if TYPE_CHECKING:
@@ -1174,14 +1175,23 @@ class ApiMethodsMixin(ABC):
         case_id: str | None = None,
         plot_index: int = 0,
         dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
+        other_raw: Literal["op", "fra_1"] | None = None,
     ) -> RawResult:
-        """Load one raw result through the bounded parser and return a safe wrapper."""
+        """Load one raw result through the bounded parser and return a safe wrapper.
+
+        ``other_raw`` reads the case's other raw of that kind, as its run row's
+        ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
+        response analysis's results, ``"op"`` a transient's operating point."""
         self._check_process_and_thread()
         _one_source("raw_path", raw_path, job_id, run_index, case_id)
         if type(plot_index) is not int or plot_index < 0:
             raise ApiValidationError("plot_index must be a nonnegative integer")
         if dialect is not None and dialect not in ("ltspice", "ngspice", "qspice", "xyce"):
             raise ApiValidationError("dialect must be ltspice, ngspice, qspice, xyce or None")
+        if other_raw is not None and other_raw not in OTHER_RAW_KINDS:
+            raise ApiValidationError(f"other_raw must be one of {list(OTHER_RAW_KINDS)} or None")
+        if other_raw is not None and raw_path is not None:
+            raise TypeError("other_raw is only valid with job_id")
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1191,6 +1201,7 @@ class ApiMethodsMixin(ABC):
                 case_id=case_id,
                 plot_index=plot_index,
                 dialect=dialect,
+                other_raw=other_raw,
             ),
             cancelable=True,
             cancel_on_interrupt=True,

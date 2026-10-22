@@ -587,7 +587,11 @@ schema lists both vocabularies. `other_raws` maps each kind of
 other raw the run wrote beside its raw to its path (`<run>.<kind>.raw`): `op`,
 a transient's operating point, and `fra_1`, a frequency response analysis's
 results. Only kinds recorded from LTspice are listed, and a run with no raw
-lists none. `simulator_version` is the build the run reported in its own
+lists none. A read by job and case takes one of them in place of the case's
+raw with `other_raw`: a job source of `analyze_results`, `plot_waveform`,
+`inspect(kind="results")` and the Python API's `load_raw`. A case whose run
+wrote no raw of that kind fails with `other_raw_not_written` (a missing case
+in `analyze_results`). `simulator_version` is the build the run reported in its own
 output: the LTspice log banner
 (`LTspice 26.0.2 for Windows`), the Xyce log banner
 (`Xyce Release 7.8.0-opensource`), the ngspice console banner
@@ -1340,9 +1344,11 @@ cursors where listed:
     source_path, include_directive (source_path as the server sees it, which
     is what staging reads), ports, params, and for a .MODEL its device_type
     and usage; a search adds score
-{kind: "results", path? | job_id?, run_index?, case_id?, plot_index?: int|null,
- dialect?: str|null, view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
-    one admitted RAW path or one finished experiment case. plots returns
+{kind: "results", path? | job_id?, run_index?, case_id?, other_raw?: "fra_1"|"op",
+ plot_index?: int|null, dialect?: str|null,
+ view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
+    one admitted RAW path or one finished experiment case; other_raw reads
+    the case's raw of that kind in place of its raw, RAW views only. plots returns
     the complete plot inventory in artifact order; signals returns the
     selected trace descriptors, marking the axis; table returns plain
     native quantities from a plot with no sampled axis, keeping the first

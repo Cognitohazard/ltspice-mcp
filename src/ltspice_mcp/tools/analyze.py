@@ -25,6 +25,7 @@ from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     LTSpiceMCPError,
+    OtherRawNotWritten,
     PathSecurityError,
     ResultError,
     python_route_text,
@@ -59,7 +60,6 @@ from ltspice_mcp.lib.projection import (
 from ltspice_mcp.lib.raw_parser import (
     OtherRawKind,
     get_step_count,
-    other_raw_path,
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import (
@@ -1129,31 +1129,25 @@ async def _resolve_sources(
                     }
                 )
                 continue
-            kind = source_input.other_raw
-            if kind is not None and kind not in case.other_raws:
+            try:
+                ctx = services.experiment_run_context(
+                    job,
+                    state,
+                    case_id=case.case_id,
+                    require_raw=False,
+                    other_raw=source_input.other_raw,
+                )
+            except OtherRawNotWritten as exc:
                 missing.append(
                     {
                         "label": source_input.label,
                         "case_id": case.case_id,
                         "run_index": case.run_index,
-                        "code": "other_raw_not_written",
-                        "detail": (
-                            f"the run wrote no {kind} raw; its row's other_raws lists "
-                            f"{sorted(case.other_raws) or 'none'}"
-                        ),
+                        "code": exc.code,
+                        "detail": str(exc),
                     }
                 )
                 continue
-            ctx = services.experiment_run_context(
-                job, state, case_id=case.case_id, require_raw=kind is not None
-            )
-            if kind is not None:
-                assert ctx.raw is not None
-                ctx = replace(
-                    ctx,
-                    raw=other_raw_path(ctx.raw, kind),
-                    identity={**ctx.identity, "other_raw": kind},
-                )
             resolved = services.source_for_run(
                 ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
             )

@@ -745,7 +745,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 85 characters so a hierarchy query can name the LTspice
     # build its spellings are for ('ltspice:xvii'): XVII's .save takes a name
     # inside a subcircuit only without each instance's X. Measured 11,331.
-    "inspect": 11350,
+    # Raised by about 225 characters for the results query's other_raw, which
+    # reads a case's FRA results or a transient's operating point by job and
+    # case, as analyze_results does, where only their path could. Measured
+    # 11,574.
+    "inspect": 11590,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -821,7 +825,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # About 20 more for three words on the same argument: a plot of the
     # sheet's results that is open is reopened, which closes a pane the user
     # may have added traces to. Measured 4,451.
-    "plot_waveform": 4455,
+    # Raised by about 190 characters for other_raw, which plots a case's FRA
+    # results by job and case, where only their path could. Measured 4,642.
+    "plot_waveform": 4660,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
