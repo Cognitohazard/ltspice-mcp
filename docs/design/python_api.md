@@ -377,14 +377,17 @@ api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sour
   is refused rather than cut to its first; read it with `trace`.
 - `compare` says how far `other`'s traces are from this result's:
   `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
-  only_there, span, points}`. Signals match by name without case, and by
-  default every signal both hold is compared, the axis aside. `other_step`
+  only_there, span, points}`. A signal named in `signals` is found in each
+  result as `trace` finds it; by default every signal both hold is compared,
+  the axis aside, paired by name without case and by the path to a node or
+  device inside subcircuits however each build spells it (LTspice 26's
+  `V(xa:xin:mid)` is XVII's `V(a:in:mid)`). `other_step`
   defaults to the step of `other` whose parameters are this step's (step 0 of
   a result that is not stepped); a step with no match is refused. On a sampled
   axis each signal is compared at this result's points within the span both
   axes cover, `other` read there by linear interpolation when its axis
-  differs: in log frequency, log magnitude and unwrapped phase on a frequency
-  axis. A plot of no axis compares point by point and needs as many points.
+  differs: in log frequency, dB and unwrapped phase on a frequency axis, as
+  `log_interp_complex` reads one. A plot of no axis compares point by point and needs as many points.
   `max_rel` is `max_abs` over this result's largest magnitude of the signal,
   null when that is 0; complex values compare as complex numbers. No
   tolerance is applied.

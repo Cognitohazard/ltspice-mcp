@@ -110,8 +110,9 @@ d = r.compare(api.load_raw("archived.raw"))  # d["signals"]["V(out)"]["max_abs"]
 
 `r.compare(other, signals=None, step=0, other_step=None)` says how far another
 run's traces are from these: per signal the largest difference, its share of
-this run's peak, and where it is, plus the signals only one run holds. Names
-match without case, steps pair by their parameters, and the other run is read
+this run's peak, and where it is, plus the signals only one run holds. Signals
+pair by name without case and by their path inside subcircuits, so an LTspice 26
+run compares with an XVII one; steps pair by their parameters, and the other run is read
 at this one's points over the span both cover, by interpolation where its axis
 differs (a compressed LTspice raw, guide section 'ltspice'). The tolerance is
 yours.

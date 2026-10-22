@@ -197,12 +197,23 @@ def log_interp_complex(freqs: np.ndarray, H: np.ndarray, f_query: float) -> comp
     changing on a dB-per-decade slope. Interpolating mag_db + unwrapped
     phase matches what a human reads off a Bode plot.
     """
-    mag_db = magnitude_db(H)
-    phase_rad = np.unwrap(np.angle(H))
-    m_db = log_interp(freqs, mag_db, f_query)
-    p_rad = log_interp(freqs, phase_rad, f_query)
-    magnitude = 10.0 ** (m_db / 20.0)
-    return complex(magnitude * np.cos(p_rad), magnitude * np.sin(p_rad))
+    if f_query <= 0:
+        raise ValueError(f"f_query must be positive, got {f_query}")
+    return complex(log_interp_complex_at(freqs, H, np.asarray([f_query]))[0])
+
+
+def log_interp_at(freqs: np.ndarray, values: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """``log_interp`` at every frequency of ``at``: linear in ``log10`` of
+    ascending, positive ``freqs``, clamped to the end values outside them."""
+    return np.interp(np.log10(at), np.log10(freqs), values)
+
+
+def log_interp_complex_at(freqs: np.ndarray, H: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """``log_interp_complex`` at every frequency of ``at``: magnitude in dB and
+    unwrapped phase, each linear in ``log10`` frequency."""
+    m_db = log_interp_at(freqs, magnitude_db(H), at)
+    p_rad = log_interp_at(freqs, np.unwrap(np.angle(H)), at)
+    return 10.0 ** (m_db / 20.0) * np.exp(1j * p_rad)
 
 
 def detect_crossings(

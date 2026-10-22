@@ -1169,10 +1169,7 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    by_lower = {name.lower(): name for name in flat}
-    found = by_lower.get(recipe.expr.lower()) or services.device_param_name(
-        flat, recipe.expr, xvii=writes_xvii_names(raw)
-    )
+    found = services.find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))
     match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are

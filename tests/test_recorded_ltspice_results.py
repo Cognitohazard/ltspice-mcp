@@ -1187,6 +1187,25 @@ class TestSubcircuitDeviceNames:
         # The drain current of the inner MOSFET, as the device table prints it.
         assert read["drain"]["value"] == pytest.approx(8.21e-6, rel=5e-3)
 
+    async def test_a_bias_point_value_inside_a_subcircuit_is_read_by_its_path(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The value recipe reads an operating point's node by its path through
+        the same lookup as any trace."""
+        raw = rec.stage_run(build, self._table_case(build, saved=True), work_dir)
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [{"key": "mid", "metric": "value", "expr": "V(xa.xin.mid)"}],
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None
+        assert data["failures"] == []
+        (value,) = data["results"]["mid"]["values"]
+        expected = "V(a:in:mid)" if rec.generation(build) == "xvii" else "V(xa:xin:mid)"
+        assert value["value"]["signal"] == expected
+
     async def test_the_bias_point_maps_each_devices_names_and_reads_it_by_path(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
@@ -1430,7 +1449,8 @@ class TestCompareRuns:
         bit on the operating point, to rounding on the complex AC response,
         and on the transient where XVII's compressed run stored its points."""
         current, xvii = (
-            self._load(state_no_sim, build, case_id, work_dir) for build in rec.BUILDS
+            self._load(state_no_sim, build, case_id, work_dir)
+            for build in ("ltspice26", "ltspice17")
         )
 
         found = current.compare(xvii)
@@ -1447,6 +1467,27 @@ class TestCompareRuns:
             assert all(row["max_rel"] < 1e-12 for row in rows if row["max_rel"] is not None)
         else:
             assert found["signals"]["V(out)"]["max_rel"] > 1e-3
+
+    def test_signals_inside_subcircuits_pair_across_the_builds(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """LTspice 26 writes V(xa:xin:mid) where XVII writes V(a:in:mid): the
+        same node, compared as one. A signal asked for by its path is found in
+        each as trace() finds it. Currents only one build stored are listed as
+        such."""
+        current, xvii = (
+            self._load(state_no_sim, build, "raw/subckt_names_tran_saved", work_dir)
+            for build in ("ltspice26", "ltspice17")
+        )
+
+        found = current.compare(xvii)
+        asked = current.compare(xvii, signals=["V(xa.xin.mid)", "Ix(xb.top)"])
+
+        for name in ("V(xa:xin:mid)", "Id(xa:xin:Mtail)", "I(xb:xin:Rin)", "Ix(xa:top)"):
+            assert found["signals"][name]["max_rel"] < 1e-3, name
+        assert "Is(xa:xin:Mtail)" in found["only_here"]
+        assert found["only_there"] == []
+        assert list(asked["signals"]) == ["V(xa:xin:mid)", "Ix(xb:top)"]
 
     def test_a_stepped_run_is_compared_step_for_step(
         self, state_no_sim: SessionState, work_dir: Path

@@ -711,21 +711,28 @@ class Signal:
 
 
 def _find_trace(raw: RawData, signal: str) -> str | None:
-    """The raw's own name for one trace ``signal`` addresses, or None.
+    """The raw's own name for one trace ``signal`` addresses, or None
+    (``find_trace`` over the raw's trace names)."""
+    return find_trace(raw.get_trace_names(), signal, xvii=writes_xvii_names(raw))
+
+
+def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
+    """The name among ``names`` that ``signal`` addresses, or None.
 
     Lookup is case-insensitive: SPICE node names are case-insensitive per
     SPICE conventions, but spicelib preserves the case the simulator wrote.
     LTspice writes ``V(out)`` for transient/AC/DC sweep raws but ``v(onoise)``
     for ``.NOISE`` raws — case-sensitive match would reject the user's
-    ``V(onoise)`` even though the data exists.
+    ``V(onoise)`` even though the data exists. ``xvii`` is for names a build
+    wrote that names subcircuit members as XVII does. The one rule behind
+    every reader that finds a trace or an operating-point value by name.
     """
-    trace_names = raw.get_trace_names()
-    if signal in trace_names:
+    if signal in names:
         return signal
     sig_lower = signal.lower()
-    for name in trace_names:
-        if name.lower() == sig_lower:
-            return name
+    by_lower = {name.lower(): name for name in names}
+    if sig_lower in by_lower:
+        return by_lower[sig_lower]
 
     # Resolve cross-simulator / shorthand aliases transparently instead of
     # forcing a guaranteed retry on a deterministic rename:
@@ -734,7 +741,6 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     #   - hierarchical separator: LTspice ':' (V(X1:mid)) <-> ngspice '.'
     #   - a path through subcircuits, which XVII writes without each
     #     instance's X (V(xa.xin.mid) is its V(a:in:mid))
-    by_lower = {t.lower(): t for t in trace_names}
     candidates: list[str] = []
     for kind in ("onoise", "inoise"):
         if sig_lower in (kind, f"v({kind})", f"{kind}_spectrum"):
@@ -747,9 +753,8 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
-    xvii = writes_xvii_names(raw)
-    return find_trace_by_path(trace_names, signal, xvii=xvii) or device_param_name(
-        trace_names, signal, xvii=xvii
+    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(
+        names, signal, xvii=xvii
     )
 
 

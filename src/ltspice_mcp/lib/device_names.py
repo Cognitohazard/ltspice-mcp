@@ -103,11 +103,36 @@ def _owner(name: str, *, xvii: bool) -> _Owner | None:
     if current is None:
         return None
     text = current.group(2)
-    *instances, last = text.casefold().split(":")
-    if current.group(1).casefold() == "ix" and instances:
+    path = _raw_path(text, xvii=xvii)
+    if current.group(1).casefold() == "ix" and len(path) > 1:
         # The port's name follows the instance's path.
-        return _Owner(text, _instances(instances, xvii=xvii), port=True)
-    return _Owner(text, (*_instances(instances, xvii=xvii), last))
+        return _Owner(text, path[:-1], port=True)
+    return _Owner(text, path)
+
+
+def _raw_path(text: str, *, xvii: bool) -> DevicePath:
+    """The path a raw's name for a node or device spells: LTspice's ``:`` or
+    ngspice's ``.`` between instances, each instance without its ``X`` on
+    XVII."""
+    if ":" not in text:
+        return split_path(text)
+    *instances, last = text.casefold().split(":")
+    return (*_instances(instances, xvii=xvii), last)
+
+
+TraceKey = tuple[str, DevicePath]
+
+
+def trace_key(name: str, *, xvii: bool) -> TraceKey:
+    """One key for a trace however a build or simulator spells it: its
+    function and the path to its node or device. LTspice 26's
+    ``V(xa:xin:mid)``, XVII's ``V(a:in:mid)`` (``xvii``), ngspice's
+    ``v(xa.xin.mid)`` and a caller's ``V(xa.xin.mid)`` are all
+    ``("v", ("xa", "xin", "mid"))``. A name of another form is its own key."""
+    match = _TRACE.match(name.strip())
+    if match is None:
+        return "", (name.strip().casefold(),)
+    return match.group(1).casefold(), _raw_path(match.group(2), xvii=xvii)
 
 
 def owner_path(name: str, *, xvii: bool) -> DevicePath | None:
@@ -172,27 +197,24 @@ def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bo
 
 def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
     """The one trace among ``names`` that ``signal`` names by a path through
-    subcircuit instances, as either build writes it: ``V(xa.xin.mid)`` is
-    LTspice 26's ``V(xa:xin:mid)`` and XVII's ``V(a:in:mid)``,
-    ``Id(xa.xin.mtail)`` is ``Id(a:in:Mtail)`` on XVII, and ``Ix(xa.top)`` is
-    ``Ix(a:TOP)``. None when ``signal`` names no such path or not exactly one
-    trace matches."""
-    match = _TRACE.match(signal.strip())
-    if match is None:
+    subcircuit instances, as either build writes it (``trace_key``):
+    ``V(xa.xin.mid)`` is LTspice 26's ``V(xa:xin:mid)`` and XVII's
+    ``V(a:in:mid)``, ``Id(xa.xin.mtail)`` is ``Id(a:in:Mtail)`` on XVII, and
+    ``Ix(xa.top)`` is ``Ix(a:TOP)``. None when ``signal`` names no such path or
+    not exactly one trace matches."""
+    if _TRACE.match(signal.strip()) is None:
         return None
-    want = (match.group(1).casefold(), split_path(match.group(2)))
+    want = trace_key(signal, xvii=False)
     if len(want[1]) < 2:
         return None
-    found = [name for name in names if _trace_path(name, xvii=xvii) == want]
+    # Every match ends with the path's last segment: a cheap test first.
+    tail = f"{want[1][-1]})"
+    found = [
+        name
+        for name in names
+        if name.casefold().endswith(tail) and trace_key(name, xvii=xvii) == want
+    ]
     return found[0] if len(found) == 1 else None
-
-
-def _trace_path(name: str, *, xvii: bool) -> tuple[str, DevicePath] | None:
-    match = _TRACE.match(name)
-    if match is None or ":" not in match.group(2):
-        return None
-    *instances, last = match.group(2).casefold().split(":")
-    return match.group(1).casefold(), (*_instances(instances, xvii=xvii), last)
 
 
 def path_text(path: DevicePath) -> str:

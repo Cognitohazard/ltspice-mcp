@@ -15,7 +15,8 @@ tool-surface changes.
   `V(xa:xin:mid)`, and not on XVII, whose raw writes each instance without
   its X (`V(a:in:mid)`; recorded: `raw/subckt_names_tran_saved`). Every recipe
   now reads it by its path on either build, port currents (`Ix(xa.top)`)
-  included.
+  included, and so does the `value` recipe on an operating point, which
+  refused the path on both builds through a lookup of its own.
 - `edit_schematic` replies gave a pin on a net no label names `net: null`,
   though LTspice's export names it (`N001`). LTspice's numbering is its own, so
   the name is read off an export, never predicted: a batch with a `compare`
@@ -981,7 +982,8 @@ recording that showed it.
 - `RawResult.compare(other, signals=None, step=0, other_step=None)` in the
   Python API says how far another run's traces are from a run's: per signal
   the largest difference, its share of the run's peak and where it is, and the
-  signals only one run holds. It matches names without case, pairs steps by
+  signals only one run holds. It pairs signals by name without case and by
+  their path inside subcircuits on either LTspice build, pairs steps by
   their parameters, compares over the span both axes cover and reads the other
   run by interpolation where its axis differs (in log frequency, magnitude and
   phase on an AC run), so a compressed LTspice raw is read along the lines its
