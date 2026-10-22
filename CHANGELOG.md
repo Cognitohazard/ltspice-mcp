@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- `verify_circuit`'s export check reported `value_suffix_micro_sign` on every
+  export of a sheet with a `u` value: both LTspice builds write a part's `u`
+  suffix as µ in the netlist they export, whatever the sheet spells (recorded:
+  `benchmark/nmos_mirror_drawn`), so the sheet could not make it go away. The
+  build that wrote the export reads its µ as micro, so an export's micro signs
+  are now reported only as the warning per value for a reader that misreads
+  them, an LTspice XVII in the session reading a UTF-8 export. A netlist
+  passed to `verify_circuit` keeps its observation.
 - A run row's `status` is its case's (`produced` once the simulator wrote its
   output) while the receipt's `status` is the job's (`completed`), and nothing
   said so: a caller that selected rows on `completed` got none. The output

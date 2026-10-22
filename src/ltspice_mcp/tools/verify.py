@@ -1105,7 +1105,6 @@ def _micro_sign_observation(
     path: Path,
     encoding: str,
     generated_by: str | None,
-    exported: bool = False,
 ) -> dict[str, Any]:
     """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
     readers = (
@@ -1121,11 +1120,7 @@ def _micro_sign_observation(
         "tokens": [site.token for site in sites],
         "encoding": encoding,
         "reason": (
-            f"LTspice's export wrote {len(sites)} value(s) with a micro sign for the "
-            f"micro suffix in this {encoding} netlist: both builds write a part's 'u' "
-            f"suffix that way, whatever the sheet spells. {readers}"
-            if exported
-            else f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
+            f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
             f"{encoding} file. {readers}"
         ),
     }
@@ -1165,9 +1160,11 @@ def _value_suffix_findings(
     (``cp1252_reader``, from ``services.cp1252_ltspice``) or the one the deck
     shows exported it (``export_writer``), reading a file that is not cp1252. Otherwise
     the file's micro signs are one observation, with their count and lines,
-    which leaves the outcome alone; for an ``exported`` netlist it says the
-    export wrote them. ``encoding`` is the codec the file decoded as. ``cards``
-    has its title card dropped already.
+    which leaves the outcome alone, except in an ``exported`` netlist: both
+    builds write a part's ``u`` suffix as a micro sign there whatever the
+    sheet spells, so the sheet cannot change it, and only a reader that
+    misreads it is worth a finding. ``encoding`` is the codec the file decoded
+    as. ``cards`` has its title card dropped already.
     """
     sites = value_suffix_sites(cards)
     if not sites:
@@ -1202,8 +1199,8 @@ def _value_suffix_findings(
                 evidence=evidence,
             )
         )
-    if micro:
-        findings.append(_micro_sign_observation(micro, path, encoding, generated_by, exported))
+    if micro and not exported:
+        findings.append(_micro_sign_observation(micro, path, encoding, generated_by))
     return findings
 
 
@@ -1512,11 +1509,12 @@ def _exported_value_suffix_findings(
 ) -> list[dict[str, Any]]:
     """Value-suffix findings over an exported netlist.
 
-    LTspice 24 and later write the export as UTF-8, a micro sign as C2 B5, and
-    the exported ``.net`` is what gets handed to another LTspice. Both builds
-    write a part's value suffix ``u`` as a micro sign there (the recorded
-    ``benchmark/nmos_mirror_drawn`` export of a sheet whose value is ``100u``),
-    so the observation says the export wrote them, not the sheet.
+    Both builds write a part's value suffix ``u`` as a micro sign in the
+    export (the recorded ``benchmark/nmos_mirror_drawn`` export of a sheet
+    whose value is ``100u``), LTspice 24 and later in UTF-8 (C2 B5), which
+    they read back as micro. Those micro signs are reported only as a warning
+    per value for a reader that misreads them, an LTspice XVII decoding a
+    UTF-8 export as cp1252; the build that wrote them reads them as meant.
     """
     try:
         text, encoding = read_spice_text_with_encoding(net_path)

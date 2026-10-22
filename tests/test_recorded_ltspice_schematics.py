@@ -983,9 +983,10 @@ class TestExportEncoding:
 
     def test_an_export_spells_a_values_u_as_a_micro_sign(self, build: str):
         """Both builds write a part's value 100u as 100µ in the netlist they
-        export, so the micro signs verify_circuit's export check reports are the
-        export's own: its observation says so, rather than reading as a fact
-        about the sheet."""
+        export, whatever the sheet spells, so verify_circuit's export check
+        reports those micro signs only to a reader that misreads them: an
+        LTspice XVII reading LTspice 26's UTF-8 export, and not XVII's own
+        cp1252 one."""
         from ltspice_mcp.tools.verify import _exported_value_suffix_findings
 
         sheet = (INPUTS / "benchmark/nmos_mirror_drawn.asc").read_text(encoding="utf-8")
@@ -993,9 +994,16 @@ class TestExportEncoding:
         sites = value_suffix_sites(rec.export_cards(build, "benchmark/nmos_mirror_drawn"))
         assert [(site.token, site.micro) for site in sites] == [(f"100{MICRO}", True)]
         net = rec.recorded(build, "benchmark/nmos_mirror_drawn.net")
-        (finding,) = _exported_value_suffix_findings(net, cp1252_reader=None)
-        assert finding["severity"] == "observation"
-        assert finding["evidence"]["reason"].startswith("LTspice's export wrote 1 value(s)")
+        assert _exported_value_suffix_findings(net, cp1252_reader=None) == []
+
+        xvii = "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"
+        misread = _exported_value_suffix_findings(net, cp1252_reader=xvii)
+        if rec.generation(build) == "xvii":
+            assert misread == []
+        else:
+            assert [(f["severity"], f["evidence"]["reader"]) for f in misread] == [
+                ("warning", xvii)
+            ]
 
     def test_a_comment_keeps_its_line_breaks_as_text_and_a_directive_splits(self, build: str):
         """A sheet holds a line break in a TEXT as the two characters ``\\n``.
