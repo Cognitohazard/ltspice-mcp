@@ -54,13 +54,17 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import numpy as np
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import extract_meas_name
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.decoded_raw import DecodedRaw
 
 # Salience threshold for lifting a node value into view. The gmin/floating-node
 # artifact lands at ~1e30, so 1e8 has enormous headroom; a legitimate HV design
@@ -97,6 +101,11 @@ _SOURCE_RELATIVE_RATIO = 20.0  # peak |V| ≥ this many × the largest V-source 
 # Transient-function keywords a V-card may carry; used by the best-effort
 # source-amplitude parser below.
 _SOURCE_FUNCTION_KEYWORDS = frozenset({"sin", "sine", "pulse", "exp", "pwl", "sffm", "am"})
+
+
+#: A compressed transient whose widest gap between stored points spans more
+#: than this share of its time is coarser than twenty evenly spaced points.
+_COARSE_GAP_SHARE = 1 / 20
 
 
 class Observation(TypedDict, total=False):
@@ -307,6 +316,42 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
         if amp > 0:
             out[tokens[0]] = amp
     return out
+
+
+def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
+    """The first step of a compressed LTspice transient whose widest gap
+    between stored points spans more than a twentieth of its time: the step,
+    its points and span, and where the gap lies. None for any other plot.
+
+    LTspice adds ``nocompression`` to a transient's flags when waveform
+    compression is off (``raw/compress_*``).
+    """
+    descriptor = raw.descriptor
+    if (
+        descriptor.dialect != "ltspice"
+        or descriptor.analysis != "transient"
+        or any(flag.lower() == "nocompression" for flag in raw.header.flags)
+    ):
+        return None
+    try:
+        for step in raw.get_steps():
+            times = np.asarray(raw.get_axis(step))
+            if times.size < 2:
+                continue
+            span = float(times[-1] - times[0])
+            gaps = np.diff(times)
+            widest = int(np.argmax(gaps))
+            if span > 0 and gaps[widest] > span * _COARSE_GAP_SHARE:
+                return {
+                    "step": step,
+                    "points": times.size,
+                    "span_s": span,
+                    "gap_from_s": float(times[widest]),
+                    "gap_to_s": float(times[widest + 1]),
+                }
+    except ResultError:
+        return None  # step boundaries unresolved: no step to read
+    return None
 
 
 def deck_observation_inputs(

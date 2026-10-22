@@ -6115,6 +6115,142 @@
         ".raw"
       ]
     },
+    "raw/compress_1mv": {
+      "behaviour": "raw-compression",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1mv.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1mv.cir": "b723ffd9190e0fceacd5af047b04788cf183f9c7ea2893be7982d0247d0a87fe"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1mv.log": {
+          "bytes": 492,
+          "sha256": "e33f75a4eafb4c2f9a62864d99dcfc4348a0fc73720d4b70849dbfe0ccb327b4"
+        },
+        "raw/compress_1mv.raw": {
+          "bytes": 1200,
+          "sha256": "5cdd7f2384ee6f94f5f2087b85bd716c6ab1ea228c6252f7f1303cd7bf6a48b4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_1mv_maxstep": {
+      "behaviour": "raw-compression",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1mv_maxstep.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1mv_maxstep.cir": "ccb0909efcd34f6b412621d37a4442c9dd81400df8c95e942ff292d52caf8667"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1mv_maxstep.log": {
+          "bytes": 482,
+          "sha256": "eeb29ecb5e5ba56b16dbe0db96fab200c3b8a0bed6dd600897be6a07f3b04010"
+        },
+        "raw/compress_1mv_maxstep.raw": {
+          "bytes": 1186,
+          "sha256": "4578d616681d2a0b0912bbe325327f634a436ea87ada309919acb5b0b5e2db22"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_1mv_off": {
+      "behaviour": "raw-compression",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1mv_off.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1mv_off.cir": "db80663a7a264c1a6ddff534c1fef064fea9410ce13b86a99af34c03ef56556b"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1mv_off.log": {
+          "bytes": 479,
+          "sha256": "f45bba29eae570c30f747b5cbc2cd1e305d6cd69030bbfa33e784116e67bb101"
+        },
+        "raw/compress_1mv_off.raw": {
+          "bytes": 31018,
+          "sha256": "a59cddd5792f590b65f5a37c164f854367da51f3ab070ac4889a9cbd782eae79"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/compress_1v": {
+      "behaviour": "raw-compression",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/compress_1v.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/compress_1v.cir": "5ecbb03b03288336ab6b383692bff099010c77d3358d8603330a39ff9cd80aab"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/compress_1v.log": {
+          "bytes": 496,
+          "sha256": "44fdd817f71a88d8a37c24a40ce7f4100288be3b2d3b538a17b99a545b3557fc"
+        },
+        "raw/compress_1v.raw": {
+          "bytes": 1526,
+          "sha256": "d34acb98e683a4b4e37d31435e53761a055533796e23497905e645501c7e950f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/dc": {
       "behaviour": "raw-dc",
       "command": [

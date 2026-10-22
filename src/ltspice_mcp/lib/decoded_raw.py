@@ -537,6 +537,10 @@ class DecodedRaw:
         return self.plots[self.plot_index].descriptor
 
     @property
+    def header(self) -> RawPlotHeader:
+        return self.plots[self.plot_index].header
+
+    @property
     def dialect(self) -> str:
         return self.plots[self.plot_index].dialect
 

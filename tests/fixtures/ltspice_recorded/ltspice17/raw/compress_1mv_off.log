@@ -1,0 +1,25 @@
+Circuit: * a 1 mV RC charge with waveform compression off
+
+.OP point found by inspection.
+
+vavg: AVG(v(out))=0.000801247 FROM 0 TO 0.005
+vat: v(out)=0.000631934 at 0.001
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2154
+traniter = 2154
+tranpoints = 1078
+accept = 1078
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+
