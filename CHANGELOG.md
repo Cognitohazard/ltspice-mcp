@@ -8,6 +8,8 @@ tool-surface changes.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-22
+
 ### Fixed
 
 - `plot_waveform`, and the `ac_structure` recipe, could fail on a frequency
@@ -1782,6 +1784,22 @@ recording that showed it.
   `pyjwt` 2.13.0 → 2.15.1 (CVE-2026-102274). It arrives transitively via the
   MCP SDK, whose only use of it is client-side OAuth credentials, which this
   server does not import.
+
+### Known issues
+
+- With LTspice XVII as the simulator and LTspice 26 also installed, `.asc`
+  editing and rendering read symbols from LTspice 26's library, where some
+  symbols place their pins differently. On WSL with only XVII installed, no
+  symbols are found. Set `[schematic] symbol_paths` to XVII's `lib/sym`
+  folder to use its symbols.
+- A rendered schematic draws no junction dots, so wires that cross and wires
+  that join at the same point look alike.
+- A symbol file with a blank line between a `PIN` line and its `PINATTR`
+  lines loses that pin's name and order. One symbol LTspice XVII ships,
+  `DAC/AD5679R`, has such a line.
+- `edit_schematic` keeps each library symbol it has read for the life of the
+  server, so a symbol file changed while the server runs is seen by
+  `verify_circuit` but not by an edit until the server restarts.
 
 ## [0.6.1] - 2026-09-08
 
