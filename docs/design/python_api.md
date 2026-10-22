@@ -366,12 +366,17 @@ raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
+raw.observations               # [{code, kind, detail, evidence}]; partial_raw
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements(log_path="result.log")  # XOR: log_path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- `observations` is what the result says of itself as it was read:
+  `partial_raw` for a stopped case's raw kept with
+  `execution.keep_partial_raw`, whose values end where the run was stopped.
+  Empty for a whole result.
 - `value` reads a plot of one point a step, such as an operating point, as a
   number: a float, or a complex for a complex trace. A trace of more points
   is refused rather than cut to its first; read it with `trace`.

@@ -31,6 +31,7 @@ class RawResult:
         dialect: str | None,
         step_count: int,
         steps: list[dict[str, Any]],
+        observations: tuple[dict[str, Any], ...] = (),
     ) -> None:
         self._raw = raw
         self._signals = tuple(str(name) for name in raw.get_trace_names())
@@ -41,6 +42,7 @@ class RawResult:
         self._analysis_type = raw.descriptor.analysis
         self._dialect = raw.descriptor.dialect
         self._source = source
+        self._observations = observations
 
     @property
     def signals(self) -> list[str]:
@@ -115,6 +117,13 @@ class RawResult:
     @property
     def source(self) -> Path:
         return self._source
+
+    @property
+    def observations(self) -> list[dict[str, Any]]:
+        """What this result says of itself as it was read: ``partial_raw`` when
+        it is a stopped case's kept raw, whose values end where the run was
+        stopped. Empty for a whole result."""
+        return copy.deepcopy(list(self._observations))
 
     @property
     def plot_index(self) -> int:
@@ -323,6 +332,7 @@ async def load_raw_result(
     dialect: str | None = None,
 ) -> RawResult:
     """Resolve and bounded-parse one raw result on the API event loop."""
+    observations: tuple[dict[str, Any], ...] = ()
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
@@ -334,6 +344,7 @@ async def load_raw_result(
         context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
         resolved = source.raw
+        observations = context.observations
 
     raw = await services.load_raw(source, state)
     assert resolved is not None
@@ -345,6 +356,7 @@ async def load_raw_result(
         dialect=raw.descriptor.dialect,
         step_count=step_count,
         steps=steps,
+        observations=observations,
     )
 
 

@@ -327,7 +327,7 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"|
                                   "<family>:<name>", recoverable?: bool,
-                      simulator_seed?: int}
+                      simulator_seed?: int, keep_partial_raw?: bool}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       plot_index?, dialect?, include?}
                                         attached analysis stage; `recipes` is
@@ -383,7 +383,8 @@ those quantities from the waveform (`value`, `signal_stats`) instead.
 `execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
 the server (`limits.run_timeout_s` in `inspect(kind="capabilities")`, `null`
 when unset). A timeout deletes the partial result, unless the job is
-recoverable. A running job reports each
+recoverable or `execution.keep_partial_raw` keeps it for reads (below). A
+running job reports each
 case's progress (below), which shows when a case is stuck.
 `[simulation] timeout` (`limits.export_timeout_s`) bounds only LTspice netlist
 export.
@@ -549,6 +550,22 @@ not from the `No. Points` header, which ngspice leaves at 0 until a plot ends
 and which lags the data on LTspice. `last_axis_value` is in deck coordinates.
 `run_timeout`, `job_deadline` and `kill_unconfirmed` rows carry a recovery
 `hint`.
+
+**Keeping a stopped case's raw.** `execution.keep_partial_raw: true` keeps the
+raw of a stopped case, cut to the points a full read reaches, where it would
+be deleted. An LTspice raw keeps the points its header's count declares, which
+is as far as LTspice's own reader reads it: LTspice XVII's records past that
+count need not run on in time. An ngspice raw keeps every complete record. The
+`partial_progress` observation then says `raw_kept: true` and adds
+`kept_points` and `kept_last_axis_value`; the failure row's `evidence` adds
+`partial_raw`, the kept file's path, which is also the run row's `raw`. Reads
+of that case (`analyze_results`, `plot_waveform`, `inspect(kind="results")`,
+the Python API's `load_raw`) take it as they take a produced case's, and each
+carries a `partial_raw` observation, `{case_id, stop, points, axis,
+last_axis_value}`: every value read ends at the last kept point. A raw with no
+point to keep, a text (`Values:`) raw and an LTspice Fast Access raw are
+deleted as before. The flag cannot be combined with `recoverable`, since a
+resumed job runs its stopped cases again.
 
 **Running cases.** While a job runs, receipts from `run_experiments`,
 `jobs(status)` and `jobs(wait)` carry one `run_progress` observation per

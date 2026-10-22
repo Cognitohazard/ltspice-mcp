@@ -19,7 +19,7 @@ import os
 import re
 import struct
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -1156,6 +1156,22 @@ class PartialRawProgress:
     points: int | None
     last_axis_value: float | None
     stepped: bool
+    #: Where :func:`cut_partial_raw` cuts the file. None when it cannot: the
+    #: plot's data is text or is stored axis first (``fastaccess``), another
+    #: simulator wrote it, or it holds no point to keep.
+    cut: _Cut | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class _Cut:
+    """The plot a raw ends in, cut to the points it keeps: the byte offsets of
+    the plot's header, of its data, and of the end of its last kept point."""
+
+    width: int
+    plot_start: int
+    data_start: int
+    data_end: int
+    points: int
 
 
 @dataclass(frozen=True)
@@ -1207,7 +1223,7 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
             offset = 0
             while True:
                 header = _read_plot_header(handle, offset, width)
-                following = _progress_of_plot(handle, header, size, width, dialect)
+                following = _progress_of_plot(handle, header, offset, size, width, dialect)
                 if isinstance(following, int):
                     offset = following
                     continue
@@ -1290,18 +1306,22 @@ def _raw_writer(fields: dict[str, str], width: int, dialect: str | None) -> str:
 def _progress_of_plot(
     handle: Any,
     header: _PlotHeader,
+    offset: int,
     size: int,
     width: int,
     dialect: str | None,
 ) -> PartialRawProgress | int | None:
-    """This plot's progress, or the offset of the plot that follows it."""
+    """This plot's progress, or the offset of the plot that follows it.
+    ``offset`` is where this plot's header starts."""
     fields = header.fields
     plot = fields.get("plotname") or None
     flags = fields.get("flags", "").lower().split()
     has_axis = bool(header.variables) and (plot or "").lower() not in _AXISLESS_PLOTS
     axis = header.variables[0] if has_axis else None
 
-    def progress(points: int | None, last: float | None) -> PartialRawProgress:
+    def progress(
+        points: int | None, last: float | None, cut: _Cut | None = None
+    ) -> PartialRawProgress:
         return PartialRawProgress(
             raw_bytes=size,
             header_complete=header.data_start is not None,
@@ -1310,6 +1330,7 @@ def _progress_of_plot(
             points=points,
             last_axis_value=_deck_axis_value(last, axis, plot, fields) if axis else None,
             stepped="stepped" in flags,
+            cut=cut,
         )
 
     if header.data_start is None:
@@ -1351,17 +1372,85 @@ def _progress_of_plot(
     points = on_disk
     if points == 0:
         return progress(0, None)
+    cut = None
     if "fastaccess" in flags:
         # Axis first, as one contiguous block; only a finished plot is converted.
         at = header.data_start + (points - 1) * axis_size
     else:
         at = header.data_start + (points - 1) * record
+        # LTspice's own reader reads a stopped run's file as far as its
+        # header's count, and LTspice XVII's records past that count need not
+        # run on in time (recorded: raw/tran_killed), so an LTspice file keeps
+        # what its count declares. ngspice's count stays 0 until the plot ends.
+        kept = min(declared, points) if writer == "ltspice" else points
+        if kept > 0 and writer in ("ltspice", "ngspice"):
+            end = header.data_start + kept * record
+            cut = _Cut(width, offset, header.data_start, end, kept)
     handle.seek(at)
     value = handle.read(8)
     if len(value) < 8:
         return progress(None, None)
     # A complex axis stores its real part first.
-    return progress(points, struct.unpack("<d", value)[0])
+    return progress(points, struct.unpack("<d", value)[0], cut)
+
+
+#: The header line that declares a plot's point count.
+_RE_POINT_COUNT = re.compile(r"(?im)^(No\. Points:)[^\r\n]*")
+#: Bytes copied at a time when a raw is cut.
+_CUT_COPY_CHUNK = 1024 * 1024
+
+
+def cut_partial_raw(path: Path, dialect: str | None = None) -> PartialRawProgress | None:
+    """Cut a stopped run's raw, in place, to the points a full load can read.
+
+    A stopped run's raw ends part way through a point, and its header's point
+    count is 0 (ngspice) or lags the points written (LTspice); a full load
+    refuses both. The cut file keeps every plot before the one the run was
+    writing as it was, and of that plot the points LTspice's own reader would
+    read of an LTspice file, as many as its count declares, or every complete
+    point of an ngspice file, under a count of exactly those points. Returns
+    what the cut file holds, or None, leaving the file as it was, when it
+    cannot be cut (see :attr:`PartialRawProgress.cut`) or the header declares
+    no count to set.
+
+    The cut is written beside the file and moved over it, so a reader never
+    sees half of it. Raises FileNotFoundError when there is no file.
+    """
+    progress = read_partial_raw_progress(path, dialect)
+    cut = progress.cut if progress is not None else None
+    if progress is None or cut is None:
+        return None
+    codec = _RAW_CODECS[cut.width]
+    partial = path.with_name(f"{path.name}.cut")
+    try:
+        with path.open("rb") as source, partial.open("wb") as out:
+            _copy_bytes(source, out, 0, cut.plot_start)
+            source.seek(cut.plot_start)
+            header = source.read(cut.data_start - cut.plot_start).decode(
+                codec, errors="surrogatepass"
+            )
+            header, found = _RE_POINT_COUNT.subn(
+                lambda match: f"{match.group(1)} {cut.points}", header, count=1
+            )
+            if not found:
+                return None
+            out.write(header.encode(codec, errors="surrogatepass"))
+            _copy_bytes(source, out, cut.data_start, cut.data_end - cut.data_start)
+        os.replace(partial, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            partial.unlink()
+    return read_partial_raw_progress(path, dialect)
+
+
+def _copy_bytes(source: Any, out: Any, start: int, length: int) -> None:
+    source.seek(start)
+    while length > 0:
+        chunk = source.read(min(_CUT_COPY_CHUNK, length))
+        if not chunk:
+            raise OSError("the raw ended before the bytes it was read to hold")
+        out.write(chunk)
+        length -= len(chunk)
 
 
 def _plot_starts_at(handle: Any, offset: int, width: int) -> bool:

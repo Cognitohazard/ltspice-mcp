@@ -88,6 +88,21 @@ class ExperimentCase:
     recovery: CaseRecovery | None = None
 
 
+#: The key under which a stopped case's failure evidence names the raw it kept
+#: for reads (``execution.keep_partial_raw``).
+PARTIAL_RAW_KEY = "partial_raw"
+
+
+def keeps_partial_raw(case: ExperimentCase) -> bool:
+    """Whether ``case`` was stopped part way and kept its raw, cut to the
+    points a full read reaches, for reads of the case to take."""
+    return (
+        case.status != "produced"
+        and case.raw_file is not None
+        and bool((case.failure_evidence or {}).get(PARTIAL_RAW_KEY))
+    )
+
+
 def failure_row(case: ExperimentCase) -> dict[str, Any]:
     """Project one non-produced case into the receipt's failure-channel row.
 

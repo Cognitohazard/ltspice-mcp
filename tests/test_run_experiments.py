@@ -80,6 +80,27 @@ def test_step_and_all_steps_are_exclusive_on_the_attached_block():
         )
 
 
+def _execution_request(**execution: Any) -> RunExperimentsInput:
+    return RunExperimentsInput.model_validate(
+        {"request_id": "kept", "circuits": [{"path": "deck.cir"}], "execution": execution}
+    )
+
+
+def test_keep_partial_raw_cannot_be_combined_with_recoverable():
+    """A resumed job runs its stopped cases again, so a raw kept for reads
+    would be read from the run a resume replaces."""
+    with pytest.raises(ValidationError, match="cannot be combined with recoverable"):
+        _execution_request(keep_partial_raw=True, recoverable=True)
+
+
+def test_keep_partial_raw_is_part_of_a_requests_identity_only_when_set():
+    plain = _execution_request().strip_presentation()
+    assert "keep_partial_raw" not in plain["execution"]
+    assert _execution_request(keep_partial_raw=False).strip_presentation() == plain
+    kept = _execution_request(keep_partial_raw=True).strip_presentation()
+    assert kept["execution"]["keep_partial_raw"] is True
+
+
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
     """One cap, both surfaces, held rather than refused.
 

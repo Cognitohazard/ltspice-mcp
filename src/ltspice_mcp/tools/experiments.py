@@ -203,12 +203,26 @@ class ExperimentExecution(StrictModel):
         ),
     )
 
+    keep_partial_raw: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Keep a stopped case's raw (run_timeout_s, job_deadline_s, cancel), cut "
+            "to what a full read reaches, for reads of that case. Not with recoverable."
+        ),
+    )
+
     @model_validator(mode="after")
     def _seed_requires_recovery(self) -> ExperimentExecution:
         if self.simulator_seed is not None and (
             not self.recoverable or self.simulator == "ltspice"
         ):
             raise ValueError("execution.simulator_seed requires recoverable ngspice")
+        if self.keep_partial_raw and self.recoverable:
+            raise ValueError(
+                "execution.keep_partial_raw cannot be combined with recoverable: a "
+                "resumed job runs its stopped cases again"
+            )
         return self
 
     wait_s: float = Field(
@@ -433,6 +447,8 @@ class RunExperimentsInput(ToolInput):
             payload["execution"].pop("recoverable", None)
         if self.execution.simulator_seed is None:
             payload["execution"].pop("simulator_seed", None)
+        if not self.execution.keep_partial_raw:
+            payload["execution"].pop("keep_partial_raw", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -741,6 +757,7 @@ async def handle_run_experiments(
             job_deadline_s=args.execution.job_deadline_s,
             recoverable=args.execution.recoverable,
             simulator_seed=args.execution.simulator_seed,
+            keep_partial_raw=args.execution.keep_partial_raw,
             analysis_request=analysis_request,
             analysis_callback=(
                 attached_analysis_callback(state) if analysis_request is not None else None

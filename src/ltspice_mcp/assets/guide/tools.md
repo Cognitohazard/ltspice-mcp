@@ -43,7 +43,10 @@ A case has no time limit unless `execution.run_timeout_s` (or the server's
 points written and the last time or frequency reached, to compare with the
 deck's own stop value. A simulator writes in buffered blocks, so compare
 readings a few minutes apart: if `points` has not moved, the case is not
-advancing, and `jobs(action="cancel")` stops it.
+advancing, and `jobs(action="cancel")` stops it. A stopped case's raw is
+deleted unless the run asked for `execution.keep_partial_raw: true`; then its
+results stay readable up to where the run was stopped, and every read says so
+with a `partial_raw` observation.
 
 `inspect(kind="reference")` finds a recipe, schematic op, variation kind,
 check or job action from plain words (`query="phase margin"`) and returns its

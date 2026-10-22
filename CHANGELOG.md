@@ -974,6 +974,16 @@ recording that showed it.
 
 ### Added
 
+- `run_experiments` takes `execution.keep_partial_raw`. A case stopped by its
+  run timeout, the job deadline or a cancel then keeps its raw, cut to the
+  points a full read reaches, where it was deleted, and `analyze_results`,
+  `plot_waveform`, `inspect(kind="results")` and the Python API read it, each
+  with a `partial_raw` observation saying where its values end. An LTspice raw
+  keeps the points its header declares, as far as LTspice's own reader reads
+  it, because LTspice XVII's records past that count go back in time
+  (recorded: `raw/tran_killed`); an ngspice raw keeps every complete record.
+  The failure row's evidence names the kept file as `partial_raw`. The flag
+  cannot be combined with `recoverable`.
 - `RawResult.compare(other, signals=None, step=0, other_step=None)` in the
   Python API says how far another run's traces are from a run's: per signal
   the largest difference, its share of the run's peak and where it is, and the

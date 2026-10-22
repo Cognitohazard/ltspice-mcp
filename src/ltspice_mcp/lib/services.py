@@ -31,7 +31,12 @@ from ltspice_mcp.lib.device_names import (
     find_trace_by_path,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob, failure_summary
+from ltspice_mcp.lib.experiment_types import (
+    ExperimentCase,
+    ExperimentJob,
+    failure_summary,
+    keeps_partial_raw,
+)
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
@@ -144,6 +149,9 @@ class RunContext:
     console: Path | None = None
     #: The build the case's run named in its own output, as recorded.
     simulator_version: str | None = None
+    #: What a read of this case's results has to say of them: a stopped case's
+    #: kept raw ends where its run was stopped (``partial_raw_observation``).
+    observations: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -285,6 +293,40 @@ def _no_raw_result(job_id: str, case: ExperimentCase) -> str:
     return text
 
 
+def partial_raw_observation(case: ExperimentCase) -> dict[str, Any]:
+    """What a read of a stopped case's kept raw says of it: the values end
+    where the run was stopped, at the last point the raw was cut to."""
+    reached = next(
+        (
+            item.get("evidence") or {}
+            for item in case.observations
+            if item.get("code") == "partial_progress"
+        ),
+        {},
+    )
+    points = reached.get("kept_points")
+    last = reached.get("kept_last_axis_value")
+    axis = reached.get("axis")
+    where = f"its first {points} points" if points is not None else "the points it holds"
+    if axis is not None and last is not None:
+        where += f", to {axis} = {last:g}"
+    return {
+        "code": "partial_raw",
+        "kind": "coverage",
+        "detail": (
+            f"Case {case.case_id} was stopped ({case.failure_code or case.status}) before its "
+            f"run ended; its raw was kept with {where}, and every value read from it ends there."
+        ),
+        "evidence": {
+            "case_id": case.case_id,
+            "stop": case.failure_code or case.status,
+            "points": points,
+            "axis": axis,
+            "last_axis_value": last,
+        },
+    }
+
+
 def experiment_run_context(
     job: ExperimentJob,
     state: SessionState,
@@ -317,7 +359,8 @@ def experiment_run_context(
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
     case = matches[0]
-    if case.status != "produced" or (require_raw and case.raw_file is None):
+    partial = keeps_partial_raw(case)
+    if (case.status != "produced" and not partial) or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
     identity: dict[str, Any] = {
         "case_id": case.case_id,
@@ -347,6 +390,7 @@ def experiment_run_context(
         identity=identity,
         console=console,
         simulator_version=case.simulator_version,
+        observations=(partial_raw_observation(case),) if partial else (),
     )
 
 

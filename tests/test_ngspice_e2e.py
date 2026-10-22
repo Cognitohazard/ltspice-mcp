@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, live_run_progress
 from ltspice_mcp.lib.native_execution import observe_simulator
@@ -743,6 +744,83 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     assert 0 < reached["last_axis_value"] < 1
     leftovers = await asyncio.to_thread(lambda: list(work_dir.rglob("*.raw")))
     assert not leftovers, "the killed run's raw was left on disk"
+
+
+async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
+    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """With keep_partial_raw, a real ngspice run killed at its run timeout
+    keeps its raw, cut to its whole points, and analyze_results and inspect
+    read it, each saying that its values end where the run was stopped."""
+
+    async def progressing(_runner: ExperimentRunner, execution: Any, _future: Any) -> bool:
+        live = await live_run_progress(execution.job)
+        return any((item["evidence"]["points"] or 0) > 0 for item in live.values())
+
+    start_when(
+        monkeypatch,
+        ExperimentRunner,
+        "_await_case",
+        progressing,
+        what="ngspice to write its first points",
+    )
+    net = _write(work_dir, "slow.cir", _SLOW_RC_DECK)
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "ng-keep-partial",
+            "circuits": [{"path": net, "id": "dut"}],
+            # timing: the run timeout under test; it starts once there are points, and
+            # the deck solves far past it
+            "execution": {
+                "wait_s": 90,
+                "simulator": "ngspice",
+                "run_timeout_s": 0.2,
+                "keep_partial_raw": True,
+            },
+        },
+    )
+
+    [failure] = receipt["failures"]
+    assert failure["code"] == "run_timeout"
+    kept = failure["evidence"]["partial_raw"]
+    [row] = receipt["runs"]["items"]
+    assert (row["status"], row["raw"]) == ("failed", kept)
+    [progress] = [item for item in receipt["observations"] if item["code"] == "partial_progress"]
+    reached = progress["evidence"]
+    # ngspice's count stays 0 until a plot ends: every whole point is kept.
+    assert reached["kept_points"] == reached["points"] > 0
+    last = reached["kept_last_axis_value"]
+
+    data = await _analyze(
+        ngspice_state,
+        receipt["job_id"],
+        [{"key": "vout", "metric": "value", "expr": "v(out)", "at": repr(last)}],
+    )
+    assert data["coverage"]["runs_analyzed"] == 1
+    value = data["results"]["vout"]["values"][0]["value"]
+    assert value["actual_x"] == pytest.approx(last)
+    assert math.isfinite(value["value"])
+    [partial] = [item for item in data["observations"] if item["code"] == "partial_raw"]
+    assert partial["evidence"]["points"] == reached["kept_points"]
+
+    reply = await handle_inspect(
+        InspectInput.model_validate(
+            {"queries": [{"kind": "results", "view": "signals", "job_id": receipt["job_id"]}]}
+        ),
+        ngspice_state,
+    )
+    assert reply.structured_content is not None
+    [result] = reply.structured_content["results"]
+    assert result["ok"], result
+    assert "v(out)" in {signal["name"] for signal in result["data"]["signals"]}
+    assert [item["code"] for item in result["data"]["observations"]] == ["partial_raw"]
+
+    loaded = await load_raw_result(
+        state=ngspice_state, raw_path=None, job_id=receipt["job_id"], run_index=0, case_id=None
+    )
+    assert len(loaded.axis()) == reached["kept_points"]
+    assert [item["code"] for item in loaded.observations] == ["partial_raw"]
 
 
 async def test_an_unbounded_case_reports_progress_while_it_runs(

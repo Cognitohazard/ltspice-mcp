@@ -10,7 +10,8 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib import experiment_store
+from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     SPICELIB_TIMEOUT_MARGIN_S,
@@ -24,6 +25,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
+from ltspice_mcp.lib.raw_parser import read_partial_raw_progress
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import OwnerLiveness
 from ltspice_mcp.state import SessionState
@@ -92,6 +94,7 @@ def _request(
     job_deadline_s: float | None = None,
     kill_grace_s: float = LIVENESS_S,
     analysis_callback=None,
+    keep_partial_raw: bool = False,
 ) -> ExperimentRunRequest:
     return _request_and_cases(
         state,
@@ -103,6 +106,7 @@ def _request(
         run_timeout_s=run_timeout_s,
         job_deadline_s=job_deadline_s,
         kill_grace_s=kill_grace_s,
+        keep_partial_raw=keep_partial_raw,
         analysis_callback=analysis_callback,
     )[0]
 
@@ -119,6 +123,7 @@ def _request_and_cases(
     job_deadline_s: float | None = None,
     kill_grace_s: float = LIVENESS_S,
     analysis_callback=None,
+    keep_partial_raw: bool = False,
 ) -> tuple[ExperimentRunRequest, list[ExperimentCase]]:
     """The request and the cases it will stage, for a test that needs both.
 
@@ -139,6 +144,7 @@ def _request_and_cases(
         kill_grace_s=kill_grace_s,
         analysis_request={"recipes": []} if analysis_callback is not None else None,
         analysis_callback=analysis_callback,
+        keep_partial_raw=keep_partial_raw,
     )
     return request, cases
 
@@ -1081,6 +1087,7 @@ class TestStoppedCaseRecord:
         run_timeout_s: float | None = 0.01,
         log_text: str = "Circuit: deck\n",
         raw: bytes | None = None,
+        keep_partial_raw: bool = False,
     ):
         runner = ExperimentRunner(asyncio.get_running_loop(), MockSimulator, work_dir, 1)
         callbacks, submissions = _controlled_submit(monkeypatch, runner)
@@ -1097,6 +1104,7 @@ class TestStoppedCaseRecord:
                     work_dir,
                     request_id=request_id,
                     run_timeout_s=run_timeout_s,
+                    keep_partial_raw=keep_partial_raw,
                 )
             )
         )
@@ -1183,6 +1191,90 @@ class TestStoppedCaseRecord:
         assert evidence["raw_kept"] is False
         assert "The raw is removed" in progress[0]["detail"]
         assert not await asyncio.to_thread(raw.exists)
+
+    async def test_a_kept_partial_raw_is_cut_named_and_readable(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """keep_partial_raw keeps the raw a stopped case left, cut to its whole
+        points under a count a full read accepts, and names it in the case's
+        evidence and row; reads of the case take it and say where it ends."""
+        times = [0.0, 1e-6, 2e-6, 3e-6]
+        job = await self._timed_out(
+            state_no_sim,
+            work_dir,
+            monkeypatch,
+            request_id="timeout-keep-partial",
+            raw=_partial_ngspice_raw(times),
+            keep_partial_raw=True,
+        )
+        case = job.cases[0]
+        assert job.output_folder is not None
+        raw = job.output_folder / f"{case.run_token}.raw"
+
+        assert case.status == "failed" and case.failure_code == "run_timeout"
+        assert case.raw_file == raw
+        assert case.failure_evidence is not None
+        assert case.failure_evidence["partial_raw"] == str(raw)
+        assert job.failures[-1]["evidence"]["partial_raw"] == str(raw)
+        assert b"No. Points: 4\n" in await asyncio.to_thread(raw.read_bytes)
+        cut = await asyncio.to_thread(read_partial_raw_progress, raw, "ngspice")
+        assert cut is not None and cut.points == 4
+        [progress] = [item for item in case.observations if item["code"] == "partial_progress"]
+        assert progress["evidence"]["raw_kept"] is True
+        assert progress["evidence"]["kept_points"] == 4
+        assert progress["evidence"]["kept_last_axis_value"] == pytest.approx(3e-6)
+        assert "reads of this case take it" in progress["detail"]
+
+        context = services.experiment_run_context(job, state_no_sim, case_id=case.case_id)
+        assert context.raw == raw
+        [read] = context.observations
+        assert read["code"] == "partial_raw"
+        assert read["evidence"]["points"] == 4
+        assert read["evidence"]["last_axis_value"] == pytest.approx(3e-6)
+
+    async def test_without_keep_partial_raw_a_stopped_case_is_not_readable(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        job = await self._timed_out(
+            state_no_sim,
+            work_dir,
+            monkeypatch,
+            request_id="timeout-no-keep",
+            raw=_partial_ngspice_raw([0.0, 1e-6]),
+        )
+        case = job.cases[0]
+
+        assert case.raw_file is None
+        assert "partial_raw" not in (case.failure_evidence or {})
+        with pytest.raises(ResultError, match="did not produce a raw result"):
+            services.experiment_run_context(job, state_no_sim, case_id=case.case_id)
+
+    async def test_a_raw_with_no_whole_point_is_not_kept(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        job = await self._timed_out(
+            state_no_sim,
+            work_dir,
+            monkeypatch,
+            request_id="timeout-keep-nothing",
+            raw=_partial_ngspice_raw([]),
+            keep_partial_raw=True,
+        )
+        case = job.cases[0]
+        assert job.output_folder is not None
+
+        assert case.raw_file is None
+        assert "partial_raw" not in (case.failure_evidence or {})
+        assert not await asyncio.to_thread((job.output_folder / f"{case.run_token}.raw").exists)
 
     async def test_no_raw_on_disk_is_reported_as_such(
         self,
@@ -1399,11 +1491,11 @@ class TestStoppedCaseRecord:
         recorded_at_removal: list[bool] = []
         remove = runner._remove_case_artifacts
 
-        def observe_then_remove(job: Any, case: Any) -> None:
+        def observe_then_remove(job: Any, case: Any, kept: Path | None = None) -> None:
             recorded_at_removal.append(
                 any(item["code"] == "partial_progress" for item in case.observations)
             )
-            remove(job, case)
+            remove(job, case, kept)
 
         monkeypatch.setattr(runner, "_remove_case_artifacts", observe_then_remove)
         receipt = await asyncio.shield(

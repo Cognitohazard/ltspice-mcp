@@ -414,7 +414,7 @@ summary = "A raw converted to Fast Access layout: the fastaccess flag and sample
 model = ["lib/raw_header.py", "lib/raw_parser.py"]
 
 [behaviour.raw-partial]
-summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it."
+summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it, and, on LTspice XVII, samples past the count that go back in time."
 model = ["lib/raw_parser.py", "lib/experiment_runner.py"]
 
 # ---------------------------------------------------------------- logs
