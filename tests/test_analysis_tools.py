@@ -18,6 +18,7 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.device_names import owner_path
 from ltspice_mcp.lib.metrics import (
     MetricValue,
     has_active_device,
@@ -36,9 +37,6 @@ from ltspice_mcp.lib.metrics import (
 )
 from ltspice_mcp.lib.metrics import (
     split_ratio as _split_ratio,
-)
-from ltspice_mcp.lib.metrics import (
-    trace_device as _trace_device,
 )
 from ltspice_mcp.lib.recipes import (
     AcStructureRecipe,
@@ -1870,14 +1868,14 @@ class TestSignalStatsAnalysisTypeRobustness:
 class TestTraceDeviceFilter:
     """Pure helpers behind operating_point's device= filter."""
 
-    def test_trace_device_owner(self):
-        assert _trace_device("@m1[gm]") == "m1"
-        assert _trace_device("v(@m1[vth])") == "m1"
-        assert _trace_device("i(@m1[id])") == "m1"
-        assert _trace_device("Id(M1)") == "m1"
-        assert _trace_device("Ic(Q2)") == "q2"
-        assert _trace_device("I(R1)") == "r1"
-        assert _trace_device("V(out)") is None
+    def test_the_owner_of_each_name(self):
+        assert owner_path("@m1[gm]", xvii=False) == ("m1",)
+        assert owner_path("v(@m1[vth])", xvii=False) == ("m1",)
+        assert owner_path("i(@m1[id])", xvii=False) == ("m1",)
+        assert owner_path("Id(M1)", xvii=False) == ("m1",)
+        assert owner_path("Ic(Q2)", xvii=False) == ("q2",)
+        assert owner_path("I(R1)", xvii=False) == ("r1",)
+        assert owner_path("V(out)", xvii=False) is None
 
     def test_filter_narrows_to_device(self):
         op = {

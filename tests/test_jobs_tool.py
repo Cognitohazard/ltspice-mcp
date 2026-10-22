@@ -7,6 +7,7 @@ import copy
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock
 
 import jsonschema
@@ -19,6 +20,7 @@ from ltspice_mcp.lib.experiment_types import (
     AnalysisStage,
     Completeness,
     ExperimentCase,
+    ExperimentCaseStatus,
     ExperimentJob,
     ManifestEntry,
     SourceRecord,
@@ -445,6 +447,34 @@ def test_receipt_schemas_require_progress():
         )
         assert "progress" in branch["required"]
         assert "progress" in branch["properties"]
+
+
+def test_the_schemas_tell_a_case_status_from_the_jobs():
+    """A case that ran is produced while its job is completed, and a caller that
+    selected rows on completed got none. Every run row's status lists the case
+    statuses, and every receipt's status says it is the job's."""
+
+    def branch(action: str) -> dict:
+        return next(
+            item
+            for item in JOBS_OUTPUT_SCHEMA["oneOf"]
+            if item["properties"]["action"]["const"] == action
+        )
+
+    receipts = [RUN_EXPERIMENTS_OUTPUT_SCHEMA, branch("status"), branch("wait"), branch("runs")]
+    rows = [
+        RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"]["properties"]["items"]["items"],
+        branch("status")["properties"]["runs"]["properties"]["items"]["items"],
+        branch("runs")["properties"]["items"]["items"],
+    ]
+
+    for row in rows:
+        assert row["properties"]["status"]["enum"] == list(get_args(ExperimentCaseStatus))
+        assert "produced" in row["properties"]["status"]["description"]
+    for receipt in receipts:
+        description = receipt["properties"]["status"]["description"]
+        assert description.startswith("The job's status")
+        assert "completed" in description
 
 
 def test_top_level_properties_describe_what_every_action_shares():

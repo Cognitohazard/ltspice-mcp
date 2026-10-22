@@ -3034,3 +3034,80 @@ finding naming the part. `tests/test_netlist_graph.py` pins the comparison side:
 parameter given twice is reported (`duplicate_params`) and compares equal only
 when it does whichever copy is read. Once upstream searches every slot and
 appends as text, the workaround can call it again.
+
+## Bug 30 — `AscEditor` takes every instance named `X...` for a subcircuit, whatever its symbol
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-22
+on a resistor named `X9`.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor._load_asc_file`, the `SYMATTR InstName` branch).
+**Our workaround:** `lib/schematic_ops.py:level_label_lint` decides whether a
+part is a subcircuit call by `element_class`, the letter LTspice netlists it
+as, and no longer reads spicelib's `_SUBCKT` attribute.
+
+### Summary
+
+When it reads `SYMATTR InstName`, the editor gives the component a `_SUBCKT`
+attribute when its name starts with `X` or its symbol is a subcircuit. The
+letter a part netlists as comes from its symbol's `Prefix`, or its own, not
+from its name: LTspice puts the element letter in front of a name that does
+not start with it (`R§Load` for a resistor named `Load`; recorded:
+`export/instance_names`, `export/instance_prefix`). A resistor named `X9` is a
+resistor, but spicelib marks it as a subcircuit, and a lowercase `x9` it does
+not.
+
+### Affected code
+
+```python
+if ref == "InstName":
+    component.reference = text
+    symbol = self._get_symbol(component.symbol)
+    if component.reference.startswith('X') or symbol.is_subcircuit():
+        component.attributes['_SUBCKT'] = self._get_subcircuit(symbol)
+```
+
+### Reproduction
+
+```
+Version 4
+SHEET 1 880 680
+SYMBOL res 96 144 R0
+SYMATTR InstName X9
+SYMATTR Value 1k
+```
+
+```python
+editor = AscEditor("x9.asc")
+"_SUBCKT" in editor.get_component("X9").attributes  # True
+```
+
+### Impact
+
+Code that asks spicelib whether a part is a subcircuit gets a yes for any part
+named `X...` and a no for one named `x...`, both independent of what LTspice
+netlists. In this server, `edit_schematic` warned that a resistor named `X9`
+with the value `Level.2` was a subcircuit given an opamp's complexity label.
+
+### Proposed fix
+
+Decide by the element letter: the instance's own `Prefix` attribute when it has
+one, else the symbol's `Prefix`, case-insensitively `X`, or a subcircuit
+symbol. Drop the test on the instance's name.
+
+### Suggested upstream test
+
+```python
+def test_a_resistor_named_x_is_not_a_subcircuit(tmp_path):
+    asc = tmp_path / "x9.asc"
+    asc.write_text(
+        "Version 4\nSHEET 1 880 680\nSYMBOL res 96 144 R0\n"
+        "SYMATTR InstName X9\nSYMATTR Value 1k\n"
+    )
+    assert "_SUBCKT" not in AscEditor(asc).get_component("X9").attributes
+```
+
+### Cross-reference
+
+`tests/test_circuit_asc.py::TestInstancePrefix::test_the_level_label_check_reads_the_parts_element_letter`
+pins the workaround: a resistor named `X9` given `Level.2` is not warned of,
+and the same part with its own `Prefix X` is.

@@ -2279,6 +2279,13 @@ async def _log_results_page(
     return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
 
 
+def _with_observations(page: dict[str, Any], source: services.AnalysisSource) -> dict[str, Any]:
+    """A results page carrying what its source says of its results, if anything."""
+    if source.observations:
+        page["data"]["observations"] = list(source.observations)
+    return page
+
+
 async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     log_view = query.view in ("measurements", "native_tables")
     if query.path is not None:
@@ -2299,7 +2306,7 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
             run, plot_index=query.plot_index or 0, dialect=query.dialect
         )
     if log_view:
-        return await _log_results_page(query, source, state, view)
+        return _with_observations(await _log_results_page(query, source, state, view), source)
     raw = await services.load_raw(source, state)
     descriptor = raw.descriptor
     prefix = _check_prefix(query.prefix)
@@ -2347,7 +2354,9 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
     }
     metadata = _page_meta(page, "results")
     metadata["collections"] = {query.view: dict(metadata)}
-    return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
+    return _with_observations(
+        {"data": data, "next_cursor": page["next_cursor"], "page": metadata}, source
+    )
 
 
 async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
@@ -2607,6 +2616,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "native_tables": {"type": "array", "items": {"type": "object"}},
                             "capture_facts": {"type": "object"},
                             "scan": {"type": "object"},
+                            "observations": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                "description": (
+                                    "What the results read say of themselves: partial_raw "
+                                    "for a stopped case's kept raw."
+                                ),
+                            },
                             "section": {
                                 "anyOf": [
                                     _GUIDE_DATA_PROPERTIES["section"],

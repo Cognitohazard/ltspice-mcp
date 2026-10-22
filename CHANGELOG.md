@@ -10,6 +10,56 @@ tool-surface changes.
 
 ### Fixed
 
+- A signal inside a subcircuit named by its path (`V(xa.xin.mid)`,
+  `Id(xa.xin.mtail)`) resolved on LTspice 26, whose raw writes
+  `V(xa:xin:mid)`, and not on XVII, whose raw writes each instance without
+  its X (`V(a:in:mid)`; recorded: `raw/subckt_names_tran_saved`). Every recipe
+  now reads it by its path on either build, port currents (`Ix(xa.top)`)
+  included, and so does the `value` recipe on an operating point, which
+  refused the path on both builds through a lookup of its own.
+- `edit_schematic` replies gave a pin on a net no label names `net: null`,
+  though LTspice's export names it (`N001`). LTspice's numbering is its own, so
+  the name is read off an export, never predicted: a batch with a `compare`
+  exports the committed sheet, and each such pin now also carries
+  `net_export`, its node there. Each part's card is found by the name the
+  exporter writes for it and its nodes are its pins in SpiceOrder, which
+  agrees with the server's own nets on every recorded sheet of both builds.
+- A device inside a subcircuit is named differently in the log's device table
+  and in the raw, and each LTspice build spells both its own way (recorded:
+  `log/subckt_names*`, `raw/subckt_names*`): `xa:xin:Mtail` on LTspice 26,
+  `m:a:in:tail` in XVII's table and `a:in:Mtail` in its raw. The
+  `operating_point` recipe's `device=` split XVII's names wrongly and found no
+  table values for a nested device, and the `value` recipe's `x1.m1.gm`
+  shorthand reached only LTspice 26's spelling. Both now read every name back
+  to the device's path, so `device="xa.xin.mtail"` and `xa.xin.mtail.gm` work
+  on either build, and the `operating_point` result carries `device_names`,
+  each nested device's name in the table and in the raw. A raw holds those
+  devices' currents only under LTspice's "Save subcircuit device currents"
+  setting, and the guide says so. A device current inside a subcircuit now
+  also counts as an active device for the note that says how to get the
+  device table.
+- `set_component_attribute` and `add_component` refused a part's own
+  `Prefix` as a symbol property, so making parts subcircuit calls needed new
+  symbol files and every part removed and placed again. Both LTspice builds
+  honour an instance's `Prefix` on export, in either case of the letter and on
+  any symbol (recorded: `export/instance_prefix`), so it is now accepted,
+  written in upper case as spicelib reads it back, and sets the element letter
+  the part's value is read for. Clearing it gives the part its symbol's letter
+  back.
+- `verify_circuit`'s export check reported `value_suffix_micro_sign` on every
+  export of a sheet with a `u` value: both LTspice builds write a part's `u`
+  suffix as µ in the netlist they export, whatever the sheet spells (recorded:
+  `benchmark/nmos_mirror_drawn`), so the sheet could not make it go away. The
+  build that wrote the export reads its µ as micro, so an export's micro signs
+  are now reported only as the warning per value for a reader that misreads
+  them, an LTspice XVII in the session reading a UTF-8 export. A netlist
+  passed to `verify_circuit` keeps its observation.
+- A run row's `status` is its case's (`produced` once the simulator wrote its
+  output) while the receipt's `status` is the job's (`completed`), and nothing
+  said so: a caller that selected rows on `completed` got none. The output
+  schemas of `run_experiments` and `jobs` now list a row's statuses and say a
+  receipt's status is the job's; the guide and `docs/design/mcp_surface.md`
+  name both vocabularies.
 - A stepped `.ac` at one frequency could not be split into its steps: reading
   a step was refused with "Step boundaries are unresolved". Both LTspice
   builds store such a run one point a step, the stepped parameter first and
@@ -849,25 +899,20 @@ recording that showed it.
   waypoints the two ends must share an x or a y, or the route is refused as
   diagonal.
 
-- A PNG render that fell back to SVG blamed the optional `raster` extra even
-  when the extra was installed and the native Cairo library it loads was what
-  was missing, so the advice was to install something already installed. The
-  `render` failure, `render.note` and the hint now name which of the two is
-  missing, with the remedy for the server's platform: the install command for
-  the extra, or how to install Cairo on Linux, macOS or Windows. On Windows
-  that includes putting the DLL folder on `PATH` or in
-  `CAIROCFFI_DLL_DIRECTORIES`. The server checks once per process, because
-  each retry reran cairocffi's library search, so a fix takes effect after a
-  restart, as each remedy says.
-- A `verify_circuit` render with `delivery: "inline"` or `"both"` that returned
-  no image said only `returned_inline: false`. An agent that cannot read files
-  had no way to tell the drawing existed. The render block now carries
-  `inline_skipped` (`svg_requested` or `png_unavailable`). `render.note` says
-  that inline delivery is PNG only and where the file was written, and when
-  SVG was requested the hint says so too. SVG markup is still not returned
-  inline. It runs about 600 bytes a component, which costs more than the PNG
-  past a handful of parts, and structured-only clients drop the text channel
-  it would ride on.
+- PNG renders no longer need the native Cairo library. The `raster` extra
+  installs `resvg-py`, which ships prebuilt wheels and loads no other library,
+  in place of `cairosvg`, which loads Cairo when imported; on Windows that
+  meant installing a Cairo runtime by hand and putting it on `PATH`. A server
+  with `cairosvg` and not the extra still uses it. Where that is all there is
+  and Cairo is missing, the `render` failure, `render.note` and the hint say
+  so, where they blamed the extra before, and offer the extra or the Cairo
+  install for the server's platform. The server looks for a rasterizer once
+  per process, so a fix takes effect after a restart, as each remedy says.
+- A `verify_circuit` render with `delivery: "inline"` or `"both"` that came
+  out as SVG, because SVG was asked for or no PNG could be made, said only
+  `returned_inline: false`, and an agent that cannot read files had no way to
+  see the drawing. It now returns the SVG markup in `render.svg`, where a
+  client that reads only the structured payload finds it.
 - A symbol saved in the same folder as its `.asc`, where LTspice looks first and
   where a hand-drawn subcircuit symbol usually lives, was not found for pin
   positions. `inspect(kind="symbol")` and rendering found it, but
@@ -929,6 +974,28 @@ recording that showed it.
 
 ### Added
 
+- `run_experiments` takes `execution.keep_partial_raw`. A case stopped by its
+  run timeout, the job deadline or a cancel then keeps its raw, cut to the
+  points a full read reaches, where it was deleted, and `analyze_results`,
+  `plot_waveform`, `inspect(kind="results")` and the Python API read it, each
+  with a `partial_raw` observation saying where its values end. An LTspice raw
+  keeps the points its header declares, as far as LTspice's own reader reads
+  it, because LTspice XVII's records past that count go back in time
+  (recorded: `raw/tran_killed`); an ngspice raw keeps every complete record.
+  The count is patched where it stands and the file truncated, so nothing is
+  copied. The failure row's evidence says what the kept raw holds as
+  `partial_raw`, and the run row's `raw` is its path. The flag cannot be
+  combined with `recoverable`.
+- `RawResult.compare(other, signals=None, step=0, other_step=None)` in the
+  Python API says how far another run's traces are from a run's: per signal
+  the largest difference, its share of the run's peak and where it is, and the
+  signals only one run holds. It pairs signals by name without case and by
+  their path inside subcircuits on either LTspice build, pairs steps by
+  their parameters, compares over the span both axes cover and reads the other
+  run by interpolation where its axis differs (in log frequency, magnitude and
+  phase on an AC run), so a compressed LTspice raw is read along the lines its
+  points draw. Confirming that a new model library reproduces archived runs
+  needed this written by hand.
 - `analyze_results` says when device operating points it read came from
   LTspice's log table, with the observation `device_op_log_precision`: the
   table prints every value to three significant digits. It is said once for a
@@ -1150,9 +1217,9 @@ recording that showed it.
   with its size and `estimated_tokens` in `image`). It draws the same panels
   as the interactive chart, is off by default, and takes its default from
   `[analysis] attach_plot` (`LTSPICE_MCP_ATTACH_PLOT`). Rendering needs the
-  `raster` extra and the native Cairo library; without either, the reply
-  carries an `image_unavailable` observation naming the missing piece and
-  how to install it, instead of the image.
+  `raster` extra; without it, the reply carries an `image_unavailable`
+  observation naming what is missing and how to install it, instead of the
+  image.
 - `plot_waveform(panels=[[...], [...]])` lays the panels out by hand, one
   list of signals per panel (up to 8), for traces of one unit but very
   different size.
@@ -1258,8 +1325,9 @@ recording that showed it.
 
 - `inspect(kind="capabilities")` reports `render: {png, missing, reason,
   remedy}`. It says whether `verify_circuit` can make the PNG it returns
-  inline and, if not, whether the `raster` extra or the native Cairo library is
-  missing and how to install it, before anything is drawn.
+  inline and, if not, whether the `raster` extra is missing, or only
+  `cairosvg` is installed without the native Cairo library, and how to
+  install what is missing, before anything is drawn.
 - Results record which simulator build produced them. A job records the
   executable its cases launch: path, size, modification time and SHA-256.
   Each case records the build the simulator named in its own output: the
@@ -1313,6 +1381,13 @@ recording that showed it.
 
 ### Changed
 
+- `verify_circuit` wrote its drawings into the server's working directory
+  (`.ltspice-mcp/verify/renders`), so a server started in one project
+  collected drawings of sheets in others. They now go to the per-user folder's
+  `renders/` (`%LOCALAPPDATA%\ltspice-mcp` on Windows,
+  `~/.local/state/ltspice-mcp` elsewhere, moved by `LTSPICE_MCP_HOME`), and a
+  render deletes the drawings there a week old. The reply gives the path as
+  before.
 - `edit_schematic` reports what its ops make of the sheet once, on the sheet
   the batch commits, through four new sheet rules that `verify_circuit`
   reports too: `net_with_two_names` (a net whose labels carry two or more
@@ -1598,9 +1673,8 @@ recording that showed it.
 
 - The Claude Code plugin and the Claude Desktop extension install
   `ltspice-mcp[raster]`. Neither lets a user add an extra to the launch it
-  ships, so PNG rendering was impossible through them; installing native Cairo
-  is now the only step. The README documents the extra and the per-platform
-  Cairo install.
+  ships, so PNG rendering was impossible through them; it now needs no other
+  step. The README documents the extra.
 - CI: lint and type check run once, in a new `checks / static` job, instead of
   on every interpreter. They gave the same answer on each: ruff and pyright
   both target 3.11, and the lockfile resolves one package set for 3.11 through

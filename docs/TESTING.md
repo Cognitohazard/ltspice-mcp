@@ -72,8 +72,9 @@ The native Windows integration tier also needs:
   settings file. A missing build is skipped, and the skip names it.
 - The console build of ngspice on PATH as `ngspice.exe`, with its DLLs. The GUI
   executable does not write the console output these tests read.
-- The `raster` extra and native Cairo DLLs with their dependencies. For a
-  portable installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
+- The `raster` extra. The tests of the `cairosvg` path also need native Cairo
+  DLLs with their dependencies, and skip without them. For a portable
+  installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
 
 With those set in the test shell, run
 
@@ -404,7 +405,7 @@ bridge recorder again on Windows with LTspice 26.1 or later; until then one
 test fails and names the script.
 
 The replies for `raw/fra` and its `fra_1` results file, for both builds'
-`raw/step_ac_one_freq` and `raw/compress_*`, and for XVII's
+`raw/step_ac_one_freq`, `raw/compress_*` and `raw/subckt_names_*`, and for XVII's
 `raw/op_save_device`, were made under Wine 11, by the recorder's own reading
 code with the same pinned executables, and the bridge manifest has no field
 that says so. Made the same way, the replies for

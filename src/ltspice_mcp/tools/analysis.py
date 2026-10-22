@@ -1644,7 +1644,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # Surface FACTS, not verdicts (result-trust doctrine). What the reply's own
     # fields already say (the panels, series and steps drawn, `opened`,
     # `delivery`) is not restated here.
-    observations: list[dict] = []
+    observations: list[dict] = list(source.observations)
     if traces_total > len(traces):
         observations.append(
             {

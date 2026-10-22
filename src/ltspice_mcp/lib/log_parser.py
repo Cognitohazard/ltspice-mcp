@@ -401,10 +401,12 @@ def read_device_op_points(
     Returns the flattened block keyed in the ``@dev[param]`` form (e.g.
     ``@m1[gm]``, lowercased), so callers can fold it straight into
     ``device_op_points`` and address top-level devices by the ``m1.gm``
-    shorthand. Subcircuit semiconductors keep LTspice's colon-qualified name
-    (``@q:q2:1:2[gm]``); ``operating_point(device=...)`` matches those by
-    instance. Non-numeric fields (the ``Model:`` row) are dropped. Empty dict
-    when the block is absent or unparseable.
+    shorthand. A semiconductor inside a subcircuit keeps the name the build
+    printed (``@xa:xin:mtail[gm]`` on LTspice 26, ``@m:a:in:tail[gm]`` on
+    XVII); ``device_names`` reads either back to its path, by which
+    ``operating_point(device=...)`` and the ``xa.xin.mtail.gm`` shorthand find
+    it. Non-numeric fields (the ``Model:`` row) are dropped. Empty dict when
+    the block is absent or unparseable.
 
     ``scratch_dir`` puts normalized input under the supplied parser directory.
     ``strict`` preserves read/parse failures for worker section status.

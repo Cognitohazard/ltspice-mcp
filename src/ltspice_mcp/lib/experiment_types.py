@@ -88,6 +88,27 @@ class ExperimentCase:
     recovery: CaseRecovery | None = None
 
 
+#: The key under which a stopped case's failure evidence says what the raw it
+#: kept for reads holds (``execution.keep_partial_raw``).
+PARTIAL_RAW_KEY = "partial_raw"
+
+
+def partial_raw(case: ExperimentCase) -> dict[str, Any] | None:
+    """What the raw a stopped case kept for reads holds, cut to the points a
+    full read reaches: ``{points, axis, last_axis_value}``. None for a case
+    that kept none, a produced case included; ``raw_file`` is the raw."""
+    if case.status == "produced" or case.raw_file is None:
+        return None
+    held = (case.failure_evidence or {}).get(PARTIAL_RAW_KEY)
+    return held if isinstance(held, dict) else None
+
+
+def has_readable_raw(case: ExperimentCase) -> bool:
+    """Whether reads of ``case`` take a raw: it produced one, or it was
+    stopped and kept what its run wrote (``partial_raw``)."""
+    return case.status == "produced" or partial_raw(case) is not None
+
+
 def failure_row(case: ExperimentCase) -> dict[str, Any]:
     """Project one non-produced case into the receipt's failure-channel row.
 

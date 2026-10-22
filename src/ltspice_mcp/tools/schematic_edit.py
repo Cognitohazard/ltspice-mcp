@@ -49,6 +49,7 @@ from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
 from ltspice_mcp.lib.deck_prep import export_netlist_text, stage_sheet
 from ltspice_mcp.lib.encoding import leading_byte_order_mark
+from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import OpenSheet, file_difference
 from ltspice_mcp.lib.pin_legend import (
@@ -82,9 +83,11 @@ from ltspice_mcp.lib.schematic_ops import (
     collapse_result_warnings,
     collect_component_geometry,
     edit_guard,
+    export_parts,
     files_written_beside,
     get_asc_editor,
     make_editor,
+    placed_geometry,
     require_asc,
     run_op_batch,
     trace_nets,
@@ -676,6 +679,29 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
         return [], label_only
     nets = trace_nets(editor)
     return build_pin_legend(geometry, lambda c: net_name(nets.get(c, ()))), label_only
+
+
+async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:
+    """Give each legend pin on a net no label names the node ``netlist``, the
+    committed sheet's export, puts it on (``net_export``: ``N001``, ``NC_01``).
+
+    The numbering is the exporter's own, so it comes from an export, never a
+    guess. Only the parts with such a pin are looked up, on the loop as the
+    editor must be; the export is read in a thread.
+    """
+    unnamed = [row["ref"] for row in legend if any(pin["net"] is None for pin in row["pins"])]
+    if not unnamed:
+        return
+    geometry = [
+        {"ref": ref, "pins": placed["pins"]}
+        for ref in unnamed
+        if (placed := placed_geometry(editor, ref)) is not None
+    ]
+    nodes = await asyncio.to_thread(exported_pin_nodes, netlist, export_parts(editor, geometry))
+    for row in legend:
+        for pin in row["pins"]:
+            if pin["net"] is None and (node := nodes.get((row["ref"], pin["name"]))):
+                pin["net_export"] = node
 
 
 # The ``kind`` a label-only pin carries in the preexisting view, beside the
@@ -1716,18 +1742,6 @@ async def _evaluate_edit_schematic(
                     _window_row(sheet, refusal)
                     for sheet, refusal in zip(open_sheets, refusals, strict=True)
                 ]
-            post_commit_stage = "views"
-            neutral_views = _build_edit_views(
-                profile, legend, pins_reported, preexisting_rows, committed_sha
-            )
-            wiring, presented_views = _paged_edit_views(
-                args,
-                profile,
-                neutral_views,
-                present_mcp_views=present_mcp_views,
-            )
-            post_commit_stage = "response"
-
             verification = None
             netlist = None
             if reference_path is not None:
@@ -1738,6 +1752,8 @@ async def _evaluate_edit_schematic(
                 )
                 exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
+                if exported:
+                    await _name_nets_as_exported(legend, editor, exported)
                 mismatch = comparison_mismatch(verification)
                 # The stage is over: a later failure is the response's, never
                 # a second verdict on the reference.
@@ -1750,6 +1766,20 @@ async def _evaluate_edit_schematic(
                 # of a comparison the caller now has to diagnose.
                 if mismatch:
                     netlist = exported
+
+            # After the reference stage, whose export names the legend's
+            # unlabelled nets.
+            post_commit_stage = "views"
+            neutral_views = _build_edit_views(
+                profile, legend, pins_reported, preexisting_rows, committed_sha
+            )
+            wiring, presented_views = _paged_edit_views(
+                args,
+                profile,
+                neutral_views,
+                present_mcp_views=present_mcp_views,
+            )
+            post_commit_stage = "response"
 
             hint = " ".join([_commit_hint(verification, left_out_hint), *_window_notes(shown)])
             return finish(

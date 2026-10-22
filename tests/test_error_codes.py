@@ -533,6 +533,7 @@ FROZEN_ERROR_CODES = (
     "parse_error",
     "parser_cleanup_failed",
     "partial_progress",
+    "partial_raw",
     "path_denied",
     "pdk_native_request",
     "phase_unwrapped",

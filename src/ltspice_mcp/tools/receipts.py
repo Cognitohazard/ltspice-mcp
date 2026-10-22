@@ -17,7 +17,7 @@ import copy
 import functools
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from mcp import types
 
@@ -28,7 +28,9 @@ from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
     Completeness,
     ExperimentCase,
+    ExperimentCaseStatus,
     ExperimentJob,
+    ExperimentStatus,
     ManifestEntry,
     SourceRecord,
 )
@@ -188,7 +190,15 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "circuit": {"type": "string"},
         "assignments": {"type": "object"},
         "native_statistics": {"type": "object"},
-        "status": {"type": "string"},
+        "status": {
+            "type": "string",
+            "enum": list(get_args(ExperimentCaseStatus)),
+            "description": (
+                "The case's own status, not the job's: produced once the simulator wrote "
+                "its output; failed, cancelled or skipped when it ended without it; "
+                "queued, submitted or running before."
+            ),
+        },
         "raw": {"type": ["string", "null"]},
         "log": {"type": ["string", "null"]},
         "other_raws": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -210,6 +220,17 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
 }
 
 RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema({"type": "array", "items": RUN_RECORD_SCHEMA})
+
+#: A receipt's own ``status``, which is the job's: a separate vocabulary from
+#: its run rows' case statuses.
+JOB_STATUS_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        f"The job's status: one of {', '.join(get_args(ExperimentStatus))}; unknown in "
+        "an error reply that read no job. A run row's status is its case's own: a case "
+        "that ran is produced."
+    ),
+}
 
 _COMPLETENESS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -271,7 +292,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         # receipt came back and no cases were submitted. The replay leaves the
         # job's record as it was.
         "replayed": {"type": "boolean"},
-        "status": {"type": "string"},
+        "status": JOB_STATUS_SCHEMA,
         "outcome": OUTCOME_SCHEMA,
         "source": {
             "type": "array",

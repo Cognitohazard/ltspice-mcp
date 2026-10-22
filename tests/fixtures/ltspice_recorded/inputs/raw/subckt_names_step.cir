@@ -1,0 +1,18 @@
+* the same transient, stepped
+V1 vdd 0 3
+Xa vdd outa stage
+Xb vdd outb stage
+.subckt stage top out
+Rd top out {rd}
+Mdrv out out 0 0 NM W=20u L=2u
+Xin top out inner
+.ends
+.subckt inner p n
+Rin p mid 100k
+Mtail mid mid n n NM W=10u L=2u
+.ends
+.param rd=10k
+.model NM NMOS(VTO=0.7 KP=100u)
+.tran 1u
+.step param rd 10k 20k 10k
+.end

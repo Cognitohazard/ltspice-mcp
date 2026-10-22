@@ -31,6 +31,7 @@ from ltspice_mcp.lib.experiment_inputs import (
 )
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
+    PARTIAL_RAW_KEY,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
     Completeness,
@@ -57,7 +58,10 @@ from ltspice_mcp.lib.pdk_native import (
 )
 from ltspice_mcp.lib.raw_parser import (
     OTHER_RAW_KINDS,
+    PartialRawProgress,
+    cut_partial_raw,
     other_raw_path,
+    points_reached,
     read_partial_raw_progress,
 )
 from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
@@ -434,6 +438,9 @@ class ExperimentRunRequest:
     analysis_callback: AnalysisCallback | None = None
     recoverable: bool = False
     simulator_seed: int | None = None
+    #: Keep a stopped case's raw, cut to the points a full read reaches, for
+    #: reads of the case to take. Never set on a recoverable request.
+    keep_partial_raw: bool = False
 
 
 def effective_run_timeout(
@@ -1598,7 +1605,7 @@ class ExperimentRunner(RunnerBase):
             self._apply_outcome(case, outcome)
         else:
             self._apply_stopped_outcome(case, outcome)
-        await self._record_progress_then_remove(execution.job, case)
+        kept = await self._record_progress_then_remove(execution, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
             execution,
@@ -1606,7 +1613,7 @@ class ExperimentRunner(RunnerBase):
             terminal_status,
             code=reason,
             error=f"Case stopped because {cause}",
-            evidence=_stopped_run_evidence(limits, outcome),
+            evidence=_with_partial_raw(_stopped_run_evidence(limits, outcome), kept),
         )
         self._release_slot(execution, case.case_id)
 
@@ -1706,27 +1713,47 @@ class ExperimentRunner(RunnerBase):
     async def _retire_late_exit(self, execution: _Execution, case: ExperimentCase) -> None:
         """Record late-exit progress and persist final artifact facts."""
         try:
-            await self._record_progress_then_remove(execution.job, case)
+            kept = await self._record_progress_then_remove(execution, case)
+            case.failure_evidence = _with_partial_raw(case.failure_evidence, kept)
         finally:
             await self._persist_job(execution)
 
-    async def _record_progress_then_remove(self, job: ExperimentJob, case: ExperimentCase) -> None:
-        """Record how far a stopped case's simulator got, then remove its heavy artifacts.
+    async def _record_progress_then_remove(
+        self, execution: _Execution, case: ExperimentCase
+    ) -> PartialRawProgress | None:
+        """Record how far a stopped case's simulator got, then remove its heavy
+        artifacts. Returns what the raw kept for reads (``keep_partial_raw``)
+        holds, cut to the points a full read reaches, or None.
 
         In that order, because the partial raw is among what is removed:
         reading it is the last moment anything can say how far the run got.
         The observation is recorded on the loop before the removal starts, so
         nothing that sees the artifacts gone can see the case without it.
         """
+        job = execution.job
+        raw = experiment_store.case_raw_path(job, case)
+        kept: PartialRawProgress | None = None
         try:
-            progress = await asyncio.to_thread(self._read_progress, job, case)
+            progress, kept = await asyncio.to_thread(
+                self._read_progress, job, case, raw, keep=execution.request.keep_partial_raw
+            )
             if progress is not None:
                 case.observations.append(progress)
         finally:
-            await asyncio.to_thread(self._remove_case_artifacts, job, case)
+            await asyncio.to_thread(
+                self._remove_case_artifacts, job, case, raw if kept is not None else None
+            )
+        if kept is not None:
+            case.raw_file = raw
+        return kept
 
-    def _read_progress(self, job: ExperimentJob, case: ExperimentCase) -> dict[str, Any] | None:
-        """How far a stopped case's simulator got, read off its partial raw.
+    @staticmethod
+    def _read_progress(
+        job: ExperimentJob, case: ExperimentCase, raw: Path | None, *, keep: bool
+    ) -> tuple[dict[str, Any] | None, PartialRawProgress | None]:
+        """How far a stopped case's simulator got, read off its partial raw
+        ``raw``, and, with ``keep``, what that raw holds once cut to the points
+        a full read reaches.
 
         Neither simulator writes progress anywhere else a stopped run keeps:
         LTspice's log carries only its preamble until the run ends, and ngspice
@@ -1736,14 +1763,24 @@ class ExperimentRunner(RunnerBase):
         ngspice 42 killed with SIGKILL, and on LTspice 26.1 killed the same way
         under Wine).
         """
-        return _progress_observation(
+        dialect = dialect_for_simulator_name(job.simulator)
+        read = _read_raw_progress(case.case_id, raw, dialect)
+        if read is None:
+            return None, None
+        fields, reached = read
+        kept = (
+            _cut_kept_raw(case.case_id, raw, dialect) if keep and fields["raw_present"] else None
+        )
+        fact = _progress_fact(
             case.case_id,
             case.run_index,
-            experiment_store.case_raw_path(job, case),
-            dialect_for_simulator_name(job.simulator),
+            fields,
+            reached,
             code="partial_progress",
             raw_kept=_keeps_stopped_artifacts(job),
+            kept=kept,
         )
+        return fact, kept
 
     @staticmethod
     def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
@@ -1759,6 +1796,7 @@ class ExperimentRunner(RunnerBase):
         """Keep post-kill diagnostics without advertising artifacts we remove."""
         ExperimentRunner._apply_outcome(case, outcome)
         case.raw_file = None
+        case.other_raws = []
 
     def _mark_case(
         self,
@@ -2031,8 +2069,11 @@ class ExperimentRunner(RunnerBase):
     async def _kill_case(self, token: str) -> None:
         await asyncio.to_thread(self._kill_by_token, token, "experiment case")
 
-    def _remove_case_artifacts(self, job: ExperimentJob, case: ExperimentCase) -> None:
-        """Best-effort removal of a killed case's exact heavy-artifact paths."""
+    def _remove_case_artifacts(
+        self, job: ExperimentJob, case: ExperimentCase, kept: Path | None = None
+    ) -> None:
+        """Best-effort removal of a killed case's exact heavy-artifact paths,
+        all but the raw ``kept`` for reads."""
         if _keeps_stopped_artifacts(job):
             return
         raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
@@ -2047,6 +2088,7 @@ class ExperimentRunner(RunnerBase):
             paths.add(case.raw_file)
         if case.log_file is not None:
             paths.add(case.log_file.with_suffix(raw_extension))
+        paths.discard(kept)
         for path in paths:
             with contextlib.suppress(OSError):
                 path.unlink()
@@ -2055,6 +2097,16 @@ class ExperimentRunner(RunnerBase):
 def _keeps_stopped_artifacts(job: ExperimentJob) -> bool:
     """Whether a stopped case's run files stay on disk: a recoverable job's do."""
     return job.recovery is not None
+
+
+def _with_partial_raw(
+    evidence: dict[str, Any] | None, kept: PartialRawProgress | None
+) -> dict[str, Any] | None:
+    """A stopped case's evidence, with what the raw it kept for reads holds."""
+    if kept is None:
+        return evidence
+    held = {"points": kept.points, "axis": kept.axis, "last_axis_value": kept.last_axis_value}
+    return {**(evidence or {}), PARTIAL_RAW_KEY: held}
 
 
 def _stop_bound(execution: _Execution, reason: StopReason) -> tuple[str, dict[str, Any]]:
@@ -2091,6 +2143,20 @@ def _stopped_run_evidence(limits: dict[str, Any], outcome: RunOutcome) -> dict[s
     return evidence or None
 
 
+def _cut_kept_raw(
+    case_id: str, raw: Path | None, dialect: str | None
+) -> PartialRawProgress | None:
+    """``raw`` cut to the points a full read reaches; None, the raw left to be
+    removed, when it holds none or cannot be cut."""
+    if raw is None:
+        return None
+    try:
+        return cut_partial_raw(raw, dialect)
+    except OSError:
+        logger.warning("could not cut the raw of case %s", case_id, exc_info=True)
+        return None
+
+
 def _raw_progress(raw: Path | None, dialect: str | None) -> tuple[dict[str, Any], str]:
     """How far a case's raw has got, as evidence fields and a phrase for a detail."""
     try:
@@ -2117,49 +2183,58 @@ def _raw_progress(raw: Path | None, dialect: str | None) -> tuple[dict[str, Any]
     }
     if progress.stepped:
         fields["stepped"] = True
-    if progress.points is None:
-        phrase = "a number of points that could not be counted"
-    else:
-        phrase = f"{progress.points} point{'s' if progress.points != 1 else ''}"
-    if progress.axis is not None and progress.last_axis_value is not None:
-        phrase += f", the last at {progress.axis} = {progress.last_axis_value:g}"
-        if progress.stepped:
-            phrase += " within the current .step"
+    phrase = points_reached(progress.points, progress.axis, progress.last_axis_value)
+    if progress.stepped and progress.axis is not None and progress.last_axis_value is not None:
+        phrase += " within the current .step"
     if progress.plot:
         phrase += f" of its {progress.plot}"
     return fields, phrase
 
 
-def _progress_observation(
+def _read_raw_progress(
+    case_id: str, raw: Path | None, dialect: str | None
+) -> tuple[dict[str, Any], str] | None:
+    """``_raw_progress`` of a case's raw, or None when the read fails, which is
+    logged: neither a case's outcome nor a status call may depend on it."""
+    try:
+        return _raw_progress(raw, dialect)
+    except Exception:
+        logger.warning("could not read the raw of case %s", case_id, exc_info=True)
+        return None
+
+
+def _progress_fact(
     case_id: str,
     run_index: int,
-    raw: Path | None,
-    dialect: str | None,
+    fields: dict[str, Any],
+    reached: str,
     *,
     code: Literal["partial_progress", "run_progress"],
     running_s: float | None = None,
     raw_kept: bool = False,
-) -> dict[str, Any] | None:
-    """One case's progress fact, read from its raw.
+    kept: PartialRawProgress | None = None,
+) -> dict[str, Any]:
+    """One case's progress fact, from its raw's ``_raw_progress``.
 
     ``partial_progress`` for a case that was stopped, which also carries
     ``raw_kept``, whether that raw stays on disk once the case's run files are
-    removed; ``run_progress`` for one still running, which also carries
-    ``running_s``. A case with no raw on disk says so rather than going quiet,
-    and the detail names the case because a receipt merges every case's
-    observations into one job-level list. A read that fails is logged and
-    returns None: neither a case's outcome nor a status call may depend on it.
+    removed: a recoverable job's does, and so does one ``kept`` for reads, cut
+    to the points a full read reaches. ``run_progress`` for one still running,
+    which also carries ``running_s``. A case with no raw on disk says so rather
+    than going quiet, and the detail names the case because a receipt merges
+    every case's observations into one job-level list.
     """
-    try:
-        fields, reached = _raw_progress(raw, dialect)
-    except Exception:
-        logger.warning("could not read the raw of case %s", case_id, exc_info=True)
-        return None
     evidence: dict[str, Any] = {"case_id": case_id, "run_index": run_index}
     if code == "partial_progress":
         detail = f"Case {case_id} was stopped after its simulator wrote {reached}."
-        raw_kept = raw_kept and fields["raw_present"]
-        if fields["raw_present"]:
+        raw_kept = (raw_kept or kept is not None) and fields["raw_present"]
+        if kept is not None:
+            held = points_reached(kept.points, kept.axis, kept.last_axis_value)
+            detail += (
+                f" The raw is kept with its first {held}, as far as a full read reaches, "
+                "and reads of this case take it."
+            )
+        elif fields["raw_present"]:
             detail += (
                 " The raw is kept, because the job is recoverable."
                 if raw_kept
@@ -2217,9 +2292,9 @@ def _read_live_progress(
 ) -> dict[str, dict[str, Any]]:
     observations: dict[str, dict[str, Any]] = {}
     for case_id, run_index, raw, running_s in targets:
-        observation = _progress_observation(
-            case_id, run_index, raw, dialect, code="run_progress", running_s=running_s
-        )
-        if observation is not None:
-            observations[case_id] = observation
+        read = _read_raw_progress(case_id, raw, dialect)
+        if read is not None:
+            observations[case_id] = _progress_fact(
+                case_id, run_index, *read, code="run_progress", running_s=running_s
+            )
     return observations

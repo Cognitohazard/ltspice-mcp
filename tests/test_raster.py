@@ -5,7 +5,7 @@ skip when it is absent — but the *degradation* path is tested unconditionally 
 failing the import the way a deployment without it does (the
 ``raster_extra_missing`` and ``raster_native_missing`` fixtures in conftest).
 That is the branch such a deployment actually runs, so it must not be the
-branch that only gets exercised when someone happens not to have cairosvg
+branch that only gets exercised when someone happens not to have a rasterizer
 installed.
 """
 
@@ -33,9 +33,9 @@ from ltspice_mcp.lib.raster import (
     render_image,
 )
 from ltspice_mcp.tools._base import image_response
-from tests.conftest import FailingCairosvgImport, needs_raster
+from tests.conftest import FailingImports, fail_imports, needs_raster, not_installed
 
-# Smallest thing cairosvg will accept that still has measurable extent.
+# Smallest thing a rasterizer will accept that still has measurable extent.
 TINY_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10" width="20" height="10">'
     '<rect x="0" y="0" width="20" height="10" fill="black"/>'
@@ -63,13 +63,27 @@ def test_png_request_returns_real_png_bytes() -> None:
 @needs_raster
 def test_scale_is_the_cost_lever() -> None:
     # Asserted in pixels, not bytes: the source viewBox is 20x10, so these exact
-    # dimensions prove the float scale reached the rasterizer and was applied,
-    # past a type stub that declares the parameter as an int.
+    # dimensions prove the float scale reached the rasterizer and was applied.
     small = render_image(TINY_SVG, image_format=PNG, scale=1.0)
     large = render_image(TINY_SVG, image_format=PNG, scale=3.0)
     assert (small.width, small.height) == (20, 10)
     assert (large.width, large.height) == (60, 30)
     assert large.scale == 3.0
+
+
+@pytest.mark.parametrize("hidden", ["cairosvg", "resvg_py"])
+def test_each_rasterizer_draws_on_its_own(monkeypatch: pytest.MonkeyPatch, hidden: str) -> None:
+    """The extra's resvg-py, which loads no native library, is tried first and
+    cairosvg after it; either alone draws the picture at the asked scale."""
+    finder = fail_imports(monkeypatch, {hidden: not_installed(hidden)})
+    support = raster_support()
+    if not support.png:
+        pytest.skip(f"the other rasterizer is not usable here: {support.reason}")
+    image = render_image(TINY_SVG, image_format=PNG, scale=1.5)
+    assert (image.width, image.height) == (30, 15)
+    assert image.data.startswith(_PNG_MAGIC)
+    # resvg-py answers before cairosvg is looked for.
+    assert finder.attempts[hidden] == (0 if hidden == "cairosvg" else 1)
 
 
 @needs_raster
@@ -122,8 +136,7 @@ def test_png_request_degrades_to_svg_without_the_extra(raster_extra_missing: Non
     assert image.image_format == SVG
     assert image.data.decode("utf-8") == TINY_SVG
     assert image.note is not None
-    assert "cairosvg" in image.note
-    assert "raster" in image.note  # names the extra that fixes it
+    assert "'raster' extra" in image.note  # names the extra that fixes it
     # The same fact as data, for a caller that acts on it rather than reads it.
     assert image.png_unavailable is not None
     assert image.png_unavailable.missing == "extra"
@@ -143,9 +156,9 @@ def test_missing_extra_is_reported_as_the_extra(raster_extra_missing: None) -> N
 def test_missing_native_library_is_reported_as_the_library(
     raster_native_missing: None,
 ) -> None:
-    """The extra is installed, so telling the caller to install it sends them
-    round a loop: the reason names the native library, and the remedy is the
-    one for this platform."""
+    """cairosvg is installed without its native library: the reason names the
+    library, and the remedy offers the extra, which needs none, before the
+    library for this platform."""
     support = raster_support()
     assert support.png is False
     assert support.missing == "native_library"
@@ -156,17 +169,19 @@ def test_missing_native_library_is_reported_as_the_library(
     # names were tried, and a multi-line message does not fit in one sentence.
     assert 'no library called "cairo-2" was found' in support.reason
     assert "\n" not in support.reason
-    assert support.remedy == raster.native_library_remedy(sys.platform)
+    assert support.remedy is not None
+    assert support.remedy.startswith(raster._EXTRA_REMEDY)
+    assert support.remedy.endswith(raster.native_library_remedy(sys.platform))
 
 
-def test_a_failed_probe_is_not_repeated(raster_native_missing: FailingCairosvgImport) -> None:
+def test_a_failed_probe_is_not_repeated(raster_native_missing: FailingImports) -> None:
     # A failed import is not cached by Python, and each retry reruns
     # cairocffi's library search. The remedy ends in a restart, so the loader
     # answers from its first attempt.
     first = raster_support()
     render_image(TINY_SVG, image_format=PNG)
     assert raster_support() == first
-    assert raster_native_missing.attempts == 1
+    assert raster_native_missing.attempts == {"resvg_py": 1, "cairosvg": 1}
 
 
 def test_native_library_remedy_is_per_platform() -> None:
@@ -190,7 +205,7 @@ def test_a_working_rasterizer_reports_png_support() -> None:
 def test_direct_rasterize_raises_when_unavailable(raster_extra_missing: None) -> None:
     # render_image degrades; the lower-level call is explicit about failing, so
     # a caller that genuinely requires a bitmap can detect it.
-    with pytest.raises(RasterUnavailableError, match="cairosvg") as caught:
+    with pytest.raises(RasterUnavailableError, match="'raster' extra") as caught:
         raster.rasterize_svg(TINY_SVG)
     assert caught.value.support.missing == "extra"
 
@@ -356,6 +371,6 @@ def test_a_missing_native_cairo_library_counts_as_no_rasterizer(
     assert image.data.decode("utf-8") == TINY_SVG
     assert image.png_unavailable is not None
     assert image.png_unavailable.missing == "native_library"
-    # The extra is installed; the note blames the library, not the extra.
+    # cairosvg is installed; the note blames its library, not the package.
     assert image.note is not None and "Cairo" in image.note
-    assert "not installed" not in image.note
+    assert "cairosvg is installed" in image.note

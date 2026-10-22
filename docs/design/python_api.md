@@ -364,23 +364,47 @@ raw.axis(step=0)               # real sampled axis; refuses a native table
 raw.step_count; raw.steps      # captured metadata aligned per step
 raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
+raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
+raw.observations               # [{code, kind, detail, evidence}]; partial_raw
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements(log_path="result.log")  # XOR: log_path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- `observations` is what the result says of itself as it was read:
+  `partial_raw` for a stopped case's raw kept with
+  `execution.keep_partial_raw`, whose values end where the run was stopped.
+  Empty for a whole result.
 - `value` reads a plot of one point a step, such as an operating point, as a
   number: a float, or a complex for a complex trace. A trace of more points
   is refused rather than cut to its first; read it with `trace`.
+- `compare` says how far `other`'s traces are from this result's:
+  `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
+  only_there, span, points}`. A signal named in `signals` is found in each
+  result as `trace` finds it; by default every signal both hold is compared,
+  the axis aside, paired by name without case and by the path to a node or
+  device inside subcircuits however each build spells it (LTspice 26's
+  `V(xa:xin:mid)` is XVII's `V(a:in:mid)`). `other_step`
+  defaults to the step of `other` whose parameters are this step's (step 0 of
+  a result that is not stepped); a step with no match is refused. On a sampled
+  axis each signal is compared at this result's points within the span both
+  axes cover, `other` read there by linear interpolation when its axis
+  differs: in log frequency, dB and unwrapped phase on a frequency axis, as
+  `log_interp_complex` reads one. A plot of no axis compares point by point and needs as many points.
+  `max_rel` is `max_abs` over this result's largest magnitude of the signal,
+  null when that is 0; complex values compare as complex numbers. No
+  tolerance is applied.
 - `device_op_points` reads the semiconductor operating points LTspice prints in
   the log of an `.op` run under `.options logopinfo`, by device and parameter.
   The table holds three significant digits; a node voltage or a device current
   read from the raw with `value` holds the raw's own precision (single, about
   seven digits, in both builds' operating-point recordings). A device in a
   subcircuit keeps LTspice's name for it (`x1:m1` on LTspice 26, `m:1:1` on
-  XVII), and a value the log did not print as a finite number is `None`. Empty
+  XVII: the device's letter, the instance's name without its X, the device's
+  name without its letter), and a value the log did not print as a finite
+  number is `None`. Empty
   when the log has no table, as an ngspice log never does: ngspice writes the
   same parameters as traces of its raw, read with `raw.value("@m1[gm]")`.
 - `plot_index` is a strict nonnegative integer, independent of case/run and

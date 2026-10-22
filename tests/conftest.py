@@ -1342,7 +1342,7 @@ def live_peer_pid() -> Iterator[int]:
 # ---------------------------------------------------------------------------
 #
 # The optional rasterizer is missing in one of two ways, and each must be
-# reported as itself. Both fixtures fail the real `import cairosvg` the way the
+# reported as itself. Both fixtures fail the real imports the way the
 # environment would, so the server's own loader decides which half is missing.
 
 _RASTER_SUPPORT = raster.raster_support()
@@ -1353,55 +1353,65 @@ needs_raster = pytest.mark.skipif(
 )
 
 
-class FailingCairosvgImport(importlib.abc.MetaPathFinder):
-    """Fails every `import cairosvg` with ``error``, counting the attempts."""
+class FailingImports(importlib.abc.MetaPathFinder):
+    """Fails every import of a named module with its error, counting the
+    attempts per module."""
 
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-        self.attempts = 0
+    def __init__(self, errors: dict[str, Exception]) -> None:
+        self._errors = errors
+        self.attempts = dict.fromkeys(errors, 0)
 
     def find_spec(self, fullname, path, target=None):
-        if fullname == "cairosvg":
-            self.attempts += 1
-            raise self._error
+        error = self._errors.get(fullname)
+        if error is not None:
+            self.attempts[fullname] += 1
+            raise error
         return None
 
 
-def _fail_cairosvg_import(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
-) -> FailingCairosvgImport:
-    finder = FailingCairosvgImport(error)
-    monkeypatch.delitem(sys.modules, "cairosvg", raising=False)
+def not_installed(module: str) -> ModuleNotFoundError:
+    return ModuleNotFoundError(f"No module named {module!r}", name=module)
+
+
+def fail_imports(monkeypatch: pytest.MonkeyPatch, errors: dict[str, Exception]) -> FailingImports:
+    finder = FailingImports(errors)
+    for module in errors:
+        monkeypatch.delitem(sys.modules, module, raising=False)
     monkeypatch.setattr(sys, "meta_path", [finder, *sys.meta_path])
-    # The loader keeps the first failure for the life of the process; start
-    # from none so this test's failure is the one it reports.
-    monkeypatch.setattr(raster, "_unavailable", None)
+    # The loader keeps its first answer for the life of the process; start
+    # from none so the answer is this test's.
+    monkeypatch.setattr(raster, "_loaded", None)
     return finder
 
 
 @pytest.fixture
-def raster_extra_missing(monkeypatch: pytest.MonkeyPatch) -> FailingCairosvgImport:
-    """The 'raster' extra is not installed: importing cairosvg finds no module."""
-    return _fail_cairosvg_import(
-        monkeypatch, ModuleNotFoundError("No module named 'cairosvg'", name="cairosvg")
+def raster_extra_missing(monkeypatch: pytest.MonkeyPatch) -> FailingImports:
+    """The 'raster' extra is not installed, nor cairosvg: neither rasterizer
+    imports."""
+    return fail_imports(
+        monkeypatch,
+        {"resvg_py": not_installed("resvg_py"), "cairosvg": not_installed("cairosvg")},
     )
 
 
 @pytest.fixture
-def raster_native_missing(monkeypatch: pytest.MonkeyPatch) -> FailingCairosvgImport:
-    """The extra is installed but libcairo is not.
+def raster_native_missing(monkeypatch: pytest.MonkeyPatch) -> FailingImports:
+    """The extra is not installed, and cairosvg is but libcairo is not.
 
     cairocffi opens the native library while it is imported, and reports a
     library it cannot find as an OSError, not an ImportError. The message is
     the one it builds on a host with no Cairo at all.
     """
-    return _fail_cairosvg_import(
+    return fail_imports(
         monkeypatch,
-        OSError(
-            'no library called "cairo-2" was found\n'
-            'no library called "cairo" was found\n'
-            'no library called "libcairo-2" was found'
-        ),
+        {
+            "resvg_py": not_installed("resvg_py"),
+            "cairosvg": OSError(
+                'no library called "cairo-2" was found\n'
+                'no library called "cairo" was found\n'
+                'no library called "libcairo-2" was found'
+            ),
+        },
     )
 
 

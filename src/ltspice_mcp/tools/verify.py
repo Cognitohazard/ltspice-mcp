@@ -332,21 +332,18 @@ _RENDER_SCHEMA: dict[str, Any] = {
         "estimated_tokens": {"type": ["integer", "null"]},
         "returned_inline": {"type": "boolean"},
         "delivery": {"type": "string"},
-        "inline_skipped": {
-            "type": ["string", "null"],
-            "enum": ["svg_requested", "png_unavailable", None],
+        "svg": {
+            "type": "string",
             "description": (
-                "Why an inline or both delivery returned no image: inline is PNG "
-                "only, and either format 'svg' was asked for or no PNG could be "
-                "made. Null when the image was inlined or inline was not asked for."
+                "The SVG markup, when an inline or both delivery returned an SVG; "
+                "absent otherwise."
             ),
         },
         "note": {
             "type": ["string", "null"],
             "description": (
                 "What was delivered instead of what was asked for, and why: a PNG "
-                "that fell back to SVG, an image that was not inlined, and where "
-                "the file is."
+                "that fell back to SVG, and how to get the PNG."
             ),
         },
     },
@@ -793,9 +790,9 @@ class VerifyRenderPolicy(RenderPolicy):
         default="artifact",
         description=(
             "'artifact' (default) writes the image and returns its path; "
-            "'inline' and 'both' also return the PNG as image content. An "
-            "inline image costs about 3k tokens at the default scale and stays "
-            "in context for every later turn. PNG only."
+            "'inline' and 'both' also return it in the reply: a PNG as image "
+            "content (about 3k tokens at the default scale), an SVG as its "
+            "markup in render.svg, charged as text. Either stays in context."
         ),
     )
 
@@ -1105,7 +1102,6 @@ def _micro_sign_observation(
     path: Path,
     encoding: str,
     generated_by: str | None,
-    exported: bool = False,
 ) -> dict[str, Any]:
     """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
     readers = (
@@ -1121,11 +1117,7 @@ def _micro_sign_observation(
         "tokens": [site.token for site in sites],
         "encoding": encoding,
         "reason": (
-            f"LTspice's export wrote {len(sites)} value(s) with a micro sign for the "
-            f"micro suffix in this {encoding} netlist: both builds write a part's 'u' "
-            f"suffix that way, whatever the sheet spells. {readers}"
-            if exported
-            else f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
+            f"{len(sites)} value(s) spell the micro suffix as a micro sign in this "
             f"{encoding} file. {readers}"
         ),
     }
@@ -1165,9 +1157,11 @@ def _value_suffix_findings(
     (``cp1252_reader``, from ``services.cp1252_ltspice``) or the one the deck
     shows exported it (``export_writer``), reading a file that is not cp1252. Otherwise
     the file's micro signs are one observation, with their count and lines,
-    which leaves the outcome alone; for an ``exported`` netlist it says the
-    export wrote them. ``encoding`` is the codec the file decoded as. ``cards``
-    has its title card dropped already.
+    which leaves the outcome alone, except in an ``exported`` netlist: both
+    builds write a part's ``u`` suffix as a micro sign there whatever the
+    sheet spells, so the sheet cannot change it, and only a reader that
+    misreads it is worth a finding. ``encoding`` is the codec the file decoded
+    as. ``cards`` has its title card dropped already.
     """
     sites = value_suffix_sites(cards)
     if not sites:
@@ -1202,8 +1196,8 @@ def _value_suffix_findings(
                 evidence=evidence,
             )
         )
-    if micro:
-        findings.append(_micro_sign_observation(micro, path, encoding, generated_by, exported))
+    if micro and not exported:
+        findings.append(_micro_sign_observation(micro, path, encoding, generated_by))
     return findings
 
 
@@ -1512,11 +1506,12 @@ def _exported_value_suffix_findings(
 ) -> list[dict[str, Any]]:
     """Value-suffix findings over an exported netlist.
 
-    LTspice 24 and later write the export as UTF-8, a micro sign as C2 B5, and
-    the exported ``.net`` is what gets handed to another LTspice. Both builds
-    write a part's value suffix ``u`` as a micro sign there (the recorded
-    ``benchmark/nmos_mirror_drawn`` export of a sheet whose value is ``100u``),
-    so the observation says the export wrote them, not the sheet.
+    Both builds write a part's value suffix ``u`` as a micro sign in the
+    export (the recorded ``benchmark/nmos_mirror_drawn`` export of a sheet
+    whose value is ``100u``), LTspice 24 and later in UTF-8 (C2 B5), which
+    they read back as micro. Those micro signs are reported only as a warning
+    per value for a reader that misreads them, an LTspice XVII decoding a
+    UTF-8 export as cp1252; the build that wrote them reads them as meant.
     """
     try:
         text, encoding = read_spice_text_with_encoding(net_path)
@@ -1926,19 +1921,17 @@ def _render_scene(
     scale: float,
     max_pixels: int | None,
 ) -> tuple[RenderedImage, Path, bool]:
-    """Render a scene into the verify scratch dir. Returns (image, path, downscaled)."""
-    return render_scene_artifact(
+    """Render a scene into the per-user render folder. Returns (image, path,
+    downscaled)."""
+    rendered = render_scene_artifact(
         scene,
-        _scratch_dir(state, "renders"),
+        state.store.renders_dir(),
         image_format=image_format,
         scale=scale,
         max_pixels=max_pixels,
     )
-
-
-#: Why an inline delivery returned no image. Inline is PNG only; the reasons
-#: are in the verify_circuit section of docs/design/mcp_surface.md.
-InlineSkipped: TypeAlias = Literal["svg_requested", "png_unavailable"]
+    state.store.delete_old_renders()
+    return rendered
 
 
 #: What the render check produces: ``(payload, inline image, failures,
@@ -1994,36 +1987,29 @@ async def _do_render(
                 remedy=unavailable.remedy,
             )
         )
-    inline_asked = policy.delivery in ("inline", "both")
-    want_inline = inline_asked and image.is_raster
-    inline_skipped: InlineSkipped | None = None
-    if inline_asked and not image.is_raster:
-        inline_skipped = "svg_requested" if policy.format == "svg" else "png_unavailable"
+    inline = policy.delivery in ("inline", "both")
     payload = _render_payload(
         image,
         out_path,
         downscaled=downscaled,
         delivery=policy.delivery,
-        returned_inline=want_inline,
-        inline_skipped=inline_skipped,
+        returned_inline=inline,
         source_sha256=scene.source_sha256,
     )
-    return payload, (image if want_inline else None), failures, []
+    if inline and not image.is_raster:
+        # SVG is markup, not an image a client shows. A structured-aware
+        # client reads only the structured payload, so the drawing rides
+        # there, once.
+        payload["svg"] = image.data.decode("utf-8")
+    return payload, (image if inline and image.is_raster else None), failures, []
 
 
-def _render_note(
-    image: RenderedImage, path: Path, inline_skipped: InlineSkipped | None
-) -> str | None:
+def _render_note(image: RenderedImage, returned_inline: bool) -> str | None:
     """The render's own explanation: what was delivered in place of the request."""
-    if inline_skipped is None:
-        return image.note
-    if inline_skipped == "svg_requested":
-        return (
-            "Render not returned inline: inline delivery is PNG only and format "
-            f"'svg' was requested; the SVG is at {path}. Request format 'png' "
-            "to receive the drawing inline."
-        )
-    return f"{image.note}. Not returned inline: inline delivery is PNG only; the SVG is at {path}."
+    note = image.note
+    if note is not None and returned_inline:
+        note += ". The SVG markup is returned inline in render.svg in place of the PNG"
+    return note
 
 
 def _render_payload(
@@ -2033,7 +2019,6 @@ def _render_payload(
     downscaled: bool,
     delivery: str,
     returned_inline: bool,
-    inline_skipped: InlineSkipped | None,
     source_sha256: str | None,
 ) -> dict[str, Any]:
     return {
@@ -2056,8 +2041,7 @@ def _render_payload(
         "estimated_tokens": image.estimated_tokens,
         "returned_inline": returned_inline,
         "delivery": delivery,
-        "inline_skipped": inline_skipped,
-        "note": _render_note(image, path, inline_skipped),
+        "note": _render_note(image, returned_inline),
     }
 
 
@@ -2169,9 +2153,8 @@ def _hint(data: dict[str, Any]) -> str:
             + ", ".join(sorted({f["rule_id"] for f in observations}))
             + " (facts, not a verdict)"
         )
-    # A caller that asked for the picture inline and chose SVG, or left the
-    # format to a default that fell back to SVG, has nothing to fix, but is not
-    # holding a PNG either, so the headline says so.
+    # A caller that left the format to a default that fell back to SVG has
+    # nothing to fix, but is not holding a PNG either, so the headline says so.
     delivery_note = (data.get("render") or {}).get("note")
     if parts:
         headline = "; ".join(parts) + "."

@@ -217,8 +217,10 @@ C1 out 0 {C}
   XVII reads the file as cp1252 and drops the scale, so `23µ` runs as 23.
   `run_experiments` stages decks with `u`; write `u` in any deck you run
   elsewhere. `verify_circuit` reports µ suffixes (`value_suffix_micro_sign`)
-  as one observation per file, and as a warning per value only when it knows
-  of an LTspice XVII that would misread the file. A suffix that shows the file
+  in a netlist as one observation per file, and as a warning per value only
+  when it knows of an LTspice XVII that would misread the file. In an `.asc`'s
+  exported netlist, where both builds write µ whatever the sheet spells, only
+  that warning is reported. A suffix that shows the file
   was decoded in the wrong encoding (`value_suffix_mojibake`, such as `Âµ`) is
   an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`) is a
   warning, read as the bare number. These checks run on a netlist and on an

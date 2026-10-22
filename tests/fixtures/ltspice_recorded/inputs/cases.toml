@@ -192,6 +192,12 @@ model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py",
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
+[behaviour.export-instance-prefix]
+summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
+model = ["lib/schematic_ops.py"]
+inputs = ["export/instance_prefix.asc"]
+extra = ["export/res.asy", "export/cell4.asy"]
+
 [behaviour.export-attributes]
 summary = "Where Value2, SpiceLine, SpiceLine2 and SpiceModel land on an exported card: subcircuit parameters, a params: marker, and a transistor's or diode's area factor."
 model = ["lib/spice_lex_views.py", "lib/netlist_diff.py", "lib/schematic_ops.py", "lib/sheet.py", "lib/sheet_findings.py"]
@@ -408,7 +414,7 @@ summary = "A raw converted to Fast Access layout: the fastaccess flag and sample
 model = ["lib/raw_header.py", "lib/raw_parser.py"]
 
 [behaviour.raw-partial]
-summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it."
+summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it, and, on LTspice XVII, samples past the count that go back in time."
 model = ["lib/raw_parser.py", "lib/experiment_runner.py"]
 
 # ---------------------------------------------------------------- logs
@@ -479,6 +485,11 @@ summary = "The semiconductor operating-point block of the log: printed under .op
 model = ["lib/log_parser.py", "lib/log_decode.py", "lib/runner_base.py", "lib/metrics.py"]
 inputs = ["log/device_op.cir", "log/device_op_off.cir", "log/device_op_tran.cir"]
 keep = ["log"]
+
+[behaviour.subckt-device-names]
+summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
+model = ["lib/device_names.py", "lib/metrics.py", "lib/log_parser.py"]
+inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
 [behaviour.log-device-op-precision]
 summary = "How many digits the device operating-point table prints under .options numdgt=7, with and without logopinfo, and whether .save of a device parameter (@m1[gm]) stores it in the raw."
@@ -724,6 +735,31 @@ source = "log/meas_phase.cir"
 ini = { RadianMeasure = "true" }
 keep = ["log"]
 note = "ph() with the same setting."
+
+# The settings keys behind "Save subcircuit node voltages" and "Save
+# subcircuit device currents" (the Save Defaults page of the settings). Both
+# builds default them to off, and then store nothing from inside a
+# subcircuit but its port currents.
+[[case]]
+id = "raw/subckt_names_tran_saved"
+behaviour = "subckt-device-names"
+source = "raw/subckt_names_tran.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+note = "The transient with the settings that store the nodes and device currents inside subcircuits."
+
+[[case]]
+id = "log/subckt_names_saved"
+behaviour = "subckt-device-names"
+source = "log/subckt_names.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+note = "The .op with logopinfo and the same settings, for the operating-point raw beside the device table."
+
+[[case]]
+id = "log/subckt_names_off_saved"
+behaviour = "subckt-device-names"
+source = "log/subckt_names_off.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+note = "The .op without logopinfo and the same settings."
 
 [[case]]
 id = "raw/tran_fastaccess"

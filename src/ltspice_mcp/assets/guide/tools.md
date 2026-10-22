@@ -43,7 +43,10 @@ A case has no time limit unless `execution.run_timeout_s` (or the server's
 points written and the last time or frequency reached, to compare with the
 deck's own stop value. A simulator writes in buffered blocks, so compare
 readings a few minutes apart: if `points` has not moved, the case is not
-advancing, and `jobs(action="cancel")` stops it.
+advancing, and `jobs(action="cancel")` stops it. A stopped case's raw is
+deleted unless the run asked for `execution.keep_partial_raw: true`; then its
+results stay readable up to where the run was stopped, and every read says so
+with a `partial_raw` observation.
 
 `inspect(kind="reference")` finds a recipe, schematic op, variation kind,
 check or job action from plain words (`query="phase margin"`) and returns its
@@ -121,13 +124,17 @@ lint blocks a mismatch. A case that produced nothing is counted in
   rather than setting `lint: "warn"`.
 - `jobs`: `{"action": "status", "request_id": "ldo-load-1"}` finds a job whose
   id you lost. A `wait` that returns `timed_out` ended the wait, not the job.
+  A receipt's `status` is the job's (`completed`, `completed_with_failures`,
+  `failed`, ...); each run row's `status` is its case's (`produced` when it
+  ran, `failed`, `cancelled` or `skipped` when it did not).
 - `analyze_results`: the default reply is the answer (`results`, `coverage`,
   `observations`, `failures`); ask for more under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). A failure row is one reason:
   one that hit several runs carries `count` and `wheres` (the first 10
   places). `group_by` is a top-level argument, never inside a recipe. Results
   of the `operating_point` recipe are in `device_op_points`, keyed by the
-  simulator's literal names (`@m1[gm]`).
+  simulator's literal names (`@m1[gm]`); a device inside a subcircuit is
+  found by its path (`"device": "x1.m1"`, guide section 'operating-points').
   For a staircase signal (DAC steps, line reflections), read each level with a
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur

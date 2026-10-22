@@ -178,19 +178,35 @@ class DecodedRun:
 def _decode(build: str, case_id: str, scratch: Path, *, raw: bool) -> ParsedArtifacts:
     raw_path = recorded(build, f"{case_id}.raw") if raw else None
     log_path = recorded(build, f"{case_id}.log")
-    request = parser_request(raw_path, log_path if log_path.is_file() else None)
-    directory = scratch / f"decode-{build}-{case_id.replace('/', '-')}"
+    return _decode_paths(
+        raw_path,
+        log_path if log_path.is_file() else None,
+        scratch / f"decode-{build}-{case_id.replace('/', '-')}",
+    )
+
+
+def _decode_paths(
+    raw_path: Path | None, log_path: Path | None, directory: Path
+) -> ParsedArtifacts:
+    request = parser_request(raw_path, log_path)
     directory.mkdir(parents=True)
     parse_request(request, directory)
     metadata = json.loads((directory / "result.json").read_bytes())
     return read_parsed_artifacts(
-        metadata, directory, limits=RAW_LIMITS, require_raw=raw, request=request
+        metadata, directory, limits=RAW_LIMITS, require_raw=raw_path is not None, request=request
     )
 
 
 def decode(build: str, case_id: str, scratch: Path) -> DecodedRun:
     """Decode a recorded run with the decoder the server runs, raising what it raises."""
     parsed = _decode(build, case_id, scratch, raw=True)
+    assert parsed.raw is not None
+    return DecodedRun(raw=parsed.raw, logs=parsed.logs)
+
+
+def decode_file(raw_path: Path, scratch: Path) -> DecodedRun:
+    """Decode a results file a test made, with no log, with the decoder the server runs."""
+    parsed = _decode_paths(raw_path, None, scratch / f"decode-{raw_path.stem}")
     assert parsed.raw is not None
     return DecodedRun(raw=parsed.raw, logs=parsed.logs)
 

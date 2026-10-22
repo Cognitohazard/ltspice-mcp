@@ -2074,6 +2074,25 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/instance_prefix.asc": {
+   "labels": {
+    "proposals": 46,
+    "sha256": "a501a97900529ce5b36263667f4dc3a51d72c8d2cb08b77fd19955186c5f1b15",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 22,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 22
+    }
+   },
+   "moves": {
+    "proposals": 239,
+    "sha256": "037ec8dd4dba70a05d0baccad464e4250a1b7da93fff58579c3f4addb8d64403",
+    "shapes": {
+     "moved": 239
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
    "labels": {
     "proposals": 15,

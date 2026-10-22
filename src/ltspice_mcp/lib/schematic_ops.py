@@ -148,6 +148,25 @@ def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None
         )
 
 
+def _attribute_value(reference: str, attribute: str, value: str) -> str:
+    """The value an attribute is written with.
+
+    A ``Prefix`` must start with the element letter it gives the part, and is
+    written in upper case, the way spicelib reads it back; LTspice reads either
+    case the same.
+    """
+    if attribute != INSTANCE_PREFIX:
+        return value
+    letter = value.strip()[:1]
+    if not (letter.isascii() and letter.isalpha()):
+        raise NetlistError(
+            f"Prefix {value!r} on {reference!r} does not start with an element "
+            "letter: give the letter the part netlists as, such as 'X' for a "
+            "subcircuit."
+        )
+    return value.strip().upper()
+
+
 def _require_clearable_attr(reference: str, attribute: str) -> None:
     """Refuse clearing an attribute the component cannot live without.
 
@@ -179,17 +198,6 @@ def _reject_unknown_attr(attribute: str) -> None:
         raise NetlistError(
             f"Unknown attribute {attribute!r}. Did you mean {canonical!r}? "
             "LTspice attribute names are case-sensitive."
-        )
-    if attribute.lower() == "prefix":
-        # A SpiceLine referral here misdirects: Prefix is a SYMBOL property,
-        # not an instance attribute, and SpiceLine can't change it.
-        raise NetlistError(
-            "Attribute 'Prefix' is a symbol property, not an instance "
-            "attribute — the element prefix comes from the symbol's .asy "
-            "file ('SYMATTR Prefix ...'). To place a subcircuit (X-prefix) "
-            "device, use the edit_schematic add_component op with a symbol whose .asy declares "
-            "'SYMATTR Prefix X', then bind the subckt name via Value or "
-            "SpiceModel."
         )
     raise NetlistError(
         f"Unknown attribute {attribute!r}. LTspice silently ignores "
@@ -229,7 +237,7 @@ def create_component(
         for attr_name, attr_val in attributes.items():
             _reject_unknown_attr(attr_name)
             _reject_empty_attr_value(reference, attr_name, attr_val)
-            comp.attributes[attr_name] = attr_val
+            comp.attributes[attr_name] = _attribute_value(reference, attr_name, attr_val)
     editor.add_component(comp)
 
 
@@ -266,11 +274,19 @@ async def edit_guard(path: Path, *beside: Path) -> AsyncIterator[None]:
         yield
 
 
+#: An instance's own ``Prefix`` overrides its symbol's: both builds write the
+#: part's card with that element letter, in either case of the letter, on a
+#: library, stock or block symbol (recorded: ``export/instance_prefix``).
+#: spicelib reads the attribute back in upper case.
+INSTANCE_PREFIX = "Prefix"
+
 # Standard LTspice SYMATTR slot names. Anything outside this set is
 # silently ignored at netlist-export time, so we reject up-front rather
 # than letting a typo no-op silently. Sourced from spicelib so a future
 # release that adds a slot is picked up without a code change here.
-_LTSPICE_ATTR_NAMES: frozenset[str] = frozenset(LTSPICE_PARAMETERS + LTSPICE_ATTRIBUTES)
+_LTSPICE_ATTR_NAMES: frozenset[str] = frozenset(
+    (*LTSPICE_PARAMETERS, *LTSPICE_ATTRIBUTES, INSTANCE_PREFIX)
+)
 _LTSPICE_ATTR_CANONICAL: dict[str, str] = {n.lower(): n for n in _LTSPICE_ATTR_NAMES}
 
 # Rotation string -> ERotation enum mapping (shared by move/add handlers)
@@ -481,9 +497,9 @@ def level_label_lint(editor, reference: str, value: str) -> str | None:
     - any Value set on a symbol whose model is selected via the ``SpiceModel``
       attribute (e.g. UniversalOpamp2), whose Value slot must stay empty.
 
-    The subcircuit gate is an OR of signals — the InstName may be ``U1`` while
-    the netlist prefix is X (from the .asy Prefix), so the X-prefix test alone
-    is not enough. A symbol that carries its subckt name IN Value (the common
+    The subcircuit gate is the element letter the part netlists as
+    (``element_class``: its own Prefix, its symbol's, or its name's first
+    letter), or a ``SpiceModel``. A symbol that carries its subckt name IN Value (the common
     library part, no SpiceModel) is left alone. Returns the warning text, or
     ``None`` when neither shape applies.
     """
@@ -492,7 +508,9 @@ def level_label_lint(editor, reference: str, value: str) -> str | None:
     comp = editor.components.get(reference)
     attrs = getattr(comp, "attributes", None) or {}
     has_spicemodel = "SpiceModel" in attrs
-    is_subckt = reference[:1].upper() == "X" or has_spicemodel or "_SUBCKT" in attrs
+    # Not spicelib's _SUBCKT, which it sets for every part named X...
+    # (docs/spicelib_bugs.md, Bug 30).
+    is_subckt = element_class(editor, reference) == "X" or has_spicemodel
     if not is_subckt:
         return None
     if _LEVEL_LABEL_RE.match(value):
@@ -677,16 +695,33 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
 def element_class(editor: AscEditor, reference: str) -> str:
     """The element letter a placed part netlists as.
 
-    LTspice takes it from the symbol's ``Prefix`` (``QN`` → ``Q``) and prepends
-    that letter to an instance name that does not already start with it, so a
-    part named ``Vin`` on a resistor symbol is a resistor. Falls back to the
-    reference's own first letter when the symbol does not resolve.
+    LTspice takes it from the part's own ``Prefix`` when it has one, else from
+    its symbol's (``QN`` → ``Q``), and prepends that letter to an instance name
+    that does not already start with it, so a part named ``Vin`` on a resistor
+    symbol is a resistor. Falls back to the reference's own first letter when
+    neither gives one.
     """
     comp = editor.components.get(reference)
+    own = (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX)
+    if own:
+        return own[:1].upper()
     symbol = getattr(comp, "symbol", None)
     info = symbol_info_for(editor, symbol) if symbol else None
     prefix = info.prefix if info is not None and info.prefix else reference
     return prefix[:1].upper()
+
+
+def export_parts(editor: AscEditor, geometry: Iterable[dict]) -> list[tuple[str, str, list[str]]]:
+    """Each placed part's reference, element letter and pin names in
+    SpiceOrder, from ``collect_component_geometry``'s rows: what
+    ``export_nets.exported_pin_nodes`` finds its card and nodes by. A symbol's
+    pins are already in SpiceOrder; a part with a pin of none (order 0) is
+    left out."""
+    return [
+        (row["ref"], element_class(editor, row["ref"]), [pin["name"] for pin in row["pins"]])
+        for row in geometry
+        if all(pin["order"] for pin in row["pins"])
+    ]
 
 
 def collect_component_geometry(editor: AscEditor) -> list[dict]:
@@ -1951,7 +1986,7 @@ class OpSetComponentAttribute(StrictModel):
     op: Literal["set_component_attribute"]
     reference: str = Field(description=_REFERENCE_DESCRIPTION)
     attribute: str = Field(
-        description="Attribute name, e.g. Value, Value2, SpiceLine, SpiceModel."
+        description="Attribute name, e.g. Value, SpiceLine, SpiceModel, Prefix."
     )
     value: str = Field(description="New value for that attribute.")
 
@@ -2380,7 +2415,11 @@ def apply_op_inplace(
             _require_clearable_attr(op.reference, op.attribute)
             editor.get_component(op.reference).attributes.pop(op.attribute, None)
         else:
-            editor.set_component_attribute(op.reference, op.attribute, op.value)
+            editor.set_component_attribute(
+                op.reference,
+                op.attribute,
+                _attribute_value(op.reference, op.attribute, op.value),
+            )
         attr_result: dict[str, object] = {
             "op": "set_component_attribute",
             "reference": op.reference,

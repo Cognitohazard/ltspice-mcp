@@ -656,7 +656,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Measured 15,596.
     # Recovery opt-in, simulator seed and attached RAW selection also
     # contribute to the merged schema bound.
-    "run_experiments": 16500,
+    # Raised by about 200 characters for execution.keep_partial_raw, which
+    # keeps a stopped case's raw for reads; nothing else said a stopped run's
+    # results could be read at all. Measured 16,656.
+    "run_experiments": 16700,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.

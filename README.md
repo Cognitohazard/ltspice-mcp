@@ -180,7 +180,7 @@ your client as you would a shell command, and set `[tools] run_code = false`
 if anyone else can reach the server.
 
 **Schematic and plot images** for the assistant to look at need an optional
-extra and the Cairo library: see [PNG rendering](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#png-rendering).
+extra: see [PNG rendering](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#png-rendering).
 
 [docs/USAGE.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md) covers the common settings, WSL, which files
 the server creates, and running it on another machine.

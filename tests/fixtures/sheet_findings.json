@@ -15026,6 +15026,703 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/instance_prefix.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (96,96)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (96,192)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 96,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.1 at (288,96)",
+     "pin": "1",
+     "ref": "R2",
+     "x": 288,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (288,192)",
+     "pin": "2",
+     "ref": "R2",
+     "x": 288,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: Load.1 at (480,96)",
+     "pin": "1",
+     "ref": "Load",
+     "x": 480,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: Load.2 at (480,192)",
+     "pin": "2",
+     "ref": "Load",
+     "x": 480,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: X4.1 at (672,96)",
+     "pin": "1",
+     "ref": "X4",
+     "x": 672,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: X4.2 at (672,192)",
+     "pin": "2",
+     "ref": "X4",
+     "x": 672,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R5.1 at (96,352)",
+     "pin": "1",
+     "ref": "R5",
+     "x": 96,
+     "y": 352
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R5.2 at (96,448)",
+     "pin": "2",
+     "ref": "R5",
+     "x": 96,
+     "y": 448
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R6.1 at (288,352)",
+     "pin": "1",
+     "ref": "R6",
+     "x": 288,
+     "y": 352
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R6.2 at (288,448)",
+     "pin": "2",
+     "ref": "R6",
+     "x": 288,
+     "y": 448
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R7.1 at (480,352)",
+     "pin": "1",
+     "ref": "R7",
+     "x": 480,
+     "y": 352
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R7.2 at (480,448)",
+     "pin": "2",
+     "ref": "R7",
+     "x": 480,
+     "y": 448
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: M1.D at (144,528)",
+     "pin": "D",
+     "ref": "M1",
+     "x": 144,
+     "y": 528
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: M1.G at (96,608)",
+     "pin": "G",
+     "ref": "M1",
+     "x": 96,
+     "y": 608
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: M1.S at (144,624)",
+     "pin": "S",
+     "ref": "M1",
+     "x": 144,
+     "y": 624
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: M1.B at (144,576)",
+     "pin": "B",
+     "ref": "M1",
+     "x": 144,
+     "y": 576
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.a at (416,672)",
+     "pin": "a",
+     "ref": "U1",
+     "x": 416,
+     "y": 672
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.b at (448,624)",
+     "pin": "b",
+     "ref": "U1",
+     "x": 448,
+     "y": 624
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.c at (368,704)",
+     "pin": "c",
+     "ref": "U1",
+     "x": 368,
+     "y": 704
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.d at (336,592)",
+     "pin": "d",
+     "ref": "U1",
+     "x": 336,
+     "y": 592
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 22,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,96)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 96,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,192)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 288,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       96
+      ]
+     ],
+     "detail": "Floating pin: R2.1 at (288,96)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 288,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       192
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (288,192)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 480,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       96
+      ]
+     ],
+     "detail": "Floating pin: Load.1 at (480,96)",
+     "refs": [
+      "Load"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "Load"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 480,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       192
+      ]
+     ],
+     "detail": "Floating pin: Load.2 at (480,192)",
+     "refs": [
+      "Load"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "Load"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 672,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       672,
+       96
+      ]
+     ],
+     "detail": "Floating pin: X4.1 at (672,96)",
+     "refs": [
+      "X4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "X4"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 672,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       672,
+       192
+      ]
+     ],
+     "detail": "Floating pin: X4.2 at (672,192)",
+     "refs": [
+      "X4"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "X4"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 96,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       352
+      ]
+     ],
+     "detail": "Floating pin: R5.1 at (96,352)",
+     "refs": [
+      "R5"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R5"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 96,
+     "y": 448
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       448
+      ]
+     ],
+     "detail": "Floating pin: R5.2 at (96,448)",
+     "refs": [
+      "R5"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R5"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 288,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       352
+      ]
+     ],
+     "detail": "Floating pin: R6.1 at (288,352)",
+     "refs": [
+      "R6"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R6"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 288,
+     "y": 448
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       448
+      ]
+     ],
+     "detail": "Floating pin: R6.2 at (288,448)",
+     "refs": [
+      "R6"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R6"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 480,
+     "y": 352
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       352
+      ]
+     ],
+     "detail": "Floating pin: R7.1 at (480,352)",
+     "refs": [
+      "R7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R7"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 480,
+     "y": 448
+    },
+    "evidence": {
+     "coords": [
+      [
+       480,
+       448
+      ]
+     ],
+     "detail": "Floating pin: R7.2 at (480,448)",
+     "refs": [
+      "R7"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R7"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 144,
+     "y": 528
+    },
+    "evidence": {
+     "coords": [
+      [
+       144,
+       528
+      ]
+     ],
+     "detail": "Floating pin: M1.D at (144,528)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 96,
+     "y": 608
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       608
+      ]
+     ],
+     "detail": "Floating pin: M1.G at (96,608)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 144,
+     "y": 624
+    },
+    "evidence": {
+     "coords": [
+      [
+       144,
+       624
+      ]
+     ],
+     "detail": "Floating pin: M1.S at (144,624)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 144,
+     "y": 576
+    },
+    "evidence": {
+     "coords": [
+      [
+       144,
+       576
+      ]
+     ],
+     "detail": "Floating pin: M1.B at (144,576)",
+     "refs": [
+      "M1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "M1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 416,
+     "y": 672
+    },
+    "evidence": {
+     "coords": [
+      [
+       416,
+       672
+      ]
+     ],
+     "detail": "Floating pin: U1.a at (416,672)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 448,
+     "y": 624
+    },
+    "evidence": {
+     "coords": [
+      [
+       448,
+       624
+      ]
+     ],
+     "detail": "Floating pin: U1.b at (448,624)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 368,
+     "y": 704
+    },
+    "evidence": {
+     "coords": [
+      [
+       368,
+       704
+      ]
+     ],
+     "detail": "Floating pin: U1.c at (368,704)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   },
+   {
+    "at": {
+     "file": "instance_prefix.asc",
+     "x": 336,
+     "y": 592
+    },
+    "evidence": {
+     "coords": [
+      [
+       336,
+       592
+      ]
+     ],
+     "detail": "Floating pin: U1.d at (336,592)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
   "dropped_wire": [],
   "edit": {

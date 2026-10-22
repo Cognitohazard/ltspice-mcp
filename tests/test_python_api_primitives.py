@@ -124,6 +124,8 @@ def test_raw_result_xor_step_slicing_and_mutation_isolation(
     assert result.step_count == 3
     assert result.steps == [{"r": 1.0}, {"r": 22.0}, {"r": 680.0}]
     assert len(result.steps) == result.step_count
+    # A whole result has nothing to say of itself.
+    assert result.observations == []
 
     first = result.trace("v(OUT)", step=0)
     last = result.trace("V(out)", step=2)

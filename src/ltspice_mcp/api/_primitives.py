@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -11,8 +12,10 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.ac_analysis import log_interp_at, log_interp_complex_at
 from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
+from ltspice_mcp.lib.device_names import TraceKey, trace_key, writes_xvii_names
 from ltspice_mcp.lib.log_parser import split_device_key
 from ltspice_mcp.state import SessionState
 
@@ -28,6 +31,7 @@ class RawResult:
         dialect: str | None,
         step_count: int,
         steps: list[dict[str, Any]],
+        observations: tuple[dict[str, Any], ...] = (),
     ) -> None:
         self._raw = raw
         self._signals = tuple(str(name) for name in raw.get_trace_names())
@@ -38,6 +42,7 @@ class RawResult:
         self._analysis_type = raw.descriptor.analysis
         self._dialect = raw.descriptor.dialect
         self._source = source
+        self._observations = observations
 
     @property
     def signals(self) -> list[str]:
@@ -114,6 +119,13 @@ class RawResult:
         return self._source
 
     @property
+    def observations(self) -> list[dict[str, Any]]:
+        """What this result says of itself as it was read: ``partial_raw`` when
+        it is a stopped case's kept raw, whose values end where the run was
+        stopped. Empty for a whole result."""
+        return copy.deepcopy(list(self._observations))
+
+    @property
     def plot_index(self) -> int:
         return self._raw.plot_index
 
@@ -151,6 +163,163 @@ class RawResult:
                 )
         return rows
 
+    def _keyed_traces(self) -> dict[TraceKey, int]:
+        """This plot's traces but its axis, by ``trace_key``, each to its index;
+        a key two traces share is left out, never guessed between."""
+        xvii = writes_xvii_names(self._raw)
+        axis = self._raw.descriptor.axis
+        keyed: dict[TraceKey, int] = {}
+        shared: set[TraceKey] = set()
+        for index, trace in enumerate(self._raw.descriptor.traces):
+            if axis is not None and trace.name == axis.name:
+                continue
+            key = trace_key(trace.name, xvii=xvii)
+            shared.update([key] if key in keyed else [])
+            keyed[key] = index
+        return {key: index for key, index in keyed.items() if key not in shared}
+
+    def _step_with(self, parameters: dict[str, Any]) -> int:
+        """The step whose parameters are ``parameters``; step 0 of a result
+        that is not stepped."""
+        if self._step_count == 1 and not self._steps[0]:
+            return 0
+        try:
+            return self._steps.index(parameters)
+        except ValueError:
+            raise ResultError(
+                f"No step of the other result has this step's parameters "
+                f"({parameters or 'none'}); pass other_step."
+            ) from None
+
+    def compare(
+        self,
+        other: RawResult,
+        *,
+        signals: Sequence[str] | None = None,
+        step: int = 0,
+        other_step: int | None = None,
+    ) -> dict[str, Any]:
+        """How far ``other``'s traces are from this result's, signal by signal.
+
+        ``signals`` names the ones to compare, each found in each result as
+        :meth:`trace` finds it. By default every signal both hold is, the axis
+        aside, paired by name without case and by the path to a node or device
+        inside subcircuits however each build spells it (LTspice 26's
+        ``V(xa:xin:mid)`` is XVII's ``V(a:in:mid)``). Each is compared at this result's
+        points, ``other`` read there by interpolation when its axis differs
+        (a compressed LTspice raw stores few points, and its values between
+        them are the line drawn through them): linearly on a time or sweep
+        axis, in log frequency, dB and unwrapped phase on a frequency axis
+        (``log_interp_complex``).
+        Only the span both axes cover is compared. A plot of no axis, such as
+        an operating point, compares point by point. Complex values compare as
+        complex numbers.
+
+        ``other_step`` defaults to the step of ``other`` whose parameters are
+        this ``step``'s, or step 0 of a result that is not stepped.
+
+        Returns ``{"signals": {name: {"max_abs", "max_rel", "at", "value",
+        "other"}}, "only_here", "only_there", "span", "points"}``: per signal
+        the largest difference, its share of this result's largest magnitude
+        of that signal (None when that is 0), the axis value it is at, and
+        the two values there. How large a difference may be is the caller's.
+        """
+        self._validate_step(step)
+        if other_step is None:
+            other_step = other._step_with(self._steps[step])
+        other._validate_step(other_step)
+        here, there = self._keyed_traces(), other._keyed_traces()
+        names = [trace.name for trace in self._raw.descriptor.traces]
+        other_names = [trace.name for trace in other._raw.descriptor.traces]
+        if signals is None:
+            pairs = [(index, there[key]) for key, index in here.items() if key in there]
+        else:
+            found = [(self._find(signal), other._find(signal)) for signal in signals]
+            missing = [
+                s for s, (a, b) in zip(signals, found, strict=True) if a is None or b is None
+            ]
+            if missing:
+                raise ResultError(f"Not a signal of both results: {', '.join(missing)}")
+            pairs = [(names.index(a), other_names.index(b)) for a, b in found if a and b]
+        has_axis = self._raw.descriptor.axis is not None
+        if has_axis != (other._raw.descriptor.axis is not None):
+            raise ResultError("One result has a sampled axis and the other has none.")
+        select: slice | np.ndarray = slice(None)
+        at = span = resample = None
+        if has_axis:
+            axis, other_axis = self.axis(step=step), other.axis(step=other_step)
+            low = max(axis.min(), other_axis.min())
+            high = min(axis.max(), other_axis.max())
+            select = (axis >= low) & (axis <= high)
+            at = axis[select]
+            if not at.size:
+                raise ResultError("The two results' axes share no point to compare at.")
+            span = [float(low), float(high)]
+            if not np.array_equal(at, other_axis):
+                assert self._raw.descriptor.axis is not None
+                resample = _Resampler(
+                    other_axis, at, log=self._raw.descriptor.axis.quantity == "frequency"
+                )
+        compared: dict[str, Any] = {}
+        points = 0 if at is None else at.size
+        for index, other_index in pairs:
+            ours = self._raw.get_wave(index, step=step)[select]
+            points = ours.size
+            theirs = other._raw.get_wave(other_index, step=other_step)
+            if resample is not None:
+                theirs = resample(theirs)
+            elif theirs.size != ours.size:
+                raise ResultError(
+                    f"{names[index]!r} has {ours.size} points here and {theirs.size} in the "
+                    "other result; a plot of no axis compares point by point."
+                )
+            difference = np.abs(ours - theirs)
+            worst = int(np.argmax(difference))
+            peak = float(np.max(np.abs(ours)))
+            compared[names[index]] = {
+                "max_abs": float(difference[worst]),
+                "max_rel": float(difference[worst]) / peak if peak else None,
+                "at": None if at is None else float(at[worst]),
+                "value": ours[worst].item(),
+                "other": theirs[worst].item(),
+            }
+        return {
+            "signals": compared,
+            "only_here": sorted(names[i] for key, i in here.items() if key not in there),
+            "only_there": sorted(other_names[i] for key, i in there.items() if key not in here),
+            "span": span,
+            "points": points,
+        }
+
+    def _find(self, signal: str) -> str | None:
+        """The trace ``signal`` names in this result, found as :meth:`trace`
+        finds one."""
+        return services.find_trace(
+            [trace.name for trace in self._raw.descriptor.traces],
+            signal,
+            xvii=writes_xvii_names(self._raw),
+        )
+
+
+class _Resampler:
+    """Another result's values read at this one's axis points, the other's
+    axis sorted once and, on a frequency axis, its logarithm taken once."""
+
+    def __init__(self, axis: np.ndarray, at: np.ndarray, *, log: bool) -> None:
+        self._order = None if np.all(np.diff(axis) >= 0) else np.argsort(axis, kind="stable")
+        self._axis = axis if self._order is None else axis[self._order]
+        self._at = at
+        self._log = log and self._axis[0] > 0 and at.min() > 0
+
+    def __call__(self, values: np.ndarray) -> np.ndarray:
+        if self._order is not None:
+            values = values[self._order]
+        if not self._log:
+            return np.interp(self._at, self._axis, values)
+        if np.iscomplexobj(values):
+            return log_interp_complex_at(self._axis, values, self._at)
+        return log_interp_at(self._axis, values, self._at)
+
 
 async def load_raw_result(
     *,
@@ -185,6 +354,7 @@ async def load_raw_result(
         dialect=raw.descriptor.dialect,
         step_count=step_count,
         steps=steps,
+        observations=source.observations,
     )
 
 

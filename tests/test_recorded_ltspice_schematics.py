@@ -26,12 +26,14 @@ from ltspice_mcp.lib.connectivity import (
 )
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
+from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, export_writer
 from ltspice_mcp.lib.netlist_diff import parse_directive, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import canon_ref, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import (
     collect_component_geometry,
     element_class,
+    export_parts,
     make_editor,
     net_partition,
     trace_nets,
@@ -208,6 +210,89 @@ def test_the_net_partition_connects_what_ltspice_connects(
     diagonal wires, pins that only touch, labels of one name on two wires."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     assert modelled_groups(sheet) == exported_groups(build, case_id)
+
+
+#: Recorded sheets the exporter names nets of, unlabelled ones among them.
+EXPORT_NAMED = [
+    *CONNECTIVITY,
+    *rec.cases_of("build-benchmark-export"),
+    "export/instance_names",
+    "export/instance_prefix",
+]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(EXPORT_NAMED)))
+def test_each_pin_is_given_the_node_ltspice_exported_it_on(
+    build: str, case_id: str, tmp_path: Path
+):
+    """An unlabelled net's name is the exporter's own (N001, NC_01), so it is
+    read off the export: each part's card found by the name the exporter
+    writes for it, its nodes in SpiceOrder. The pins the server puts on one
+    node get one exported node, and two nodes two; a node's name is compared
+    without case, as LTspice reads it."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    editor = make_editor(sheet)
+    assert isinstance(editor, AscEditor)
+    geometry = collect_component_geometry(editor)
+    nodes = exported_pin_nodes(rec.export_text(build, case_id), export_parts(editor, geometry))
+    node_of = label_folded_nets(net_partition(editor))
+    exported: dict[tuple[int, int], set[str]] = {}
+    unmapped = set()
+    for row in geometry:
+        for pin in row["pins"]:
+            node = nodes.get((row["ref"], pin["name"]))
+            if node is None:
+                unmapped.add(row["ref"])
+                continue
+            exported.setdefault(node_of((pin["x"], pin["y"])), set()).add(node.casefold())
+    # An R prefix on a four-pin block symbol writes two nodes: none is read.
+    assert unmapped == ({"U1"} if case_id == "export/instance_prefix" else set())
+    assert all(len(names) == 1 for names in exported.values()), exported
+    names = [name for found in exported.values() for name in found]
+    assert len(set(names)) == len(names)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_an_edit_compared_with_its_export_names_its_unlabelled_nets(
+    build: str, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An edit reply gave a pin on a net no label names ``net: null``. With a
+    compare, the committed sheet is exported, and each such pin also carries
+    the node the export put it on."""
+    from ltspice_mcp.tools import schematic_edit
+
+    case_id = "connectivity/unlabelled_nets"
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    export = rec.export_text(build, case_id)
+
+    async def recorded_export(_copy: Path, _state: SessionState) -> str:
+        # The batch adds a directive, which leaves the recorded cards as they are.
+        return export
+
+    monkeypatch.setattr(schematic_edit, "_export_asc_to_netlist", recorded_export)
+    data = await apply_ops(
+        state_no_sim,
+        sheet,
+        [{"op": "add_directive", "instruction": ".op", "x": 96, "y": 400}],
+        compare={"reference": export},
+        return_views=["pin_legend"],
+    )
+    assert data["commit_state"] == "committed"
+    assert data["verification"]["equivalent"] is True
+    pins = {
+        (row["ref"], pin["name"]): pin
+        for row in data["views"]["pin_legend"]["items"]
+        for pin in row["pins"]
+    }
+    exported = rec.export_instances(build, case_id)
+    for (ref, name), pin in pins.items():
+        node = exported[canon_ref(ref)].nodes[int(name) - 1]
+        if pin["net"] is None:
+            assert pin["net_export"] == node, (ref, name)
+        else:
+            assert "net_export" not in pin
+            assert pin["net"] == node
+    assert pins[("R2", "1")]["net_export"] == pins[("R1", "1")]["net_export"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -983,9 +1068,10 @@ class TestExportEncoding:
 
     def test_an_export_spells_a_values_u_as_a_micro_sign(self, build: str):
         """Both builds write a part's value 100u as 100µ in the netlist they
-        export, so the micro signs verify_circuit's export check reports are the
-        export's own: its observation says so, rather than reading as a fact
-        about the sheet."""
+        export, whatever the sheet spells, so verify_circuit's export check
+        reports those micro signs only to a reader that misreads them: an
+        LTspice XVII reading LTspice 26's UTF-8 export, and not XVII's own
+        cp1252 one."""
         from ltspice_mcp.tools.verify import _exported_value_suffix_findings
 
         sheet = (INPUTS / "benchmark/nmos_mirror_drawn.asc").read_text(encoding="utf-8")
@@ -993,9 +1079,16 @@ class TestExportEncoding:
         sites = value_suffix_sites(rec.export_cards(build, "benchmark/nmos_mirror_drawn"))
         assert [(site.token, site.micro) for site in sites] == [(f"100{MICRO}", True)]
         net = rec.recorded(build, "benchmark/nmos_mirror_drawn.net")
-        (finding,) = _exported_value_suffix_findings(net, cp1252_reader=None)
-        assert finding["severity"] == "observation"
-        assert finding["evidence"]["reason"].startswith("LTspice's export wrote 1 value(s)")
+        assert _exported_value_suffix_findings(net, cp1252_reader=None) == []
+
+        xvii = "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"
+        misread = _exported_value_suffix_findings(net, cp1252_reader=xvii)
+        if rec.generation(build) == "xvii":
+            assert misread == []
+        else:
+            assert [(f["severity"], f["evidence"]["reader"]) for f in misread] == [
+                ("warning", xvii)
+            ]
 
     def test_a_comment_keeps_its_line_breaks_as_text_and_a_directive_splits(self, build: str):
         """A sheet holds a line break in a TEXT as the two characters ``\\n``.
@@ -1175,11 +1268,41 @@ class TestExportedNames:
         assert written.count("SYMBOL probe4 ") == 3
         assert "!.op" in written
 
-    def test_the_editor_names_each_parts_element_class(self, build: str, tmp_path: Path):
-        sheet = rec.stage_sheet(build, "export/instance_names", tmp_path)
-        editor = make_editor(sheet)
+    def test_an_instances_own_prefix_gives_its_element_letter(self, build: str):
+        """A part's own Prefix replaces its symbol's on the card: an X turns a
+        resistor or a MOSFET into a subcircuit call, a C turns a resistor into a
+        capacitor and an R a block symbol into a resistor of its first two
+        pins. A lower-case x is X, and where the line stands among the part's
+        attributes does not matter. The name is written as for a symbol of that
+        prefix."""
+        references = [
+            card.name
+            for card in rec.export_cards(build, "export/instance_prefix")
+            if card.kind == "instance"
+        ]
+        x = "X" if rec.generation(build) == "xvii" else "X§"
+        assert references == [
+            "R1",
+            f"{x}R2",
+            f"{x}Load",
+            f"{x}X4",
+            f"{x}R5",
+            "C§R6",
+            f"{x}R7",
+            f"{x}M1",
+            "R§U1",
+        ]
+        (u1,) = [c for c in rec.export_cards(build, "export/instance_prefix") if c.name == "R§U1"]
+        assert u1.body.split()[1:] == ["NC_19", "NC_20", "5k"]
+
+    @pytest.mark.parametrize("sheet", ["instance_names", "instance_prefix"])
+    def test_the_editor_names_each_parts_element_class(
+        self, build: str, sheet: str, tmp_path: Path
+    ):
+        sheet_path = rec.stage_sheet(build, f"export/{sheet}", tmp_path)
+        editor = make_editor(sheet_path)
         assert isinstance(editor, AscEditor)
-        cards = rec.export_instances(build, "export/instance_names")
+        cards = rec.export_instances(build, f"export/{sheet}")
         for reference in editor.get_components():
             letter = element_class(editor, reference)
             matches = [

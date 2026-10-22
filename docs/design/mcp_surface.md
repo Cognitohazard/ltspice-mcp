@@ -89,7 +89,7 @@ Codes by kind of failure:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was requested without a usable rasterizer: the optional `raster` extra, or the native Cairo library it loads |
+| `raster_unavailable` | a PNG was requested without a usable rasterizer: the optional `raster` extra is not installed, or only `cairosvg` is, without the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Codes named after the stage, used where the stage is the more useful fact:
@@ -327,7 +327,7 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"|
                                   "<family>:<name>", recoverable?: bool,
-                      simulator_seed?: int}
+                      simulator_seed?: int, keep_partial_raw?: bool}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       plot_index?, dialect?, include?}
                                         attached analysis stage; `recipes` is
@@ -383,7 +383,8 @@ those quantities from the waveform (`value`, `signal_stats`) instead.
 `execution.run_timeout_s` on the request, else `[simulation] run_timeout` on
 the server (`limits.run_timeout_s` in `inspect(kind="capabilities")`, `null`
 when unset). A timeout deletes the partial result, unless the job is
-recoverable. A running job reports each
+recoverable or `execution.keep_partial_raw` keeps it for reads (below). A
+running job reports each
 case's progress (below), which shows when a case is stuck.
 `[simulation] timeout` (`limits.export_timeout_s`) bounds only LTspice netlist
 export.
@@ -550,6 +551,22 @@ and which lags the data on LTspice. `last_axis_value` is in deck coordinates.
 `run_timeout`, `job_deadline` and `kill_unconfirmed` rows carry a recovery
 `hint`.
 
+**Keeping a stopped case's raw.** `execution.keep_partial_raw: true` keeps the
+raw of a stopped case, cut to the points a full read reaches, where it would
+be deleted. An LTspice raw keeps the points its header's count declares, which
+is as far as LTspice's own reader reads it: LTspice XVII's records past that
+count need not run on in time. An ngspice raw keeps every complete record. The
+`partial_progress` observation then says `raw_kept: true`, the failure row's
+`evidence` adds `partial_raw: {points, axis, last_axis_value}`, what the kept
+raw holds, and the run row's `raw` is its path. Reads
+of that case (`analyze_results`, `plot_waveform`, `inspect(kind="results")`,
+the Python API's `load_raw`) take it as they take a produced case's, and each
+carries a `partial_raw` observation, `{case_id, stop, points, axis,
+last_axis_value}`: every value read ends at the last kept point. A raw with no
+point to keep, a text (`Values:`) raw and an LTspice Fast Access raw are
+deleted as before. The flag cannot be combined with `recoverable`, since a
+resumed job runs its stopped cases again.
+
 **Running cases.** While a job runs, receipts from `run_experiments`,
 `jobs(status)` and `jobs(wait)` carry one `run_progress` observation per
 running case, with the `partial_progress` evidence plus `running_s`, the
@@ -561,7 +578,12 @@ advancing; the caller decides whether to cancel it.
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, attempt?}`. Every key is optional because a
-run-field projection can remove any of them. `other_raws` maps each kind of
+run-field projection can remove any of them. `status` is the case's own, a
+separate vocabulary from the job's `status` on the receipt: `produced` once
+the simulator wrote its output, `failed`, `cancelled` or `skipped` when the
+case ended without it, and `queued`, `submitted` or `running` before. A job
+whose cases all ran is `completed` while each row says `produced`; the output
+schema lists both vocabularies. `other_raws` maps each kind of
 other raw the run wrote beside its raw to its path (`<run>.<kind>.raw`): `op`,
 a transient's operating point, and `fra_1`, a frequency response analysis's
 results. Only kinds recorded from LTspice are listed, and a run with no raw
@@ -889,6 +911,11 @@ change: those its ops place, move, remove, wire or label. A part whose value or
 attributes alone changed keeps its pins where they were and joined as they
 were, so a batch of value changes lists no pins, in `touched` or in
 `wiring.label_only_pins`; its label-only pins are counted under `preexisting`.
+A pin's `net` is the name a label gives its net, null when none does. LTspice
+names such a net only when it exports the sheet (`N001`, `NC_01` for a pin on
+nothing), so the name comes from an export, never a guess: a batch with a
+`compare` exports the committed sheet, and each pin on a net no label names
+then also carries `net_export`, its node in that export.
 The whole-sheet `pin_legend` is returned only on request, and is the only
 whole-sheet pin-to-net table on the surface:
 `inspect(kind: "components", detail: "full")` gives pin coordinates without
@@ -1165,12 +1192,13 @@ the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
-a file. Inline delivery is PNG only. When `inline` or `both` returns no image,
-`render.inline_skipped` gives the reason (`svg_requested` or
-`png_unavailable`) and `render.note` gives the file's location. A PNG needs
-the `raster` extra and the native Cairo library; without them the render falls
-back to SVG, and `render.note` names which of the two is missing and a
-per-platform remedy. It is a `render` failure too when the caller named
+a file. The file is written to the per-user folder's `renders/`, never to the
+working directory or beside the sheet, and is deleted a week later; a render
+regenerates it. `inline` and `both` return a PNG as an image block, and an SVG as
+its markup in `render.svg`. A PNG needs the `raster` extra
+(`resvg-py`), or `cairosvg` with the native Cairo library it loads; without
+either the render falls back to SVG, and `render.note` names what is missing
+and its remedy. It is a `render` failure too when the caller named
 `format: "png"`; a default that falls back is not one, since nothing was asked
 for that the server could not do. `inspect(kind:"capabilities")` reports the same as
 `render: {png, missing, reason, remedy}` before anything is drawn.
@@ -1208,7 +1236,7 @@ given twice contributes both copies, so a second copy counts as a change.
 
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled,
-returned_inline, inline_skipped, note, …}`, a scene summary, `outcome` and
+returned_inline, svg?, note, …}`, a scene summary, `outcome` and
 `hint`.
 
 In the render block, `sha256` is the image's digest and `source_sha256` the
@@ -1251,10 +1279,10 @@ cursors where listed:
     session was served; limits; linter_version; the startup diagnostics,
     which show whether the server started degraded; and `render: {png,
     missing, reason, remedy}` (whether verify_circuit can make the PNG it
-    inlines and, if not, whether the `raster` extra or native Cairo is
-    missing). `fields` (e.g. ["allowed_paths", "config_path"], to check
-    after a config edit) returns only those top-level keys; without it the
-    whole report is returned
+    inlines and, if not, whether the `raster` extra is missing or only
+    cairosvg is, without native Cairo). `fields` (e.g. ["allowed_paths",
+    "config_path"], to check after a config edit) returns only those
+    top-level keys; without it the whole report is returned
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
@@ -1601,7 +1629,7 @@ it, and reported when the caller names it.
 | `resonance` | ac | `signal` | resonant frequency, Q, peak |
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
 | `noise_integral` | noise | — | `signal?`, `from_hz?`, `to_hz?` |
-| `operating_point` | op | — | `device?` scopes the reply to one device |
+| `operating_point` | op | — | `device?` scopes the reply to one device, named by its path (`x1.m1`) on either LTspice build; `device_names` maps each device inside a subcircuit to its name in the log's table and in the raw |
 | `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
 

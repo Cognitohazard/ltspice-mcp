@@ -17,7 +17,9 @@ mutation below is an entry in its `ops` list, applied as one guarded
 transaction, so batch a whole build into one call. Place components with the
 `add_component` op; the response's `touched` view gives their placed pins and
 nets, `warnings` any overlap, and `inspect(kind="symbol")` previews the same
-geometry before you place anything. It also lists every attribute the
+geometry before you place anything. A pin on a net no label names has
+`net: null`; with a `compare`, it also has `net_export`, the name LTspice's
+export gives it (`N001`). It also lists every attribute the
 symbol carries (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`):
 the model name and parameters an instance is netlisted with.
 
@@ -81,7 +83,10 @@ fails as `open_window_differs` wrote nothing: the window's copy is not the
 file's. Only the user can settle that, so ask them to save the sheet (Ctrl+S)
 or close it, then read its `sha256` again and resubmit.
 
-- Component attributes: Value, Value2, SpiceLine, SpiceLine2.
+- Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
+  `Prefix` replaces its symbol's element letter on export, on both builds:
+  `Prefix X` with the subcircuit's name in `Value` makes a resistor or MOSFET
+  symbol a subcircuit call (`X§R2 ... mysub`), with no new symbol file.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to
   individual nets).
 

@@ -15,7 +15,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -26,7 +26,18 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, Resul
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
-from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob, failure_summary
+from ltspice_mcp.lib.device_names import (
+    find_device_param,
+    find_trace_by_path,
+    writes_xvii_names,
+)
+from ltspice_mcp.lib.experiment_types import (
+    ExperimentCase,
+    ExperimentJob,
+    failure_summary,
+    has_readable_raw,
+    partial_raw,
+)
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
@@ -38,6 +49,7 @@ from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     is_noise_analysis,
+    points_reached,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
@@ -139,6 +151,9 @@ class RunContext:
     console: Path | None = None
     #: The build the case's run named in its own output, as recorded.
     simulator_version: str | None = None
+    #: What a read of this case's results has to say of them: a stopped case's
+    #: kept raw ends where its run was stopped (``partial_raw_observation``).
+    observations: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -157,6 +172,9 @@ class AnalysisSource:
     #: The build a job's run named in its own output, as its case recorded it;
     #: None for a bare path, whose build is read from the artifacts instead.
     simulator_version: str | None = None
+    #: What a read of these results says of them, from the case that made them
+    #: (``RunContext.observations``); none for a bare path.
+    observations: tuple[dict[str, Any], ...] = ()
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -226,6 +244,7 @@ def source_for_run(
         plot_index=plot_index,
         console=run.console,
         simulator_version=run.simulator_version,
+        observations=run.observations,
     )
 
 
@@ -280,6 +299,22 @@ def _no_raw_result(job_id: str, case: ExperimentCase) -> str:
     return text
 
 
+def partial_raw_observation(case: ExperimentCase, held: dict[str, Any]) -> dict[str, Any]:
+    """What a read of a stopped case's kept raw says of it: every value ends
+    at the last point the raw was cut to. ``held`` is ``partial_raw(case)``."""
+    stop = case.failure_code or case.status
+    reached = points_reached(held.get("points"), held.get("axis"), held.get("last_axis_value"))
+    return {
+        "code": "partial_raw",
+        "kind": "coverage",
+        "detail": (
+            f"Case {case.case_id} was stopped ({stop}) before its run ended; its raw was "
+            f"kept with its first {reached}, and every value read from it ends there."
+        ),
+        "evidence": {"case_id": case.case_id, "stop": stop, **held},
+    }
+
+
 def experiment_run_context(
     job: ExperimentJob,
     state: SessionState,
@@ -312,8 +347,9 @@ def experiment_run_context(
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
     case = matches[0]
-    if case.status != "produced" or (require_raw and case.raw_file is None):
+    if not has_readable_raw(case) or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
+    held = partial_raw(case)
     identity: dict[str, Any] = {
         "case_id": case.case_id,
         "run_index": case.run_index,
@@ -342,6 +378,7 @@ def experiment_run_context(
         identity=identity,
         console=console,
         simulator_version=case.simulator_version,
+        observations=(partial_raw_observation(case, held),) if held is not None else (),
     )
 
 
@@ -639,6 +676,25 @@ def device_param_forms(signal: str) -> list[str]:
     return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
 
 
+def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
+    """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
+
+    Its literal forms (``device_param_forms``) first, then the device by the
+    end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
+    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``; ``xvii`` for a build that names
+    devices as XVII does), refused when more than one matches: never a guess.
+    The one rule behind both readers of the shorthand.
+    """
+    match = DEV_PARAM_RE.fullmatch(signal.lower())
+    if match is None:
+        return None
+    by_lower = {name.lower(): name for name in names}
+    for form in device_param_forms(signal):
+        if form in by_lower:
+            return by_lower[form]
+    return find_device_param(by_lower.values(), *match.groups(), xvii=xvii)
+
+
 #: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
 #: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
 #: no comma, parenthesis or space, which keeps the split unambiguous.
@@ -687,28 +743,36 @@ class Signal:
 
 
 def _find_trace(raw: RawData, signal: str) -> str | None:
-    """The raw's own name for one trace ``signal`` addresses, or None.
+    """The raw's own name for one trace ``signal`` addresses, or None
+    (``find_trace`` over the raw's trace names)."""
+    return find_trace(raw.get_trace_names(), signal, xvii=writes_xvii_names(raw))
+
+
+def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
+    """The name among ``names`` that ``signal`` addresses, or None.
 
     Lookup is case-insensitive: SPICE node names are case-insensitive per
     SPICE conventions, but spicelib preserves the case the simulator wrote.
     LTspice writes ``V(out)`` for transient/AC/DC sweep raws but ``v(onoise)``
     for ``.NOISE`` raws — case-sensitive match would reject the user's
-    ``V(onoise)`` even though the data exists.
+    ``V(onoise)`` even though the data exists. ``xvii`` is for names a build
+    wrote that names subcircuit members as XVII does. The one rule behind
+    every reader that finds a trace or an operating-point value by name.
     """
-    trace_names = raw.get_trace_names()
-    if signal in trace_names:
+    if signal in names:
         return signal
     sig_lower = signal.lower()
-    for name in trace_names:
-        if name.lower() == sig_lower:
-            return name
+    by_lower = {name.lower(): name for name in names}
+    if sig_lower in by_lower:
+        return by_lower[sig_lower]
 
     # Resolve cross-simulator / shorthand aliases transparently instead of
     # forcing a guaranteed retry on a deterministic rename:
     #   - noise: LTspice V(onoise)/V(inoise) <-> ngspice onoise_spectrum/
     #     inoise_spectrum, plus bare onoise/inoise shorthand
     #   - hierarchical separator: LTspice ':' (V(X1:mid)) <-> ngspice '.'
-    by_lower = {t.lower(): t for t in trace_names}
+    #   - a path through subcircuits, which XVII writes without each
+    #     instance's X (V(xa.xin.mid) is its V(a:in:mid))
     candidates: list[str] = []
     for kind in ("onoise", "inoise"):
         if sig_lower in (kind, f"v({kind})", f"{kind}_spectrum"):
@@ -718,28 +782,12 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
 
-    dev_param = DEV_PARAM_RE.fullmatch(sig_lower)
-    candidates += device_param_forms(signal)
-
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
-
-    # Hierarchical path that drops the device-type letter, e.g. 'x1.mn.gm' for
-    # ngspice's '@m.x1.mn[gm]'. Match a unique @<path>[param] whose device path
-    # ends with the requested segments; refuse if ambiguous — never guess.
-    if dev_param:
-        dev, param = dev_param.group(1), dev_param.group(2)
-        suffix = "." + dev
-        wrapped = re.compile(r"^[vi]?\(?@(.+)\[" + re.escape(param) + r"\]\)?$")
-        hits = [
-            orig
-            for low, orig in by_lower.items()
-            if (m := wrapped.match(low)) and (m.group(1) == dev or m.group(1).endswith(suffix))
-        ]
-        if len(hits) == 1:
-            return hits[0]
-    return None
+    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(
+        names, signal, xvii=xvii
+    )
 
 
 def _looks_like_expression(signal: str) -> bool:

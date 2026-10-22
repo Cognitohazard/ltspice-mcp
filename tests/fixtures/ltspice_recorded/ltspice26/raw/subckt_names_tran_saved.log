@@ -1,0 +1,21 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\subckt_names_tran_saved.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Instance "xa:Mdrv": Length shorter than recommended for a level 1 MOSFET.
+Instance "xa:xin:Mtail": Length shorter than recommended for a level 1 MOSFET.
+Instance "xa:xin:Mtail": Width narrower than recommended for a level 1 MOSFET.
+Instance "xb:Mdrv": Length shorter than recommended for a level 1 MOSFET.
+Instance "xb:xin:Mtail": Length shorter than recommended for a level 1 MOSFET.
+Instance "xb:xin:Mtail": Width narrower than recommended for a level 1 MOSFET.
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 2089
+
+Files loaded:
+C:\recording\subckt_names_tran_saved.cir
+

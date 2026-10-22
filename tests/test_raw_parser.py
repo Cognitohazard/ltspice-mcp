@@ -16,6 +16,7 @@ from ltspice_mcp.lib import log_parser, raw_parser, services
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
+    cut_partial_raw,
     detect_sim_type,
     extract_operating_point,
     get_step_count,
@@ -799,6 +800,130 @@ class TestPartialRawProgress:
         assert read_partial_raw_progress(other) is None
         with pytest.raises(FileNotFoundError):
             read_partial_raw_progress(tmp_path / "missing.raw")
+
+
+class TestCutPartialRaw:
+    """A stopped run's raw, cut to the points a full load can read.
+
+    Each expectation is a finished file's own samples, as spicelib reads
+    them, up to where the stopped run's file is cut.
+    """
+
+    @pytest.mark.parametrize(
+        "fixture", ["ltspice_tran_rc.raw", "ltspice_ac_rc.raw", "ltspice_dc_div.raw"]
+    )
+    def test_a_torn_ltspice_raw_loads_its_complete_points(self, tmp_path: Path, fixture: str):
+        data, start, record, axis = _ltspice_layout(FIXTURES_DIR / fixture)
+        finished = RawRead(str(FIXTURES_DIR / fixture), verbose=False)
+        points = len(axis) // 2
+        stopped = tmp_path / fixture
+        stopped.write_bytes(data[: start + points * record + record // 2])
+
+        progress = cut_partial_raw(stopped)
+
+        assert progress is not None
+        assert progress.points == points
+        assert progress.raw_bytes == len(stopped.read_bytes()) == start + points * record
+        assert progress.last_axis_value == pytest.approx(axis[points - 1])
+        cut = RawRead(str(stopped), verbose=False)
+        for name in finished.get_trace_names():
+            np.testing.assert_array_equal(
+                cut.get_trace(name).data, finished.get_trace(name).data[:points], err_msg=name
+            )
+
+    def test_an_ltspice_raw_keeps_the_points_its_count_declares(self, tmp_path: Path):
+        """LTspice's own reader reads a stopped run as far as the header's count."""
+        data, _start, _record, axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
+        final = "No. Points:          221".encode("utf-16-le")
+        lagging = "No. Points:          100".encode("utf-16-le")
+        stopped = tmp_path / "lagging.raw"
+        stopped.write_bytes(data.replace(final, lagging))
+
+        progress = cut_partial_raw(stopped)
+
+        assert progress is not None
+        assert progress.points == 100
+        assert progress.last_axis_value == pytest.approx(axis[99])
+        assert len(RawRead(str(stopped), verbose=False).get_trace(0).data) == 100
+
+    def test_an_ltspice_raw_that_declares_no_points_is_left_as_it_is(self, tmp_path: Path):
+        data, _start, _record, _axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
+        final = "No. Points:          221".encode("utf-16-le")
+        stopped = tmp_path / "none.raw"
+        stopped.write_bytes(data.replace(final, "No. Points:            0".encode("utf-16-le")))
+        before = stopped.read_bytes()
+
+        assert cut_partial_raw(stopped) is None
+        assert stopped.read_bytes() == before
+
+    def test_an_ngspice_raw_with_an_unpatched_count_loads(self, tmp_path: Path):
+        rows = [(1e-9 * index, 0.5 * index, 2.0) for index in range(7)]
+        stopped = tmp_path / "ngspice.raw"
+        stopped.write_bytes(
+            ngspice_binary_raw(rows, ["time", "v(in)", "v(out)"], tail=b"\x01" * 13)
+        )
+
+        progress = cut_partial_raw(stopped, "ngspice")
+
+        assert progress is not None
+        assert progress.points == 7
+        cut = RawRead(str(stopped), dialect="ngspice", verbose=False)
+        np.testing.assert_array_equal(cut.get_trace("v(in)").data, [row[1] for row in rows])
+
+    def test_a_finished_plot_before_the_stopped_one_is_kept_as_it_was(self, tmp_path: Path):
+        op = ngspice_binary_raw(
+            [(1.0, 2.0)], ["v(in)", "v(out)"], plot="Operating Point", declared=1
+        )
+        rows = [(0.0, 1.0, 2.0), (1e-6, 1.1, 2.1), (2e-6, 1.2, 2.2)]
+        stopped = tmp_path / "two_plots.raw"
+        stopped.write_bytes(
+            op + ngspice_binary_raw(rows, ["time", "v(in)", "v(out)"], tail=b"\x02")
+        )
+
+        progress = cut_partial_raw(stopped, "ngspice")
+
+        assert progress is not None
+        assert (progress.plot, progress.points) == ("Transient Analysis", 3)
+        cut = stopped.read_bytes()
+        assert cut.startswith(op)
+        records = b"".join(struct.pack("<3d", *row) for row in rows)
+        assert b"No. Points:        3\n" in cut[len(op) :]
+        assert cut.endswith(b"Binary:\n" + records)
+
+    def test_a_count_too_wide_for_its_field_is_written_to_a_copy(self, tmp_path: Path):
+        """The count is patched where it stands when the header left it room;
+        a header that left none is rewritten."""
+        rows = [(1e-9 * index, 0.5 * index) for index in range(12)]
+        names = ["time", "v(in)"]
+        stopped = tmp_path / "narrow.raw"
+        padded = b"No. Points: 0       \n"
+        stopped.write_bytes(
+            ngspice_binary_raw(rows, names, tail=b"\x01" * 5).replace(padded, b"No. Points: 0\n")
+        )
+
+        progress = cut_partial_raw(stopped, "ngspice")
+
+        assert progress is not None
+        assert progress.points == 12
+        assert progress.raw_bytes == len(stopped.read_bytes())
+        cut = RawRead(str(stopped), dialect="ngspice", verbose=False)
+        np.testing.assert_array_equal(cut.get_trace("v(in)").data, [row[1] for row in rows])
+        assert list(tmp_path.iterdir()) == [stopped]
+
+    def test_a_layout_it_cannot_cut_is_left_as_it_is(self, tmp_path: Path):
+        """A text raw has no fixed record to cut at."""
+        header = (
+            "Title: synthesized\nDate: x\nPlotname: Transient Analysis\nFlags: real\n"
+            "No. Variables: 2\nNo. Points: 0       \nVariables:\n"
+            "\t0\ttime\ttime\n\t1\tv(in)\tvoltage\nValues:\n"
+        )
+        stopped = tmp_path / "ascii.raw"
+        stopped.write_text(header + "0\t\t0.0\n\t1.0\n1\t\t1e-3\n", encoding="ascii")
+        before = stopped.read_bytes()
+
+        assert cut_partial_raw(stopped, "ngspice") is None
+        assert stopped.read_bytes() == before
+        assert list(tmp_path.iterdir()) == [stopped]
 
 
 # ---------------------------------------------------------------------------

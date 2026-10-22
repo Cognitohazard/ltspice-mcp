@@ -204,7 +204,9 @@ async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
     sets it.
     """
     level = {"op": "set_component_value", "reference": "X1", "value": "Level.2"}
-    ops = [{"op": "add_component", "reference": "X1", "symbol": "res", "x": 400, "y": 300}]
+    # Its own Prefix makes the part a subcircuit call.
+    place = {"op": "add_component", "reference": "X1", "symbol": "res", "x": 400, "y": 300}
+    ops = [{**place, "attributes": {"Prefix": "X"}}]
     ops += [level] * 3
 
     data = await _build_blank(asc_state, "dupwarn", ops)

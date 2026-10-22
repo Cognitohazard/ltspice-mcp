@@ -30,6 +30,7 @@ here with what LTspice's reader says:
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ import pytest
 
 from ltspice_mcp.errors import NoAxisError
 from ltspice_mcp.lib.raw_header import RawHeaderError
+from ltspice_mcp.lib.raw_parser import cut_partial_raw
 from tests import _ltspice_recorded as rec
 from tests import ltspice_recorder
 from tests._ltspice_recorded import declared_points, header_fields
@@ -305,3 +307,59 @@ def test_a_run_stopped_part_way_is_read_as_far_as_its_header_says_by_ltspices_re
     assert int(read["n_points"]) == declared_points(written_by, f"raw/{name}")
     with pytest.raises(RawHeaderError):
         rec.decode(written_by, f"raw/{name}", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("reader", "written_by", "name"), [s for s in READ if s[2] == STOPPED_PART_WAY]
+)
+def test_a_run_stopped_part_way_and_cut_reads_as_ltspices_reader_reads_it(
+    reader: str, written_by: str, name: str, tmp_path: Path
+):
+    """Cut (``cut_partial_raw``), the stopped run's file holds the points its
+    header declared and decodes to the samples LTspice's reader gives for the
+    file as LTspice left it. LTspice XVII's file holds more records than its
+    count, and the records past the count go back in time: they are cut off."""
+    stopped = tmp_path / f"{name}.raw"
+    shutil.copyfile(rec.recorded(written_by, f"raw/{name}.raw"), stopped)
+    declared = declared_points(written_by, f"raw/{name}")
+
+    progress = cut_partial_raw(stopped)
+
+    assert progress is not None
+    assert progress.points == declared
+    raw = rec.decode_file(stopped, tmp_path).raw
+    read = reader_reply(reader, written_by, name)["read"]
+    assert int(read["n_points"]) == declared
+    time = np.real(np.asarray(raw.get_axis(0)))
+    np.testing.assert_array_equal(time, np.abs(np.asarray(read["data"]["x"], dtype=np.float64)))
+    assert time[-1] == pytest.approx(progress.last_axis_value)
+    for signal, columns in read["data"]["signals"].items():
+        np.testing.assert_array_equal(
+            at_the_precision_recorded(np.asarray(raw.get_wave(signal, 0)), read["precision"]),
+            at_the_precision_recorded(theirs(columns), read["precision"]),
+            err_msg=signal,
+        )
+
+
+def test_xvii_records_past_its_count_go_back_in_time(tmp_path: Path):
+    """Why an LTspice file is cut at its count and not at its last whole record:
+    in the run LTspice XVII left, the records after the count do not run on."""
+    case_id = f"raw/{STOPPED_PART_WAY}"
+    _, payload = ltspice_recorder.split_raw(
+        rec.recorded("ltspice17", f"{case_id}.raw").read_bytes()
+    )
+    fields = header_fields("ltspice17", case_id)
+    assert "double" not in fields["Flags"][0].split()
+    # A double for time, then a single for each other variable.
+    record = 8 + 4 * (int(fields["No. Variables"][0]) - 1)
+    time = np.abs(
+        np.frombuffer(
+            payload,
+            dtype=np.dtype([("time", "<f8"), ("rest", f"V{record - 8}")]),
+            count=len(payload) // record,
+        )["time"]
+    )
+    declared = declared_points("ltspice17", case_id)
+    assert len(time) > declared
+    assert np.all(np.diff(time[:declared]) >= 0)
+    assert np.any(np.diff(time[declared - 1 :]) < 0)

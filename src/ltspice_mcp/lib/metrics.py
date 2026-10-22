@@ -51,8 +51,16 @@ from ltspice_mcp.lib.ac_analysis import (
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.device_names import (
+    current_device,
+    device_names,
+    device_query,
+    owner_path,
+    path_text,
+    writes_xvii_names,
+)
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log, split_device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -608,92 +616,37 @@ def has_active_device(currents: dict[str, float]) -> bool:
     ``device_op_points_absent`` observation — and a second copy of the rule is
     how one of them speaks while the other stays silent about the same run.
     """
-    for name in currents:
-        lp = name.find("(")
-        if lp != -1 and lp + 1 < len(name) and name[lp + 1].lower() in "mqjd":
-            return True
-    return False
+    return any(
+        (device := current_device(name)) is not None and device[:1] in ("m", "q", "j", "d")
+        for name in currents
+    )
 
 
 #: The analyses whose plots signal_stats defines statistics for.
 _STATS_ANALYSES = frozenset({"transient", "dc", "noise"}) | AC_SHAPED
 
-_OP_INTERNAL_DEV_RE = re.compile(r"@([\w.:]+)\[")
-_OP_TERMINAL_CUR_RE = re.compile(r"^i[a-z]?\(([^)]+)\)$")
-
-
-def trace_device(name: str) -> str | None:
-    """The device a .op trace belongs to: the ``@<dev>[...]`` op-point owner, or
-    the ``X(<dev>)`` terminal-current owner. None for plain node voltages."""
-    low = name.lower()
-    m = _OP_INTERNAL_DEV_RE.search(low)
-    if m:
-        return m.group(1)
-    m = _OP_TERMINAL_CUR_RE.match(low)
-    return m.group(1) if m else None
-
-
-def _dev_core_segments(owner: str) -> list[str]:
-    """Identity segments of a .op trace owner: split on ``.``/``:``, drop a
-    leading single-letter device-class token, and drop trailing region/
-    multiplicity index segments. ngspice uses dots (``m.x1.mn`` -> x1, mn);
-    LTspice subcircuit semiconductors use colons with a class prefix and trailing
-    indices (``q:q2:1:2`` -> q2). Both callers want exactly this normalized form."""
-    segs = [s for s in re.split(r"[.:]", owner) if s]
-    if segs and len(segs[0]) == 1 and segs[0].isalpha():
-        segs = segs[1:]
-    while len(segs) > 1 and segs[-1].isdigit():
-        segs.pop()
-    return segs
-
-
-def dev_instance(owner: str) -> str:
-    """Reference token for the 'devices present' list: strips LTspice's class
-    prefix and trailing region/multiplicity indices from colon-form subcircuit
-    names (q:q2:1:2 -> q2). Dotted ngspice paths (m.x1.mn) and top-level refs
-    (m1) pass through unchanged."""
-    if ":" not in owner:
-        return owner
-    segs = _dev_core_segments(owner)
-    return ":".join(segs) if segs else owner
-
-
-def device_matches(owner: str, want: str) -> bool:
-    """Whether a .op trace owner belongs to the requested device. Top-level and
-    ngspice-dotted owners match by exact name or hierarchical path suffix
-    (``m.x1.mn`` matches ``mn`` or ``x1.mn``). LTspice colon-form subcircuit
-    owners (``q:q2:1:2``) match by instance segment, ignoring the class prefix
-    and the trailing region/multiplicity indices."""
-    if owner == want:
-        return True
-    if ":" in owner:
-        segs = _dev_core_segments(owner)
-        want_parts = [p for p in re.split(r"[.:]", want) if p]
-        if not want_parts:
-            return False
-        if len(want_parts) == 1:
-            return want_parts[0] in segs
-        return segs[-len(want_parts) :] == want_parts
-    return owner.endswith("." + want)
-
-
 #: Every bucket that filtering, unit reporting and scalar reads must visit.
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
-    terminal currents. Returns whether anything matched. Handles top-level
-    devices (``m1``), ngspice subcircuit-qualified traces (``@m.x1.mn[gm]``
-    matches bare ``mn`` via path suffix), and LTspice colon-form subcircuit
-    semiconductors (``q:q2:1:2`` matches ``q2``)."""
-    want = device.strip().lower()
+    terminal currents. Returns whether anything matched.
+
+    Each name is read back to the device path it belongs to
+    (``device_names.device_query``; ``xvii`` for a build that names devices as
+    XVII does), so ``device`` matches a device as the simulator spells it, a
+    top-level device (``m1``), a device in a subcircuit by its own name or
+    path (``mtail``, ``xin.mtail``, ``xa.xin.mtail``) whichever build or
+    simulator wrote it, or an instance, which keeps everything inside it and
+    its port currents.
+    """
+    names_device = device_query(device, xvii=xvii)
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
         for name, value in op_data.get(bucket, {}).items():
-            owner = trace_device(name)
-            if owner is not None and device_matches(owner, want):
+            if names_device(name):
                 kept[name] = value
                 matched = True
         op_data[bucket] = kept
@@ -1216,15 +1169,8 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    by_lower = {name.lower(): (name, item) for name, item in flat.items()}
-    match = next(
-        (
-            by_lower[form]
-            for form in (recipe.expr.lower(), *services.device_param_forms(recipe.expr))
-            if form in by_lower
-        ),
-        None,
-    )
+    found = services.find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))
+    match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
         # then read off this same bias point, as a plain name would be.
@@ -1246,10 +1192,9 @@ async def _value_from_operating_point(
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
             "result. Address a value by the name it carries (e.g. "
-            "'@m1[gm]', 'V(out)'); a top-level device also accepts the "
-            "'m1.gm' shorthand, but a subcircuit device keeps LTspice's "
-            "colon-qualified name ('@q:q2:1:2[gm]') and must be named "
-            f"literally. Present here: {present}"
+            "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
+            "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "
+            f"Present here: {present}"
         ) from None
     name, item = match
     data: MetricValue = {
@@ -2225,16 +2170,17 @@ async def operating_point(
     # Refuse with the list of devices present rather than returning a
     # misleading empty result when nothing matches. ``available_devs`` is
     # gathered before the filter, which empties the buckets in place.
+    xvii = writes_xvii_names(raw)
     if recipe.device is not None:
         available_devs = sorted(
             {
-                dev_instance(d)
+                path_text(path)
                 for bucket in ("currents", "device_op_points")
                 for name in op_data.get(bucket, {})
-                if (d := trace_device(name)) is not None
+                if (path := owner_path(name, xvii=xvii)) is not None
             }
         )
-        if not filter_operating_point(op_data, recipe.device):
+        if not filter_operating_point(op_data, recipe.device, xvii=xvii):
             dev_list = ", ".join(available_devs) if available_devs else "none found"
             raise ResultError(
                 f"No operating-point params or terminal currents for device "
@@ -2245,8 +2191,15 @@ async def operating_point(
 
     # The log's table holds fewer digits than a raw trace: mark a result that
     # carries a value from it (analyze_results says so in its observations).
-    if any(key not in from_raw for key in op_data["device_op_points"]):
+    table = {
+        split_device_key(key)[0] for key in op_data["device_op_points"] if key not in from_raw
+    }
+    if table:
         op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS
+    # A device inside a subcircuit is named differently in the table and in
+    # the raw, and differently on each build: say which names are one device.
+    if names := device_names(table, op_data.get("currents", {}), xvii=xvii):
+        op_data["device_names"] = names
 
     # Unit per trace, only where the simulator declared the type.
     op_data["units"] = operating_point_units(raw, op_data)
