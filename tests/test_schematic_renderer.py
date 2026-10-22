@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.lib.schematic_renderer import render_svg, render_to_file
-from ltspice_mcp.lib.schematic_scene import build_scene
+from ltspice_mcp.lib.schematic_scene import build_scene, text_width
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.render import main as render_main
 from tests._schematic_fixtures import (
@@ -103,8 +103,10 @@ class TestSemanticGoldens:
             for t in _elements(svg, "text")
             if t.get("class") == "t-attr"
         }
-        assert attrs["X1"] == ("116", "96")
-        assert attrs["5"] == ("116", "124")
+        # The windows' points (116,96) and (116,124), each line centred on its
+        # point: a size-2 line's baseline lies 9 below it.
+        assert attrs["X1"] == ("116", "105")
+        assert attrs["5"] == ("116", "133")
 
     def test_upright_attribute_text_carries_no_transform(self, tmp_path: Path) -> None:
         svg = _build(tmp_path, GOLDEN_ASC)
@@ -120,10 +122,12 @@ class TestSemanticGoldens:
             for t in _elements(svg, "text")
             if t.get("class") == "t-attr"
         }
-        # Windows (24,-8) and (24,8) turned about the origin, each a quarter turn
-        # anticlockwise with the run heading down the sheet.
-        assert attrs["C1"] == ("8", "24", "end", "rotate(-90,8,24)")
-        assert attrs["100n"] == ("-8", "24", "end", "rotate(-90,-8,24)")
+        # Windows (24,-24) and (24,24) turned about the origin to (24,24) and
+        # (-24,24), each a quarter turn anticlockwise with the run heading down
+        # the sheet, and centred across it: the baseline lies 9 along the
+        # turned glyphs' "down", which is the sheet's +x.
+        assert attrs["C1"] == ("33", "24", "end", "rotate(-90,33,24)")
+        assert attrs["100n"] == ("-15", "24", "end", "rotate(-90,-15,24)")
 
     def test_turned_attribute_text_is_inside_the_crop(self, tmp_path: Path) -> None:
         # The run heads down the sheet, so the crop has to reach past its end
@@ -133,8 +137,8 @@ class TestSemanticGoldens:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         content = scene.content_bbox()
         assert content is not None
-        # "100n" from y=24, run = round(4*14*0.62) = 35 downward.
-        assert content.y2 >= 24 + 35
+        # "100n" runs down from y=24 for its width.
+        assert content.y2 >= 24 + text_width("100n", 2)
 
 
 class TestFlagRendering:
@@ -161,16 +165,21 @@ class TestFlagRendering:
     @pytest.mark.parametrize(
         ("wire", "flag", "expect"),
         [
-            # vertical wire -> rotated text reading bottom-to-top, away from the wire
-            ("WIRE 96 256 96 320", (96, 320, "NORTH"), ("99", "324", "end", "rotate(-90,99,324)")),
+            # vertical wire -> rotated text reading bottom-to-top, away from the
+            # wire: it starts or ends at the point, centred across the wire
+            (
+                "WIRE 96 256 96 320",
+                (96, 320, "NORTH"),
+                ("105", "320", "end", "rotate(-90,105,320)"),
+            ),
             (
                 "WIRE 288 384 288 320",
                 (288, 320, "SOUTH"),
-                ("291", "316", "start", "rotate(-90,291,316)"),
+                ("297", "320", "start", "rotate(-90,297,320)"),
             ),
             # horizontal wire -> upright text on the far side
-            ("WIRE 416 320 480 320", (480, 320, "WEST"), ("484", "323", "start", None)),
-            ("WIRE 736 320 672 320", (672, 320, "EAST"), ("668", "323", "end", None)),
+            ("WIRE 416 320 480 320", (480, 320, "WEST"), ("480", "329", "start", None)),
+            ("WIRE 736 320 672 320", (672, 320, "EAST"), ("672", "329", "end", None)),
         ],
     )
     def test_net_label_placement_and_rotation(
@@ -230,9 +239,10 @@ class TestFlagRendering:
         svg = render_svg(build_scene(asc, SymbolResolver(local_dir=tmp_path)))
         label = next(t for t in _elements(svg, "text") if t.get("class") == "t-flag")
         assert label.get("transform") is None
+        # Centred over the point, its line's bottom edge on it.
         assert (label.get("x"), label.get("y"), label.get("text-anchor")) == (
             "512",
-            "476",
+            "475",
             "middle",
         )
 
@@ -250,8 +260,10 @@ class TestMultilineDirective:
         assert len(texts) == 1  # one <text> holding all lines
         spans = [e for e in texts[0] if _local(e.tag) == "tspan"]
         assert [s.text for s in spans] == [".tran 1m", ".save V(out)", ".end"]
-        # First line sits on the anchor baseline; each later line drops px+gap.
-        assert [s.get("dy") for s in spans] == ["0", "16", "16"]
+        # The first line is centred on the point, its baseline 9 below it, and
+        # each later line drops one line height.
+        assert texts[0].get("y") == "309"
+        assert [s.get("dy") for s in spans] == ["0", "28", "28"]
         assert {s.get("x") for s in spans} == {"40"}
         # The literal escape must not survive into the output.
         assert "\\n" not in svg
@@ -267,9 +279,8 @@ class TestMultilineDirective:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         svg = render_svg(scene)
         texts = [t for t in _elements(svg, "text") if t.get("class") == "t-directive"]
-        spans = [e for e in texts[0] if _local(e.tag) == "tspan"]
-        assert len(spans) == 1
-        assert spans[0].text == '.include "C:\\new_models\\x.lib"'
+        assert [e for e in texts[0] if _local(e.tag) == "tspan"] == []
+        assert texts[0].text == '.include "C:\\new_models\\x.lib"'
 
 
 class TestReversedRect:
@@ -300,18 +311,17 @@ class TestCropBounds:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         content = scene.content_bbox()
         assert content is not None
-        # Hand-computed, including estimated glyph extents (advance 0.62,
-        # ascent 1.0, descent 0.3 of the font height):
+        # Hand-computed, including the glyphs' estimated reach (0.76 of the
+        # 23-unit em above the baseline, 0.21 below):
         #   left  94 = ground glyph at x=100 minus its 6-wide half-width
-        #   top   82 = "X1" baseline 96 minus one 14px ascent
-        #   right 224 = "OUT" sits right of its wire (anchor 204), width
-        #               3*11*0.62 = 20
-        #   bot  128 = "5" baseline 124 plus a 14*0.3 = 4 descent
-        assert (content.x1, content.y1, content.x2, content.y2) == (94, 82, 224, 128)
+        #   top   88 = "X1" baseline 105 minus 17.5
+        #   right 249 = "OUT" starts at its point 200 and is 49 wide
+        #   bot  138 = "5" baseline 133 plus 4.8
+        assert (content.x1, content.y1, content.x2, content.y2) == (94, 88, 249, 138)
         svg = render_svg(scene, margin=16)
         root = ET.fromstring(svg)
-        # margin 16 → 78 66, 162 x 78
-        assert root.get("viewBox") == "78 66 162 78"
+        # margin 16 → 78 72, 187 x 82
+        assert root.get("viewBox") == "78 72 187 82"
 
     def test_long_attribute_value_is_not_cropped(self, tmp_path: Path) -> None:
         # Field regression: a trailing value such as "100n" ran past the right
@@ -326,9 +336,9 @@ class TestCropBounds:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         content = scene.content_bbox()
         assert content is not None
-        # The value is centred on window 3 at x=116; its estimated half-width is
-        # len*14*0.62/2, which reaches well past the symbol body's right edge 132.
-        value_right = 116 + (round(len(long_value) * 14 * 0.62)) // 2
+        # The value is centred on window 3 at x=116; half its width reaches well
+        # past the symbol body's right edge 132.
+        value_right = 116 + text_width(long_value, 2) // 2
         assert content.x2 >= value_right
         assert content.x2 > 132  # strictly beyond the pure-geometry extent
         # And the rendered viewBox actually contains that right edge.
@@ -347,11 +357,11 @@ class TestCropBounds:
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         content = scene.content_bbox()
         assert content is not None
-        # anchor (99,324) end-anchored; run = round(5*11*0.62) = 34 downward
-        # -> y 324..358; glyph band x 99-11 .. 99+3.
-        assert (content.x1, content.y1, content.x2, content.y2) == (88, 256, 102, 358)
+        # Baseline (105,320), end-anchored: the text runs 84 down from the
+        # point, its glyphs 17.5 left of the baseline and 4.8 right of it.
+        assert (content.x1, content.y1, content.x2, content.y2) == (88, 256, 110, 404)
         root = ET.fromstring(render_svg(scene, margin=16))
-        assert root.get("viewBox") == "72 240 46 134"
+        assert root.get("viewBox") == "72 240 54 180"
 
     def test_empty_scene_has_valid_viewbox(self, tmp_path: Path) -> None:
         asc = _write(tmp_path / "empty.asc", "Version 4\nSHEET 1 880 680\n")

@@ -21,7 +21,7 @@ import struct
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict, get_args
 
 import numpy as np
 from spicelib.raw.raw_classes import SpiceReadException
@@ -81,7 +81,8 @@ _RAW_HEADER_UTF16 = (b"\xff\xfe" + _RAW_TITLE_UTF16, _RAW_TITLE_UTF16)
 #: ``<stem>.<kind>.raw``, by kind: a transient's initial operating point (both
 #: builds) and LTspice 26's frequency response analysis results (the
 #: ``written`` list of the recorded ``raw/fra``).
-OTHER_RAW_KINDS = ("op", "fra_1")
+OtherRawKind = Literal["op", "fra_1"]
+OTHER_RAW_KINDS: tuple[OtherRawKind, ...] = get_args(OtherRawKind)
 
 
 def other_raw_path(raw: Path, kind: str) -> Path:

@@ -1057,6 +1057,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "duplicate_wire": 0,
         "symbol_overlap": 1,
         "wire_through_symbol": 2,
+        "attribute_text_overlap": 0,
         "label_over_component": 0,
         "text_in_symbol_body": 2,
         "stacked_directive": 0,

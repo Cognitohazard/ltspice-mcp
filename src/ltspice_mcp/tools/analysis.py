@@ -75,6 +75,7 @@ from ltspice_mcp.lib.plot_html import (
 from ltspice_mcp.lib.plot_svg import render_plot_svg
 from ltspice_mcp.lib.raster import RasterSupport, RenderedImage, raster_support, render_image
 from ltspice_mcp.lib.raw_parser import (
+    OtherRawKind,
     get_step_count,
     safe_magnitude_db,
 )
@@ -90,6 +91,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
+    OtherRawFields,
     RawSelectionFields,
     ToolInput,
     format_observations,
@@ -146,20 +148,25 @@ async def _experiment_case(
     run_index: int,
     case_id: str | None,
     state: SessionState,
+    *,
+    other_raw: OtherRawKind | None = None,
 ) -> services.RunContext | None:
     """The case a ``job_id`` names when it is a run_experiments job, else ``None``.
 
     Experiment runs are addressed by case, never through ``resolve_run`` — the
-    same split ``Api.load_raw`` makes. ``case_id`` only means something here, so
-    it is refused beside a raw_file. raw_file together with job_id is left to
+    same split ``Api.load_raw`` makes. ``case_id`` and ``other_raw`` only mean
+    something here, so they are refused beside a raw_file. raw_file together with job_id is left to
     ``_direct_source``'s exclusivity error.
     """
     job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
     if job is not None:
-        return services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
-    if case_id is not None:
+        return services.experiment_run_context(
+            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
+    if case_id is not None or other_raw is not None:
         raise ResultError(
-            "case_id selects a run_experiments case; pass it with that job's job_id."
+            "case_id and other_raw select a run_experiments case; pass them with that "
+            "job's job_id."
         )
     return None
 
@@ -965,7 +972,7 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
     return lines
 
 
-class PlotWaveformInput(RawSelectionFields, ToolInput):
+class PlotWaveformInput(RawSelectionFields, OtherRawFields, ToolInput):
     raw_file: str | None = Field(
         default=None,
         description="Path to .raw result file. Pass this or ``job_id`` (a job run), not both.",
@@ -1446,7 +1453,9 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
     },
 )
 async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
-    case = await _experiment_case(args.raw_file, args.job_id, args.run_index, args.case_id, state)
+    case = await _experiment_case(
+        args.raw_file, args.job_id, args.run_index, args.case_id, state, other_raw=args.other_raw
+    )
     if case is not None:
         source = services.source_for_run(case, plot_index=args.plot_index, dialect=args.dialect)
         run_index = case.identity["run_index"]
@@ -1613,7 +1622,9 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
             _show_in_ltspice,
             state,
             raw_path,
-            case.circuit_path if case is not None else None,
+            # An other raw is not the case's results: shown on its own, as its
+            # path would be, never as the results beside the case's sheet.
+            case.circuit_path if case is not None and args.other_raw is None else None,
             source.log,
             raw.descriptor.original_plot_name,
             [[sig.name for sig in group] for group in plan.groups if group],

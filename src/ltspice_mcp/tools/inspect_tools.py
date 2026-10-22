@@ -179,6 +179,7 @@ from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     dialect_for_simulator_name,
     family_refusal,
+    selector_pattern,
     simulator_family,
     simulator_library_roots,
     simulator_remediation,
@@ -186,6 +187,7 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
+    ltspice_before_24,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -200,6 +202,7 @@ from ltspice_mcp.tools._base import (
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
     OptionalRawSelectionFields,
+    OtherRawFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -648,8 +651,12 @@ class HierarchyQuery(StrictModel):
 
     kind: Literal["hierarchy"]
     path: str = Field(description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first.")
-    simulator: Literal["ltspice", "ngspice"] = Field(
-        description="Offline semantic backend; installation is not required."
+    simulator: str = Field(
+        pattern=selector_pattern(("ltspice", "ngspice")),
+        description=(
+            "Offline semantic backend; installation is not required. 'ltspice:<name>' "
+            "spells names for that named build."
+        ),
     )
     ngbehavior: str | None = Field(
         default=None,
@@ -668,9 +675,13 @@ class HierarchyQuery(StrictModel):
         description="Resume token bound to captured dependency content, profile and filters.",
     )
 
+    @property
+    def family(self) -> Literal["ltspice", "ngspice"]:
+        return "ltspice" if self.simulator.partition(":")[0] == "ltspice" else "ngspice"
+
     @model_validator(mode="after")
     def _profile(self) -> HierarchyQuery:
-        if self.simulator == "ltspice" and self.ngbehavior is not None:
+        if self.family == "ltspice" and self.ngbehavior is not None:
             raise ValueError("ngbehavior is only valid for ngspice")
         return self
 
@@ -715,7 +726,7 @@ class ModelQuery(StrictModel):
         return self
 
 
-class ResultsQuery(OptionalRawSelectionFields):
+class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
     """RAW inventory or detached log facts with snapshot-bound pages."""
 
     kind: Literal["results"]
@@ -738,12 +749,16 @@ class ResultsQuery(OptionalRawSelectionFields):
     def _source(self) -> ResultsQuery:
         if bool(self.path) == bool(self.job_id):
             raise ValueError("provide exactly one of path or job_id")
-        if self.path is not None and (self.case_id is not None or self.run_index != 0):
-            raise ValueError("run_index and case_id require job_id")
+        if self.path is not None and (
+            self.case_id is not None or self.run_index != 0 or self.other_raw is not None
+        ):
+            raise ValueError("run_index, case_id and other_raw require job_id")
         if self.view == "plots" and self.prefix is not None:
             raise ValueError("prefix does not apply to plot inventory")
-        if self.view in ("measurements", "native_tables") and self.plot_index is not None:
-            raise ValueError("log views do not select a RAW plot")
+        if self.view in ("measurements", "native_tables") and (
+            self.plot_index is not None or self.other_raw is not None
+        ):
+            raise ValueError("log views do not select a RAW plot or an other_raw")
         return self
 
 
@@ -2075,13 +2090,28 @@ def _do_guide(q: GuideQuery, state: SessionState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _hierarchy_simulator(selector: str, state: SessionState) -> type | None:
+    """The executable a hierarchy's spellings are for: a named build, or the
+    session's executable of the family, which an offline query may lack."""
+    # A selector carries a ':' and a family name never does (resolve_run_simulator).
+    simulator = state.named_simulators.get(selector) or state.available_simulators.get(selector)
+    if simulator is None and ":" in selector:
+        raise NetlistError(
+            f"no executable is named {selector!r}; inspect(kind='capabilities') lists them"
+        )
+    return simulator
+
+
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
     prefix = _check_prefix(q.prefix)
+    family = q.family
+    simulator = _hierarchy_simulator(q.simulator, state)
     profile = SemanticProfile(
-        q.simulator,
+        family,
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
-        if q.simulator == "ngspice"
+        if family == "ngspice"
         else None,
+        xvii_names=family == "ltspice" and ltspice_before_24(simulator),
     )
     sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(
@@ -2089,11 +2119,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         sandbox,
         profile,
         # Roots that widen a sandbox; with none they would go unused.
-        simulator_roots=(
-            ()
-            if sandbox is None
-            else simulator_library_roots(state.available_simulators.get(q.simulator))
-        ),
+        simulator_roots=(() if sandbox is None else simulator_library_roots(simulator)),
         relative_to=state.config.working_dir,
     )
     selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
@@ -2300,7 +2326,12 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
         assert query.job_id is not None
         job = await services.resolve_job_async(query.job_id, state)
         run = services.experiment_run_context(
-            job, state, run_index=query.run_index, case_id=query.case_id, require_raw=not log_view
+            job,
+            state,
+            run_index=query.run_index,
+            case_id=query.case_id,
+            require_raw=not log_view,
+            other_raw=query.other_raw,
         )
         source = services.source_for_run(
             run, plot_index=query.plot_index or 0, dialect=query.dialect

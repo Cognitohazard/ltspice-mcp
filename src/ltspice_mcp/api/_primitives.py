@@ -15,8 +15,15 @@ from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import log_interp_at, log_interp_complex_at
 from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
-from ltspice_mcp.lib.device_names import TraceKey, trace_key, writes_xvii_names
+from ltspice_mcp.lib.device_names import (
+    TraceKey,
+    path_text,
+    table_device_path,
+    trace_key,
+    writes_xvii_names,
+)
 from ltspice_mcp.lib.log_parser import split_device_key
+from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.state import SessionState
 
 
@@ -330,6 +337,7 @@ async def load_raw_result(
     case_id: str | None,
     plot_index: int = 0,
     dialect: str | None = None,
+    other_raw: OtherRawKind | None = None,
 ) -> RawResult:
     """Resolve and bounded-parse one raw result on the API event loop."""
     if raw_path is not None:
@@ -340,7 +348,9 @@ async def load_raw_result(
     else:
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
-        context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+        context = services.experiment_run_context(
+            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
         resolved = source.raw
 
@@ -394,10 +404,11 @@ def measurements_of(section: Any) -> dict[str, Any]:
 
 def device_op_points_of(section: Any) -> dict[str, dict[str, float | None]]:
     """The ``device_op`` section by device and parameter, as
-    ``Api.device_op_points`` returns it. A value the log printed as not a
-    finite number is None."""
+    ``Api.device_op_points`` returns it: a device inside a subcircuit by its
+    path (``xa.xin.mtail``), however the build that wrote the table names it.
+    A value the log printed as not a finite number is None."""
     by_device: dict[str, dict[str, float | None]] = {}
     for key, number in (section or {}).items():
         device, param = split_device_key(key)
-        by_device.setdefault(device, {})[param] = number
+        by_device.setdefault(path_text(table_device_path(device)), {})[param] = number
     return by_device

@@ -114,6 +114,7 @@ from ltspice_mcp.tools._base import (
     NEW_WORK_ANNOTATIONS,
     NotedModel,
     OptionalRawSelectionFields,
+    OtherRawFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -330,7 +331,9 @@ class AnalysisInclude(NotedModel):
 coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
-class AttachedAnalysis(OptionalRawSelectionFields, StepSelectionFields, NotedModel):
+class AttachedAnalysis(
+    OptionalRawSelectionFields, OtherRawFields, StepSelectionFields, NotedModel
+):
     # The same typed union analyze_results advertises, not a free-form object:
     # this block IS an analyze_results request, and a schema that said
     # "any object" left a caller to discover the recipe grammar by having a
@@ -449,6 +452,8 @@ class RunExperimentsInput(ToolInput):
             payload["execution"].pop("simulator_seed", None)
         if not self.execution.keep_partial_raw:
             payload["execution"].pop("keep_partial_raw", None)
+        if self.analyze is not None and self.analyze.other_raw is None:
+            payload["analyze"].pop("other_raw", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -1194,6 +1199,7 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
                 "label": _ATTACHED_ANALYSIS_LABEL,
                 "plot_index": request.get("plot_index"),
                 "dialect": request.get("dialect"),
+                "other_raw": request.get("other_raw"),
             }
         ],
         "recipes": request.get("recipes") or [],

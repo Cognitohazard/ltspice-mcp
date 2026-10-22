@@ -18,11 +18,13 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
-from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
@@ -49,10 +51,17 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools import analysis, inspect_tools
+from ltspice_mcp.tools.analyze import (
+    AnalyzeResultsInput,
+    handle_analyze_results,
+    render_attached_analysis,
+)
+from ltspice_mcp.tools.experiments import AttachedAnalysis, attached_analysis_callback
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import inspect_one
 from tests._ltspice_recorded import declared_points, header_fields
-from tests.conftest import SyncApi
+from tests.conftest import SyncApi, make_experiment_job
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 from tests.test_decoded_raw import assert_classified_as_named
 
@@ -1024,7 +1033,8 @@ class TestDeviceOperatingPoints:
     def test_the_api_reads_the_block_by_device(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
-        """``api.device_op_points`` is the same table, by device and parameter."""
+        """``api.device_op_points`` is the same table, by device and parameter,
+        a device inside a subcircuit by its path."""
         case_id = _device_op_case(build)
         log = work_dir / "device_op.log"
         log.write_bytes(rec.recorded(build, f"{case_id}.log").read_bytes())
@@ -1034,13 +1044,10 @@ class TestDeviceOperatingPoints:
         assert points["m1"]["gm"] == pytest.approx(5.86e-4)
         assert points["q1"]["gm"] == pytest.approx(1.15e-2)
         assert points["d1"]["id"] == pytest.approx(2.32e-3)
-        inner = "m:1:1" if rec.generation(build) == "xvii" else "x1:m1"
-        assert points[inner]["gm"] == pytest.approx(8.64e-4)
+        assert points["x1.m1"]["gm"] == pytest.approx(8.64e-4)
         # Every value of the table, and nothing else.
         flat = read_device_op_points(log)
-        assert {f"@{device}[{param}]" for device in points for param in points[device]} == set(
-            flat
-        )
+        assert sum(len(params) for params in points.values()) == len(flat)
 
     def test_the_table_prints_three_significant_digits_whatever_numdgt_says(self, build: str):
         for case_id in (_device_op_case(build), _device_op_case(build, numdgt=True)):
@@ -1094,6 +1101,60 @@ def _raw_variables(build: str, case_id: str) -> list[str]:
 _NESTED_MOSFETS = ["xa.mdrv", "xa.xin.mtail", "xb.mdrv", "xb.xin.mtail"]
 
 
+#: The recorded decks that .save a current and a node inside subcircuits, by
+#: whether they spell each instance with its X.
+_SAVE_SPELLINGS = {True: "raw/save_subckt_names", False: "raw/save_subckt_names_no_x"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+class TestSaveInsideSubcircuits:
+    """Each build's ``.save`` takes a name inside a subcircuit only in the
+    spelling its raw names it: LTspice 26 with each instance's X, XVII
+    without. The other spelling stores nothing on LTspice 26 and makes XVII
+    save everything but what was asked."""
+
+    def _stored(self, build: str, with_x: bool) -> list[str]:
+        """The traces the run stored beside its time axis."""
+        return [name for name in declared_names(build, _SAVE_SPELLINGS[with_x]) if name != "time"]
+
+    def test_each_build_stores_what_its_own_spelling_names(self, build: str):
+        xvii = rec.generation(build) == "xvii"
+        own = self._stored(build, with_x=not xvii)
+        expected = (
+            ["V(a:in:mid)", "I(a:in:Rin)", "I(a:Rd)"]
+            if xvii
+            else ["V(xa:xin:mid)", "I(xa:Rd)", "I(xa:xin:Rin)"]
+        )
+        assert sorted(own) == sorted(expected)
+        other = self._stored(build, with_x=xvii)
+        if xvii:
+            log = read_spice_text(rec.recorded(build, f"{_SAVE_SPELLINGS[True]}.log"))
+            assert "Invalid .save command.  Just saving everything..." in log
+            assert not set(other) & set(expected)
+        else:
+            assert other == []
+
+    def test_the_hierarchy_saves_in_the_builds_own_spelling(self, build: str):
+        """inspect(kind="hierarchy") names each current and node as the build
+        that will run it stores it."""
+        xvii = rec.generation(build) == "xvii"
+        deck = INPUTS / f"{_SAVE_SPELLINGS[True]}.cir"
+        hierarchy = load_hierarchy(str(deck), None, SemanticProfile("ltspice", xvii_names=xvii))
+        rows = {"/".join(row.instance).casefold(): row for row in hierarchy.instances}
+        stored = {name.casefold() for name in self._stored(build, with_x=not xvii)}
+        for path in ("xa/xin/rin", "xa/rd"):
+            save = rows[path].save
+            assert save is not None and save.startswith(".save ")
+            assert save.removeprefix(".save ").casefold() in stored, save
+        (mid,) = {
+            node.voltage_trace
+            for row in hierarchy.instances
+            for node in row.nodes
+            if node.voltage_trace is not None and node.voltage_trace.casefold().endswith(":mid)")
+        }
+        assert mid.casefold() in stored
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 class TestSubcircuitDeviceNames:
     """A device inside a subcircuit has one name in the device table and
@@ -1114,10 +1175,20 @@ class TestSubcircuitDeviceNames:
             assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
         else:
             assert names == ["xa:mdrv", "xa:xin:mtail", "xb:mdrv", "xb:xin:mtail"]
-        xvii = rec.generation(build) == "xvii"
-        assert sorted(path_text(table_device_path(n, xvii=xvii)) for n in names) == (
-            _NESTED_MOSFETS
-        )
+        assert sorted(path_text(table_device_path(n)) for n in names) == _NESTED_MOSFETS
+
+    def test_the_api_keys_each_device_by_its_path_on_either_build(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The two builds' tables name the same devices differently; the API's
+        keys are their paths, which agree."""
+        log = work_dir / "subckt_names.log"
+        log.write_bytes(rec.recorded(build, f"{self._table_case(build)}.log").read_bytes())
+
+        points = SyncApi(state_no_sim).device_op_points(log)
+
+        assert sorted(points) == _NESTED_MOSFETS
+        assert all("gm" in params for params in points.values())
 
     def test_the_raw_holds_a_subcircuits_insides_only_when_the_setting_asks(self, build: str):
         """By default both builds store a subcircuit instance's port currents
@@ -1398,6 +1469,166 @@ async def test_the_stability_recipe_on_the_negated_fra_gain_gives_ltspices_margi
     (margin,) = result["phase_margins"]
     assert margin["frequency_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
     assert margin["margin_deg"] == pytest.approx(margin_deg, abs=0.5)
+
+
+def _fra_job(state: SessionState, work_dir: Path, *, other_raws: list[str]):
+    """A job whose one case ran the recorded frequency response analysis."""
+    for name in ("fra.raw", "fra.log", "fra.fra_1.raw"):
+        (work_dir / name).write_bytes(rec.recorded("ltspice26", f"raw/{name}").read_bytes())
+    job = make_experiment_job(state, job_id="exp_fra", raw=work_dir / "fra.raw")
+    job.cases[0].other_raws = list(other_raws)
+    return job
+
+
+async def _analyze_fra(state: SessionState, job_id: str) -> dict[str, Any]:
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": job_id, "other_raw": "fra_1", "label": "fra"}],
+                "recipes": [{"key": "loop", "metric": "stability", "signal": "-gain_1"}],
+            }
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    return result.structured_content
+
+
+async def test_a_jobs_fra_results_are_read_by_job_and_case(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A frequency response analysis writes its results beside the run's raw,
+    and the run row lists them; a job source reads them with other_raw instead
+    of the transient, as a raw_path source of the file would."""
+    said = _FRA_RESULT.search(read_spice_text(rec.recorded("ltspice26", "raw/fra.log")))
+    assert said is not None
+    crossover_khz, margin_deg = (float(value) for value in said.groups())
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+
+    data = await _analyze_fra(state_no_sim, job.job_id)
+
+    assert data["coverage"]["runs_analyzed"] == 1
+    [row] = data["results"]["loop"]["values"]
+    assert row["case_id"] == job.cases[0].case_id
+    assert row["value"]["unity_gain_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
+    assert row["value"]["phase_margin_worst_deg"] == pytest.approx(margin_deg, abs=0.5)
+
+
+async def test_a_case_that_wrote_no_such_raw_is_missing_not_misread(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job = _fra_job(state_no_sim, work_dir, other_raws=[])
+
+    data = await _analyze_fra(state_no_sim, job.job_id)
+
+    assert data["coverage"]["runs_analyzed"] == 0
+    [missing] = data["coverage"]["missing_cases"]["items"]
+    assert missing["code"] == "other_raw_not_written"
+    assert missing["case_id"] == job.cases[0].case_id
+
+
+_INSPECT_FRA = {"kind": "results", "view": "signals", "other_raw": "fra_1"}
+
+
+async def test_plot_and_inspect_read_a_jobs_fra_results_by_job_and_case(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """plot_waveform and inspect's results read a case's other raw by job and
+    case, as analyze_results does."""
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+
+    plot = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(
+            job_id=job.job_id, other_raw="fra_1", signals=["gain_1"], open=False
+        ),
+        state_no_sim,
+    )
+    listed = await inspect_one(state_no_sim, {**_INSPECT_FRA, "job_id": job.job_id})
+
+    assert plot.structured_content is not None
+    assert plot.structured_content["analysis_type"] == "fra"
+    assert plot.structured_content["signals"] == ["gain_1"]
+    assert [row["name"] for row in listed["signals"]] == ["frequency", "gain_1", "V(stimulus_1)"]
+
+
+async def test_plot_and_inspect_refuse_an_other_raw_the_run_did_not_write(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job = _fra_job(state_no_sim, work_dir, other_raws=["op"])
+
+    with pytest.raises(OtherRawNotWritten, match=r"wrote no fra_1 raw; .* lists \['op'\]"):
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(job_id=job.job_id, other_raw="fra_1", open=False),
+            state_no_sim,
+        )
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{**_INSPECT_FRA, "job_id": job.job_id}]}
+        ),
+        state_no_sim,
+    )
+
+    assert reply.structured_content is not None
+    [listed] = reply.structured_content["results"]
+    assert not listed["ok"]
+    assert "wrote no fra_1 raw" in listed["error"]["message"]
+
+
+async def test_an_attached_analysis_reads_a_jobs_fra_results(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """run_experiments' attached analyze block takes other_raw too, so a job
+    measures its FRA results as its cases finish."""
+    said = _FRA_RESULT.search(read_spice_text(rec.recorded("ltspice26", "raw/fra.log")))
+    assert said is not None
+    crossover_khz = float(said.group(1))
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+    job.analysis.request = AttachedAnalysis.model_validate(
+        {
+            "other_raw": "fra_1",
+            "recipes": [{"key": "loop", "metric": "stability", "signal": "-gain_1"}],
+        }
+    ).model_dump(mode="json", exclude_none=True)
+
+    stored = await attached_analysis_callback(state_no_sim)(job)
+
+    [row] = render_attached_analysis(stored, fields=None)["results"]["loop"]["values"]
+    assert row["value"]["unity_gain_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
+
+
+def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+    api = SyncApi(state_no_sim)
+
+    raw = api.load_raw(job_id=job.job_id, other_raw="fra_1")
+
+    assert raw.analysis_type == "fra"
+    assert raw.source == work_dir / "fra.fra_1.raw"
+    assert list(np.real(raw.axis())) == [4e3, 8e3, 16e3, 32e3]
+    with pytest.raises(OtherRawNotWritten):
+        api.load_raw(job_id=job.job_id, other_raw="op")
+
+
+async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
+    """An other raw is a case's: a path names its file instead."""
+    raw = work_dir / "fra.fra_1.raw"
+    with pytest.raises(TypeError, match="case_id and other_raw are only valid with job_id"):
+        SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
+    with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(raw_file=str(raw), other_raw="fra_1", open=False),
+            state_no_sim,
+        )
+    with pytest.raises(ValidationError, match="other_raw require job_id"):
+        inspect_tools.ResultsQuery.model_validate(
+            {"kind": "results", "path": str(raw), "other_raw": "fra_1"}
+        )
+    with pytest.raises(ValidationError, match="log views do not select"):
+        inspect_tools.ResultsQuery.model_validate(
+            {"kind": "results", "view": "measurements", "job_id": "exp_fra", "other_raw": "op"}
+        )
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():

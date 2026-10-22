@@ -663,6 +663,7 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
         "duplicate_wire": 1,
         "symbol_overlap": 0,
         "wire_through_symbol": 0,
+        "attribute_text_overlap": 0,
     }
     assert quality["rules_run"] == {
         "duplicate_parameter": 0,
@@ -671,6 +672,28 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
         "stacked_directive": 1,
         "label_island": 0,
     }
+
+
+async def test_layout_reports_attribute_text_drawn_across_a_wire(
+    state_no_sim, work_dir, asc_symbols
+):
+    """On a part placed R180, LTspice draws a Left window's text leftward from
+    its point, here across the wire beside the part: the drawing the layout
+    scan used to leave out."""
+    asc = _write(
+        work_dir,
+        "crowded.asc",
+        "Version 4\nSHEET 1 880 680\n"
+        "SYMBOL res 200 200 R180\nSYMATTR InstName R1\nSYMATTR Value {Rload*2}\n"
+        "WIRE 100 120 100 220\n",
+    )
+    layout = await _run(state_no_sim, path=str(asc), checks=["layout"])
+    (found,) = [f for f in layout["findings"] if f["rule_id"] == "attribute_text_overlap"]
+    assert found["subject"] == "R1"
+    assert found["evidence"]["detail"] == (
+        "R1's text '{Rload*2}' at (168,168) is drawn across wire (100,120)->(100,220)"
+    )
+    assert layout["rules_run"]["attribute_text_overlap"] == 1
 
 
 async def test_quality_reports_a_part_giving_a_parameter_twice(

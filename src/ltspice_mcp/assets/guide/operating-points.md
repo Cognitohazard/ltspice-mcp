@@ -25,8 +25,8 @@ Run it with `run_experiments`, then read
 `{"metric": "operating_point", "device": "M1"}`: gm, gds, vth, vdsat, the caps
 and the terminal currents at that bias. On LTspice these come from the log's
 *Semiconductor Device Operating Points* block, which LTspice writes only for
-`.op` and only under `.options logopinfo`; the server adds that option to
-every `.op` run. The block prints every value to three significant digits
+`.op`: LTspice 26 only under `.options logopinfo`, which the server adds to
+every `.op` run, and XVII always, ending the run on that option. The block prints every value to three significant digits
 (`4.66e-05`), which rounds it by up to 0.5%; `analyze_results` says so in
 `observations` (`device_op_log_precision`). Neither build
 gives more: `.options numdgt=7` leaves the block at three digits, LTspice 26

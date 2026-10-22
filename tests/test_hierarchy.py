@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.device_names import raw_name, trace_key
+from tests import _ltspice_recorded as rec
 from tests.test_inspect_tools import _run
 
 
@@ -365,7 +367,7 @@ async def test_discovery_to_real_device_operating_point(
             for ref, resistance in (("R1", 1000), ("R2", 2000))
         ]
     selected.extend(rows[scope] for scope, _ in extra_resistors)
-    saves = sorted({row["address"]["save"] for row in selected})
+    saves = sorted({row["address"]["save"] for row in selected} - {None})
     path.write_text(text + "\n".join(saves) + "\n.end\n", encoding="utf-8")
     try:
         if backend == "ngspice":
@@ -741,11 +743,54 @@ async def test_ltspice_explicit_scale_is_refused(state_no_sim, work_dir, directi
     assert "LTspice" in result["error"]["message"]
 
 
-async def test_ltspice_mos_save_directive(state_no_sim, work_dir):
+async def test_ltspice_mos_needs_no_directive(state_no_sim, work_dir):
+    """The server asks LTspice 24 and later for the device table on every .op
+    run, and XVII prints it unasked and ends a run on .options logopinfo, so
+    a MOSFET's address names no directive to add on either build."""
     path = work_dir / "mos.cir"
     path.write_text("* mos\nM1 d g 0 0 n w=20u l=2u\n.end\n", encoding="utf-8")
     result = await _inspect(state_no_sim, path)
-    assert result["data"]["instances"][0]["address"]["save"] == ".options logopinfo"
+    address = result["data"]["instances"][0]["address"]
+    assert address == {"device": "m1", "save": None, "reason": None}
+
+
+_NESTED_R = "* nested\nV1 a 0 1\nXa a stage\n.subckt stage p\nXin p inner\n.ends\n.subckt inner p\nRin p mid 1k\nRlo mid 0 1k\n.ends\n.end\n"
+
+
+async def test_a_nested_name_is_spelled_for_the_sessions_ltspice(state_no_sim, work_dir):
+    """XVII's .save takes a name inside a subcircuit only without each
+    instance's X, and its raw names it so (recorded: raw/save_subckt_names*)."""
+    path = work_dir / "nested.cir"
+    path.write_text(_NESTED_R, encoding="utf-8")
+
+    def spelled(result):
+        rows = {"/".join(row["instance"]).casefold(): row for row in result["data"]["instances"]}
+        return rows["xa/xin/rin"]["address"]["save"], result["data"]["profile"]["xvii_names"]
+
+    assert spelled(await _inspect(state_no_sim, path)) == (".save I(xa:xin:rin)", False)
+    state_no_sim.available_simulators["ltspice"] = rec.launcher("ltspice17")
+    assert spelled(await _inspect(state_no_sim, path)) == (".save I(a:in:rin)", True)
+
+
+@pytest.mark.parametrize("xvii", [False, True])
+def test_a_name_spelled_for_a_build_reads_back_as_its_path(xvii):
+    """What an address writes for a build is what that build's raw is read by."""
+    spelled = raw_name(("Xa", "Xin"), "Mid", xvii=xvii)
+    assert spelled == ("a:in:mid" if xvii else "xa:xin:mid")
+    assert trace_key(f"V({spelled})", xvii=xvii) == ("v", ("xa", "xin", "mid"))
+
+
+async def test_a_named_build_spells_for_itself(state_no_sim, work_dir):
+    path = work_dir / "nested.cir"
+    path.write_text(_NESTED_R, encoding="utf-8")
+    state_no_sim.named_simulators["ltspice:xvii"] = rec.launcher("ltspice17")
+
+    result = await _inspect(state_no_sim, path, simulator="ltspice:xvii")
+    assert result["data"]["profile"]["xvii_names"] is True
+
+    missing = await _inspect(state_no_sim, path, simulator="ltspice:old")
+    assert not missing["ok"]
+    assert "no executable is named 'ltspice:old'" in missing["error"]["message"]
 
 
 @pytest.mark.parametrize("expression", ["2^3^2", "2**3**2"])

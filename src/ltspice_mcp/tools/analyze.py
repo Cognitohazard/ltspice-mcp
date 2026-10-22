@@ -25,6 +25,7 @@ from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     LTSpiceMCPError,
+    OtherRawNotWritten,
     PathSecurityError,
     ResultError,
     python_route_text,
@@ -56,7 +57,10 @@ from ltspice_mcp.lib.projection import (
     project_row,
     split_field_path,
 )
-from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
+from ltspice_mcp.lib.raw_parser import (
+    get_step_count,
+    safe_magnitude_db,
+)
 from ltspice_mcp.lib.recipes import (
     KeyedRecipe,
     MeasurementsRecipe,
@@ -76,6 +80,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     NotedModel,
     OptionalRawSelectionFields,
+    OtherRawFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -127,7 +132,7 @@ class CaseSelection(NotedModel):
         return self
 
 
-class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
+class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
@@ -179,6 +184,8 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
             self.keep_first("runs")
         if isinstance(self.runs, CaseSelection) and self.job_id is None:
             raise ValueError("case_ids selection is available only for experiment jobs")
+        if self.other_raw is not None and self.job_id is None:
+            raise ValueError("other_raw selects a raw of an experiment job's cases")
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
@@ -1115,9 +1122,25 @@ async def _resolve_sources(
                     }
                 )
                 continue
-            ctx = services.experiment_run_context(
-                job, state, case_id=case.case_id, require_raw=False
-            )
+            try:
+                ctx = services.experiment_run_context(
+                    job,
+                    state,
+                    case_id=case.case_id,
+                    require_raw=False,
+                    other_raw=source_input.other_raw,
+                )
+            except OtherRawNotWritten as exc:
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": case.case_id,
+                        "run_index": case.run_index,
+                        "code": exc.code,
+                        "detail": str(exc),
+                    }
+                )
+                continue
             resolved = services.source_for_run(
                 ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
             )

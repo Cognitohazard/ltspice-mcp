@@ -6692,6 +6692,74 @@
         ".raw"
       ]
     },
+    "raw/save_subckt_names": {
+      "behaviour": "save-subckt-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_subckt_names.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/save_subckt_names.cir": "8cce456c56f45e08586e8c1d758978ad4cb54e52249db680a8c043301d1be914"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_subckt_names.log": {
+          "bytes": 512,
+          "sha256": "610d494765f627cbbf848592180e566cb2f03e8fa6e2b9d90735970e35378bce"
+        },
+        "raw/save_subckt_names.raw": {
+          "bytes": 1036,
+          "sha256": "32da0aa9f919a1b018f2c7fb02cc42488dcfb0e4150c3a2d2201b197cdaa47cc"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/save_subckt_names_no_x": {
+      "behaviour": "save-subckt-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_subckt_names_no_x.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "raw/save_subckt_names_no_x.cir": "b4f051e791f0e02e1f22b65e922e5610377cebf21ed9543b5b7b261d56b90fd0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/save_subckt_names_no_x.log": {
+          "bytes": 465,
+          "sha256": "88524b945579a71c3de82ebb805a177162748489e5e61361041a03ad43996e5a"
+        },
+        "raw/save_subckt_names_no_x.raw": {
+          "bytes": 934,
+          "sha256": "377c1c4dfc4990d30cdb31c383379cd874ee1d31fb063938bae388a826b2a996"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/step_ac": {
       "behaviour": "raw-stepped",
       "command": [

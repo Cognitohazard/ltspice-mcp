@@ -265,6 +265,18 @@ class TestAcStructureDegenerate:
         resid = result["phase_residual_deg"]
         assert resid is None or np.isfinite(resid)
 
+    @pytest.mark.parametrize(
+        "freqs", [np.array([4e3, 8e3, 16e3, 32e3]), np.logspace(0, 7, 22)], ids=["octave", "dec3"]
+    )
+    def test_a_sweep_too_sparse_to_fit_a_slope_reads_no_breakpoint(self, freqs: np.ndarray):
+        """Samples further apart than the slope window (an FRA an octave a
+        point, ``.ac dec 3``) leave no sample a neighbour to fit a slope with,
+        so the magnitude staircase has no step to read."""
+        from ltspice_mcp.lib.ac_structure import _read_breakpoints
+
+        mag_db = -20.0 * np.log10(np.abs(1.0 + 1j * freqs / 1e4))
+        assert _read_breakpoints(freqs, mag_db) == (0, [])
+
     def test_notch_with_exactly_sampled_null_is_finite(self):
         # FREQS[200] == 1e4 exactly, so the on-axis zero makes |H| hit exactly 0.
         fz = float(FREQS[200])

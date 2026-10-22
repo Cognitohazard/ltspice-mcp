@@ -356,7 +356,7 @@ to the MCP tools'.
 
 ```python
 raw = api.load_raw(raw_path=..., plot_index=0, dialect=None)  # XOR: raw_path | job_id
-raw = api.load_raw(job_id=..., run_index=0, case_id=None)
+raw = api.load_raw(job_id=..., run_index=0, case_id=None, other_raw=None)  # "fra_1" | "op"
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
 raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
@@ -397,14 +397,15 @@ api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sour
   null when that is 0; complex values compare as complex numbers. No
   tolerance is applied.
 - `device_op_points` reads the semiconductor operating points LTspice prints in
-  the log of an `.op` run under `.options logopinfo`, by device and parameter.
-  The table holds three significant digits; a node voltage or a device current
+  the log of an `.op` run, by device and parameter: LTspice 26 prints them
+  under `.options logopinfo`, and XVII always, refusing that option. The
+  table holds three significant digits; a node voltage or a device current
   read from the raw with `value` holds the raw's own precision (single, about
   seven digits, in both builds' operating-point recordings). A device in a
-  subcircuit keeps LTspice's name for it (`x1:m1` on LTspice 26, `m:1:1` on
-  XVII: the device's letter, the instance's name without its X, the device's
-  name without its letter), and a value the log did not print as a finite
-  number is `None`. Empty
+  subcircuit is keyed by its path (`x1.m1`), where the table names it
+  `x1:m1` on LTspice 26 and `m:1:1` on XVII (the device's letter, the
+  instance's name without its X, the device's name without its letter), and
+  a value the log did not print as a finite number is `None`. Empty
   when the log has no table, as an ngspice log never does: ngspice writes the
   same parameters as traces of its raw, read with `raw.value("@m1[gm]")`.
 - `plot_index` is a strict nonnegative integer, independent of case/run and

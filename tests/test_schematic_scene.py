@@ -28,13 +28,17 @@ from ltspice_mcp.lib.schematic_scene import (
     decode_text_lines,
     default_stock_paths,
     drawn_text_extent,
-    flag_label_anchor,
+    flag_label_bbox,
+    flag_label_layout,
     font_px,
     ground_polygon,
+    line_height,
     resolve_flag_placement,
     scene_of_text,
     sheet_view,
     text_extent,
+    text_layout,
+    text_width,
     wire_directions_at,
 )
 from ltspice_mcp.lib.sheet import editor_symbol_resolver
@@ -104,23 +108,57 @@ class TestDecodeTextLines:
         assert decode_text_lines(raw) == expected
 
 
-class TestTextExtent:
-    def test_anchor_variants(self) -> None:
-        # size 2 -> 14px; advance 0.62; "abcd" width = round(4*14*0.62) = 35.
-        start = text_extent(100, 50, ["abcd"], 2, "start")
-        assert (start.x1, start.x2) == (100, 135)
-        end = text_extent(100, 50, ["abcd"], 2, "end")
-        assert (end.x1, end.x2) == (65, 100)
-        mid = text_extent(100, 50, ["abcd"], 2, "middle")
-        assert (mid.x1, mid.x2) == (83, 118)
-        # Vertical: one ascent (14) above the baseline, 0.3 descent below.
-        assert (start.y1, start.y2) == (36, 54)
+class TestTextLayout:
+    """The arithmetic of laying text out. Where LTspice puts each justification
+    at each placement and size is checked against its own drawing in
+    ``test_ltspice_screenshots.py``."""
 
-    def test_multiline_grows_downward_and_uses_longest_line(self) -> None:
-        box = text_extent(0, 0, ["ab", "abcdef"], 2, "start")
-        assert box.x2 == round(6 * 14 * 0.62)  # widest line drives the width
-        # second line adds one font height + gap below the first's descent
-        assert box.y2 == round(14 * 0.3) + (14 + 2)
+    def test_width_adds_up_the_fonts_advances(self) -> None:
+        # Tahoma Bold's digits advance 637 thousandths of an em; a size-2 em is
+        # 23 sheet units.
+        assert font_px(2) == 23
+        assert text_width("1234567890", 2) == round(10 * 637 * 23 / 1000)
+        assert text_width("il", 2) < text_width("WM", 2)
+
+    @pytest.mark.parametrize(("align", "edge"), [("Left", "x1"), ("Right", "x2")])
+    def test_a_line_starts_or_ends_at_its_point(self, align: str, edge: str) -> None:
+        layout = text_layout(align, 2)
+        assert layout is not None
+        box = text_extent(100, 50, ["abcd"], 2, layout)
+        assert getattr(box, edge) == 100
+        assert box.y1 < 50 < box.y2
+
+    def test_center_straddles_its_point(self) -> None:
+        layout = text_layout("Center", 2)
+        assert layout is not None
+        box = text_extent(100, 50, ["abcd"], 2, layout)
+        assert abs((box.x1 + box.x2) / 2 - 100) <= 1
+        assert box.y1 < 50 < box.y2
+
+    def test_top_and_bottom_put_their_point_on_an_edge(self) -> None:
+        top, bottom = text_layout("Top", 2), text_layout("Bottom", 2)
+        assert top is not None and bottom is not None
+        assert text_extent(100, 50, ["abcd"], 2, top).y1 > 50
+        assert text_extent(100, 50, ["abcd"], 2, bottom).y2 <= 50
+
+    def test_a_block_stacks_its_lines_one_line_apart(self) -> None:
+        lines = ["ab", "abcdef", "c"]
+        line = text_layout("Left", 2)
+        block = text_layout("Left", 2, lines=3)
+        assert line is not None and block is not None
+        one = text_extent(0, 0, ["abcdef"], 2, line)
+        many = text_extent(0, 0, lines, 2, block)
+        assert many.x2 == one.x2  # the widest line sets the width
+        assert many.y2 - one.y2 == 2 * line_height(2)
+
+    def test_bottom_ends_a_block_at_its_point(self) -> None:
+        lines = ["ab", "abcdef", "c"]
+        single, block = text_layout("Bottom", 2), text_layout("Bottom", 2, lines=3)
+        assert single is not None and block is not None
+        assert text_extent(0, 0, lines, 2, block).y2 == text_extent(0, 0, ["c"], 2, single).y2
+
+    def test_invisible_is_not_drawn(self) -> None:
+        assert text_layout("Invisible", 2) is None
 
 
 class TestFlagPlacement:
@@ -197,22 +235,36 @@ class TestFlagPlacement:
         assert ground_polygon(flag) == expected
 
     @pytest.mark.parametrize(
-        ("orientation", "vertical", "expected"),
+        ("orientation", "vertical", "turn", "edge"),
         [
-            # font_px(1) == 11, FLAG_LABEL_DY == 4, px // 3 == 3
-            ("up", False, (100, 104, "middle", 0)),
-            ("right", False, (104, 111, "start", 0)),
-            ("left", False, (96, 111, "end", 0)),
-            ("down", False, (100, 123, "middle", 0)),  # horizontal below (junction fallback)
-            ("up", True, (103, 104, "start", -90)),  # grows upward, reads bottom-to-top
-            ("down", True, (103, 112, "end", -90)),  # grows downward, same reading
+            # LTspice starts or ends a label's text at its point, centred across
+            # the wire's line, and turns it to read bottom to top on a vertical one.
+            ("right", False, 0, "x1"),
+            ("left", False, 0, "x2"),
+            ("up", True, -90, "y2"),
+            ("down", True, -90, "y1"),
         ],
     )
-    def test_label_anchor(self, orientation: str, vertical: bool, expected: tuple) -> None:
+    def test_label_runs_from_its_point(
+        self, orientation: str, vertical: bool, turn: int, edge: str
+    ) -> None:
         flag = NetFlag(
             100, 108, "OUT", is_ground=False, orientation=orientation, text_vertical=vertical
         )
-        assert flag_label_anchor(flag) == expected
+        assert flag_label_layout(flag).rotation == turn
+        box = flag_label_bbox(flag)
+        assert getattr(box, edge) == (100 if edge.startswith("x") else 108)
+        if turn:
+            assert box.x1 < 100 < box.x2
+        else:
+            assert box.y1 < 108 < box.y2
+
+    def test_label_without_a_wire_sits_above_or_below_its_point(self) -> None:
+        # The junction fallbacks: text centred over the point, above or below it.
+        above = flag_label_bbox(NetFlag(100, 108, "OUT", is_ground=False, orientation="up"))
+        below = flag_label_bbox(NetFlag(100, 108, "OUT", is_ground=False, orientation="down"))
+        assert above.y2 <= 108 and above.x1 < 100 < above.x2
+        assert below.y1 > 108 and below.x1 < 100 < below.x2
 
     @pytest.mark.parametrize(
         ("wire", "flag_xy", "expected"),
@@ -431,38 +483,31 @@ class TestAscParsing:
     def test_sideways_symbol_attributes_do_not_overprint(self, tmp_path: Path) -> None:
         # Field regression: readers of a rendered sheet read a sideways
         # capacitor's "C1" and "100n" as the single string "1001n". The windows
-        # are 16 units apart in the symbol's y; a quarter turn moved that gap
-        # onto the baseline, where a four-character value is more than twice as
-        # wide.
+        # are stacked in the symbol's y; a quarter turn moved that gap onto the
+        # baseline, where a four-character value is wider than it.
         _write(tmp_path / "stacked.asy", STACKED_ATTRS_ASY)
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs("R90"))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         texts = {t.text: t for t in scene.symbols[0].texts}
-        assert texts["C1"].rotation == -90
-        assert texts["100n"].rotation == -90
+        assert texts["C1"].layout.rotation == -90
+        assert texts["100n"].layout.rotation == -90
         # Turned glyphs run down the sheet, so the strings occupy separate
-        # columns further apart than a glyph is tall — neither can grow into the
-        # other however long the value gets.
+        # columns — neither can grow into the other however long the value gets.
         assert texts["C1"].y == texts["100n"].y
-        assert abs(texts["C1"].x - texts["100n"].x) >= font_px(texts["C1"].size)
-        # Horizontally the two used to overlap by half the value's length. The
-        # estimated glyph band is deliberately generous above the baseline (a
-        # full font height, so the crop never clips), so allow the columns to
-        # graze — just not by as much as a character.
         name, value = (drawn_text_extent(texts["C1"]), drawn_text_extent(texts["100n"]))
-        overlap = min(name.x2, value.x2) - max(name.x1, value.x1)
-        assert overlap < round(font_px(2) * 0.62)
+        assert min(name.x2, value.x2) < max(name.x1, value.x1)
 
     @pytest.mark.parametrize(
         ("rotation", "expected"),
         [
-            # Upright either way up: the text stays horizontal.
+            # The run follows the symbol's own +x axis, so a Left window's text
+            # leaves the body the way it did upright: it starts at its point
+            # where that axis points right or up and ends there where it points
+            # left or down, and turns sideways where it is vertical.
             ("R0", (0, "start")),
-            ("R180", (0, "start")),
-            ("M0", (0, "start")),
+            ("R180", (0, "end")),
+            ("M0", (0, "end")),
             ("M180", (0, "start")),
-            # Sideways: text turns with the symbol, and the run follows the
-            # symbol's own +x axis so it leaves the body the way it did upright.
             ("R90", (-90, "end")),
             ("M90", (-90, "end")),
             ("R270", (-90, "start")),
@@ -476,28 +521,25 @@ class TestAscParsing:
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs(rotation))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         value = next(t for t in scene.symbols[0].texts if t.text == "100n")
-        assert (value.rotation, value.anchor) == expected
+        assert (value.layout.rotation, value.layout.anchor) == expected
 
     @pytest.mark.parametrize(
         ("align", "expected"),
         [
-            # Plain token on a turned instance: the author asked for horizontal.
-            ("Left", (0, "start")),
-            ("Right", (0, "end")),
-            # V-prefixed: turned. The run direction comes from the placement, so
-            # at R90 both grow down the sheet, but the token still separates the
-            # two — Left and Right must not land on the same anchor.
-            ("VLeft", (-90, "end")),
-            ("VRight", (-90, "start")),
-            ("VCenter", (-90, "middle")),
+            # The token lays the text out in the symbol's frame and the placement
+            # turns that frame: at R90 a plain token's text turns sideways, and a
+            # V token's, which runs up the symbol, comes back upright.
+            ("Left", (-90, "end")),
+            ("Right", (-90, "start")),
+            ("VLeft", (0, "start")),
+            ("VRight", (0, "end")),
+            ("VCenter", (0, "middle")),
         ],
     )
-    def test_explicit_window_justification_decides(
+    def test_explicit_window_justification_turns_with_the_symbol(
         self, tmp_path: Path, align: str, expected: tuple[int, str]
     ) -> None:
-        # A per-instance WINDOW is the author's own choice, so whether the text
-        # turns is its call: LTspice writes a V-prefixed token when it means
-        # sideways text and a plain one when it does not.
+        # A per-instance WINDOW is laid out like the symbol's own default.
         _write(tmp_path / "stacked.asy", STACKED_ATTRS_ASY)
         asc = _write(
             tmp_path / "s.asc",
@@ -505,7 +547,7 @@ class TestAscParsing:
         )
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         value = next(t for t in scene.symbols[0].texts if t.text == "100n")
-        assert (value.rotation, value.anchor) == expected
+        assert (value.layout.rotation, value.layout.anchor) == expected
 
     def test_asy_default_window_may_ask_for_turned_text(self, tmp_path: Path) -> None:
         # A .asy default can be V-prefixed too, and then it means the same thing
@@ -514,7 +556,7 @@ class TestAscParsing:
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs("R0"))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         value = next(t for t in scene.symbols[0].texts if t.text == "100n")
-        assert (value.rotation, value.anchor) == (-90, "end")
+        assert (value.layout.rotation, value.layout.anchor) == (-90, "end")
 
     def test_sheet_graphics_parsed(self, tmp_path: Path) -> None:
         asc = _write(

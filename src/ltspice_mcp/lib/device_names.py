@@ -62,10 +62,14 @@ def _instances(segments: Iterable[str], *, xvii: bool) -> DevicePath:
     return tuple(f"x{segment}" for segment in segments) if xvii else tuple(segments)
 
 
-def table_device_path(name: str, *, xvii: bool) -> DevicePath:
+def table_device_path(name: str) -> DevicePath:
     """The device a name in the log's device table (or an ngspice ``@`` trace)
     belongs to: ``xa:xin:mtail`` and ``m:a:in:tail`` are both
-    ``("xa", "xin", "mtail")``, ngspice's ``m.xa.xin.mtail`` too."""
+    ``("xa", "xin", "mtail")``, ngspice's ``m.xa.xin.mtail`` too.
+
+    Each name says which build wrote it: LTspice 26 starts with the outermost
+    instance, whose name starts with X, and XVII with the device's letter,
+    as its table lists no instance."""
     low = name.casefold()
     if ":" not in low:
         segments = [segment for segment in low.split(".") if segment]
@@ -73,12 +77,12 @@ def table_device_path(name: str, *, xvii: bool) -> DevicePath:
         if len(segments) > 1 and len(segments[0]) == 1:
             segments = segments[1:]
         return tuple(segments)
-    *head, last = low.split(":")
-    if xvii and head:
-        # XVII writes the device's letter first and drops it from its name.
-        letter, *instances = head
-        return (*_instances(instances, xvii=True), letter + last)
-    return (*head, last)
+    first, *rest = low.split(":")
+    if first.startswith("x"):
+        return (first, *rest)
+    # XVII writes the device's letter first and drops it from its name.
+    *instances, last = rest
+    return (*_instances(instances, xvii=True), first + last)
 
 
 @dataclass(frozen=True)
@@ -94,11 +98,19 @@ class _Owner:
     param: str | None = None
 
 
-def _owner(name: str, *, xvii: bool) -> _Owner | None:
+def _param_owner(name: str) -> _Owner | None:
+    """The device a ``@device[param]`` name holds a parameter of, as the log's
+    table or ngspice spells it; None for any other name."""
     table = _DEVICE_PARAM.search(name)
-    if table is not None:
-        device = table.group(1)
-        return _Owner(device, table_device_path(device, xvii=xvii), param=table.group(2))
+    if table is None:
+        return None
+    device = table.group(1)
+    return _Owner(device, table_device_path(device), param=table.group(2))
+
+
+def _owner(name: str, *, xvii: bool) -> _Owner | None:
+    if (owner := _param_owner(name)) is not None:
+        return owner
     current = _CURRENT.match(name)
     if current is None:
         return None
@@ -118,6 +130,16 @@ def _raw_path(text: str, *, xvii: bool) -> DevicePath:
         return split_path(text)
     *instances, last = text.casefold().split(":")
     return (*_instances(instances, xvii=xvii), last)
+
+
+def raw_name(scope: Iterable[str], name: str, *, xvii: bool) -> str:
+    """How an LTspice raw, and so ``.save``, names a node or device inside
+    subcircuit instances, the reverse of :func:`trace_key`'s reading: the
+    instances as written on LTspice 26 (``xa:xin:mid``), each without its X on
+    XVII (``a:in:mid``). Each build's ``.save`` takes only its own spelling
+    (recorded: ``raw/save_subckt_names*``)."""
+    instances = (segment.lower()[1:] if xvii else segment.lower() for segment in scope)
+    return ":".join((*instances, name.lower()))
 
 
 TraceKey = tuple[str, DevicePath]
@@ -177,7 +199,7 @@ def device_query(wanted: str, *, xvii: bool) -> Callable[[str], bool]:
     return names
 
 
-def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bool) -> str | None:
+def find_device_param(names: Iterable[str], device: str, param: str) -> str | None:
     """The one name among ``names`` that holds ``param`` of ``device``: the
     device as the simulator spells it, or the end of its path (``x1.mn`` for
     ``MN`` inside ``X1``, wherever ``X1`` is), whichever build or simulator
@@ -187,7 +209,7 @@ def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bo
     found = [
         name
         for name in names
-        if (owner := _owner(name, xvii=xvii)) is not None
+        if (owner := _param_owner(name)) is not None
         and owner.param is not None
         and owner.param.casefold() == param.casefold()
         and (owner.text.casefold() == literal or (want and owner.path[-len(want) :] == want))
@@ -237,7 +259,7 @@ def device_names(
     names: dict[str, dict[str, str | None]] = {}
     for name in table_names:
         entry = names.setdefault(
-            path_text(table_device_path(name, xvii=xvii)), {"op_table": None, "raw": None}
+            path_text(table_device_path(name)), {"op_table": None, "raw": None}
         )
         entry["op_table"] = name
     for trace in raw_traces:

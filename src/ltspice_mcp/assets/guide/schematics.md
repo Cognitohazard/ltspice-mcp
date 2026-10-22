@@ -214,8 +214,10 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   local nets; reserve net-labels for ground, power rails, and distant nets.
   Also heed the sheet findings in `warnings`: they are what `verify_circuit`
   reports of the same sheet (a floating pin, a loose wire end, parts that
-  overlap, a wire through a part, a label or text inside one, a wire LTspice
-  leaves out of the netlist), said as soon as the edit that caused them.
+  overlap, a wire through a part, a label or text inside one, a part's name or
+  value drawn across a wire, another part or other text, a wire LTspice
+  leaves out of the netlist), said as soon as the edit that caused them. A
+  part's text moves with the part, so move the part or what its text crosses.
 - **On an existing sheet, the reported findings are the edit's.** `warnings`
   and `wiring.label_only_pins` list only what your ops introduced or named;
   older ones are counted in `preexisting`, not listed. A batch that only sets

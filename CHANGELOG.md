@@ -10,6 +10,32 @@ tool-surface changes.
 
 ### Fixed
 
+- `plot_waveform`, and the `ac_structure` recipe, could fail on a frequency
+  sweep whose points lie more than a quarter decade apart (`.ac dec 3` or
+  sparser, an `.ac oct 1` sweep, an FRA's results an octave a point): no slope
+  can be fit there, and reading the magnitude's breakpoints stopped on it.
+  Such a sweep now has no breakpoints to read.
+- A rendered sheet placed text where LTspice does not, so it could not show
+  whether text collides. A `Left` window on a part placed `R180` or `M0` was
+  drawn starting at its point where LTspice ends it there, a plain window on a
+  part turned a quarter turn stayed horizontal, and `Top`, `Bottom` and
+  `Center` lined up the baseline rather than the line; every text was drawn
+  two thirds of LTspice's size, in a monospace face, and comments and
+  directives ignored their justification. Text is now laid out as both
+  builds draw it, from screenshots of each (`docs/TESTING.md`, "How LTspice
+  draws text"): each justification on the part's placement, in Tahoma Bold
+  at LTspice's size for each text size, a multi-line comment's lines one line
+  apart, and a net label starting or ending at its point.
+- `inspect(kind="hierarchy")` told LTspice users to add `.options logopinfo`
+  to read a nested MOSFET's operating point, which LTspice XVII ends the run
+  on, and spelled a nested resistor's `.save I(xa:xin:r1)` and a node's trace
+  LTspice 26's way, which XVII's `.save` refuses, saving everything but the
+  current instead (recorded: `raw/save_subckt_names*`). A MOSFET's address
+  now names no directive, since the server asks LTspice 26 for the device
+  table on every `.op` run and XVII prints it unasked, and names inside
+  subcircuits are spelled for the session's LTspice, each instance without
+  its X on XVII. `simulator: "ltspice:<name>"` spells for a named build, and
+  the reply's `profile.xvii_names` says which spelling it used.
 - A signal inside a subcircuit named by its path (`V(xa.xin.mid)`,
   `Id(xa.xin.mtail)`) resolved on LTspice 26, whose raw writes
   `V(xa:xin:mid)`, and not on XVII, whose raw writes each instance without
@@ -974,6 +1000,19 @@ recording that showed it.
 
 ### Added
 
+- `verify_circuit`'s layout check, and `edit_schematic`'s reply, report a
+  part's name or value drawn across a wire, across what another part draws or
+  across other text (`attribute_text_overlap`), where the layout scan used to
+  leave attribute text out. The text is placed where LTspice draws it, its
+  extent estimated from the font's widths; a bounding box's empty corner, or
+  two lines that only graze, are not counted.
+- `analyze_results`, `run_experiments`' attached `analyze` block,
+  `plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
+  read a case's other raw by job and case:
+  `other_raw: "fra_1"` reads its frequency response analysis results, and
+  `other_raw: "op"` a transient's operating point, where only a path to the
+  file could before. A case whose run wrote no such raw fails with code
+  `other_raw_not_written`, a missing case in `analyze_results`.
 - `run_experiments` takes `execution.keep_partial_raw`. A case stopped by its
   run timeout, the job deadline or a cancel then keeps its raw, cut to the
   points a full read reaches, where it was deleted, and `analyze_results`,
@@ -1021,7 +1060,10 @@ recording that showed it.
 - `api.device_op_points(job_id=..., case_id=...)` (or `log_path=`) returns
   the semiconductor operating points LTspice prints in an `.op` run's log, by
   device and parameter (`ops["m1"]["gm"]`), and says that the table holds
-  three significant digits. The guide's Python section shows a run's
+  three significant digits. A device inside a subcircuit is keyed by its path
+  (`ops["xa.xin.mtail"]`), the same on both builds, where the table names it
+  `xa:xin:mtail` on LTspice 26 and `m:a:in:tail` on XVII (recorded:
+  `log/subckt_names*`). The guide's Python section shows a run's
   operating point, device table and an AC trace kept in a JSON file.
 - `edit_schematic` op `move`: shifts any mix of parts, wires, net labels,
   directives and comments by one offset (`dx`, `dy`). Parts are chosen by

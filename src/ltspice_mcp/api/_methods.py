@@ -35,6 +35,7 @@ from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.pathutil import relative_paths_from
+from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, OtherRawKind
 from ltspice_mcp.state import SessionState
 
 if TYPE_CHECKING:
@@ -1174,14 +1175,21 @@ class ApiMethodsMixin(ABC):
         case_id: str | None = None,
         plot_index: int = 0,
         dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
+        other_raw: OtherRawKind | None = None,
     ) -> RawResult:
-        """Load one raw result through the bounded parser and return a safe wrapper."""
+        """Load one raw result through the bounded parser and return a safe wrapper.
+
+        ``other_raw`` reads the case's other raw of that kind, as its run row's
+        ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
+        response analysis's results, ``"op"`` a transient's operating point."""
         self._check_process_and_thread()
-        _one_source("raw_path", raw_path, job_id, run_index, case_id)
+        _one_source("raw_path", raw_path, job_id, run_index, case_id, other_raw=other_raw)
         if type(plot_index) is not int or plot_index < 0:
             raise ApiValidationError("plot_index must be a nonnegative integer")
         if dialect is not None and dialect not in ("ltspice", "ngspice", "qspice", "xyce"):
             raise ApiValidationError("dialect must be ltspice, ngspice, qspice, xyce or None")
+        if other_raw is not None and other_raw not in OTHER_RAW_KINDS:
+            raise ApiValidationError(f"other_raw must be one of {list(OTHER_RAW_KINDS)} or None")
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1191,6 +1199,7 @@ class ApiMethodsMixin(ABC):
                 case_id=case_id,
                 plot_index=plot_index,
                 dialect=dialect,
+                other_raw=other_raw,
             ),
             cancelable=True,
             cancel_on_interrupt=True,
@@ -1219,12 +1228,13 @@ class ApiMethodsMixin(ABC):
         """Return the semiconductor operating points of a log or one experiment
         case, by device and parameter: ``ops["m1"]["gm"]``.
 
-        LTspice prints them in the log of an ``.op`` run whose deck carries
-        ``.options logopinfo``, to three significant digits whatever
-        ``.options numdgt`` says; a device inside a subcircuit keeps LTspice's
-        name for it. Empty when the log has no such
-        table, as an ngspice log never does: ngspice's are traces of its raw,
-        read with ``load_raw(...).value("@m1[gm]")``.
+        LTspice prints them in the log of an ``.op`` run, to three significant
+        digits whatever ``.options numdgt`` says: LTspice 26 under ``.options
+        logopinfo``, LTspice XVII always. A device inside a subcircuit is keyed
+        by its path (``ops["xa.xin.mtail"]``), whichever build named it in the
+        table. Empty when the log has no such table, as an ngspice log never
+        does: ngspice's are traces of its raw, read with
+        ``load_raw(...).value("@m1[gm]")``.
         """
         section = self._log_section("device_op", log_path, job_id, run_index, case_id)
         return device_op_points_of(section)
@@ -1254,14 +1264,20 @@ class ApiMethodsMixin(ABC):
 
 
 def _one_source(
-    path_name: str, path: object, job_id: str | None, run_index: int, case_id: str | None
+    path_name: str,
+    path: object,
+    job_id: str | None,
+    run_index: int,
+    case_id: str | None,
+    *,
+    other_raw: str | None = None,
 ) -> None:
     """Refuse a read that names both or neither of a file and a job, or a case
     selector without a job."""
     if (path is None) == (job_id is None):
         raise TypeError(f"Pass exactly one of {path_name} or job_id")
-    if path is not None and (run_index != 0 or case_id is not None):
-        raise TypeError("run_index and case_id are only valid with job_id")
+    if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
+        raise TypeError("run_index, case_id and other_raw are only valid with job_id")
 
 
 # The six methods carry their operation's catalogue entry as their docstring —

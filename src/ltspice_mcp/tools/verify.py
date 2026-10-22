@@ -269,7 +269,10 @@ _RULES_OF_CHECK: dict[str, tuple[str, ...]] = {
 # Stated inline so an empty findings list is not read as a clean drawing. Kept
 # to the one fact that changes what a caller concludes — the scan's blind spot,
 # not how bounding boxes are built.
-LAYOUT_COVERAGE = "Layout scan excludes WINDOW attribute text."
+LAYOUT_COVERAGE = (
+    "Layout scan checks attribute text by extents estimated from LTspice's font; "
+    "directives and comments only where attribute text crosses them."
+)
 
 
 # ---------------------------------------------------------------------------

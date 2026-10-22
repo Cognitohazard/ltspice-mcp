@@ -587,7 +587,13 @@ schema lists both vocabularies. `other_raws` maps each kind of
 other raw the run wrote beside its raw to its path (`<run>.<kind>.raw`): `op`,
 a transient's operating point, and `fra_1`, a frequency response analysis's
 results. Only kinds recorded from LTspice are listed, and a run with no raw
-lists none. `simulator_version` is the build the run reported in its own
+lists none. A read by job and case takes one of them in place of the case's
+raw with `other_raw`: a job source of `analyze_results`, `run_experiments`'
+attached `analyze` block, `plot_waveform`, `inspect(kind="results")` and the
+Python API's `load_raw`. A case whose run wrote no raw of that kind fails with
+`other_raw_not_written` (a missing case in `analyze_results`). A plot of one
+opened `in_ltspice` is shown on its own, never as the results beside the
+case's sheet. `simulator_version` is the build the run reported in its own
 output: the LTspice log banner
 (`LTspice 26.0.2 for Windows`), the Xyce log banner
 (`Xyce Release 7.8.0-opensource`), the ngspice console banner
@@ -689,7 +695,12 @@ Input:
 
 ```
 sources    list[{job_id? | raw_path? | log_path?, runs?: "all"|[int]|{case_ids}, label?,
-                 plot_index?: int|null, dialect?: str|null}]
+                 plot_index?: int|null, dialect?: str|null,
+                 other_raw?: "fra_1"|"op"}]
+                          other_raw (job sources only) reads each case's raw
+                          of that kind, as its row's other_raws lists it,
+                          instead of its raw; a case that wrote none is a
+                          missing case with code other_raw_not_written
 recipes    list[Recipe]   Appendix A.2; unique key; optional per-recipe
                           sources: [label]
 group_by   list[assignment param | "circuit" | step-axis name]
@@ -1074,11 +1085,13 @@ reported.
 
 Ops do not repeat sheet findings, and what an op makes of the sheet is said
 by the sheet, once: a route through a part, a part placed or moved over
-another, a label on nothing, a crossing left unjoined, a pin or label that
-joins wires where they cross, a wire left diagonal, and a net given a second
-name are each reported by the sheet finding (`wire_through_symbol`,
-`symbol_overlap`, `dangling_label`, `unjoined_crossing`, `joined_at_crossing`,
-`diagonal_wire`, `net_with_two_names`), whichever op made it. Findings are
+another, a part's text drawn across a wire, a part or other text, a label on
+nothing, a crossing left unjoined, a pin or label that joins wires where they
+cross, a wire left diagonal, and a net given a second name are each reported
+by the sheet finding (`wire_through_symbol`, `symbol_overlap`,
+`attribute_text_overlap`, `dangling_label`, `unjoined_crossing`,
+`joined_at_crossing`, `diagonal_wire`, `net_with_two_names`), whichever op
+made it. Findings are
 computed on the sheet the batch leaves, so a state the batch only passes
 through is not reported: a label placed before the wire that reaches it is not
 dangling, and a net relabelled in remove-and-add pairs has one name at the
@@ -1192,7 +1205,12 @@ the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
-a file. The file is written to the per-user folder's `renders/`, never to the
+a file. Text is drawn as LTspice draws it, from screenshots of both builds:
+in Tahoma Bold at LTspice's size for each text size, and each justification
+laid out on the part's placement, so a `Left` window on a part placed `R180`
+or `M0` ends at its point, and one on a part turned a quarter turn reads
+bottom to top. A multi-line comment's lines are one line apart, and a `Bottom`
+one ends at its point. The file is written to the per-user folder's `renders/`, never to the
 working directory or beside the sheet, and is deleted a week later; a render
 regenerates it. `inline` and `both` return a PNG as an image block, and an SVG as
 its markup in `render.svg`. A PNG needs the `raster` extra
@@ -1245,6 +1263,14 @@ another session sharing the working directory may commit between
 `edit_schematic` returning and this call running; compare `source_sha256` with
 the `sha256` `edit_schematic` returned to confirm the image shows that
 revision. The export block's `sha256` is the netlist's.
+
+The layout check reads a part's attribute text where LTspice draws it, with
+its extent estimated from the font's widths rather than measured off its
+glyphs: `attribute_text_overlap` reports text that a wire or a line another
+part draws passes through, or that lies over a rectangle or circle another
+part draws or over other text, by more than the estimate's slack. Comments,
+directives and labels are checked only where attribute text crosses them, and
+the layout check says so in `observations`.
 
 A per-rule finding cap applies only to layout and quality issue rules and to
 `dropped_wire`; `dropped_wire` carries no truncation observation.
@@ -1303,11 +1329,13 @@ cursors where listed:
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
     but not L1. It is plain text; a wildcard is refused with the plain
     spelling to use
-{kind: "hierarchy", path, simulator: "ltspice"|"ngspice", ngbehavior?, instance?, prefix?, cursor?}
+{kind: "hierarchy", path, simulator: "ltspice"|"ngspice"|"ltspice:<name>", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
     selecting a subtree, and `prefix` is the `components` rule applied to
     each instance's own reference (the last segment), so a one-letter
-    prefix still selects an element type
+    prefix still selects an element type. LTspice names are spelled for the
+    session's LTspice, or the named build, as its raw names them
+    (`profile.xvii_names`)
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query and fuzzy-matches it; enumerate requires libs and,
     given a query, lists the names containing it (case-insensitive). A
@@ -1318,9 +1346,11 @@ cursors where listed:
     source_path, include_directive (source_path as the server sees it, which
     is what staging reads), ports, params, and for a .MODEL its device_type
     and usage; a search adds score
-{kind: "results", path? | job_id?, run_index?, case_id?, plot_index?: int|null,
- dialect?: str|null, view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
-    one admitted RAW path or one finished experiment case. plots returns
+{kind: "results", path? | job_id?, run_index?, case_id?, other_raw?: "fra_1"|"op",
+ plot_index?: int|null, dialect?: str|null,
+ view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
+    one admitted RAW path or one finished experiment case; other_raw reads
+    the case's raw of that kind in place of its raw, RAW views only. plots returns
     the complete plot inventory in artifact order; signals returns the
     selected trace descriptors, marking the axis; table returns plain
     native quantities from a plot with no sampled axis, keeping the first
@@ -1812,13 +1842,19 @@ with Api(working_dir=project) as api:
 
 For a supported nested MOS, ngspice gives `device: "m.xa.xleaf.m0"`
 and `.save @m.xa.xleaf.m0[gm]`; LTspice gives
-`device: "xa:xleaf:m0"` and `.options logopinfo`. Add the given directive to
+`device: "xa:xleaf:m0"` and no directive, since the server asks LTspice 26
+for the device table on every `.op` run and XVII prints it unasked and stops
+on `.options logopinfo`. Add any directive given to
 the deck before `run_experiments`, then pass `address.device` to the
 `analyze_results` `operating_point` recipe. The full ancestral selector
 excludes repeated peers; a selector that would also match another instance
 gets no address. On ngspice, gm comes from saved raw traces; on LTspice, from
 the log through the existing log reader. For a nested resistor the directive
-is `.save @r.xa.xleaf.r1[i]` on ngspice and `.save I(xa:xleaf:r1)` on LTspice.
+is `.save @r.xa.xleaf.r1[i]` on ngspice, `.save I(xa:xleaf:r1)` on LTspice 26
+and `.save I(a:leaf:r1)` on LTspice XVII: each build's `.save` takes a name
+inside a subcircuit only as its raw spells it (recorded:
+`raw/save_subckt_names*`), and a node's `voltage_trace` follows the same
+spelling.
 Addresses are given only for verified resistor and MOS forms with simple
 identifier spellings; other legal source names keep their structural identity
 with a reason the address is unavailable. A node's `voltage_trace` is the

@@ -25,6 +25,7 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
     unquote,
 )
+from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import (
@@ -57,12 +58,17 @@ class SemanticProfile:
     simulator: Literal["ltspice", "ngspice"]
     ngbehavior: str | None = None
     evaluation_context: str = "initial_deck"
+    #: The LTspice is XVII (or IV), which spells a node or device inside a
+    #: subcircuit without each instance's X, as its raw names it.
+    xvii_names: bool = False
 
     def __post_init__(self) -> None:
         if self.simulator not in {"ltspice", "ngspice"}:
             raise NetlistError("hierarchy supports ltspice or ngspice")
         if self.simulator == "ltspice" and self.ngbehavior is not None:
             raise NetlistError("ngbehavior is only valid for ngspice")
+        if self.simulator != "ltspice" and self.xvii_names:
+            raise NetlistError("xvii_names is only valid for ltspice")
         if self.simulator == "ngspice" and self.ngbehavior is None:
             raise NetlistError("ngspice hierarchy requires its effective ngbehavior")
         if self.simulator == "ngspice" and (self.ngbehavior or "").casefold() not in {
@@ -507,10 +513,14 @@ def _address(
             device = kind.lower() + "." + device
         parameter = "gm" if kind == "M" else "i"
         return device, f".save @{device}[{parameter}]", None
+    # The operating_point selector reads the device by its path on either build.
     device = ":".join(p.lower() for p in path)
     if kind == "M":
-        return device, ".options logopinfo", None
-    return device, f".save I({device})", None
+        # No directive: the server asks LTspice 24 and later for the device
+        # table on every .op run, and XVII prints it unasked and ends the run
+        # on .options logopinfo (recorded: log/subckt_names*).
+        return device, None, None
+    return device, f".save I({raw_name(path[:-1], path[-1], xvii=profile.xvii_names)})", None
 
 
 def resolve_hierarchy(
@@ -641,8 +651,10 @@ def resolve_hierarchy(
         trace = None
         reason = None
         if all(_SAFE_NAME.fullmatch(p) for p in scope) and _SAFE_NODE.fullmatch(name):
-            sep = ":" if profile.simulator == "ltspice" else "."
-            trace = "V(" + sep.join((*[p.lower() for p in scope], name.lower())) + ")"
+            if profile.simulator == "ltspice":
+                trace = f"V({raw_name(scope, name, xvii=profile.xvii_names)})"
+            else:
+                trace = "V(" + ".".join((*[p.lower() for p in scope], name.lower())) + ")"
         else:
             reason = "backend node spelling unavailable"
         resolved = Node(scope, name, trace, reason)
