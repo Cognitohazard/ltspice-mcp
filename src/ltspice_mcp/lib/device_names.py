@@ -41,6 +41,8 @@ DevicePath = tuple[str, ...]
 #: A ``@device[param]`` name, bare or as ngspice wraps it (``v(@m1[vth])``).
 _DEVICE_PARAM = re.compile(r"@([^\[\]()]+)\[([^\]]*)\]")
 _CURRENT = re.compile(r"^(i[a-z]?)\(([^)]+)\)$", re.IGNORECASE)
+#: A trace of one node or one device: ``V(xa:xin:mid)``, ``Id(a:in:Mtail)``.
+_TRACE = re.compile(r"^([a-z]+)\(([^(),]+)\)$", re.IGNORECASE)
 
 
 def writes_xvii_names(raw: RawData) -> bool:
@@ -166,6 +168,31 @@ def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bo
         and (owner.text.casefold() == literal or (want and owner.path[-len(want) :] == want))
     ]
     return found[0] if len(found) == 1 else None
+
+
+def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
+    """The one trace among ``names`` that ``signal`` names by a path through
+    subcircuit instances, as either build writes it: ``V(xa.xin.mid)`` is
+    LTspice 26's ``V(xa:xin:mid)`` and XVII's ``V(a:in:mid)``,
+    ``Id(xa.xin.mtail)`` is ``Id(a:in:Mtail)`` on XVII, and ``Ix(xa.top)`` is
+    ``Ix(a:TOP)``. None when ``signal`` names no such path or not exactly one
+    trace matches."""
+    match = _TRACE.match(signal.strip())
+    if match is None:
+        return None
+    want = (match.group(1).casefold(), split_path(match.group(2)))
+    if len(want[1]) < 2:
+        return None
+    found = [name for name in names if _trace_path(name, xvii=xvii) == want]
+    return found[0] if len(found) == 1 else None
+
+
+def _trace_path(name: str, *, xvii: bool) -> tuple[str, DevicePath] | None:
+    match = _TRACE.match(name)
+    if match is None or ":" not in match.group(2):
+        return None
+    *instances, last = match.group(2).casefold().split(":")
+    return match.group(1).casefold(), (*_instances(instances, xvii=xvii), last)
 
 
 def path_text(path: DevicePath) -> str:

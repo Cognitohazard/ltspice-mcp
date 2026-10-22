@@ -10,6 +10,12 @@ tool-surface changes.
 
 ### Fixed
 
+- A signal inside a subcircuit named by its path (`V(xa.xin.mid)`,
+  `Id(xa.xin.mtail)`) resolved on LTspice 26, whose raw writes
+  `V(xa:xin:mid)`, and not on XVII, whose raw writes each instance without
+  its X (`V(a:in:mid)`; recorded: `raw/subckt_names_tran_saved`). Every recipe
+  now reads it by its path on either build, port currents (`Ix(xa.top)`)
+  included.
 - `edit_schematic` replies gave a pin on a net no label names `net: null`,
   though LTspice's export names it (`N001`). LTspice's numbering is its own, so
   the name is read off an export, never predicted: a batch with a `compare`

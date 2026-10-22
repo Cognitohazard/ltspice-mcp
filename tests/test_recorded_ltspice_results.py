@@ -1151,6 +1151,42 @@ class TestSubcircuitDeviceNames:
         }
         assert ports == {"xa", "xb", "xa.xin", "xb.xin"}
 
+    async def test_a_trace_inside_a_subcircuit_is_read_by_its_path_on_either_build(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """One request reads a node, a device current and a port current inside
+        the subcircuits by their paths, though XVII writes each without the
+        instances' X (V(a:in:mid)) where LTspice 26 writes V(xa:xin:mid)."""
+        raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
+        names = {"node": "V(xa.xin.mid)", "drain": "Id(xa.xin.mtail)", "port": "Ix(xb.top)"}
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [
+                    {"key": key, "metric": "value", "expr": expr, "at": "1u"}
+                    for key, expr in names.items()
+                ],
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None
+        assert data["failures"] == []
+        read = {key: data["results"][key]["values"][0]["value"] for key in names}
+        if rec.generation(build) == "xvii":
+            assert [v["signal"] for v in read.values()] == [
+                "V(a:in:mid)",
+                "Id(a:in:Mtail)",
+                "Ix(b:TOP)",
+            ]
+        else:
+            assert [v["signal"] for v in read.values()] == [
+                "V(xa:xin:mid)",
+                "Id(xa:xin:Mtail)",
+                "Ix(xb:top)",
+            ]
+        # The drain current of the inner MOSFET, as the device table prints it.
+        assert read["drain"]["value"] == pytest.approx(8.21e-6, rel=5e-3)
+
     async def test_the_bias_point_maps_each_devices_names_and_reads_it_by_path(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):

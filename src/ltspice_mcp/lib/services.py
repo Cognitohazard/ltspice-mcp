@@ -26,7 +26,11 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, Resul
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
-from ltspice_mcp.lib.device_names import find_device_param, writes_xvii_names
+from ltspice_mcp.lib.device_names import (
+    find_device_param,
+    find_trace_by_path,
+    writes_xvii_names,
+)
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob, failure_summary
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import LogDiagnostics
@@ -728,6 +732,8 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     #   - noise: LTspice V(onoise)/V(inoise) <-> ngspice onoise_spectrum/
     #     inoise_spectrum, plus bare onoise/inoise shorthand
     #   - hierarchical separator: LTspice ':' (V(X1:mid)) <-> ngspice '.'
+    #   - a path through subcircuits, which XVII writes without each
+    #     instance's X (V(xa.xin.mid) is its V(a:in:mid))
     by_lower = {t.lower(): t for t in trace_names}
     candidates: list[str] = []
     for kind in ("onoise", "inoise"):
@@ -741,7 +747,10 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
-    return device_param_name(trace_names, signal, xvii=writes_xvii_names(raw))
+    xvii = writes_xvii_names(raw)
+    return find_trace_by_path(trace_names, signal, xvii=xvii) or device_param_name(
+        trace_names, signal, xvii=xvii
+    )
 
 
 def _looks_like_expression(signal: str) -> bool:

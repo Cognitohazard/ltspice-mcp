@@ -74,7 +74,9 @@ Name it by its path instead: `{"metric": "operating_point", "device":
 (`mtail` keeps every `Mtail`; `xa` keeps everything inside `Xa`), and
 `{"metric": "value", "expr": "xa.xin.mtail.gm"}` reads one parameter. The
 `operating_point` result's `device_names` maps each path to its name in the
-table (`op_table`) and in the raw (`raw`). By default neither build stores the
+table (`op_table`) and in the raw (`raw`). A node, a device current or a port
+current inside a subcircuit is named by its path in any recipe on either
+build: `V(xa.xin.mid)`, `Id(xa.xin.mtail)`, `Ix(xa.top)`. By default neither build stores the
 currents of devices inside a subcircuit, only the instance's port currents
 (`Ix(xa:out)`); `raw` is then null. LTspice's "Save subcircuit device
 currents" setting stores them.
