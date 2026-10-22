@@ -1026,7 +1026,10 @@ recording that showed it.
 - `api.device_op_points(job_id=..., case_id=...)` (or `log_path=`) returns
   the semiconductor operating points LTspice prints in an `.op` run's log, by
   device and parameter (`ops["m1"]["gm"]`), and says that the table holds
-  three significant digits. The guide's Python section shows a run's
+  three significant digits. A device inside a subcircuit is keyed by its path
+  (`ops["xa.xin.mtail"]`), the same on both builds, where the table names it
+  `xa:xin:mtail` on LTspice 26 and `m:a:in:tail` on XVII (recorded:
+  `log/subckt_names*`). The guide's Python section shows a run's
   operating point, device table and an AC trace kept in a JSON file.
 - `edit_schematic` op `move`: shifts any mix of parts, wires, net labels,
   directives and comments by one offset (`dx`, `dy`). Parts are chosen by

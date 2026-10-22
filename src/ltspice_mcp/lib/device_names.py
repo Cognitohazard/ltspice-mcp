@@ -52,6 +52,13 @@ def writes_xvii_names(raw: RawData) -> bool:
     return isinstance(command, str) and is_cp1252_ltspice_build(command)
 
 
+def table_writes_xvii_names(names: Iterable[str]) -> bool:
+    """Whether a log's device table names a device inside a subcircuit as
+    LTspice XVII does, its letter first (``m:a:in:tail``). LTspice 26 starts
+    with the outermost instance, whose name starts with X (``xa:xin:mtail``)."""
+    return any(":" in name and not name.casefold().startswith("x") for name in names)
+
+
 def split_path(text: str) -> DevicePath:
     """A device path as a caller writes it, by dots or colons: ``xa.xin.mtail``."""
     return tuple(segment for segment in re.split(r"[.:]", text.casefold()) if segment)

@@ -1219,12 +1219,13 @@ class ApiMethodsMixin(ABC):
         """Return the semiconductor operating points of a log or one experiment
         case, by device and parameter: ``ops["m1"]["gm"]``.
 
-        LTspice prints them in the log of an ``.op`` run whose deck carries
-        ``.options logopinfo``, to three significant digits whatever
-        ``.options numdgt`` says; a device inside a subcircuit keeps LTspice's
-        name for it. Empty when the log has no such
-        table, as an ngspice log never does: ngspice's are traces of its raw,
-        read with ``load_raw(...).value("@m1[gm]")``.
+        LTspice prints them in the log of an ``.op`` run, to three significant
+        digits whatever ``.options numdgt`` says: LTspice 26 under ``.options
+        logopinfo``, LTspice XVII always. A device inside a subcircuit is keyed
+        by its path (``ops["xa.xin.mtail"]``), whichever build named it in the
+        table. Empty when the log has no such table, as an ngspice log never
+        does: ngspice's are traces of its raw, read with
+        ``load_raw(...).value("@m1[gm]")``.
         """
         section = self._log_section("device_op", log_path, job_id, run_index, case_id)
         return device_op_points_of(section)

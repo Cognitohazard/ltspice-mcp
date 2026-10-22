@@ -1024,7 +1024,8 @@ class TestDeviceOperatingPoints:
     def test_the_api_reads_the_block_by_device(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
-        """``api.device_op_points`` is the same table, by device and parameter."""
+        """``api.device_op_points`` is the same table, by device and parameter,
+        a device inside a subcircuit by its path."""
         case_id = _device_op_case(build)
         log = work_dir / "device_op.log"
         log.write_bytes(rec.recorded(build, f"{case_id}.log").read_bytes())
@@ -1034,13 +1035,10 @@ class TestDeviceOperatingPoints:
         assert points["m1"]["gm"] == pytest.approx(5.86e-4)
         assert points["q1"]["gm"] == pytest.approx(1.15e-2)
         assert points["d1"]["id"] == pytest.approx(2.32e-3)
-        inner = "m:1:1" if rec.generation(build) == "xvii" else "x1:m1"
-        assert points[inner]["gm"] == pytest.approx(8.64e-4)
+        assert points["x1.m1"]["gm"] == pytest.approx(8.64e-4)
         # Every value of the table, and nothing else.
         flat = read_device_op_points(log)
-        assert {f"@{device}[{param}]" for device in points for param in points[device]} == set(
-            flat
-        )
+        assert sum(len(params) for params in points.values()) == len(flat)
 
     def test_the_table_prints_three_significant_digits_whatever_numdgt_says(self, build: str):
         for case_id in (_device_op_case(build), _device_op_case(build, numdgt=True)):
@@ -1118,6 +1116,19 @@ class TestSubcircuitDeviceNames:
         assert sorted(path_text(table_device_path(n, xvii=xvii)) for n in names) == (
             _NESTED_MOSFETS
         )
+
+    def test_the_api_keys_each_device_by_its_path_on_either_build(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The two builds' tables name the same devices differently; the API's
+        keys are their paths, which agree."""
+        log = work_dir / "subckt_names.log"
+        log.write_bytes(rec.recorded(build, f"{self._table_case(build)}.log").read_bytes())
+
+        points = SyncApi(state_no_sim).device_op_points(log)
+
+        assert sorted(points) == _NESTED_MOSFETS
+        assert all("gm" in params for params in points.values())
 
     def test_the_raw_holds_a_subcircuits_insides_only_when_the_setting_asks(self, build: str):
         """By default both builds store a subcircuit instance's port currents
