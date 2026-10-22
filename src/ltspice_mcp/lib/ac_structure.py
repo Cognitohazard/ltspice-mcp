@@ -265,6 +265,9 @@ def _slope_plateaus(slope: np.ndarray, log_f: np.ndarray) -> list[dict[str, floa
 
     def is_plateau(k: int) -> bool:
         lvl = slope[k]
+        if not np.isfinite(lvl):
+            # Too few samples near it to fit a slope (``_running_slope``).
+            return False
         near_int = abs(lvl - _DB_PER_ORDER * round(lvl / _DB_PER_ORDER)) <= _PLATEAU_TOL_DB
         return bool(near_int and dslope[k] <= _FLAT_DSLOPE)
 

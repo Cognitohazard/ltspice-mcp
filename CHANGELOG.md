@@ -10,6 +10,11 @@ tool-surface changes.
 
 ### Fixed
 
+- `plot_waveform`, and the `ac_structure` recipe, could fail on a frequency
+  sweep whose points lie more than a quarter decade apart (`.ac dec 3` or
+  sparser, an `.ac oct 1` sweep, an FRA's results an octave a point): no slope
+  can be fit there, and reading the magnitude's breakpoints stopped on it.
+  Such a sweep now has no breakpoints to read.
 - A rendered sheet placed text where LTspice does not, so it could not show
   whether text collides. A `Left` window on a part placed `R180` or `M0` was
   drawn starting at its point where LTspice ends it there, a plain window on a
