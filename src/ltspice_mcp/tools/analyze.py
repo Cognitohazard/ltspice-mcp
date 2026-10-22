@@ -56,7 +56,7 @@ from ltspice_mcp.lib.projection import (
     project_row,
     split_field_path,
 )
-from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
+from ltspice_mcp.lib.raw_parser import get_step_count, other_raw_path, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     KeyedRecipe,
     MeasurementsRecipe,
@@ -155,6 +155,13 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
             "or {case_ids: [...]} for an experiment job."
         ),
     )
+    other_raw: Literal["fra_1", "op"] | None = Field(
+        default=None,
+        description=(
+            "Read each case's raw of this kind from its row's other_raws instead "
+            "of its raw (an FRA's results, a .tran's .op). Jobs only."
+        ),
+    )
     label: str = Field(
         default="",
         min_length=1,
@@ -179,6 +186,8 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
             self.keep_first("runs")
         if isinstance(self.runs, CaseSelection) and self.job_id is None:
             raise ValueError("case_ids selection is available only for experiment jobs")
+        if self.other_raw is not None and self.job_id is None:
+            raise ValueError("other_raw selects a raw of an experiment job's cases")
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
@@ -1115,9 +1124,31 @@ async def _resolve_sources(
                     }
                 )
                 continue
+            kind = source_input.other_raw
+            if kind is not None and kind not in case.other_raws:
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": case.case_id,
+                        "run_index": case.run_index,
+                        "code": "other_raw_not_written",
+                        "detail": (
+                            f"the run wrote no {kind} raw; its row's other_raws lists "
+                            f"{sorted(case.other_raws) or 'none'}"
+                        ),
+                    }
+                )
+                continue
             ctx = services.experiment_run_context(
-                job, state, case_id=case.case_id, require_raw=False
+                job, state, case_id=case.case_id, require_raw=kind is not None
             )
+            if kind is not None:
+                assert ctx.raw is not None
+                ctx = replace(
+                    ctx,
+                    raw=other_raw_path(ctx.raw, kind),
+                    identity={**ctx.identity, "other_raw": kind},
+                )
             resolved = services.source_for_run(
                 ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
             )

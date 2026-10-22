@@ -526,6 +526,7 @@ FROZEN_ERROR_CODES = (
     "open_windows_unavailable",
     "open_windows_unreachable",
     "order_disagreement",
+    "other_raw_not_written",
     "overlapping_assignment",
     "overlapping_mismatch_rules",
     "owner_liveness_unknown",

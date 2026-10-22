@@ -689,7 +689,12 @@ Input:
 
 ```
 sources    list[{job_id? | raw_path? | log_path?, runs?: "all"|[int]|{case_ids}, label?,
-                 plot_index?: int|null, dialect?: str|null}]
+                 plot_index?: int|null, dialect?: str|null,
+                 other_raw?: "fra_1"|"op"}]
+                          other_raw (job sources only) reads each case's raw
+                          of that kind, as its row's other_raws lists it,
+                          instead of its raw; a case that wrote none is a
+                          missing case with code other_raw_not_written
 recipes    list[Recipe]   Appendix A.2; unique key; optional per-recipe
                           sources: [label]
 group_by   list[assignment param | "circuit" | step-axis name]

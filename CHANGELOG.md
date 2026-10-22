@@ -974,6 +974,11 @@ recording that showed it.
 
 ### Added
 
+- `analyze_results` reads a case's other raw by job and case: a job source
+  with `other_raw: "fra_1"` reads each case's frequency response analysis
+  results, and `other_raw: "op"` a transient's operating point, where only a
+  `raw_path` to the file could before. A case whose run wrote no such raw is
+  a missing case with code `other_raw_not_written`.
 - `run_experiments` takes `execution.keep_partial_raw`. A case stopped by its
   run timeout, the job deadline or a cancel then keeps its raw, cut to the
   points a full read reaches, where it was deleted, and `analyze_results`,

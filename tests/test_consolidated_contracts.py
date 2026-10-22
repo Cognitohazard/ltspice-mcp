@@ -706,7 +706,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # the window rule and the phase convention (on a full listing the only
     # place a caller reads which sine and which time zero phase_deg is
     # measured from), and its entry on the roster. Measured 20,959.
-    "analyze_results": 21000,
+    # Raised by about 220 characters for a job source's other_raw, which reads
+    # a case's frequency response analysis results or a transient's operating
+    # point by job and case instead of by path. Measured 21,180.
+    "analyze_results": 21200,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

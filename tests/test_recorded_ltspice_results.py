@@ -52,7 +52,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
 from tests._ltspice_recorded import declared_points, header_fields
-from tests.conftest import SyncApi
+from tests.conftest import SyncApi, make_experiment_job
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
 from tests.test_decoded_raw import assert_classified_as_named
 
@@ -1398,6 +1398,62 @@ async def test_the_stability_recipe_on_the_negated_fra_gain_gives_ltspices_margi
     (margin,) = result["phase_margins"]
     assert margin["frequency_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
     assert margin["margin_deg"] == pytest.approx(margin_deg, abs=0.5)
+
+
+def _fra_job(state: SessionState, work_dir: Path, *, other_raws: list[str]):
+    """A job whose one case ran the recorded frequency response analysis."""
+    for name in ("fra.raw", "fra.log", "fra.fra_1.raw"):
+        (work_dir / name).write_bytes(rec.recorded("ltspice26", f"raw/{name}").read_bytes())
+    job = make_experiment_job(state, job_id="exp_fra", raw=work_dir / "fra.raw")
+    job.cases[0].other_raws = list(other_raws)
+    return job
+
+
+async def _analyze_fra(state: SessionState, job_id: str) -> dict[str, Any]:
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": job_id, "other_raw": "fra_1", "label": "fra"}],
+                "recipes": [{"key": "loop", "metric": "stability", "signal": "-gain_1"}],
+            }
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    return result.structured_content
+
+
+async def test_a_jobs_fra_results_are_read_by_job_and_case(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A frequency response analysis writes its results beside the run's raw,
+    and the run row lists them; a job source reads them with other_raw instead
+    of the transient, as a raw_path source of the file would."""
+    said = _FRA_RESULT.search(read_spice_text(rec.recorded("ltspice26", "raw/fra.log")))
+    assert said is not None
+    crossover_khz, margin_deg = (float(value) for value in said.groups())
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+
+    data = await _analyze_fra(state_no_sim, job.job_id)
+
+    assert data["coverage"]["runs_analyzed"] == 1
+    [row] = data["results"]["loop"]["values"]
+    assert row["case_id"] == job.cases[0].case_id
+    assert row["value"]["unity_gain_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
+    assert row["value"]["phase_margin_worst_deg"] == pytest.approx(margin_deg, abs=0.5)
+
+
+async def test_a_case_that_wrote_no_such_raw_is_missing_not_misread(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job = _fra_job(state_no_sim, work_dir, other_raws=[])
+
+    data = await _analyze_fra(state_no_sim, job.job_id)
+
+    assert data["coverage"]["runs_analyzed"] == 0
+    [missing] = data["coverage"]["missing_cases"]["items"]
+    assert missing["code"] == "other_raw_not_written"
+    assert missing["case_id"] == job.cases[0].case_id
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():
