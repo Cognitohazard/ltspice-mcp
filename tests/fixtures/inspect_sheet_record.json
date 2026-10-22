@@ -93179,6 +93179,707 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/instance_prefix.asc": {
+  "components": {
+   "rows": [
+    {
+     "attributes": {
+      "Prefix": "X"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 464,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 480,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 480,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 480,
+      "y": 144
+     },
+     "reference": "Load",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "mysub"
+    },
+    {
+     "attributes": {
+      "Prefix": "X"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 48,
+      "x": 96,
+      "y": 528
+     },
+     "pins": [
+      {
+       "dir": "right",
+       "name": "D",
+       "order": 1,
+       "x": 144,
+       "y": 528
+      },
+      {
+       "dir": "left",
+       "name": "G",
+       "order": 2,
+       "x": 96,
+       "y": 608
+      },
+      {
+       "dir": "right",
+       "name": "S",
+       "order": 3,
+       "x": 144,
+       "y": 624
+      },
+      {
+       "dir": "right",
+       "name": "B",
+       "order": 4,
+       "x": 144,
+       "y": 576
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 528
+     },
+     "reference": "M1",
+     "rotation": "R0",
+     "symbol": "nmos4",
+     "value": "mymos"
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    },
+    {
+     "attributes": {
+      "Prefix": "X"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 272,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 288,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 288,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 288,
+      "y": 144
+     },
+     "reference": "R2",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "mysub"
+    },
+    {
+     "attributes": {
+      "Prefix": "x"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 352
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 352
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 448
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 400
+     },
+     "reference": "R5",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "mysub"
+    },
+    {
+     "attributes": {
+      "Prefix": "C"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 272,
+      "y": 352
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 288,
+       "y": 352
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 288,
+       "y": 448
+      }
+     ],
+     "position": {
+      "x": 288,
+      "y": 400
+     },
+     "reference": "R6",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1p"
+    },
+    {
+     "attributes": {
+      "Prefix": "X"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 464,
+      "y": 352
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 480,
+       "y": 352
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 480,
+       "y": 448
+      }
+     ],
+     "position": {
+      "x": 480,
+      "y": 400
+     },
+     "reference": "R7",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "mysub"
+    },
+    {
+     "attributes": {
+      "Prefix": "R"
+     },
+     "bounding_box": {
+      "height": 144,
+      "width": 144,
+      "x": 320,
+      "y": 576
+     },
+     "pins": [
+      {
+       "dir": "right",
+       "name": "a",
+       "order": 1,
+       "x": 416,
+       "y": 672
+      },
+      {
+       "dir": "right",
+       "name": "b",
+       "order": 2,
+       "x": 448,
+       "y": 624
+      },
+      {
+       "dir": "down",
+       "name": "c",
+       "order": 3,
+       "x": 368,
+       "y": 704
+      },
+      {
+       "dir": "left",
+       "name": "d",
+       "order": 4,
+       "x": 336,
+       "y": 592
+      }
+     ],
+     "position": {
+      "x": 400,
+      "y": 640
+     },
+     "reference": "U1",
+     "rotation": "R0",
+     "symbol": "cell4",
+     "value": "5k"
+    },
+    {
+     "attributes": {
+      "Prefix": "X"
+     },
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 656,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 672,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 672,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 672,
+      "y": 144
+     },
+     "reference": "X4",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "mysub"
+    }
+   ],
+   "total": 9
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "e2a95af05202176d",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R2.1",
+    "coordinates_sha256": "6a0f65159bf2faf6",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R2",
+      "x": 288,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R2.2",
+    "coordinates_sha256": "8ae3747c39d9596d",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R2",
+      "x": 288,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "Load.1",
+    "coordinates_sha256": "b6ab26082ca385f2",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 480,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "Load.2",
+    "coordinates_sha256": "e76878202c649fa6",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "Load",
+      "x": 480,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "X4.1",
+    "coordinates_sha256": "b9b1e2f4dfb2f985",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "X4",
+      "x": 672,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "X4.2",
+    "coordinates_sha256": "6b88b5124c316677",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "X4",
+      "x": 672,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R5.1",
+    "coordinates_sha256": "7284f9052b93cd37",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R5",
+      "x": 96,
+      "y": 352
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R5.2",
+    "coordinates_sha256": "1e77ab936533e5c3",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R5",
+      "x": 96,
+      "y": 448
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R6.1",
+    "coordinates_sha256": "2b8f8ef5888ae914",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R6",
+      "x": 288,
+      "y": 352
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R6.2",
+    "coordinates_sha256": "18c13b18768d6521",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R6",
+      "x": 288,
+      "y": 448
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R7.1",
+    "coordinates_sha256": "f28af2037c296dda",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R7",
+      "x": 480,
+      "y": 352
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R7.2",
+    "coordinates_sha256": "17f8a063846222d5",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R7",
+      "x": 480,
+      "y": 448
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "M1.D",
+    "coordinates_sha256": "96e2ecbdb562ed9e",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "D",
+      "reference": "M1",
+      "x": 144,
+      "y": 528
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "M1.G",
+    "coordinates_sha256": "de139db9fcecf1a6",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "G",
+      "reference": "M1",
+      "x": 96,
+      "y": 608
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "M1.S",
+    "coordinates_sha256": "19d3a60c5279abcb",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "S",
+      "reference": "M1",
+      "x": 144,
+      "y": 624
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "M1.B",
+    "coordinates_sha256": "1f8220455ec41c07",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "B",
+      "reference": "M1",
+      "x": 144,
+      "y": 576
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "U1.a",
+    "coordinates_sha256": "957cebd3139e4fd0",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "a",
+      "reference": "U1",
+      "x": 416,
+      "y": 672
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "U1.b",
+    "coordinates_sha256": "29ac03eb78edf6ad",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "b",
+      "reference": "U1",
+      "x": 448,
+      "y": 624
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "U1.c",
+    "coordinates_sha256": "ecba72b3a2194a80",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "c",
+      "reference": "U1",
+      "x": 368,
+      "y": 704
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "U1.d",
+    "coordinates_sha256": "e36ecd2b8d38d378",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "d",
+      "reference": "U1",
+      "x": 336,
+      "y": 592
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
   "components": {
    "rows": [

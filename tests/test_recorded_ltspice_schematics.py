@@ -1183,11 +1183,41 @@ class TestExportedNames:
         assert written.count("SYMBOL probe4 ") == 3
         assert "!.op" in written
 
-    def test_the_editor_names_each_parts_element_class(self, build: str, tmp_path: Path):
-        sheet = rec.stage_sheet(build, "export/instance_names", tmp_path)
-        editor = make_editor(sheet)
+    def test_an_instances_own_prefix_gives_its_element_letter(self, build: str):
+        """A part's own Prefix replaces its symbol's on the card: an X turns a
+        resistor or a MOSFET into a subcircuit call, a C turns a resistor into a
+        capacitor and an R a block symbol into a resistor of its first two
+        pins. A lower-case x is X, and where the line stands among the part's
+        attributes does not matter. The name is written as for a symbol of that
+        prefix."""
+        references = [
+            card.name
+            for card in rec.export_cards(build, "export/instance_prefix")
+            if card.kind == "instance"
+        ]
+        x = "X" if rec.generation(build) == "xvii" else "X§"
+        assert references == [
+            "R1",
+            f"{x}R2",
+            f"{x}Load",
+            f"{x}X4",
+            f"{x}R5",
+            "C§R6",
+            f"{x}R7",
+            f"{x}M1",
+            "R§U1",
+        ]
+        (u1,) = [c for c in rec.export_cards(build, "export/instance_prefix") if c.name == "R§U1"]
+        assert u1.body.split()[1:] == ["NC_19", "NC_20", "5k"]
+
+    @pytest.mark.parametrize("sheet", ["instance_names", "instance_prefix"])
+    def test_the_editor_names_each_parts_element_class(
+        self, build: str, sheet: str, tmp_path: Path
+    ):
+        sheet_path = rec.stage_sheet(build, f"export/{sheet}", tmp_path)
+        editor = make_editor(sheet_path)
         assert isinstance(editor, AscEditor)
-        cards = rec.export_instances(build, "export/instance_names")
+        cards = rec.export_instances(build, f"export/{sheet}")
         for reference in editor.get_components():
             letter = element_class(editor, reference)
             matches = [

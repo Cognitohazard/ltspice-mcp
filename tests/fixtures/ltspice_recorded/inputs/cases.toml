@@ -192,6 +192,12 @@ model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py",
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
+[behaviour.export-instance-prefix]
+summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
+model = ["lib/schematic_ops.py"]
+inputs = ["export/instance_prefix.asc"]
+extra = ["export/res.asy", "export/cell4.asy"]
+
 [behaviour.export-attributes]
 summary = "Where Value2, SpiceLine, SpiceLine2 and SpiceModel land on an exported card: subcircuit parameters, a params: marker, and a transistor's or diode's area factor."
 model = ["lib/spice_lex_views.py", "lib/netlist_diff.py", "lib/schematic_ops.py", "lib/sheet.py", "lib/sheet_findings.py"]

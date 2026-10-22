@@ -1594,6 +1594,87 @@ class TestSetAttributeAllowlist:
 
 
 @pytest.mark.asyncio
+class TestInstancePrefix:
+    """A part's own Prefix sets the element letter it netlists as, on both
+    builds (recorded: ``export/instance_prefix``), so it is an attribute the
+    ops accept rather than refuse as a symbol property."""
+
+    async def test_a_prefix_is_written_upper_case_and_names_the_element(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        from spicelib import AscEditor
+
+        from ltspice_mcp.lib.schematic_ops import element_class
+
+        result = apply_one(
+            asc_state,
+            asc_file,
+            {
+                "op": "set_component_attribute",
+                "reference": "R1",
+                "attribute": "Prefix",
+                "value": "x",
+            },
+        )
+        assert result["changed"] == {"Prefix": {"was": None, "now": "X"}}
+        assert b"SYMATTR Prefix X" in asc_file.read_bytes()  # noqa: ASYNC240
+        editor = AscEditor(str(asc_file))
+        assert editor.get_component("R1").attributes["Prefix"] == "X"
+        assert element_class(editor, "R1") == "X"
+
+    async def test_clearing_a_prefix_gives_the_part_its_symbols_letter_back(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        from spicelib import AscEditor
+
+        from ltspice_mcp.lib.schematic_ops import element_class
+
+        op = {"op": "set_component_attribute", "reference": "R1", "attribute": "Prefix"}
+        apply_one(asc_state, asc_file, {**op, "value": "C"})
+        apply_one(asc_state, asc_file, {**op, "value": ""})
+        editor = AscEditor(str(asc_file))
+        assert "Prefix" not in editor.get_component("R1").attributes
+        assert element_class(editor, "R1") == "R"
+
+    async def test_a_prefix_that_is_no_element_letter_is_refused(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        with pytest.raises(NetlistError, match="element letter"):
+            apply_one(
+                asc_state,
+                asc_file,
+                {
+                    "op": "set_component_attribute",
+                    "reference": "R1",
+                    "attribute": "Prefix",
+                    "value": "1",
+                },
+            )
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+
+    async def test_a_part_placed_with_a_prefix_netlists_as_that_element(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        from spicelib import AscEditor
+
+        from ltspice_mcp.lib.schematic_ops import element_class
+
+        add_component(
+            asc_state,
+            asc_file,
+            "R9",
+            "res",
+            600,
+            600,
+            value="mysub",
+            attributes={"Prefix": "X"},
+        )
+        editor = AscEditor(str(asc_file))
+        assert element_class(editor, "R9") == "X"
+
+
+@pytest.mark.asyncio
 class TestNetConflictInWirePins:
     """wire_pins detects shorts between two named nets."""
 

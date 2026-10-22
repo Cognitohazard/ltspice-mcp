@@ -1,0 +1,12 @@
+* C:\recording\instance_prefix.asc
+R1 NC_01 NC_02 1k
+XR2 NC_03 NC_04 mysub
+XLoad NC_05 NC_06 mysub
+XX4 NC_07 NC_08 mysub
+XR5 NC_09 NC_10 mysub
+C§R6 NC_11 NC_12 1p
+XR7 NC_13 NC_14 mysub
+XM1 NC_15 NC_16 NC_17 NC_18 mymos
+R§U1 NC_19 NC_20 5k
+.backanno
+.end

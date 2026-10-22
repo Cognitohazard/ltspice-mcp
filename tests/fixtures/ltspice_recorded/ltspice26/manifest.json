@@ -3913,6 +3913,35 @@
         ".net"
       ]
     },
+    "export/instance_prefix": {
+      "behaviour": "export-instance-prefix",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/instance_prefix.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "host": "Wine 11.0",
+      "inputs": {
+        "export/cell4.asy": "586f07488cd8f976db4d7c8859f48fd500b769c325929f384a000bcfe4cfd5e4",
+        "export/instance_prefix.asc": "d85d22e0ef42a2f79a0f8ea07d9ac442bfbf1f248d522a607cda5157b75adf94",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/instance_prefix.net": {
+          "bytes": 387,
+          "sha256": "e1dec9253aa28d37502d92a6539d18b6f6fd7921fb2906816fbe2f92b72cb5f0"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "export/micro_cp1252": {
       "behaviour": "export-encoding",
       "command": [

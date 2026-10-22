@@ -81,7 +81,10 @@ fails as `open_window_differs` wrote nothing: the window's copy is not the
 file's. Only the user can settle that, so ask them to save the sheet (Ctrl+S)
 or close it, then read its `sha256` again and resubmit.
 
-- Component attributes: Value, Value2, SpiceLine, SpiceLine2.
+- Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
+  `Prefix` replaces its symbol's element letter on export, on both builds:
+  `Prefix X` with the subcircuit's name in `Value` makes a resistor or MOSFET
+  symbol a subcircuit call (`X§R2 ... mysub`), with no new symbol file.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to
   individual nets).
 

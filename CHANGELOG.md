@@ -10,6 +10,14 @@ tool-surface changes.
 
 ### Fixed
 
+- `set_component_attribute` and `add_component` refused a part's own
+  `Prefix` as a symbol property, so making parts subcircuit calls needed new
+  symbol files and every part removed and placed again. Both LTspice builds
+  honour an instance's `Prefix` on export, in either case of the letter and on
+  any symbol (recorded: `export/instance_prefix`), so it is now accepted,
+  written in upper case as spicelib reads it back, and sets the element letter
+  the part's value is read for. Clearing it gives the part its symbol's letter
+  back.
 - `verify_circuit`'s export check reported `value_suffix_micro_sign` on every
   export of a sheet with a `u` value: both LTspice builds write a part's `u`
   suffix as µ in the netlist they export, whatever the sheet spells (recorded:
