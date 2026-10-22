@@ -52,13 +52,6 @@ def writes_xvii_names(raw: RawData) -> bool:
     return isinstance(command, str) and is_cp1252_ltspice_build(command)
 
 
-def table_writes_xvii_names(names: Iterable[str]) -> bool:
-    """Whether a log's device table names a device inside a subcircuit as
-    LTspice XVII does, its letter first (``m:a:in:tail``). LTspice 26 starts
-    with the outermost instance, whose name starts with X (``xa:xin:mtail``)."""
-    return any(":" in name and not name.casefold().startswith("x") for name in names)
-
-
 def split_path(text: str) -> DevicePath:
     """A device path as a caller writes it, by dots or colons: ``xa.xin.mtail``."""
     return tuple(segment for segment in re.split(r"[.:]", text.casefold()) if segment)
@@ -69,10 +62,14 @@ def _instances(segments: Iterable[str], *, xvii: bool) -> DevicePath:
     return tuple(f"x{segment}" for segment in segments) if xvii else tuple(segments)
 
 
-def table_device_path(name: str, *, xvii: bool) -> DevicePath:
+def table_device_path(name: str) -> DevicePath:
     """The device a name in the log's device table (or an ngspice ``@`` trace)
     belongs to: ``xa:xin:mtail`` and ``m:a:in:tail`` are both
-    ``("xa", "xin", "mtail")``, ngspice's ``m.xa.xin.mtail`` too."""
+    ``("xa", "xin", "mtail")``, ngspice's ``m.xa.xin.mtail`` too.
+
+    Each name says which build wrote it: LTspice 26 starts with the outermost
+    instance, whose name starts with X, and XVII with the device's letter,
+    as its table lists no instance."""
     low = name.casefold()
     if ":" not in low:
         segments = [segment for segment in low.split(".") if segment]
@@ -80,12 +77,12 @@ def table_device_path(name: str, *, xvii: bool) -> DevicePath:
         if len(segments) > 1 and len(segments[0]) == 1:
             segments = segments[1:]
         return tuple(segments)
-    *head, last = low.split(":")
-    if xvii and head:
-        # XVII writes the device's letter first and drops it from its name.
-        letter, *instances = head
-        return (*_instances(instances, xvii=True), letter + last)
-    return (*head, last)
+    first, *rest = low.split(":")
+    if first.startswith("x"):
+        return (first, *rest)
+    # XVII writes the device's letter first and drops it from its name.
+    *instances, last = rest
+    return (*_instances(instances, xvii=True), first + last)
 
 
 @dataclass(frozen=True)
@@ -105,7 +102,7 @@ def _owner(name: str, *, xvii: bool) -> _Owner | None:
     table = _DEVICE_PARAM.search(name)
     if table is not None:
         device = table.group(1)
-        return _Owner(device, table_device_path(device, xvii=xvii), param=table.group(2))
+        return _Owner(device, table_device_path(device), param=table.group(2))
     current = _CURRENT.match(name)
     if current is None:
         return None
@@ -194,7 +191,7 @@ def device_query(wanted: str, *, xvii: bool) -> Callable[[str], bool]:
     return names
 
 
-def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bool) -> str | None:
+def find_device_param(names: Iterable[str], device: str, param: str) -> str | None:
     """The one name among ``names`` that holds ``param`` of ``device``: the
     device as the simulator spells it, or the end of its path (``x1.mn`` for
     ``MN`` inside ``X1``, wherever ``X1`` is), whichever build or simulator
@@ -204,7 +201,7 @@ def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bo
     found = [
         name
         for name in names
-        if (owner := _owner(name, xvii=xvii)) is not None
+        if (owner := _owner(name, xvii=False)) is not None
         and owner.param is not None
         and owner.param.casefold() == param.casefold()
         and (owner.text.casefold() == literal or (want and owner.path[-len(want) :] == want))
@@ -254,7 +251,7 @@ def device_names(
     names: dict[str, dict[str, str | None]] = {}
     for name in table_names:
         entry = names.setdefault(
-            path_text(table_device_path(name, xvii=xvii)), {"op_table": None, "raw": None}
+            path_text(table_device_path(name)), {"op_table": None, "raw": None}
         )
         entry["op_table"] = name
     for trace in raw_traces:

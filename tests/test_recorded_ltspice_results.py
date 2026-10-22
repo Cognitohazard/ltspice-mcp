@@ -18,8 +18,9 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
-from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
@@ -50,6 +51,7 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import analysis, inspect_tools
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
 from tests._ltspice_recorded import declared_points, header_fields
@@ -1167,10 +1169,7 @@ class TestSubcircuitDeviceNames:
             assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
         else:
             assert names == ["xa:mdrv", "xa:xin:mtail", "xb:mdrv", "xb:xin:mtail"]
-        xvii = rec.generation(build) == "xvii"
-        assert sorted(path_text(table_device_path(n, xvii=xvii)) for n in names) == (
-            _NESTED_MOSFETS
-        )
+        assert sorted(path_text(table_device_path(n)) for n in names) == _NESTED_MOSFETS
 
     def test_the_api_keys_each_device_by_its_path_on_either_build(
         self, build: str, state_no_sim: SessionState, work_dir: Path
@@ -1520,6 +1519,97 @@ async def test_a_case_that_wrote_no_such_raw_is_missing_not_misread(
     [missing] = data["coverage"]["missing_cases"]["items"]
     assert missing["code"] == "other_raw_not_written"
     assert missing["case_id"] == job.cases[0].case_id
+
+
+async def _inspect_fra(state: SessionState, job_id: str) -> dict[str, Any]:
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {
+                "queries": [
+                    {"kind": "results", "view": "signals", "job_id": job_id, "other_raw": "fra_1"}
+                ]
+            }
+        ),
+        state,
+    )
+    assert reply.structured_content is not None
+    return reply.structured_content["results"][0]
+
+
+async def test_plot_and_inspect_read_a_jobs_fra_results_by_job_and_case(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """plot_waveform and inspect's results read a case's other raw by job and
+    case, as analyze_results does."""
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+
+    plot = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(
+            job_id=job.job_id, other_raw="fra_1", signals=["gain_1"], open=False
+        ),
+        state_no_sim,
+    )
+    listed = await _inspect_fra(state_no_sim, job.job_id)
+
+    assert plot.structured_content is not None
+    assert plot.structured_content["analysis_type"] == "fra"
+    assert plot.structured_content["signals"] == ["gain_1"]
+    assert listed["ok"], listed
+    assert [row["name"] for row in listed["data"]["signals"]] == [
+        "frequency",
+        "gain_1",
+        "V(stimulus_1)",
+    ]
+
+
+async def test_plot_and_inspect_refuse_an_other_raw_the_run_did_not_write(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job = _fra_job(state_no_sim, work_dir, other_raws=["op"])
+
+    with pytest.raises(OtherRawNotWritten, match=r"wrote no fra_1 raw; .* lists \['op'\]"):
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(job_id=job.job_id, other_raw="fra_1", open=False),
+            state_no_sim,
+        )
+    listed = await _inspect_fra(state_no_sim, job.job_id)
+
+    assert not listed["ok"]
+    assert "wrote no fra_1 raw" in listed["error"]["message"]
+
+
+def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
+    state_no_sim: SessionState, work_dir: Path
+):
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+    api = SyncApi(state_no_sim)
+
+    raw = api.load_raw(job_id=job.job_id, other_raw="fra_1")
+
+    assert raw.analysis_type == "fra"
+    assert raw.source == work_dir / "fra.fra_1.raw"
+    assert list(np.real(raw.axis())) == [4e3, 8e3, 16e3, 32e3]
+    with pytest.raises(OtherRawNotWritten):
+        api.load_raw(job_id=job.job_id, other_raw="op")
+
+
+def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
+    """An other raw is a case's: a path names its file instead."""
+    raw = work_dir / "fra.fra_1.raw"
+    with pytest.raises(TypeError, match="other_raw is only valid with job_id"):
+        SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
+    with pytest.raises(ValidationError, match="other_raw selects a raw of an experiment job"):
+        analysis.PlotWaveformInput(raw_file=str(raw), other_raw="fra_1")
+    with pytest.raises(ValidationError, match="in_ltspice opens a run's own raw"):
+        analysis.PlotWaveformInput(job_id="exp_fra", other_raw="fra_1", in_ltspice=True)
+    with pytest.raises(ValidationError, match="other_raw require job_id"):
+        inspect_tools.ResultsQuery.model_validate(
+            {"kind": "results", "path": str(raw), "other_raw": "fra_1"}
+        )
+    with pytest.raises(ValidationError, match="log views do not select"):
+        inspect_tools.ResultsQuery.model_validate(
+            {"kind": "results", "view": "measurements", "job_id": "exp_fra", "other_raw": "op"}
+        )
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():

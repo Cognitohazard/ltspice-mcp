@@ -22,7 +22,12 @@ from typing import Any, TypeVar
 
 import numpy as np
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    JobNotFoundError,
+    OtherRawNotWritten,
+    ResultError,
+)
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
@@ -47,8 +52,10 @@ from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifac
 from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
+    OtherRawKind,
     get_step_count,
     is_noise_analysis,
+    other_raw_path,
     points_reached,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
@@ -322,12 +329,16 @@ def experiment_run_context(
     run_index: int | None = None,
     case_id: str | None = None,
     require_raw: bool = True,
+    other_raw: OtherRawKind | None = None,
 ) -> RunContext:
     """``resolve_experiment_run`` for a caller already holding the job.
 
     Carries the producing simulator and case provenance into the explicit
     source passed to each reader, independently of session defaults.
     Log readers can opt out of requiring RAW; case readiness is unchanged.
+    ``other_raw`` reads the case's other raw of that kind in place of its raw,
+    as its run row's ``other_raws`` lists it, and raises
+    :class:`OtherRawNotWritten` when the run wrote none.
     """
     job_id = job.job_id
     # Per-case readiness is still gated case by case below.
@@ -349,6 +360,15 @@ def experiment_run_context(
     case = matches[0]
     if not has_readable_raw(case) or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
+    raw = case.raw_file
+    if other_raw is not None:
+        if raw is None or other_raw not in case.other_raws:
+            raise OtherRawNotWritten(
+                f"Experiment case {case.case_id!r} of job {job_id!r} wrote no {other_raw} "
+                f"raw; its run row's other_raws lists {sorted(case.other_raws) or 'none'}",
+                show_hint=False,
+            )
+        raw = other_raw_path(raw, other_raw)
     held = partial_raw(case)
     identity: dict[str, Any] = {
         "case_id": case.case_id,
@@ -361,6 +381,8 @@ def experiment_run_context(
     }
     if case.native_statistics is not None:
         identity["native_statistics"] = case.native_statistics.public()
+    if other_raw is not None:
+        identity["other_raw"] = other_raw
     dialect = dialect_for_job(job, state)
     recorded = case.log_file or case.raw_file
     if recorded is not None:
@@ -370,7 +392,7 @@ def experiment_run_context(
     else:
         console = None
     return RunContext(
-        raw=case.raw_file,
+        raw=raw,
         log=case.log_file,
         netlist=case.staged_deck,
         circuit_path=case.circuit_path,
@@ -676,13 +698,13 @@ def device_param_forms(signal: str) -> list[str]:
     return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
 
 
-def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
+def device_param_name(names: Iterable[str], signal: str) -> str | None:
     """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
 
     Its literal forms (``device_param_forms``) first, then the device by the
     end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
-    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``; ``xvii`` for a build that names
-    devices as XVII does), refused when more than one matches: never a guess.
+    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``), refused when more than one
+    matches: never a guess.
     The one rule behind both readers of the shorthand.
     """
     match = DEV_PARAM_RE.fullmatch(signal.lower())
@@ -692,7 +714,7 @@ def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str |
     for form in device_param_forms(signal):
         if form in by_lower:
             return by_lower[form]
-    return find_device_param(by_lower.values(), *match.groups(), xvii=xvii)
+    return find_device_param(by_lower.values(), *match.groups())
 
 
 #: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
@@ -785,9 +807,7 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
-    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(
-        names, signal, xvii=xvii
-    )
+    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal)
 
 
 def _looks_like_expression(signal: str) -> bool:
