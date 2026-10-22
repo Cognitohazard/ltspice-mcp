@@ -35,7 +35,8 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
     failure_summary,
-    keeps_partial_raw,
+    has_readable_raw,
+    partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import LogDiagnostics
@@ -48,6 +49,7 @@ from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     is_noise_analysis,
+    points_reached,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
@@ -170,6 +172,9 @@ class AnalysisSource:
     #: The build a job's run named in its own output, as its case recorded it;
     #: None for a bare path, whose build is read from the artifacts instead.
     simulator_version: str | None = None
+    #: What a read of these results says of them, from the case that made them
+    #: (``RunContext.observations``); none for a bare path.
+    observations: tuple[dict[str, Any], ...] = ()
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -239,6 +244,7 @@ def source_for_run(
         plot_index=plot_index,
         console=run.console,
         simulator_version=run.simulator_version,
+        observations=run.observations,
     )
 
 
@@ -293,37 +299,19 @@ def _no_raw_result(job_id: str, case: ExperimentCase) -> str:
     return text
 
 
-def partial_raw_observation(case: ExperimentCase) -> dict[str, Any]:
-    """What a read of a stopped case's kept raw says of it: the values end
-    where the run was stopped, at the last point the raw was cut to."""
-    reached = next(
-        (
-            item.get("evidence") or {}
-            for item in case.observations
-            if item.get("code") == "partial_progress"
-        ),
-        {},
-    )
-    points = reached.get("kept_points")
-    last = reached.get("kept_last_axis_value")
-    axis = reached.get("axis")
-    where = f"its first {points} points" if points is not None else "the points it holds"
-    if axis is not None and last is not None:
-        where += f", to {axis} = {last:g}"
+def partial_raw_observation(case: ExperimentCase, held: dict[str, Any]) -> dict[str, Any]:
+    """What a read of a stopped case's kept raw says of it: every value ends
+    at the last point the raw was cut to. ``held`` is ``partial_raw(case)``."""
+    stop = case.failure_code or case.status
+    reached = points_reached(held.get("points"), held.get("axis"), held.get("last_axis_value"))
     return {
         "code": "partial_raw",
         "kind": "coverage",
         "detail": (
-            f"Case {case.case_id} was stopped ({case.failure_code or case.status}) before its "
-            f"run ended; its raw was kept with {where}, and every value read from it ends there."
+            f"Case {case.case_id} was stopped ({stop}) before its run ended; its raw was "
+            f"kept with its first {reached}, and every value read from it ends there."
         ),
-        "evidence": {
-            "case_id": case.case_id,
-            "stop": case.failure_code or case.status,
-            "points": points,
-            "axis": axis,
-            "last_axis_value": last,
-        },
+        "evidence": {"case_id": case.case_id, "stop": stop, **held},
     }
 
 
@@ -359,9 +347,9 @@ def experiment_run_context(
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
     case = matches[0]
-    partial = keeps_partial_raw(case)
-    if (case.status != "produced" and not partial) or (require_raw and case.raw_file is None):
+    if not has_readable_raw(case) or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
+    held = partial_raw(case)
     identity: dict[str, Any] = {
         "case_id": case.case_id,
         "run_index": case.run_index,
@@ -390,7 +378,7 @@ def experiment_run_context(
         identity=identity,
         console=console,
         simulator_version=case.simulator_version,
-        observations=(partial_raw_observation(case),) if partial else (),
+        observations=(partial_raw_observation(case, held),) if held is not None else (),
     )
 
 

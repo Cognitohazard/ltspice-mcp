@@ -823,6 +823,8 @@ class TestCutPartialRaw:
 
         assert progress is not None
         assert progress.points == points
+        assert progress.raw_bytes == len(stopped.read_bytes()) == start + points * record
+        assert progress.last_axis_value == pytest.approx(axis[points - 1])
         cut = RawRead(str(stopped), verbose=False)
         for name in finished.get_trace_names():
             np.testing.assert_array_equal(
@@ -831,7 +833,7 @@ class TestCutPartialRaw:
 
     def test_an_ltspice_raw_keeps_the_points_its_count_declares(self, tmp_path: Path):
         """LTspice's own reader reads a stopped run as far as the header's count."""
-        data, _start, _record, _axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
+        data, _start, _record, axis = _ltspice_layout(FIXTURES_DIR / "ltspice_tran_rc.raw")
         final = "No. Points:          221".encode("utf-16-le")
         lagging = "No. Points:          100".encode("utf-16-le")
         stopped = tmp_path / "lagging.raw"
@@ -841,6 +843,7 @@ class TestCutPartialRaw:
 
         assert progress is not None
         assert progress.points == 100
+        assert progress.last_axis_value == pytest.approx(axis[99])
         assert len(RawRead(str(stopped), verbose=False).get_trace(0).data) == 100
 
     def test_an_ltspice_raw_that_declares_no_points_is_left_as_it_is(self, tmp_path: Path):
@@ -884,8 +887,28 @@ class TestCutPartialRaw:
         cut = stopped.read_bytes()
         assert cut.startswith(op)
         records = b"".join(struct.pack("<3d", *row) for row in rows)
-        assert b"No. Points: 3\n" in cut[len(op) :]
+        assert b"No. Points:        3\n" in cut[len(op) :]
         assert cut.endswith(b"Binary:\n" + records)
+
+    def test_a_count_too_wide_for_its_field_is_written_to_a_copy(self, tmp_path: Path):
+        """The count is patched where it stands when the header left it room;
+        a header that left none is rewritten."""
+        rows = [(1e-9 * index, 0.5 * index) for index in range(12)]
+        names = ["time", "v(in)"]
+        stopped = tmp_path / "narrow.raw"
+        padded = b"No. Points: 0       \n"
+        stopped.write_bytes(
+            ngspice_binary_raw(rows, names, tail=b"\x01" * 5).replace(padded, b"No. Points: 0\n")
+        )
+
+        progress = cut_partial_raw(stopped, "ngspice")
+
+        assert progress is not None
+        assert progress.points == 12
+        assert progress.raw_bytes == len(stopped.read_bytes())
+        cut = RawRead(str(stopped), dialect="ngspice", verbose=False)
+        np.testing.assert_array_equal(cut.get_trace("v(in)").data, [row[1] for row in rows])
+        assert list(tmp_path.iterdir()) == [stopped]
 
     def test_a_layout_it_cannot_cut_is_left_as_it_is(self, tmp_path: Path):
         """A text raw has no fixed record to cut at."""

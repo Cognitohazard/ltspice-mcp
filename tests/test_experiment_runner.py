@@ -1217,15 +1217,14 @@ class TestStoppedCaseRecord:
         assert case.status == "failed" and case.failure_code == "run_timeout"
         assert case.raw_file == raw
         assert case.failure_evidence is not None
-        assert case.failure_evidence["partial_raw"] == str(raw)
-        assert job.failures[-1]["evidence"]["partial_raw"] == str(raw)
-        assert b"No. Points: 4\n" in await asyncio.to_thread(raw.read_bytes)
+        held = case.failure_evidence["partial_raw"]
+        assert (held["points"], held["axis"]) == (4, "time")
+        assert held["last_axis_value"] == pytest.approx(3e-6)
+        assert job.failures[-1]["evidence"]["partial_raw"] == held
         cut = await asyncio.to_thread(read_partial_raw_progress, raw, "ngspice")
         assert cut is not None and cut.points == 4
         [progress] = [item for item in case.observations if item["code"] == "partial_progress"]
         assert progress["evidence"]["raw_kept"] is True
-        assert progress["evidence"]["kept_points"] == 4
-        assert progress["evidence"]["kept_last_axis_value"] == pytest.approx(3e-6)
         assert "reads of this case take it" in progress["detail"]
 
         context = services.experiment_run_context(job, state_no_sim, case_id=case.case_id)

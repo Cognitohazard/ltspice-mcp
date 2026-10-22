@@ -912,7 +912,7 @@ recording that showed it.
   out as SVG, because SVG was asked for or no PNG could be made, said only
   `returned_inline: false`, and an agent that cannot read files had no way to
   see the drawing. It now returns the SVG markup in `render.svg`, where a
-  client that reads only the structured payload finds it, and in a text block.
+  client that reads only the structured payload finds it.
 - A symbol saved in the same folder as its `.asc`, where LTspice looks first and
   where a hand-drawn subcircuit symbol usually lives, was not found for pin
   positions. `inspect(kind="symbol")` and rendering found it, but
@@ -982,8 +982,10 @@ recording that showed it.
   keeps the points its header declares, as far as LTspice's own reader reads
   it, because LTspice XVII's records past that count go back in time
   (recorded: `raw/tran_killed`); an ngspice raw keeps every complete record.
-  The failure row's evidence names the kept file as `partial_raw`. The flag
-  cannot be combined with `recoverable`.
+  The count is patched where it stands and the file truncated, so nothing is
+  copied. The failure row's evidence says what the kept raw holds as
+  `partial_raw`, and the run row's `raw` is its path. The flag cannot be
+  combined with `recoverable`.
 - `RawResult.compare(other, signals=None, step=0, other_step=None)` in the
   Python API says how far another run's traces are from a run's: per signal
   the largest difference, its share of the run's peak and where it is, and the

@@ -332,7 +332,6 @@ async def load_raw_result(
     dialect: str | None = None,
 ) -> RawResult:
     """Resolve and bounded-parse one raw result on the API event loop."""
-    observations: tuple[dict[str, Any], ...] = ()
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
@@ -344,7 +343,6 @@ async def load_raw_result(
         context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
         resolved = source.raw
-        observations = context.observations
 
     raw = await services.load_raw(source, state)
     assert resolved is not None
@@ -356,7 +354,7 @@ async def load_raw_result(
         dialect=raw.descriptor.dialect,
         step_count=step_count,
         steps=steps,
-        observations=observations,
+        observations=source.observations,
     )
 
 

@@ -783,14 +783,15 @@ async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
 
     [failure] = receipt["failures"]
     assert failure["code"] == "run_timeout"
-    kept = failure["evidence"]["partial_raw"]
+    held = failure["evidence"]["partial_raw"]
     [row] = receipt["runs"]["items"]
-    assert (row["status"], row["raw"]) == ("failed", kept)
+    assert row["status"] == "failed"
+    assert row["raw"]
     [progress] = [item for item in receipt["observations"] if item["code"] == "partial_progress"]
-    reached = progress["evidence"]
+    assert progress["evidence"]["raw_kept"] is True
     # ngspice's count stays 0 until a plot ends: every whole point is kept.
-    assert reached["kept_points"] == reached["points"] > 0
-    last = reached["kept_last_axis_value"]
+    assert held["points"] == progress["evidence"]["points"] > 0
+    last = held["last_axis_value"]
 
     data = await _analyze(
         ngspice_state,
@@ -802,7 +803,7 @@ async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
     assert value["actual_x"] == pytest.approx(last)
     assert math.isfinite(value["value"])
     [partial] = [item for item in data["observations"] if item["code"] == "partial_raw"]
-    assert partial["evidence"]["points"] == reached["kept_points"]
+    assert partial["evidence"]["points"] == held["points"]
 
     reply = await handle_inspect(
         InspectInput.model_validate(
@@ -819,7 +820,7 @@ async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
     loaded = await load_raw_result(
         state=ngspice_state, raw_path=None, job_id=receipt["job_id"], run_index=0, case_id=None
     )
-    assert len(loaded.axis()) == reached["kept_points"]
+    assert len(loaded.axis()) == held["points"]
     assert [item["code"] for item in loaded.observations] == ["partial_raw"]
 
 

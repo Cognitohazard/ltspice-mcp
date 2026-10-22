@@ -19,7 +19,7 @@ import os
 import re
 import struct
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -28,6 +28,7 @@ from spicelib.raw.raw_classes import SpiceReadException
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError
+from ltspice_mcp.lib import atomic_write
 from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
 from ltspice_mcp.lib.decoded_raw import (
     AC_SHAPED,
@@ -1165,13 +1166,15 @@ class PartialRawProgress:
 @dataclass(frozen=True)
 class _Cut:
     """The plot a raw ends in, cut to the points it keeps: the byte offsets of
-    the plot's header, of its data, and of the end of its last kept point."""
+    the plot's header, of its data, and of the end of its last kept point, and
+    that point's axis value in deck coordinates."""
 
     width: int
     plot_start: int
     data_start: int
     data_end: int
     points: int
+    last_axis_value: float | None
 
 
 @dataclass(frozen=True)
@@ -1232,6 +1235,18 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
         raise
     except OSError:
         return None
+
+
+def points_reached(points: int | None, axis: str | None, last_axis_value: float | None) -> str:
+    """How far a raw's points reach, as a phrase for a detail:
+    ``40 points, the last at time = 0.039``."""
+    if points is None:
+        phrase = "a number of points that could not be counted"
+    else:
+        phrase = f"{points} point{'' if points == 1 else 's'}"
+    if axis is not None and last_axis_value is not None:
+        phrase += f", the last at {axis} = {last_axis_value:g}"
+    return phrase
 
 
 def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
@@ -1384,8 +1399,15 @@ def _progress_of_plot(
         # what its count declares. ngspice's count stays 0 until the plot ends.
         kept = min(declared, points) if writer == "ltspice" else points
         if kept > 0 and writer in ("ltspice", "ngspice"):
+            handle.seek(header.data_start + (kept - 1) * record)
+            stored = handle.read(8)
+            kept_last = (
+                _deck_axis_value(struct.unpack("<d", stored)[0], axis, plot, fields)
+                if axis and len(stored) == 8
+                else None
+            )
             end = header.data_start + kept * record
-            cut = _Cut(width, offset, header.data_start, end, kept)
+            cut = _Cut(width, offset, header.data_start, end, kept, kept_last)
     handle.seek(at)
     value = handle.read(8)
     if len(value) < 8:
@@ -1394,14 +1416,14 @@ def _progress_of_plot(
     return progress(points, struct.unpack("<d", value)[0], cut)
 
 
-#: The header line that declares a plot's point count.
-_RE_POINT_COUNT = re.compile(r"(?im)^(No\. Points:)[^\r\n]*")
-#: Bytes copied at a time when a raw is cut.
+#: The header line that declares a plot's point count, and its value field.
+_RE_POINT_COUNT = re.compile(r"(?im)^No\. Points:([^\r\n]*)")
+#: Bytes copied at a time when a raw is cut by copying.
 _CUT_COPY_CHUNK = 1024 * 1024
 
 
 def cut_partial_raw(path: Path, dialect: str | None = None) -> PartialRawProgress | None:
-    """Cut a stopped run's raw, in place, to the points a full load can read.
+    """Cut a stopped run's raw to the points a full load can read.
 
     A stopped run's raw ends part way through a point, and its header's point
     count is 0 (ngspice) or lags the points written (LTspice); a full load
@@ -1413,34 +1435,48 @@ def cut_partial_raw(path: Path, dialect: str | None = None) -> PartialRawProgres
     cannot be cut (see :attr:`PartialRawProgress.cut`) or the header declares
     no count to set.
 
-    The cut is written beside the file and moved over it, so a reader never
-    sees half of it. Raises FileNotFoundError when there is no file.
+    Both simulators leave room around the count to patch it where it stands,
+    so the file is truncated after its last kept point and the count written
+    in place: a file left between the two steps has the lagging count a
+    stopped run has. A count too wide for its field is written to a copy that
+    is moved over the file. Raises FileNotFoundError when there is no file.
     """
     progress = read_partial_raw_progress(path, dialect)
     cut = progress.cut if progress is not None else None
     if progress is None or cut is None:
         return None
     codec = _RAW_CODECS[cut.width]
-    partial = path.with_name(f"{path.name}.cut")
-    try:
-        with path.open("rb") as source, partial.open("wb") as out:
+    with path.open("rb") as source:
+        source.seek(cut.plot_start)
+        header = source.read(cut.data_start - cut.plot_start).decode(codec, errors="surrogatepass")
+    field = _RE_POINT_COUNT.search(header)
+    if field is None:
+        return None
+    count = str(cut.points)
+    before, after = header[: field.start(1)], header[field.end(1) :]
+    width = field.end(1) - field.start(1)
+    if len(count) < width:
+        at = cut.plot_start + len(before.encode(codec, errors="surrogatepass"))
+        with path.open("r+b") as raw:
+            raw.truncate(cut.data_end)
+            raw.seek(at)
+            raw.write(count.rjust(width).encode(codec))
+        size = cut.data_end
+    else:
+        patched = f"{before} {count}{after}".encode(codec, errors="surrogatepass")
+        # The source, opened second, closes before the copy is moved over it,
+        # which Windows refuses while a handle is open.
+        with (
+            atomic_write(path, mode="wb", encoding=None, durable=False) as out,
+            path.open("rb") as source,
+        ):
             _copy_bytes(source, out, 0, cut.plot_start)
-            source.seek(cut.plot_start)
-            header = source.read(cut.data_start - cut.plot_start).decode(
-                codec, errors="surrogatepass"
-            )
-            header, found = _RE_POINT_COUNT.subn(
-                lambda match: f"{match.group(1)} {cut.points}", header, count=1
-            )
-            if not found:
-                return None
-            out.write(header.encode(codec, errors="surrogatepass"))
+            out.write(patched)
             _copy_bytes(source, out, cut.data_start, cut.data_end - cut.data_start)
-        os.replace(partial, path)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            partial.unlink()
-    return read_partial_raw_progress(path, dialect)
+        size = cut.plot_start + len(patched) + cut.data_end - cut.data_start
+    return replace(
+        progress, raw_bytes=size, points=cut.points, last_axis_value=cut.last_axis_value, cut=None
+    )
 
 
 def _copy_bytes(source: Any, out: Any, start: int, length: int) -> None:

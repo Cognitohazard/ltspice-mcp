@@ -1447,12 +1447,10 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
 )
 async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     case = await _experiment_case(args.raw_file, args.job_id, args.run_index, args.case_id, state)
-    read_observations: list[dict[str, Any]] = []
     if case is not None:
         source = services.source_for_run(case, plot_index=args.plot_index, dialect=args.dialect)
         run_index = case.identity["run_index"]
         netlist: Path | None = case.netlist
-        read_observations = list(case.observations)
     else:
         source = _direct_source(
             args.raw_file, args.job_id, state, plot_index=args.plot_index, dialect=args.dialect
@@ -1646,7 +1644,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # Surface FACTS, not verdicts (result-trust doctrine). What the reply's own
     # fields already say (the panels, series and steps drawn, `opened`,
     # `delivery`) is not restated here.
-    observations: list[dict] = list(read_observations)
+    observations: list[dict] = list(source.observations)
     if traces_total > len(traces):
         observations.append(
             {

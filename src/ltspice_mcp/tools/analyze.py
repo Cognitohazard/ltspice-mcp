@@ -43,7 +43,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import AC_SHAPED, PlotDescriptor
-from ltspice_mcp.lib.experiment_types import failure_summary, keeps_partial_raw
+from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -1104,7 +1104,7 @@ async def _resolve_sources(
         else:
             selected = list(job.cases)
         for case in selected:
-            if case.status != "produced" and not keeps_partial_raw(case):
+            if not has_readable_raw(case):
                 missing.append(
                     {
                         "label": source_input.label,
@@ -1118,10 +1118,10 @@ async def _resolve_sources(
             ctx = services.experiment_run_context(
                 job, state, case_id=case.case_id, require_raw=False
             )
-            observations.extend(Observation.of(item) for item in ctx.observations)
             resolved = services.source_for_run(
                 ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
             )
+            observations.extend(Observation.of(item) for item in resolved.observations)
             resolved = replace(
                 resolved,
                 identity={

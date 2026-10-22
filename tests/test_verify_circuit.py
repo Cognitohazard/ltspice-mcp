@@ -31,7 +31,6 @@ from typing import Any, get_args
 
 import jsonschema
 import pytest
-from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.config import ServerConfig
@@ -40,13 +39,12 @@ from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
 from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import Finding
-from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.store import RENDER_RETENTION_S, Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
 from ltspice_mcp.tools._base import CompareSpec, RenderPolicy
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from ltspice_mcp.tools.verify import (
-    RENDER_RETENTION_S,
     STRUCTURAL_DELTA_PROPS,
     VerifyCircuitInput,
     evaluate_verify_circuit,
@@ -1626,8 +1624,7 @@ def _written_svg(render: dict[str, Any]) -> str:
 
 async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, asc_symbols):
     """Inline delivery of an SVG returns the drawing itself: its markup in
-    render.svg for a client that reads the structured payload, and as a text
-    block for one that reads the content."""
+    render.svg, which a structured-aware client reads."""
     asc = _write(work_dir, "ri.asc", _RES_ASC)
     result = await handle_verify_circuit(
         VerifyCircuitInput.model_validate(
@@ -1644,8 +1641,9 @@ async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, 
     assert markup.startswith("<svg")
     assert render["returned_inline"] is True
     assert render["svg"] == markup
-    assert result.content[0] == types.TextContent(type="text", text=markup)
-    assert not [c for c in result.content if c.type == "image"]
+    # Once: the text channel carries the headline, not a second copy.
+    assert [c.type for c in result.content] == ["text"]
+    assert markup not in result.content[0].text
     # SVG was what the caller asked for: nothing to explain.
     assert render["note"] is None
     assert data["failures"] == []

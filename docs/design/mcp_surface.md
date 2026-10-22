@@ -556,9 +556,9 @@ raw of a stopped case, cut to the points a full read reaches, where it would
 be deleted. An LTspice raw keeps the points its header's count declares, which
 is as far as LTspice's own reader reads it: LTspice XVII's records past that
 count need not run on in time. An ngspice raw keeps every complete record. The
-`partial_progress` observation then says `raw_kept: true` and adds
-`kept_points` and `kept_last_axis_value`; the failure row's `evidence` adds
-`partial_raw`, the kept file's path, which is also the run row's `raw`. Reads
+`partial_progress` observation then says `raw_kept: true`, the failure row's
+`evidence` adds `partial_raw: {points, axis, last_axis_value}`, what the kept
+raw holds, and the run row's `raw` is its path. Reads
 of that case (`analyze_results`, `plot_waveform`, `inspect(kind="results")`,
 the Python API's `load_raw`) take it as they take a produced case's, and each
 carries a `partial_raw` observation, `{case_id, stop, points, axis,
@@ -1195,7 +1195,7 @@ sets format, scale, pixel cap, and whether the image is returned inline or as
 a file. The file is written to the per-user folder's `renders/`, never to the
 working directory or beside the sheet, and is deleted a week later; a render
 regenerates it. `inline` and `both` return a PNG as an image block, and an SVG as
-its markup in `render.svg` and in a text block. A PNG needs the `raster` extra
+its markup in `render.svg`. A PNG needs the `raster` extra
 (`resvg-py`), or `cairosvg` with the native Cairo library it loads; without
 either the render falls back to SVG, and `render.note` names what is missing
 and its remedy. It is a `render` failure too when the caller named

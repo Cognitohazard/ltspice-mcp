@@ -68,6 +68,7 @@ version this build does not read is skipped with a warning, never guessed at.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hashlib
 import json
@@ -75,6 +76,7 @@ import logging
 import os
 import re
 import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -188,6 +190,10 @@ USER_HOME_ENV = "LTSPICE_MCP_HOME"
 
 #: Keeps each working directory's store under this directory instead of in it.
 STORE_DIR_ENV = "LTSPICE_MCP_STORE_DIR"
+
+#: How long a drawing stays in :meth:`Store.renders_dir`. It is drawn again
+#: from its sheet on the next render, and a session reads it back in minutes.
+RENDER_RETENTION_S = 7 * 24 * 3600
 
 _APP_DIRNAME = "ltspice-mcp"
 
@@ -831,9 +837,24 @@ class Store:
 
         Per user: a drawing is a view of a sheet, not a record of any working
         directory, so a server started in one project does not collect drawings
-        of sheets in others. ``verify_circuit`` deletes a drawing a week old.
+        of sheets in others. Each lives :data:`RENDER_RETENTION_S`
+        (:meth:`delete_old_renders`).
         """
         return user_home() / "renders"
+
+    @staticmethod
+    def delete_old_renders() -> None:
+        """Delete the drawings in :meth:`renders_dir` older than
+        :data:`RENDER_RETENTION_S`, so a folder every session shares does not
+        grow for ever. Run after each render."""
+        cutoff = time.time() - RENDER_RETENTION_S
+        with contextlib.suppress(FileNotFoundError):
+            for entry in os.scandir(Store.renders_dir()):
+                # A drawing another session is deleting, or a viewer holds
+                # open on Windows, is left to a later render.
+                with contextlib.suppress(OSError):
+                    if entry.is_file() and entry.stat().st_mtime < cutoff:
+                        os.unlink(entry.path)
 
 
 def run_dir_in(runs_root: Path, job_id: str) -> Path:

@@ -64,10 +64,8 @@ import asyncio
 import contextlib
 import functools
 import hashlib
-import os
 import re
 import shutil
-import time
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator, Collection, Mapping, Sequence
@@ -143,7 +141,7 @@ from ltspice_mcp.tools._base import (
     comparison_mismatch,
     failures_schema,
     format_response,
-    inline_content,
+    image_content,
     make_include_resolver,
     outcome_of,
     outcome_schema,
@@ -1925,29 +1923,15 @@ def _render_scene(
 ) -> tuple[RenderedImage, Path, bool]:
     """Render a scene into the per-user render folder. Returns (image, path,
     downscaled)."""
-    renders = state.store.renders_dir()
     rendered = render_scene_artifact(
-        scene, renders, image_format=image_format, scale=scale, max_pixels=max_pixels
+        scene,
+        state.store.renders_dir(),
+        image_format=image_format,
+        scale=scale,
+        max_pixels=max_pixels,
     )
-    _delete_old_renders(renders)
+    state.store.delete_old_renders()
     return rendered
-
-
-#: How long a drawing stays in the render folder. It is regenerated from its
-#: sheet on the next render, and a session reads it back within minutes.
-RENDER_RETENTION_S = 7 * 24 * 3600
-
-
-def _delete_old_renders(renders: Path) -> None:
-    """Delete the drawings older than :data:`RENDER_RETENTION_S`, so a folder
-    every session shares does not grow for ever."""
-    cutoff = time.time() - RENDER_RETENTION_S
-    for entry in os.scandir(renders):
-        # A drawing another session is deleting, or a viewer holds open on
-        # Windows, is left to a later render.
-        with contextlib.suppress(OSError):
-            if entry.is_file() and entry.stat().st_mtime < cutoff:
-                os.unlink(entry.path)
 
 
 #: What the render check produces: ``(payload, inline image, failures,
@@ -2012,7 +1996,12 @@ async def _do_render(
         returned_inline=inline,
         source_sha256=scene.source_sha256,
     )
-    return payload, (image if inline else None), failures, []
+    if inline and not image.is_raster:
+        # SVG is markup, not an image a client shows. A structured-aware
+        # client reads only the structured payload, so the drawing rides
+        # there, once.
+        payload["svg"] = image.data.decode("utf-8")
+    return payload, (image if inline and image.is_raster else None), failures, []
 
 
 def _render_note(image: RenderedImage, returned_inline: bool) -> str | None:
@@ -2032,7 +2021,7 @@ def _render_payload(
     returned_inline: bool,
     source_sha256: str | None,
 ) -> dict[str, Any]:
-    payload = {
+    return {
         "path": str(path),
         "sha256": hashlib.sha256(image.data).hexdigest(),
         # The digest of the SHEET this drew, not of the image and not of any
@@ -2054,11 +2043,6 @@ def _render_payload(
         "delivery": delivery,
         "note": _render_note(image, returned_inline),
     }
-    if returned_inline and not image.is_raster:
-        # SVG is markup, not an image a client shows, and a structured-aware
-        # client reads only the structured payload, so the drawing rides there.
-        payload["svg"] = image.data.decode("utf-8")
-    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -2589,7 +2573,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     if evaluation.is_error:
         result.is_error = True
     if evaluation.inline_image is not None:
-        result.content.insert(0, inline_content(evaluation.inline_image))
+        result.content.insert(0, image_content(evaluation.inline_image))
     return result
 
 
