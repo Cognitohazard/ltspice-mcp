@@ -10,10 +10,10 @@ nodes in its symbol's SpiceOrder (recorded: ``symbol-orientation``,
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 
 from ltspice_mcp.lib.netlist_graph import canon_ref
-from ltspice_mcp.lib.spice_lex import lex
+from ltspice_mcp.lib.spice_lex import iter_by_kind, lex
 from ltspice_mcp.lib.spice_lex_views import read_instance
 
 
@@ -30,7 +30,7 @@ def exported_name(reference: str, letter: str) -> str:
 
 
 def exported_pin_nodes(
-    export_text: str, parts: Iterable[tuple[str, str, Sequence[str]]]
+    export_text: str, parts: Sequence[tuple[str, str, Sequence[str]]]
 ) -> dict[tuple[str, str], str]:
     """Each pin's node in ``export_text``: ``(reference, pin name) -> node``.
 
@@ -42,12 +42,12 @@ def exported_pin_nodes(
     writes two). A node keeps the spelling the card gives it: LTspice reads
     ``out`` and ``OUT`` as one node and writes each label's own.
     """
+    wanted = {exported_name(reference, letter) for reference, letter, _ in parts}
     cards = {}
-    for card in lex(export_text).cards:
-        if card.kind == "instance" and card.name:
-            line = read_instance(card)
-            if line is not None:
-                cards[canon_ref(card.name)] = line.nodes
+    # Top-level cards only: a child sheet's parts are inside .subckt bodies.
+    for card in iter_by_kind(lex(export_text).cards, "instance", scope=()):
+        if card.name and canon_ref(card.name) in wanted and (line := read_instance(card)):
+            cards[canon_ref(card.name)] = line.nodes
     nodes: dict[tuple[str, str], str] = {}
     for reference, letter, pins in parts:
         found = cards.get(exported_name(reference, letter))

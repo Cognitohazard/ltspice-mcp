@@ -15,7 +15,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -26,6 +26,7 @@ from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, Resul
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
+from ltspice_mcp.lib.device_names import find_device_param, writes_xvii_names
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob, failure_summary
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import LogDiagnostics
@@ -639,6 +640,25 @@ def device_param_forms(signal: str) -> list[str]:
     return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
 
 
+def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
+    """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
+
+    Its literal forms (``device_param_forms``) first, then the device by the
+    end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
+    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``; ``xvii`` for a build that names
+    devices as XVII does), refused when more than one matches: never a guess.
+    The one rule behind both readers of the shorthand.
+    """
+    match = DEV_PARAM_RE.fullmatch(signal.lower())
+    if match is None:
+        return None
+    by_lower = {name.lower(): name for name in names}
+    for form in device_param_forms(signal):
+        if form in by_lower:
+            return by_lower[form]
+    return find_device_param(by_lower.values(), *match.groups(), xvii=xvii)
+
+
 #: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
 #: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
 #: no comma, parenthesis or space, which keeps the split unambiguous.
@@ -718,28 +738,10 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
 
-    dev_param = DEV_PARAM_RE.fullmatch(sig_lower)
-    candidates += device_param_forms(signal)
-
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
-
-    # Hierarchical path that drops the device-type letter, e.g. 'x1.mn.gm' for
-    # ngspice's '@m.x1.mn[gm]'. Match a unique @<path>[param] whose device path
-    # ends with the requested segments; refuse if ambiguous — never guess.
-    if dev_param:
-        dev, param = dev_param.group(1), dev_param.group(2)
-        suffix = "." + dev
-        wrapped = re.compile(r"^[vi]?\(?@(.+)\[" + re.escape(param) + r"\]\)?$")
-        hits = [
-            orig
-            for low, orig in by_lower.items()
-            if (m := wrapped.match(low)) and (m.group(1) == dev or m.group(1).endswith(suffix))
-        ]
-        if len(hits) == 1:
-            return hits[0]
-    return None
+    return device_param_name(trace_names, signal, xvii=writes_xvii_names(raw))
 
 
 def _looks_like_expression(signal: str) -> bool:

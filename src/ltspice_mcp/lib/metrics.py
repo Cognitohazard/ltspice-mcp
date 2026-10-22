@@ -52,9 +52,9 @@ from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import (
+    current_device,
     device_names,
-    find_device_param,
-    names_device,
+    device_query,
     owner_path,
     path_text,
     writes_xvii_names,
@@ -616,13 +616,10 @@ def has_active_device(currents: dict[str, float]) -> bool:
     ``device_op_points_absent`` observation — and a second copy of the rule is
     how one of them speaks while the other stays silent about the same run.
     """
-    for name in currents:
-        lp = name.find("(")
-        # A device inside a subcircuit is the last segment of its path.
-        device = name[lp + 1 :].rsplit(":", 1)[-1] if lp != -1 else ""
-        if device[:1].lower() in ("m", "q", "j", "d"):
-            return True
-    return False
+    return any(
+        (device := current_device(name)) is not None and device[:1] in ("m", "q", "j", "d")
+        for name in currents
+    )
 
 
 #: The analyses whose plots signal_stats defines statistics for.
@@ -637,18 +634,19 @@ def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) ->
     terminal currents. Returns whether anything matched.
 
     Each name is read back to the device path it belongs to
-    (``device_names.names_device``; ``xvii`` for a build that names devices as
+    (``device_names.device_query``; ``xvii`` for a build that names devices as
     XVII does), so ``device`` matches a device as the simulator spells it, a
     top-level device (``m1``), a device in a subcircuit by its own name or
     path (``mtail``, ``xin.mtail``, ``xa.xin.mtail``) whichever build or
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
+    names_device = device_query(device, xvii=xvii)
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
         for name, value in op_data.get(bucket, {}).items():
-            if names_device(name, device, xvii=xvii):
+            if names_device(name):
                 kept[name] = value
                 matched = True
         op_data[bucket] = kept
@@ -1171,24 +1169,11 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    by_lower = {name.lower(): (name, item) for name, item in flat.items()}
-    match = next(
-        (
-            by_lower[form]
-            for form in (recipe.expr.lower(), *services.device_param_forms(recipe.expr))
-            if form in by_lower
-        ),
-        None,
+    by_lower = {name.lower(): name for name in flat}
+    found = by_lower.get(recipe.expr.lower()) or services.device_param_name(
+        flat, recipe.expr, xvii=writes_xvii_names(raw)
     )
-    shorthand = services.DEV_PARAM_RE.fullmatch(recipe.expr.lower())
-    if match is None and shorthand is not None:
-        # A device inside a subcircuit by its path (xa.xin.mtail.gm), which
-        # each build and simulator spells its own way in the table.
-        found = find_device_param(
-            op["device_op_points"], *shorthand.groups(), xvii=writes_xvii_names(raw)
-        )
-        if found is not None:
-            match = (found, op["device_op_points"][found])
+    match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
         # then read off this same bias point, as a plain name would be.
@@ -2209,8 +2194,8 @@ async def operating_point(
 
     # The log's table holds fewer digits than a raw trace: mark a result that
     # carries a value from it (analyze_results says so in its observations).
-    table = {split_device_key(key)[0] for key in op_data["device_op_points"]} - {
-        split_device_key(key)[0] for key in from_raw
+    table = {
+        split_device_key(key)[0] for key in op_data["device_op_points"] if key not in from_raw
     }
     if table:
         op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS

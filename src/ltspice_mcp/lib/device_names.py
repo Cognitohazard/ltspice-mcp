@@ -27,32 +27,37 @@ builds, and the raw then holds only the instances' port currents.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.decoded_raw import RawData
 
 DevicePath = tuple[str, ...]
 
 #: A ``@device[param]`` name, bare or as ngspice wraps it (``v(@m1[vth])``).
-_DEVICE_PARAM = re.compile(r"@([^\[\]()]+)\[")
+_DEVICE_PARAM = re.compile(r"@([^\[\]()]+)\[([^\]]*)\]")
 _CURRENT = re.compile(r"^(i[a-z]?)\(([^)]+)\)$", re.IGNORECASE)
 
 
-def writes_xvii_names(raw: object) -> bool:
+def writes_xvii_names(raw: RawData) -> bool:
     """Whether the build that wrote ``raw`` names devices as XVII does:
     LTspice XVII, and LTspice IV before it, by the header's ``Command``."""
-    fields = getattr(getattr(raw, "header", None), "fields", ())
-    command = next((value for key, value in fields if key.casefold() == "command"), None)
-    return command is not None and is_cp1252_ltspice_build(command)
+    command = raw.raw_params.get("Command")
+    return isinstance(command, str) and is_cp1252_ltspice_build(command)
 
 
-def _path(segments: Sequence[str], *, xvii: bool, letter: str = "") -> DevicePath:
-    """The path XVII's segments stand for: each instance's ``X`` put back, and
-    the device's ``letter`` when the table dropped it."""
-    *instances, name = segments
-    if not xvii:
-        return (*instances, name)
-    return (*(f"x{segment}" for segment in instances), letter + name)
+def split_path(text: str) -> DevicePath:
+    """A device path as a caller writes it, by dots or colons: ``xa.xin.mtail``."""
+    return tuple(segment for segment in re.split(r"[.:]", text.casefold()) if segment)
+
+
+def _instances(segments: Iterable[str], *, xvii: bool) -> DevicePath:
+    """Instance names as the deck writes them: XVII drops each one's ``X``."""
+    return tuple(f"x{segment}" for segment in segments) if xvii else tuple(segments)
 
 
 def table_device_path(name: str, *, xvii: bool) -> DevicePath:
@@ -66,62 +71,99 @@ def table_device_path(name: str, *, xvii: bool) -> DevicePath:
         if len(segments) > 1 and len(segments[0]) == 1:
             segments = segments[1:]
         return tuple(segments)
-    segments = low.split(":")
-    if xvii and len(segments) > 1:
-        return _path(segments[1:], xvii=True, letter=segments[0])
-    return tuple(segments)
+    *head, last = low.split(":")
+    if xvii and head:
+        # XVII writes the device's letter first and drops it from its name.
+        letter, *instances = head
+        return (*_instances(instances, xvii=True), letter + last)
+    return (*head, last)
 
 
-def current_owner_path(trace: str, *, xvii: bool) -> DevicePath | None:
-    """What a raw current belongs to: a device for ``Id(xa:xin:Mtail)``, the
-    instance itself for a port current ``Ix(xa:out)``. None for anything else."""
-    match = _CURRENT.match(trace)
-    if match is None:
+@dataclass(frozen=True)
+class _Owner:
+    """What an operating-point value's name belongs to."""
+
+    #: The owner as the name spells it: ``xa:xin:Mtail``, ``m.x1.mn``.
+    text: str
+    path: DevicePath
+    #: A port current (``Ix(xa:out)``), which belongs to the instance.
+    port: bool = False
+    #: The parameter of a ``@device[param]`` name.
+    param: str | None = None
+
+
+def _owner(name: str, *, xvii: bool) -> _Owner | None:
+    table = _DEVICE_PARAM.search(name)
+    if table is not None:
+        device = table.group(1)
+        return _Owner(device, table_device_path(device, xvii=xvii), param=table.group(2))
+    current = _CURRENT.match(name)
+    if current is None:
         return None
-    segments = match.group(2).casefold().split(":")
-    if match.group(1).casefold() == "ix" and len(segments) > 1:
-        # A port current: the port's name follows the instance's path.
-        instances = segments[:-1]
-        return tuple(f"x{s}" for s in instances) if xvii else tuple(instances)
-    return _path(segments, xvii=xvii)
+    text = current.group(2)
+    *instances, last = text.casefold().split(":")
+    if current.group(1).casefold() == "ix" and instances:
+        # The port's name follows the instance's path.
+        return _Owner(text, _instances(instances, xvii=xvii), port=True)
+    return _Owner(text, (*_instances(instances, xvii=xvii), last))
 
 
 def owner_path(name: str, *, xvii: bool) -> DevicePath | None:
     """The device or instance an operating-point value's name belongs to: a
-    ``@device[param]`` key or a current. None for a node voltage."""
-    table = _DEVICE_PARAM.search(name)
-    if table is not None:
-        return table_device_path(table.group(1), xvii=xvii)
-    return current_owner_path(name, xvii=xvii)
+    device for ``@device[param]`` or ``Id(xa:xin:Mtail)``, the instance for a
+    port current ``Ix(xa:out)``. None for a node voltage."""
+    owner = _owner(name, xvii=xvii)
+    return None if owner is None else owner.path
 
 
-def names_device(name: str, wanted: str, *, xvii: bool) -> bool:
-    """Whether the operating-point value ``name`` belongs to what ``wanted``
-    names: the device as the simulator spells it (``m.xa.xleaf.m0``, which
-    ``inspect``'s hierarchy addresses use), its path, part of its path, or an
-    instance it is inside (``path_matches``)."""
-    table = _DEVICE_PARAM.search(name)
-    current = None if table is not None else _CURRENT.match(name)
-    owner = table.group(1) if table is not None else current.group(2) if current else None
-    if owner is None:
-        return False
-    if owner.casefold() == wanted.strip().casefold():
-        return True
-    path = owner_path(name, xvii=xvii)
-    return path is not None and path_matches(path, wanted)
+def current_device(name: str) -> str | None:
+    """The device's own name a device current belongs to: ``mtail`` for
+    ``Id(xa:xin:Mtail)`` on either build. None for a port current or any other
+    name."""
+    owner = _owner(name, xvii=False)
+    if owner is None or owner.port or owner.param is not None:
+        return None
+    return owner.path[-1]
+
+
+def _within(path: DevicePath, want: DevicePath) -> bool:
+    return bool(want) and any(
+        path[i : i + len(want)] == want for i in range(len(path) - len(want) + 1)
+    )
+
+
+def device_query(wanted: str, *, xvii: bool) -> Callable[[str], bool]:
+    """A test of whether an operating-point value's name belongs to what
+    ``wanted`` names: the device as the simulator spells it (``m.xa.xleaf.m0``,
+    which ``inspect``'s hierarchy addresses use), its path or part of it
+    (``mtail``, ``xin.mtail``, ``xa.xin.mtail``; dots or colons), or an
+    instance it is inside."""
+    literal = wanted.strip().casefold()
+    want = split_path(wanted)
+
+    def names(name: str) -> bool:
+        owner = _owner(name, xvii=xvii)
+        return owner is not None and (
+            owner.text.casefold() == literal or _within(owner.path, want)
+        )
+
+    return names
 
 
 def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bool) -> str | None:
-    """The one name among ``names`` that holds ``param`` of the device at the
-    path ``device`` (``xa.xin.mtail``), whichever build or simulator spelled
-    it; None when there is not exactly one."""
-    want = tuple(segment for segment in re.split(r"[.:]", device.casefold()) if segment)
+    """The one name among ``names`` that holds ``param`` of ``device``: the
+    device as the simulator spells it, or the end of its path (``x1.mn`` for
+    ``MN`` inside ``X1``, wherever ``X1`` is), whichever build or simulator
+    wrote it. None when there is not exactly one."""
+    literal = device.casefold()
+    want = split_path(device)
     found = [
         name
         for name in names
-        if (match := _DEVICE_PARAM.search(name)) is not None
-        and name[match.end() :].split("]", 1)[0].casefold() == param.casefold()
-        and table_device_path(match.group(1), xvii=xvii) == want
+        if (owner := _owner(name, xvii=xvii)) is not None
+        and owner.param is not None
+        and owner.param.casefold() == param.casefold()
+        and (owner.text.casefold() == literal or (want and owner.path[-len(want) :] == want))
     ]
     return found[0] if len(found) == 1 else None
 
@@ -129,15 +171,6 @@ def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bo
 def path_text(path: DevicePath) -> str:
     """A device path as a caller writes it: ``xa.xin.mtail``."""
     return ".".join(path)
-
-
-def path_matches(path: DevicePath, wanted: str) -> bool:
-    """Whether ``wanted`` (``mtail``, ``xin.mtail``, ``xa``; dots or colons)
-    names ``path``, part of it, or an instance it is inside."""
-    want = tuple(segment for segment in re.split(r"[.:]", wanted.casefold()) if segment)
-    if not want or len(want) > len(path):
-        return False
-    return any(path[i : i + len(want)] == want for i in range(len(path) - len(want) + 1))
 
 
 def device_names(
@@ -159,11 +192,10 @@ def device_names(
         )
         entry["op_table"] = name
     for trace in raw_traces:
-        match = _CURRENT.match(trace)
-        if match is None or match.group(1).casefold() == "ix":
+        owner = _owner(trace, xvii=xvii)
+        if owner is None or owner.port or owner.param is not None:
             continue
-        key = path_text(_path(match.group(2).casefold().split(":"), xvii=xvii))
-        # A top-level part has one name everywhere: listed only beside its table entry.
-        if key in names or ":" in match.group(2):
-            names.setdefault(key, {"op_table": None, "raw": None})["raw"] = match.group(2)
+        key = path_text(owner.path)
+        if key in names or len(owner.path) > 1:
+            names.setdefault(key, {"op_table": None, "raw": None})["raw"] = owner.text
     return dict(sorted(names.items()))

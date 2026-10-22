@@ -497,9 +497,9 @@ def level_label_lint(editor, reference: str, value: str) -> str | None:
     - any Value set on a symbol whose model is selected via the ``SpiceModel``
       attribute (e.g. UniversalOpamp2), whose Value slot must stay empty.
 
-    The subcircuit gate is an OR of signals — the InstName may be ``U1`` while
-    the netlist prefix is X (from the .asy Prefix), so the X-prefix test alone
-    is not enough. A symbol that carries its subckt name IN Value (the common
+    The subcircuit gate is the element letter the part netlists as
+    (``element_class``: its own Prefix, its symbol's, or its name's first
+    letter), or a ``SpiceModel``. A symbol that carries its subckt name IN Value (the common
     library part, no SpiceModel) is left alone. Returns the warning text, or
     ``None`` when neither shape applies.
     """
@@ -508,12 +508,9 @@ def level_label_lint(editor, reference: str, value: str) -> str | None:
     comp = editor.components.get(reference)
     attrs = getattr(comp, "attributes", None) or {}
     has_spicemodel = "SpiceModel" in attrs
-    is_subckt = (
-        reference[:1].upper() == "X"
-        or attrs.get(INSTANCE_PREFIX, "")[:1].upper() == "X"
-        or has_spicemodel
-        or "_SUBCKT" in attrs
-    )
+    # Not spicelib's _SUBCKT, which it sets for every part named X...
+    # (docs/spicelib_bugs.md, Bug 30).
+    is_subckt = element_class(editor, reference) == "X" or has_spicemodel
     if not is_subckt:
         return None
     if _LEVEL_LABEL_RE.match(value):
@@ -714,20 +711,17 @@ def element_class(editor: AscEditor, reference: str) -> str:
     return prefix[:1].upper()
 
 
-def export_parts(
-    editor: AscEditor, geometry: Iterable[dict] | None = None
-) -> list[tuple[str, str, list[str]]]:
+def export_parts(editor: AscEditor, geometry: Iterable[dict]) -> list[tuple[str, str, list[str]]]:
     """Each placed part's reference, element letter and pin names in
-    SpiceOrder: what ``export_nets.exported_pin_nodes`` finds its card and
-    nodes by. A part with a pin of no SpiceOrder is left out."""
-    parts = []
-    for row in collect_component_geometry(editor) if geometry is None else geometry:
-        pins = row["pins"]
-        if any(pin.get("order") is None for pin in pins):
-            continue
-        ordered = [pin["name"] for pin in sorted(pins, key=lambda pin: pin["order"])]
-        parts.append((row["ref"], element_class(editor, row["ref"]), ordered))
-    return parts
+    SpiceOrder, from ``collect_component_geometry``'s rows: what
+    ``export_nets.exported_pin_nodes`` finds its card and nodes by. A symbol's
+    pins are already in SpiceOrder; a part with a pin of none (order 0) is
+    left out."""
+    return [
+        (row["ref"], element_class(editor, row["ref"]), [pin["name"] for pin in row["pins"]])
+        for row in geometry
+        if all(pin["order"] for pin in row["pins"])
+    ]
 
 
 def collect_component_geometry(editor: AscEditor) -> list[dict]:

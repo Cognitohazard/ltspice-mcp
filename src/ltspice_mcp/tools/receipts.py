@@ -30,6 +30,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentCaseStatus,
     ExperimentJob,
+    ExperimentStatus,
     ManifestEntry,
     SourceRecord,
 )
@@ -225,9 +226,8 @@ RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema({"type": "array", "items": RUN_RE
 JOB_STATUS_SCHEMA: dict[str, Any] = {
     "type": "string",
     "description": (
-        "The job's status: queued, running or analyzing, then completed, "
-        "completed_with_failures, failed, cancelled or interrupted; unknown in an "
-        "error reply that read no job. A run row's status is its case's own: a case "
+        f"The job's status: one of {', '.join(get_args(ExperimentStatus))}; unknown in "
+        "an error reply that read no job. A run row's status is its case's own: a case "
         "that ran is produced."
     ),
 }

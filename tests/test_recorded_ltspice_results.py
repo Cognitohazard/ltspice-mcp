@@ -21,7 +21,7 @@ import pytest
 
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import metrics, services
-from ltspice_mcp.lib.device_names import current_owner_path, path_text, table_device_path
+from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
@@ -1139,7 +1139,7 @@ class TestSubcircuitDeviceNames:
         devices = {
             path_text(path)
             for name in saved
-            if name.startswith("Id(") and (path := current_owner_path(name, xvii=xvii))
+            if name.startswith("Id(") and (path := owner_path(name, xvii=xvii))
         }
         assert sorted(devices) == _NESTED_MOSFETS
         # The only MOSFETs are inside the subcircuits, and they are found there.
@@ -1147,7 +1147,7 @@ class TestSubcircuitDeviceNames:
         ports = {
             path_text(path)
             for name in saved
-            if name.startswith("Ix(") and (path := current_owner_path(name, xvii=xvii))
+            if name.startswith("Ix(") and (path := owner_path(name, xvii=xvii))
         }
         assert ports == {"xa", "xb", "xa.xin", "xb.xin"}
 

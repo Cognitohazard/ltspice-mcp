@@ -87,6 +87,7 @@ from ltspice_mcp.lib.schematic_ops import (
     files_written_beside,
     get_asc_editor,
     make_editor,
+    placed_geometry,
     require_asc,
     run_op_batch,
     trace_nets,
@@ -680,17 +681,23 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
     return build_pin_legend(geometry, lambda c: net_name(nets.get(c, ()))), label_only
 
 
-def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:
+async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:
     """Give each legend pin on a net no label names the node ``netlist``, the
     committed sheet's export, puts it on (``net_export``: ``N001``, ``NC_01``).
 
     The numbering is the exporter's own, so it comes from an export, never a
-    guess. The rows are the ones the views were paged from, so the pages carry
-    the names too.
+    guess. Only the parts with such a pin are looked up, on the loop as the
+    editor must be; the export is read in a thread.
     """
-    if not any(pin["net"] is None for row in legend for pin in row["pins"]):
+    unnamed = [row["ref"] for row in legend if any(pin["net"] is None for pin in row["pins"])]
+    if not unnamed:
         return
-    nodes = exported_pin_nodes(netlist, export_parts(editor))
+    geometry = [
+        {"ref": ref, "pins": placed["pins"]}
+        for ref in unnamed
+        if (placed := placed_geometry(editor, ref)) is not None
+    ]
+    nodes = await asyncio.to_thread(exported_pin_nodes, netlist, export_parts(editor, geometry))
     for row in legend:
         for pin in row["pins"]:
             if pin["net"] is None and (node := nodes.get((row["ref"], pin["name"]))):
@@ -1735,18 +1742,6 @@ async def _evaluate_edit_schematic(
                     _window_row(sheet, refusal)
                     for sheet, refusal in zip(open_sheets, refusals, strict=True)
                 ]
-            post_commit_stage = "views"
-            neutral_views = _build_edit_views(
-                profile, legend, pins_reported, preexisting_rows, committed_sha
-            )
-            wiring, presented_views = _paged_edit_views(
-                args,
-                profile,
-                neutral_views,
-                present_mcp_views=present_mcp_views,
-            )
-            post_commit_stage = "response"
-
             verification = None
             netlist = None
             if reference_path is not None:
@@ -1758,7 +1753,7 @@ async def _evaluate_edit_schematic(
                 exported = verification.pop("_netlist", None)
                 warnings.extend(verification.pop("_warnings", []))
                 if exported:
-                    _name_nets_as_exported(legend, editor, exported)
+                    await _name_nets_as_exported(legend, editor, exported)
                 mismatch = comparison_mismatch(verification)
                 # The stage is over: a later failure is the response's, never
                 # a second verdict on the reference.
@@ -1771,6 +1766,20 @@ async def _evaluate_edit_schematic(
                 # of a comparison the caller now has to diagnose.
                 if mismatch:
                     netlist = exported
+
+            # After the reference stage, whose export names the legend's
+            # unlabelled nets.
+            post_commit_stage = "views"
+            neutral_views = _build_edit_views(
+                profile, legend, pins_reported, preexisting_rows, committed_sha
+            )
+            wiring, presented_views = _paged_edit_views(
+                args,
+                profile,
+                neutral_views,
+                present_mcp_views=present_mcp_views,
+            )
+            post_commit_stage = "response"
 
             hint = " ".join([_commit_hint(verification, left_out_hint), *_window_notes(shown)])
             return finish(

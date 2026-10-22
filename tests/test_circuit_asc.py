@@ -1673,6 +1673,22 @@ class TestInstancePrefix:
         editor = AscEditor(str(asc_file))
         assert element_class(editor, "R9") == "X"
 
+    @pytest.mark.parametrize(("prefix", "warned"), [(None, False), ("X", True)])
+    async def test_the_level_label_check_reads_the_parts_element_letter(
+        self, asc_state: SessionState, asc_file: Path, prefix: str | None, warned: bool
+    ):
+        """A resistor named X9 netlists as R§X9, no subcircuit, so a Value of
+        Level.2 is a resistor's value; with its own Prefix X it is a
+        subcircuit call, and the complexity label is warned of."""
+        attributes = {"Prefix": prefix} if prefix else None
+        add_component(asc_state, asc_file, "X9", "res", 600, 600, attributes=attributes)
+        result = apply_one(
+            asc_state,
+            asc_file,
+            {"op": "set_component_value", "reference": "X9", "value": "Level.2"},
+        )
+        assert bool(result.get("warnings")) is warned
+
 
 @pytest.mark.asyncio
 class TestNetConflictInWirePins:
