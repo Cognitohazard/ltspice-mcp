@@ -1159,13 +1159,13 @@ class TestAttachedImage:
     async def test_a_missing_native_library_is_named_as_itself(
         self, state_no_sim: SessionState, work_dir: Path, raster_native_missing
     ):
-        # The extra is installed but libcairo is not: telling the caller to
-        # install the extra again would not help.
+        # cairosvg is installed but libcairo is not: the library is named, and
+        # the extra, whose rasterizer needs no native library, is offered.
         detail = self._skipped_image_detail(
             await self._plot_asking_for_an_image(state_no_sim, work_dir)
         )
         assert "native Cairo library" in detail
-        assert "pip install" not in detail
+        assert "pip install 'ltspice-mcp[raster]'" in detail
 
     @needs_raster
     async def test_ui_host_gets_the_widget_and_the_image(

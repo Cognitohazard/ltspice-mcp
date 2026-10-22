@@ -4,14 +4,15 @@ The schematic and result renderers are SVG-only by design. A model consuming a
 render over MCP generally wants a bitmap, so this module is the one place that
 converts SVG markup to PNG and describes what the caller actually got.
 
-Rasterization needs ``cairosvg``, which is an **optional** dependency (extra:
-``raster``), and the native Cairo library it loads. Without either this module
-still returns the SVG unchanged rather than failing — a render that arrives as
-markup is degraded, not broken, and the caller is told so through
-:attr:`RenderedImage.note` rather than through an exception. The two halves are
-installed in different ways, so what is missing is reported as one or the
-other (:class:`RasterSupport`), and :func:`raster_support` answers the same
-question before anything is drawn.
+Rasterization needs ``resvg-py``, an **optional** dependency (extra:
+``raster``) with prebuilt wheels and no native library; ``cairosvg`` is used
+when it is absent and is installed with the native Cairo library it loads.
+Without either this module still returns the SVG unchanged rather than failing
+— a render that arrives as markup is degraded, not broken, and the caller is
+told so through :attr:`RenderedImage.note` rather than through an exception.
+What is missing is reported as the extra or, when only cairosvg is installed,
+its native library (:class:`RasterSupport`), and :func:`raster_support`
+answers the same question before anything is drawn.
 
 Interface note: ``image_format`` is a named choice rather than a boolean so a
 third format can be added without changing the shape of every call site, and
@@ -22,16 +23,17 @@ has to infer what it received from what it asked for.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from ltspice_mcp.errors import LTSpiceMCPError
 
 ImageFormat = Literal["png", "svg"]
 
-#: Which half of the PNG rasterizer is absent: the Python package the 'raster'
-#: extra installs, or the native Cairo library that package loads.
+#: What keeps PNG from being made: the 'raster' extra is not installed, or only
+#: cairosvg is, without the native Cairo library it loads.
 RasterMissing = Literal["extra", "native_library"]
 
 # Scale is the only real cost lever. Image cost tracks pixel area (roughly
@@ -169,12 +171,11 @@ class RasterUnavailableError(LTSpiceMCPError):
         return (type(self), (self.support,))
 
 
-_EXTRA_MISSING = "the optional 'raster' extra (cairosvg) is not installed"
+_EXTRA_MISSING = "the optional 'raster' extra (resvg-py) is not installed"
 _EXTRA_REMEDY = (
     "install it where the server runs (pip install 'ltspice-mcp[raster]', "
     "uv tool install 'ltspice-mcp[raster]', or launch with uvx --from "
-    "'ltspice-mcp[raster]' ltspice-mcp), then restart the server; it also "
-    "needs the native Cairo library"
+    "'ltspice-mcp[raster]' ltspice-mcp), then restart the server"
 )
 
 
@@ -218,7 +219,7 @@ def raster_support() -> RasterSupport:
     caller should run it off the loop.
     """
     try:
-        _load_cairosvg()
+        _load_rasterizer()
     except RasterUnavailableError as exc:
         return exc.support
     return RasterSupport(png=True)
@@ -229,43 +230,90 @@ def raster_available() -> bool:
     return raster_support().png
 
 
-#: Why the first import of cairosvg failed. A failed import is not cached in
-#: sys.modules, and each retry reruns cairocffi's library search (tens of ms,
-#: and on Windows one more DLL directory registered per attempt). Every remedy
-#: ends in a server restart, so the first answer stands for the process.
-_unavailable: RasterSupport | None = None
+Rasterizer = Callable[[str, float, str], bytes]
+
+#: What the first look for a rasterizer found: the rasterizer, or why there is
+#: none. A failed import is not cached in sys.modules, and each retry reruns
+#: the import search, and cairocffi's library search (tens of ms, and on
+#: Windows one more DLL directory registered per attempt). Every remedy ends in
+#: a server restart, so the first answer stands for the process.
+_loaded: Rasterizer | RasterSupport | None = None
 
 
-def _load_cairosvg():
-    """Import ``cairosvg``, or raise :class:`RasterUnavailableError` saying why.
+def _load_rasterizer() -> Rasterizer:
+    """The rasterizer this environment has, or :class:`RasterUnavailableError`
+    saying why there is none."""
+    global _loaded
+    if _loaded is None:
+        _loaded = _find_rasterizer()
+    if isinstance(_loaded, RasterSupport):
+        raise RasterUnavailableError(_loaded)
+    return _loaded
 
-    Imported lazily rather than at module load: the dependency is optional, and
-    importing it costs a non-trivial shared-library load that a server never
-    rendering an image should not pay. The rasterizer is absent in two ways,
-    fixed in two different places: the package is not installed
-    (ImportError), or it is installed but the native cairo library it binds is
+
+def _find_rasterizer() -> Rasterizer | RasterSupport:
+    """``resvg-py`` first, the 'raster' extra's, which needs no native library;
+    then ``cairosvg``. Imported lazily rather than at module load: the
+    dependency is optional, and a server never rendering an image should not
+    pay for loading it. cairosvg is absent in two ways: the package is not
+    installed (ImportError), or it is but the native cairo library it binds is
     not, which cairocffi reports as an OSError from the import.
     """
-    global _unavailable
-    if _unavailable is None:
-        try:
-            import cairosvg
-        except ImportError:
-            _unavailable = RasterSupport(False, "extra", _EXTRA_MISSING, _EXTRA_REMEDY)
-        except OSError as exc:
-            # cairocffi lists every name it tried, one per line; the first says
-            # enough and keeps the reason to one line.
-            detail = str(exc).strip().splitlines()
-            _unavailable = RasterSupport(
-                False,
-                "native_library",
-                "the 'raster' extra is installed but the native Cairo library it "
-                "loads could not be loaded" + (f" ({detail[0]})" if detail else ""),
-                native_library_remedy(sys.platform),
-            )
-        else:
-            return cairosvg
-    raise RasterUnavailableError(_unavailable)
+    try:
+        import resvg_py
+    except ImportError:
+        pass
+    else:
+        return _resvg(resvg_py)
+    try:
+        import cairosvg
+    except ImportError:
+        return RasterSupport(False, "extra", _EXTRA_MISSING, _EXTRA_REMEDY)
+    except OSError as exc:
+        # cairocffi lists every name it tried, one per line; the first says
+        # enough and keeps the reason to one line.
+        detail = str(exc).strip().splitlines()
+        return RasterSupport(
+            False,
+            "native_library",
+            "cairosvg is installed but the native Cairo library it loads could "
+            "not be loaded" + (f" ({detail[0]})" if detail else ""),
+            f"{_EXTRA_REMEDY}; its rasterizer needs no native library. Or "
+            f"{native_library_remedy(sys.platform)}",
+        )
+    return _cairosvg(cairosvg)
+
+
+def _resvg(resvg_py: Any) -> Rasterizer:
+    def rasterize(svg: str, scale: float, background: str) -> bytes:
+        return bytes(resvg_py.svg_to_bytes(svg_string=svg, zoom=scale, background=background))
+
+    return rasterize
+
+
+def _cairosvg(cairosvg: Any) -> Rasterizer:
+    def rasterize(svg: str, scale: float, background: str) -> bytes:
+        png = cairosvg.svg2png(
+            bytestring=svg.encode("utf-8"),
+            # A fractional scale is the point of the parameter;
+            # test_scale_is_the_cost_lever pins that 3.0 yields a larger image
+            # than 1.0.
+            scale=scale,
+            background_color=background,
+        )
+        if not isinstance(png, bytes):
+            # Only writing to a file returns None, which this call never does.
+            raise TypeError(f"cairosvg returned {type(png).__name__}, expected PNG bytes")
+        return png
+
+    renderer = _renderer
+    if renderer is None:
+        return rasterize
+    # Keep Cairo's Windows font resources on a thread that stays alive between
+    # renders.
+    return lambda svg, scale, background: renderer.submit(
+        rasterize, svg, scale, background
+    ).result()
 
 
 def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "white") -> bytes:
@@ -279,27 +327,7 @@ def rasterize_svg(svg: str, *, scale: float = DEFAULT_SCALE, background: str = "
     # bad scale depend on whether the optional package happens to be installed,
     # so the same call raises on one machine and silently degrades on another.
     _check_scale(scale)
-    if _renderer is not None:
-        return _renderer.submit(_rasterize_svg, svg, scale, background).result()
-    return _rasterize_svg(svg, scale, background)
-
-
-def _rasterize_svg(svg: str, scale: float, background: str) -> bytes:
-    cairosvg = _load_cairosvg()
-    png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
-        # cairosvg's type stub declares scale as int, but the library takes a
-        # float and a fractional scale is the entire point of the parameter —
-        # test_scale_is_the_cost_lever pins that 3.0 really does yield a larger
-        # image than 1.0 at runtime.
-        scale=scale,  # pyright: ignore[reportArgumentType]
-        background_color=background,
-    )
-    if not isinstance(png, bytes):
-        # Its stub admits None; that only happens when writing to a file, which
-        # this call never does. Fail loudly rather than pass a non-image on.
-        raise TypeError(f"cairosvg returned {type(png).__name__}, expected PNG bytes")
-    return png
+    return _load_rasterizer()(svg, scale, background)
 
 
 def render_image(

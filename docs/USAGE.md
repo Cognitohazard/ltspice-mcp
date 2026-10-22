@@ -220,44 +220,33 @@ the same folder as the schematic is always found first, as in LTspice.
 
 `verify_circuit` draws schematics as SVG, but an assistant can only see a
 drawing returned as a PNG, since clients don't reliably display SVG. PNG
-needs two things the plain install leaves out:
+needs the `raster` extra, which the plain install leaves out. Install the
+server with it:
 
-1. **The `raster` extra.** Install the server with it:
-
-   ```bash
-   uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
-   ```
-
-   With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude
-   Code plugin and the Claude Desktop extension already include it.
-
-2. **The Cairo library**, which no Python package ships:
-   - **Linux and WSL:** `sudo apt install libcairo2` (Fedora:
-     `sudo dnf install cairo`). On WSL, install it inside the Linux
-     distribution.
-   - **macOS:** `brew install cairo`. On Apple silicon, also set
-     `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` in the server's
-     environment.
-   - **Windows:** install a Cairo runtime, for example the
-     [GTK for Windows runtime](https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer).
-     Then add the folder containing `libcairo-2.dll` (the runtime's `bin`
-     folder) to `PATH`, or name it in `CAIROCFFI_DLL_DIRECTORIES` (separate
-     several folders with `;`).
-
-Restart the server afterwards. The image `plot_waveform` attaches with
-`attach_plot` needs the same two things.
-
-If either is missing, a PNG request returns an SVG file instead, and the
-reply names what is missing and how to install it; a plot still returns its
-chart and trace summaries. `inspect(kind="capabilities")` reports the same
-before anything is drawn:
-
-```json
-"render": {"png": false, "missing": "native_library", "reason": "...", "remedy": "..."}
+```bash
+uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
 ```
 
-`missing` is `"extra"` or `"native_library"`; it, `reason` and `remedy` are
-null when `png` is true.
+With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude
+Code plugin and the Claude Desktop extension already include it. The extra's
+rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no other library.
+Restart the server afterwards. The image `plot_waveform` attaches with
+`attach_plot` needs the same extra.
+
+Without the extra, the server uses `cairosvg` if it is installed, together
+with the Cairo library it loads. If there is no rasterizer, a PNG request
+returns an SVG file instead, and the reply names what is missing and how to
+install it. A render asked for inline then carries the SVG markup, and a plot
+still returns its chart and trace summaries. `inspect(kind="capabilities")`
+reports the same before anything is drawn:
+
+```json
+"render": {"png": false, "missing": "extra", "reason": "...", "remedy": "..."}
+```
+
+`missing` is `"extra"`, or `"native_library"` when only `cairosvg` is
+installed and the Cairo library is not; it, `reason` and `remedy` are null
+when `png` is true.
 
 ## Where the server can run
 

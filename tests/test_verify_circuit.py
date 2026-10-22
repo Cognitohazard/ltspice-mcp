@@ -29,6 +29,7 @@ from typing import Any, get_args
 
 import jsonschema
 import pytest
+from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.config import ServerConfig
@@ -1597,27 +1598,32 @@ async def test_the_default_format_falling_back_is_not_a_failure(
 async def test_render_png_without_native_cairo_blames_the_library(
     state_no_sim, work_dir, asc_symbols, raster_native_missing
 ):
-    """With the extra installed and libcairo absent, "install the extra" is
-    advice the caller already followed. The failure names the native library,
-    and the remedy is the one for the platform the server runs on."""
+    """With cairosvg installed and libcairo absent, the failure names the
+    native library. The remedy offers the extra, whose rasterizer needs no
+    native library, then the library for the platform the server runs on."""
     asc = _write(work_dir, "rn.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
     assert data["render"]["image_format"] == "svg"
     (failure,) = [f for f in data["failures"] if f["stage"] == "render"]
     assert "Cairo" in failure["error"]
     assert "not installed" not in failure["error"]
-    assert failure["remedy"] == raster.native_library_remedy(sys.platform)
+    assert failure["remedy"].startswith("install it where the server runs")
+    assert "ltspice-mcp[raster]" in failure["remedy"]
+    assert failure["remedy"].endswith(raster.native_library_remedy(sys.platform))
     assert "Cairo" in data["render"]["note"]
     # The headline a structured-only client reads carries it too.
     assert "Cairo" in data["hint"]
 
 
-async def test_inline_svg_request_says_why_nothing_was_inlined(
-    state_no_sim, work_dir, asc_symbols
-):
-    """Inline delivery is PNG only. A caller that asked for it and got an SVG
-    used to learn only 'returned_inline: false', with nothing saying why or
-    that the drawing is on disk."""
+def _written_svg(render: dict[str, Any]) -> str:
+    """The SVG the render wrote to its path."""
+    return Path(render["path"]).read_text(encoding="utf-8")
+
+
+async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, asc_symbols):
+    """Inline delivery of an SVG returns the drawing itself: its markup in
+    render.svg for a client that reads the structured payload, and as a text
+    block for one that reads the content."""
     asc = _write(work_dir, "ri.asc", _RES_ASC)
     result = await handle_verify_circuit(
         VerifyCircuitInput.model_validate(
@@ -1630,21 +1636,19 @@ async def test_inline_svg_request_says_why_nothing_was_inlined(
     )
     data = _assert_schema(result)
     render = data["render"]
-    assert render["returned_inline"] is False
-    assert render["inline_skipped"] == "svg_requested"
-    note = render["note"] or ""
-    assert "PNG only" in note
-    assert render["path"] in note
-    # The caller chose SVG, so nothing failed: this is an explanation, not a
-    # shortfall, and it still reaches the headline.
+    markup = _written_svg(render)
+    assert markup.startswith("<svg")
+    assert render["returned_inline"] is True
+    assert render["svg"] == markup
+    assert result.content[0] == types.TextContent(type="text", text=markup)
+    assert not [c for c in result.content if c.type == "image"]
+    # SVG was what the caller asked for: nothing to explain.
+    assert render["note"] is None
     assert data["failures"] == []
     assert data["outcome"] == "complete"
-    assert "not returned inline" in data["hint"]
-    assert render["path"] in data["hint"]
-    assert not [c for c in result.content if c.type == "image"]
 
 
-async def test_inline_png_request_without_raster_says_why_nothing_was_inlined(
+async def test_an_inline_png_request_without_raster_returns_the_svg(
     state_no_sim, work_dir, asc_symbols, raster_extra_missing
 ):
     asc = _write(work_dir, "rj.asc", _RES_ASC)
@@ -1654,20 +1658,29 @@ async def test_inline_png_request_without_raster_says_why_nothing_was_inlined(
         render={"mode": "only", "format": "png", "delivery": "both"},
     )
     render = data["render"]
-    assert render["returned_inline"] is False
-    assert render["inline_skipped"] == "png_unavailable"
+    assert render["image_format"] == "svg"
+    assert render["returned_inline"] is True
+    assert render["svg"] == _written_svg(render)
     note = render["note"] or ""
-    # Why the PNG could not be made, then where the SVG went instead.
+    # Why the PNG could not be made, then what came back in its place.
     assert "'raster' extra" in note
-    assert render["path"] in note
+    assert "render.svg" in note
 
 
-async def test_artifact_delivery_skips_nothing(state_no_sim, work_dir, asc_symbols):
-    # Nothing inline was asked for, so nothing inline was skipped.
+async def test_artifact_delivery_returns_no_markup(state_no_sim, work_dir, asc_symbols):
+    # Nothing inline was asked for: the drawing is only on disk.
     asc = _write(work_dir, "ra.asc", _RES_ASC)
-    data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "svg"})
-    assert data["render"]["inline_skipped"] is None
+    result = await handle_verify_circuit(
+        VerifyCircuitInput.model_validate(
+            {"path": str(asc), "render": {"mode": "only", "format": "svg"}}
+        ),
+        state_no_sim,
+    )
+    data = _assert_schema(result)
+    assert data["render"]["returned_inline"] is False
+    assert "svg" not in data["render"]
     assert data["render"]["note"] is None
+    assert [c.type for c in result.content] == ["text"]
 
 
 @needs_raster
@@ -1681,7 +1694,7 @@ async def test_inline_png_is_delivered(state_no_sim, work_dir, asc_symbols):
     )
     data = _assert_schema(result)
     assert data["render"]["returned_inline"] is True
-    assert data["render"]["inline_skipped"] is None
+    assert "svg" not in data["render"]
     assert [c.mime_type for c in result.content if c.type == "image"] == ["image/png"]
 
 

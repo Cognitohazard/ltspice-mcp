@@ -215,6 +215,16 @@ def image_content(image: RenderedImage) -> types.ImageContent:
     )
 
 
+def inline_content(image: RenderedImage) -> types.ImageContent | types.TextContent:
+    """An image as the block a reply carries it in: a raster as an image block,
+    SVG as its markup in a text block. SVG is markup, and ``image/svg+xml`` is
+    not reliably rendered by clients, so an image block of it would produce a
+    blank space where a picture should be."""
+    if image.is_raster:
+        return image_content(image)
+    return types.TextContent(type="text", text=image.data.decode("utf-8"))
+
+
 def image_response(
     image: RenderedImage,
     text: str,
@@ -223,9 +233,7 @@ def image_response(
     """Return a rendered image plus the metadata describing it.
 
     A raster is carried as an MCP image block, which is what a model actually
-    looks at. Vector output is carried as text instead: SVG is markup, and
-    ``image/svg+xml`` is not reliably rendered by clients, so sending it as an
-    image block would produce a blank space where a picture should be.
+    looks at, and vector output as text (:func:`inline_content`).
 
     Self-sufficiency contract (as for :func:`format_response`): a client that
     renders only ``structuredContent`` must still be able to act, so the image's
@@ -242,12 +250,7 @@ def image_response(
     payload["image"] = image.to_dict()
     payload = sanitize_payload(payload)
 
-    content: list[Any] = []
-    if image.is_raster:
-        content.append(image_content(image))
-    else:
-        content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
-    content.append(types.TextContent(type="text", text=text))
+    content: list[Any] = [inline_content(image), types.TextContent(type="text", text=text)]
 
     return types.CallToolResult(content=content, structured_content=payload)
 
@@ -797,9 +800,9 @@ class RenderPolicy(StrictModel):
     format: Literal["png", "svg"] = Field(
         default="png",
         description=(
-            "PNG (lossless, what a model looks at) needs the 'raster' extra and "
-            "native Cairo, as inspect capabilities reports; without them the "
-            "render degrades to SVG and says why."
+            "PNG (lossless, what a model looks at) needs the 'raster' extra, as "
+            "inspect capabilities reports; without it the render degrades to "
+            "SVG and says why."
         ),
     )
     scale: float = Field(

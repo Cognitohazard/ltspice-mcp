@@ -899,25 +899,20 @@ recording that showed it.
   waypoints the two ends must share an x or a y, or the route is refused as
   diagonal.
 
-- A PNG render that fell back to SVG blamed the optional `raster` extra even
-  when the extra was installed and the native Cairo library it loads was what
-  was missing, so the advice was to install something already installed. The
-  `render` failure, `render.note` and the hint now name which of the two is
-  missing, with the remedy for the server's platform: the install command for
-  the extra, or how to install Cairo on Linux, macOS or Windows. On Windows
-  that includes putting the DLL folder on `PATH` or in
-  `CAIROCFFI_DLL_DIRECTORIES`. The server checks once per process, because
-  each retry reran cairocffi's library search, so a fix takes effect after a
-  restart, as each remedy says.
-- A `verify_circuit` render with `delivery: "inline"` or `"both"` that returned
-  no image said only `returned_inline: false`. An agent that cannot read files
-  had no way to tell the drawing existed. The render block now carries
-  `inline_skipped` (`svg_requested` or `png_unavailable`). `render.note` says
-  that inline delivery is PNG only and where the file was written, and when
-  SVG was requested the hint says so too. SVG markup is still not returned
-  inline. It runs about 600 bytes a component, which costs more than the PNG
-  past a handful of parts, and structured-only clients drop the text channel
-  it would ride on.
+- PNG renders no longer need the native Cairo library. The `raster` extra
+  installs `resvg-py`, which ships prebuilt wheels and loads no other library,
+  in place of `cairosvg`, which loads Cairo when imported; on Windows that
+  meant installing a Cairo runtime by hand and putting it on `PATH`. A server
+  with `cairosvg` and not the extra still uses it. Where that is all there is
+  and Cairo is missing, the `render` failure, `render.note` and the hint say
+  so, where they blamed the extra before, and offer the extra or the Cairo
+  install for the server's platform. The server looks for a rasterizer once
+  per process, so a fix takes effect after a restart, as each remedy says.
+- A `verify_circuit` render with `delivery: "inline"` or `"both"` that came
+  out as SVG, because SVG was asked for or no PNG could be made, said only
+  `returned_inline: false`, and an agent that cannot read files had no way to
+  see the drawing. It now returns the SVG markup in `render.svg`, where a
+  client that reads only the structured payload finds it, and in a text block.
 - A symbol saved in the same folder as its `.asc`, where LTspice looks first and
   where a hand-drawn subcircuit symbol usually lives, was not found for pin
   positions. `inspect(kind="symbol")` and rendering found it, but
@@ -1210,9 +1205,9 @@ recording that showed it.
   with its size and `estimated_tokens` in `image`). It draws the same panels
   as the interactive chart, is off by default, and takes its default from
   `[analysis] attach_plot` (`LTSPICE_MCP_ATTACH_PLOT`). Rendering needs the
-  `raster` extra and the native Cairo library; without either, the reply
-  carries an `image_unavailable` observation naming the missing piece and
-  how to install it, instead of the image.
+  `raster` extra; without it, the reply carries an `image_unavailable`
+  observation naming what is missing and how to install it, instead of the
+  image.
 - `plot_waveform(panels=[[...], [...]])` lays the panels out by hand, one
   list of signals per panel (up to 8), for traces of one unit but very
   different size.
@@ -1318,8 +1313,9 @@ recording that showed it.
 
 - `inspect(kind="capabilities")` reports `render: {png, missing, reason,
   remedy}`. It says whether `verify_circuit` can make the PNG it returns
-  inline and, if not, whether the `raster` extra or the native Cairo library is
-  missing and how to install it, before anything is drawn.
+  inline and, if not, whether the `raster` extra is missing, or only
+  `cairosvg` is installed without the native Cairo library, and how to
+  install what is missing, before anything is drawn.
 - Results record which simulator build produced them. A job records the
   executable its cases launch: path, size, modification time and SHA-256.
   Each case records the build the simulator named in its own output: the
@@ -1658,9 +1654,8 @@ recording that showed it.
 
 - The Claude Code plugin and the Claude Desktop extension install
   `ltspice-mcp[raster]`. Neither lets a user add an extra to the launch it
-  ships, so PNG rendering was impossible through them; installing native Cairo
-  is now the only step. The README documents the extra and the per-platform
-  Cairo install.
+  ships, so PNG rendering was impossible through them; it now needs no other
+  step. The README documents the extra.
 - CI: lint and type check run once, in a new `checks / static` job, instead of
   on every interpreter. They gave the same answer on each: ruff and pyright
   both target 3.11, and the lockfile resolves one package set for 3.11 through

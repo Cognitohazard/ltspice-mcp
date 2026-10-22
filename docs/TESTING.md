@@ -72,8 +72,9 @@ The native Windows integration tier also needs:
   settings file. A missing build is skipped, and the skip names it.
 - The console build of ngspice on PATH as `ngspice.exe`, with its DLLs. The GUI
   executable does not write the console output these tests read.
-- The `raster` extra and native Cairo DLLs with their dependencies. For a
-  portable installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
+- The `raster` extra. The tests of the `cairosvg` path also need native Cairo
+  DLLs with their dependencies, and skip without them. For a portable
+  installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
 
 With those set in the test shell, run
 

@@ -89,7 +89,7 @@ Codes by kind of failure:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was requested without a usable rasterizer: the optional `raster` extra, or the native Cairo library it loads |
+| `raster_unavailable` | a PNG was requested without a usable rasterizer: the optional `raster` extra is not installed, or only `cairosvg` is, without the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Codes named after the stage, used where the stage is the more useful fact:
@@ -1175,12 +1175,11 @@ the scratch copy.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
-a file. Inline delivery is PNG only. When `inline` or `both` returns no image,
-`render.inline_skipped` gives the reason (`svg_requested` or
-`png_unavailable`) and `render.note` gives the file's location. A PNG needs
-the `raster` extra and the native Cairo library; without them the render falls
-back to SVG, and `render.note` names which of the two is missing and a
-per-platform remedy. It is a `render` failure too when the caller named
+a file. `inline` and `both` return a PNG as an image block, and an SVG as
+its markup in `render.svg` and in a text block. A PNG needs the `raster` extra
+(`resvg-py`), or `cairosvg` with the native Cairo library it loads; without
+either the render falls back to SVG, and `render.note` names what is missing
+and its remedy. It is a `render` failure too when the caller named
 `format: "png"`; a default that falls back is not one, since nothing was asked
 for that the server could not do. `inspect(kind:"capabilities")` reports the same as
 `render: {png, missing, reason, remedy}` before anything is drawn.
@@ -1218,7 +1217,7 @@ given twice contributes both copies, so a second copy counts as a change.
 
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled,
-returned_inline, inline_skipped, note, …}`, a scene summary, `outcome` and
+returned_inline, svg?, note, …}`, a scene summary, `outcome` and
 `hint`.
 
 In the render block, `sha256` is the image's digest and `source_sha256` the
@@ -1261,10 +1260,10 @@ cursors where listed:
     session was served; limits; linter_version; the startup diagnostics,
     which show whether the server started degraded; and `render: {png,
     missing, reason, remedy}` (whether verify_circuit can make the PNG it
-    inlines and, if not, whether the `raster` extra or native Cairo is
-    missing). `fields` (e.g. ["allowed_paths", "config_path"], to check
-    after a config edit) returns only those top-level keys; without it the
-    whole report is returned
+    inlines and, if not, whether the `raster` extra is missing or only
+    cairosvg is, without native Cairo). `fields` (e.g. ["allowed_paths",
+    "config_path"], to check after a config edit) returns only those
+    top-level keys; without it the whole report is returned
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence

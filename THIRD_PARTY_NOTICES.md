@@ -88,7 +88,8 @@ Their licences, as declared in the installed distribution metadata:
 | `rapidfuzz` | MIT |
 | `scipy` | BSD (per its trove classifier) |
 | `tomlkit` | MIT |
-| `cairosvg` (optional `raster` extra) | LGPL-3.0-or-later |
+| `resvg-py` (optional `raster` extra) | MIT; the Rust crates built into its wheel carry permissive licences (MIT, Apache-2.0, BSD, Zlib and others), listed in the CycloneDX record the wheel ships |
+| `cairosvg` (used if installed, not a dependency) | LGPL-3.0-or-later |
 
 Each package's own metadata is the authoritative text; the table above is a
 convenience and can go stale as versions move.

@@ -141,7 +141,7 @@ from ltspice_mcp.tools._base import (
     comparison_mismatch,
     failures_schema,
     format_response,
-    image_content,
+    inline_content,
     make_include_resolver,
     outcome_of,
     outcome_schema,
@@ -332,21 +332,18 @@ _RENDER_SCHEMA: dict[str, Any] = {
         "estimated_tokens": {"type": ["integer", "null"]},
         "returned_inline": {"type": "boolean"},
         "delivery": {"type": "string"},
-        "inline_skipped": {
-            "type": ["string", "null"],
-            "enum": ["svg_requested", "png_unavailable", None],
+        "svg": {
+            "type": "string",
             "description": (
-                "Why an inline or both delivery returned no image: inline is PNG "
-                "only, and either format 'svg' was asked for or no PNG could be "
-                "made. Null when the image was inlined or inline was not asked for."
+                "The SVG markup, when an inline or both delivery returned an SVG; "
+                "absent otherwise."
             ),
         },
         "note": {
             "type": ["string", "null"],
             "description": (
                 "What was delivered instead of what was asked for, and why: a PNG "
-                "that fell back to SVG, an image that was not inlined, and where "
-                "the file is."
+                "that fell back to SVG, and how to get the PNG."
             ),
         },
     },
@@ -793,9 +790,9 @@ class VerifyRenderPolicy(RenderPolicy):
         default="artifact",
         description=(
             "'artifact' (default) writes the image and returns its path; "
-            "'inline' and 'both' also return the PNG as image content. An "
-            "inline image costs about 3k tokens at the default scale and stays "
-            "in context for every later turn. PNG only."
+            "'inline' and 'both' also return it in the reply: a PNG as image "
+            "content (about 3k tokens at the default scale), an SVG as its "
+            "markup in render.svg, charged as text. Either stays in context."
         ),
     )
 
@@ -1934,11 +1931,6 @@ def _render_scene(
     )
 
 
-#: Why an inline delivery returned no image. Inline is PNG only; the reasons
-#: are in the verify_circuit section of docs/design/mcp_surface.md.
-InlineSkipped: TypeAlias = Literal["svg_requested", "png_unavailable"]
-
-
 #: What the render check produces: ``(payload, inline image, failures,
 #: observations)``.
 _RenderResult = tuple[
@@ -1992,36 +1984,24 @@ async def _do_render(
                 remedy=unavailable.remedy,
             )
         )
-    inline_asked = policy.delivery in ("inline", "both")
-    want_inline = inline_asked and image.is_raster
-    inline_skipped: InlineSkipped | None = None
-    if inline_asked and not image.is_raster:
-        inline_skipped = "svg_requested" if policy.format == "svg" else "png_unavailable"
+    inline = policy.delivery in ("inline", "both")
     payload = _render_payload(
         image,
         out_path,
         downscaled=downscaled,
         delivery=policy.delivery,
-        returned_inline=want_inline,
-        inline_skipped=inline_skipped,
+        returned_inline=inline,
         source_sha256=scene.source_sha256,
     )
-    return payload, (image if want_inline else None), failures, []
+    return payload, (image if inline else None), failures, []
 
 
-def _render_note(
-    image: RenderedImage, path: Path, inline_skipped: InlineSkipped | None
-) -> str | None:
+def _render_note(image: RenderedImage, returned_inline: bool) -> str | None:
     """The render's own explanation: what was delivered in place of the request."""
-    if inline_skipped is None:
-        return image.note
-    if inline_skipped == "svg_requested":
-        return (
-            "Render not returned inline: inline delivery is PNG only and format "
-            f"'svg' was requested; the SVG is at {path}. Request format 'png' "
-            "to receive the drawing inline."
-        )
-    return f"{image.note}. Not returned inline: inline delivery is PNG only; the SVG is at {path}."
+    note = image.note
+    if note is not None and returned_inline:
+        note += ". The SVG markup is returned inline in render.svg in place of the PNG"
+    return note
 
 
 def _render_payload(
@@ -2031,10 +2011,9 @@ def _render_payload(
     downscaled: bool,
     delivery: str,
     returned_inline: bool,
-    inline_skipped: InlineSkipped | None,
     source_sha256: str | None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "path": str(path),
         "sha256": hashlib.sha256(image.data).hexdigest(),
         # The digest of the SHEET this drew, not of the image and not of any
@@ -2054,9 +2033,13 @@ def _render_payload(
         "estimated_tokens": image.estimated_tokens,
         "returned_inline": returned_inline,
         "delivery": delivery,
-        "inline_skipped": inline_skipped,
-        "note": _render_note(image, path, inline_skipped),
+        "note": _render_note(image, returned_inline),
     }
+    if returned_inline and not image.is_raster:
+        # SVG is markup, not an image a client shows, and a structured-aware
+        # client reads only the structured payload, so the drawing rides there.
+        payload["svg"] = image.data.decode("utf-8")
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -2167,9 +2150,8 @@ def _hint(data: dict[str, Any]) -> str:
             + ", ".join(sorted({f["rule_id"] for f in observations}))
             + " (facts, not a verdict)"
         )
-    # A caller that asked for the picture inline and chose SVG, or left the
-    # format to a default that fell back to SVG, has nothing to fix, but is not
-    # holding a PNG either, so the headline says so.
+    # A caller that left the format to a default that fell back to SVG has
+    # nothing to fix, but is not holding a PNG either, so the headline says so.
     delivery_note = (data.get("render") or {}).get("note")
     if parts:
         headline = "; ".join(parts) + "."
@@ -2588,7 +2570,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     if evaluation.is_error:
         result.is_error = True
     if evaluation.inline_image is not None:
-        result.content.insert(0, image_content(evaluation.inline_image))
+        result.content.insert(0, inline_content(evaluation.inline_image))
     return result
 
 
