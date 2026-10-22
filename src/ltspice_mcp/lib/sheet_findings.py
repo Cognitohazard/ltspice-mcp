@@ -255,8 +255,8 @@ class Part:
     either is ``None`` when the part has none. ``at`` is where the part is
     placed. ``pins`` are ``(name, x, y)`` in SpiceOrder, the order a symbol
     gives them in, and ``texts`` the anchors of its drawn attributes as
-    ``(x, y, first line)``, with ``text_extents`` the extent each is drawn
-    over, in the same order. ``strokes`` are the lines it draws, as segments,
+    ``(x, y, first line)``, and ``text_extents`` where each is drawn, as
+    ``(x, y, first line, extent)``. ``strokes`` are the lines it draws, as segments,
     and ``areas`` the rectangles and circles it draws, as boxes. ``missing``
     says its symbol was not found: whatever box it carries is then a
     placeholder's, and no rule reads it.
@@ -267,7 +267,7 @@ class Part:
     box: BBox | None = None
     pins: tuple[tuple[str, int, int], ...] = ()
     texts: tuple[tuple[int, int, str], ...] = ()
-    text_extents: tuple[BBox, ...] = ()
+    text_extents: tuple[tuple[int, int, str, BBox], ...] = ()
     strokes: tuple[tuple[Point, Point], ...] = ()
     areas: tuple[BBox, ...] = ()
     missing: bool = False
@@ -788,71 +788,67 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
     ]
 
 
-def _core(extent: BBox) -> BBox:
-    """What a text's glyphs surely cover: its extent, which is estimated from
-    its font's metrics rather than its own glyphs, less a quarter of its
-    thickness all round. Two lines that only graze, one's descender band on
-    the other's cap height, do not overlap."""
-    inset = min(extent.width, extent.height) // 4
-    return BBox(extent.x1 + inset, extent.y1 + inset, extent.x2 - inset, extent.y2 - inset)
-
-
 def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
     """True if what ``part`` draws reaches into ``box``: one of its lines, or
     one of its rectangles or circles, rather than an empty corner of its body
     such as the space beside an amplifier's triangle. A part drawn without
     those reaches wherever its body does."""
+    if not body.overlaps(box):
+        return False
     if not (part.strokes or part.areas):
-        return body.overlaps(box)
+        return True
     return any(_through(a, b, box) for a, b in part.strokes) or any(
         area.overlaps(box) for area in part.areas
     )
 
 
+def _core(extent: BBox) -> BBox:
+    """What a text's glyphs surely cover: its extent, which is estimated from
+    its font's metrics rather than its own glyphs, less a quarter of its
+    thickness all round. Two lines that only graze, one's descender band on
+    the other's cap height, do not overlap."""
+    return extent.expanded(-(min(extent.width, extent.height) // 4))
+
+
 @_finds("attribute_text_overlap")
 def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     # Where the text lies is LTspice's own layout of it, so a part whose symbol
-    # was not found has none to report, and nor has a view that carries no
-    # extents.
+    # was not found has none to report. Each text is compared with the texts
+    # after it: the other attribute texts, then the sheet's own.
     drawn = [
         (index, part, (x, y), text, _core(extent))
         for index, part in enumerate(ix.view.parts)
         if not part.missing
-        for (x, y, text), extent in zip(part.texts, part.text_extents, strict=False)
+        for x, y, text, extent in part.text_extents
     ]
+    texts: list[tuple[Part | None, Point, str, BBox]] = [
+        (part, at, text, core) for _index, part, at, text, core in drawn
+    ]
+    texts += [(None, (x, y), text, _core(extent)) for x, y, text, extent in ix.view.text_extents]
     found: list[Finding] = []
-    for n, (index, part, at, text, extent) in enumerate(drawn):
+    for n, (index, part, at, text, core) in enumerate(drawn):
         # What the text is drawn across: words for it, the parts and the
         # points it names, and its own facts.
         across: list[tuple[str, tuple[str, ...], tuple[Point, ...], dict[str, str]]] = [
             (f"wire {_wire(a, b)}", (), (a, b), {"across": "wire"})
             for a, b in ix.wires
-            if _through(a, b, extent)
+            if _through(a, b, core)
         ]
         across += [
             (f"{other.name}'s body", (other.name,), (), {"across": "body"})
             for other_index, other, body in ix.drawn
-            if other_index != index and _draws_over(other, body, extent)
+            if other_index != index and _draws_over(other, body, core)
         ]
         across += [
             (
-                f"{other.name}'s text {other_text!r} at {_at(other_at)}",
-                (other.name,),
+                (f"{owner.name}'s text" if owner else "the text")
+                + f" {other_text!r} at {_at(other_at)}",
+                (owner.name,) if owner else (),
                 (other_at,),
                 {"across": "text", "other_text": other_text},
             )
-            for _index, other, other_at, other_text, other_extent in drawn[n + 1 :]
-            if other_extent.overlaps(extent)
-        ]
-        across += [
-            (
-                f"the text {other_text!r} at {_at((x, y))}",
-                (),
-                ((x, y),),
-                {"across": "text", "other_text": other_text},
-            )
-            for x, y, other_text, other_extent in ix.view.text_extents
-            if _core(other_extent).overlaps(extent)
+            for owner, other_at, other_text, other_core in texts[n + 1 :]
+            if other_core.overlaps(core)
         ]
         found += [
             Finding(

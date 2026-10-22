@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.device_names import raw_name, trace_key
+from tests import _ltspice_recorded as rec
 from tests.test_inspect_tools import _run
 
 
@@ -755,11 +757,6 @@ async def test_ltspice_mos_needs_no_directive(state_no_sim, work_dir):
 _NESTED_R = "* nested\nV1 a 0 1\nXa a stage\n.subckt stage p\nXin p inner\n.ends\n.subckt inner p\nRin p mid 1k\nRlo mid 0 1k\n.ends\n.end\n"
 
 
-def _ltspice_at(program: str) -> type:
-    """An LTspice class launching ``program``, which names its build."""
-    return type("NamedLTspice", (), {"spice_exe": [program]})
-
-
 async def test_a_nested_name_is_spelled_for_the_sessions_ltspice(state_no_sim, work_dir):
     """XVII's .save takes a name inside a subcircuit only without each
     instance's X, and its raw names it so (recorded: raw/save_subckt_names*)."""
@@ -771,14 +768,22 @@ async def test_a_nested_name_is_spelled_for_the_sessions_ltspice(state_no_sim, w
         return rows["xa/xin/rin"]["address"]["save"], result["data"]["profile"]["xvii_names"]
 
     assert spelled(await _inspect(state_no_sim, path)) == (".save I(xa:xin:rin)", False)
-    state_no_sim.available_simulators["ltspice"] = _ltspice_at("C:/LTC/LTspiceXVII/XVIIx64.exe")
+    state_no_sim.available_simulators["ltspice"] = rec.launcher("ltspice17")
     assert spelled(await _inspect(state_no_sim, path)) == (".save I(a:in:rin)", True)
+
+
+@pytest.mark.parametrize("xvii", [False, True])
+def test_a_name_spelled_for_a_build_reads_back_as_its_path(xvii):
+    """What an address writes for a build is what that build's raw is read by."""
+    spelled = raw_name(("Xa", "Xin"), "Mid", xvii=xvii)
+    assert spelled == ("a:in:mid" if xvii else "xa:xin:mid")
+    assert trace_key(f"V({spelled})", xvii=xvii) == ("v", ("xa", "xin", "mid"))
 
 
 async def test_a_named_build_spells_for_itself(state_no_sim, work_dir):
     path = work_dir / "nested.cir"
     path.write_text(_NESTED_R, encoding="utf-8")
-    state_no_sim.named_simulators["ltspice:xvii"] = _ltspice_at("C:/LTC/LTspiceXVII/XVIIx64.exe")
+    state_no_sim.named_simulators["ltspice:xvii"] = rec.launcher("ltspice17")
 
     result = await _inspect(state_no_sim, path, simulator="ltspice:xvii")
     assert result["data"]["profile"]["xvii_names"] is True

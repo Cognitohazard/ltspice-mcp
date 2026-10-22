@@ -32,7 +32,7 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
-from ltspice_mcp.lib.simulator_build import executable_path, predates_logopinfo, reported_build
+from ltspice_mcp.lib.simulator_build import ltspice_before_24, reported_build
 from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
@@ -470,7 +470,7 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
-    if predates_logopinfo(executable_path(simulator) or ""):
+    if ltspice_before_24(simulator):
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path

@@ -56,7 +56,12 @@ from ltspice_mcp.lib.projection import (
     project_row,
     split_field_path,
 )
-from ltspice_mcp.lib.raw_parser import get_step_count, other_raw_path, safe_magnitude_db
+from ltspice_mcp.lib.raw_parser import (
+    OtherRawKind,
+    get_step_count,
+    other_raw_path,
+    safe_magnitude_db,
+)
 from ltspice_mcp.lib.recipes import (
     KeyedRecipe,
     MeasurementsRecipe,
@@ -155,7 +160,7 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
             "or {case_ids: [...]} for an experiment job."
         ),
     )
-    other_raw: Literal["fra_1", "op"] | None = Field(
+    other_raw: OtherRawKind | None = Field(
         default=None,
         description=(
             "Read each case's raw of this kind from its row's other_raws instead "

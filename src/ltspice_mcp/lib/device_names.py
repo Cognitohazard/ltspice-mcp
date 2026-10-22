@@ -127,6 +127,16 @@ def _raw_path(text: str, *, xvii: bool) -> DevicePath:
     return (*_instances(instances, xvii=xvii), last)
 
 
+def raw_name(scope: Iterable[str], name: str, *, xvii: bool) -> str:
+    """How an LTspice raw, and so ``.save``, names a node or device inside
+    subcircuit instances, the reverse of :func:`trace_key`'s reading: the
+    instances as written on LTspice 26 (``xa:xin:mid``), each without its X on
+    XVII (``a:in:mid``). Each build's ``.save`` takes only its own spelling
+    (recorded: ``raw/save_subckt_names*``)."""
+    instances = (segment.lower()[1:] if xvii else segment.lower() for segment in scope)
+    return ":".join((*instances, name.lower()))
+
+
 TraceKey = tuple[str, DevicePath]
 
 

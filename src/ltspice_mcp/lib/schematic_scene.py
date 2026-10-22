@@ -25,6 +25,8 @@ import hashlib
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from functools import cached_property
+from itertools import pairwise
 from pathlib import Path
 from typing import NamedTuple
 
@@ -265,26 +267,22 @@ def ground_polygon(flag: NetFlag) -> tuple[tuple[int, int], ...]:
     return ((x, y - GND_HALF_W), (x, y + GND_HALF_W), (x + sign * GND_DEPTH, y))
 
 
-#: How a justification lays text out in the frame it is given in (a symbol's
-#: own, or the sheet's): whether it runs up that frame (a V token) rather than
-#: along its x axis, which way along that run it extends from its point (1 for
-#: Left, -1 for Right, 0 centred), and on which side of the point it lies across
-#: the run (-1 for Top, the point being its top edge; 1 for Bottom; 0 centred).
-_JUSTIFICATIONS: dict[str, tuple[bool, int, int]] = {
-    "left": (False, 1, 0),
-    "right": (False, -1, 0),
-    "center": (False, 0, 0),
-    "top": (False, 0, -1),
-    "bottom": (False, 0, 1),
-    "vleft": (True, 1, 0),
-    "vright": (True, -1, 0),
-    "vcenter": (True, 0, 0),
-    "vtop": (True, 0, -1),
-    "vbottom": (True, 0, 1),
+#: How a justification lays text out along its run: which way along it the
+#: text extends from its point (1 for Left, -1 for Right, 0 centred), and on
+#: which side of the point it lies across the run (-1 for Top, the point being
+#: its top edge; 1 for Bottom; 0 centred). A V token is the same with the run
+#: up its frame rather than along the frame's x axis.
+_JUSTIFICATIONS: dict[str, tuple[int, int]] = {
+    "left": (1, 0),
+    "right": (-1, 0),
+    "center": (0, 0),
+    "top": (0, -1),
+    "bottom": (0, 1),
 }
 
-#: The direction text reads along and its glyphs' "up", on the sheet, for
-#: each turn it is drawn at: upright, or a quarter turn to read bottom to top.
+#: The direction text reads along and its glyphs' "up" for each turn it is
+#: drawn at: upright, or a quarter turn to read bottom to top. These are also
+#: a frame's run and "up" for a plain and for a V justification.
 _READING = {0: ((1, 0), (0, -1)), -90: ((0, -1), (-1, 0))}
 
 
@@ -322,9 +320,9 @@ def text_layout(align: str, size: int, rot: str = "R0", lines: int = 1) -> TextL
     token = align.lower()
     if token == "invisible":
         return None
-    sideways_token, along, across = _JUSTIFICATIONS.get(token, _JUSTIFICATIONS["left"])
-    run = _apply_rotation(0, -1, rot) if sideways_token else _apply_rotation(1, 0, rot)
-    up = _apply_rotation(-1, 0, rot) if sideways_token else _apply_rotation(0, -1, rot)
+    along, across = _JUSTIFICATIONS.get(token.removeprefix("v"), _JUSTIFICATIONS["left"])
+    frame_run, frame_up = _READING[-90 if token.startswith("v") else 0]
+    run, up = _apply_rotation(*frame_run, rot), _apply_rotation(*frame_up, rot)
     rotation = -90 if run[0] == 0 else 0
     readable_run, readable_up = _READING[rotation]
     if along == 0:
@@ -389,12 +387,6 @@ def flag_label_layout(flag: NetFlag) -> TextLayout:
     return layout
 
 
-def flag_label_anchor(flag: NetFlag) -> tuple[int, int, str, int]:
-    """Baseline ``(x, y, svg_text_anchor, rotation_degrees)`` for a net label."""
-    layout = flag_label_layout(flag)
-    return (flag.x + layout.dx, flag.y + layout.dy, layout.anchor, layout.rotation)
-
-
 def flag_label_bbox(flag: NetFlag) -> BBox:
     """Estimated extent of a net label's drawn text, rotation included."""
     return text_extent(flag.x, flag.y, [flag.text], FLAG_LABEL_SIZE, flag_label_layout(flag))
@@ -457,23 +449,14 @@ class DrawText:
     x: int
     y: int
     text: str
-    anchor: str  # "start" | "middle" | "end"
     size: int
     role: str  # "attr" | "flag" | "directive" | "comment" | "placeholder"
-    # Degrees about the baseline point; negative is anticlockwise. -90 is the
-    # quarter turn LTspice uses for the attribute text of a sideways symbol.
-    rotation: int = 0
-    # From (x, y), the point the text is placed by, to its baseline: LTspice
+    # How the text is drawn from (x, y), the point it is placed by: LTspice
     # places text by the edges or the middle of its line (see text_layout).
-    dx: int = 0
-    dy: int = 0
+    layout: TextLayout
 
     def points(self) -> tuple[tuple[int, int], ...]:
         return ((self.x, self.y),)
-
-    @property
-    def layout(self) -> TextLayout:
-        return TextLayout(self.rotation, self.anchor, self.dx, self.dy)
 
 
 def drawn_text_extent(t: DrawText) -> BBox:
@@ -560,13 +543,21 @@ class Directive:
     size: int
     is_directive: bool
 
-    @property
+    @cached_property
     def lines(self) -> list[str]:
         return decode_text_lines(self.text)
 
-    @property
+    @cached_property
     def layout(self) -> TextLayout | None:
         return text_layout(self.align, self.size, lines=len(self.lines))
+
+    @cached_property
+    def extent(self) -> BBox | None:
+        """Where its glyphs reach, or None when it is not drawn."""
+        layout = self.layout
+        return (
+            None if layout is None else text_extent(self.x, self.y, self.lines, self.size, layout)
+        )
 
 
 @dataclass
@@ -616,11 +607,7 @@ class Scene:
                 pts.append((fl.x + half, fl.y + half))
             if fl.is_ground:
                 pts.extend(ground_polygon(fl))
-            elif fl.text:
-                boxes.append(flag_label_bbox(fl))
-        for d in self.directives:
-            if (layout := d.layout) is not None:
-                boxes.append(text_extent(d.x, d.y, d.lines, d.size, layout))
+        boxes.extend(extent for *_, extent in self.sheet_text_extents())
         for g in self.sheet_graphics:
             pts.extend(g.points())
 
@@ -628,6 +615,17 @@ class Scene:
         for b in boxes:
             merged = b if merged is None else merged.union(b)
         return merged
+
+    def sheet_text_extents(self) -> tuple[tuple[int, int, str, BBox], ...]:
+        """Where the net labels', comments' and directives' text is drawn, as
+        ``(x, y, first line, extent)``."""
+        labels = (
+            (flag.x, flag.y, flag.text, flag_label_bbox(flag))
+            for flag in self.flags
+            if not flag.is_ground and flag.text
+        )
+        texts = ((d.x, d.y, d.lines[0], d.extent) for d in self.directives if d.extent is not None)
+        return (*labels, *texts)
 
 
 # ---------------------------------------------------------------------------
@@ -706,9 +704,9 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
                 x=(placeholder.x1 + placeholder.x2) // 2,
                 y=(placeholder.y1 + placeholder.y2) // 2,
                 text=ref or part.symbol_name,
-                anchor="middle",
                 size=2,
                 role="placeholder",
+                layout=TextLayout(0, "middle", 0, 0),
             )
         )
         return placed
@@ -767,9 +765,7 @@ def _attr_texts(
         if layout is None:
             return None
         ax, ay = place_point(w.x, w.y, ox, oy, rot)
-        return DrawText(
-            ax, ay, text, layout.anchor, w.size, "attr", layout.rotation, layout.dx, layout.dy
-        )
+        return DrawText(ax, ay, text, w.size, "attr", layout)
 
     for number, text in (
         (_WINDOW_INSTNAME, part.reference),
@@ -910,7 +906,7 @@ def _strokes(graphics: Sequence[Graphic]) -> tuple[tuple[tuple[int, int], tuple[
         if isinstance(g, DrawLine):
             out.append(((g.x1, g.y1), (g.x2, g.y2)))
         elif isinstance(g, DrawPolyline):
-            out.extend(zip(g.pts, g.pts[1:], strict=False))
+            out.extend(pairwise(g.pts))
     return tuple(out)
 
 
@@ -931,11 +927,11 @@ def sheet_view(scene: Scene) -> SheetView:
                 box=sym.box,
                 body=sym.body,
                 pins=tuple((pin.name, pin.x, pin.y) for pin in sym.pins),
-                texts=tuple((t.x, t.y, decode_text_lines(t.text)[0]) for t in sym.texts),
-                text_extents=tuple(drawn_text_extent(t) for t in sym.texts),
+                texts=tuple((x, y, text) for x, y, text, _extent in drawn),
+                text_extents=drawn,
                 strokes=_strokes(sym.graphics),
                 areas=tuple(
-                    BBox(min(g.x1, g.x2), min(g.y1, g.y2), max(g.x1, g.x2), max(g.y1, g.y2))
+                    BBox(g.x1, g.y1, g.x2, g.y2)
                     for g in sym.graphics
                     if isinstance(g, DrawRect | DrawEllipse)
                 ),
@@ -944,20 +940,15 @@ def sheet_view(scene: Scene) -> SheetView:
                 parameters=sym.parameters,
             )
             for sym in scene.symbols
+            for drawn in [
+                tuple(
+                    (t.x, t.y, decode_text_lines(t.text)[0], drawn_text_extent(t))
+                    for t in sym.texts
+                )
+            ]
         ),
         wires=tuple((w.x1, w.y1, w.x2, w.y2) for w in scene.wires),
         labels=tuple((flag.x, flag.y, flag.text) for flag in scene.flags),
-        texts=tuple((d.x, d.y, decode_text_lines(d.text)[0]) for d in scene.directives),
-        text_extents=(
-            *(
-                (flag.x, flag.y, flag.text, flag_label_bbox(flag))
-                for flag in scene.flags
-                if not flag.is_ground and flag.text
-            ),
-            *(
-                (d.x, d.y, d.lines[0], text_extent(d.x, d.y, d.lines, d.size, layout))
-                for d in scene.directives
-                if (layout := d.layout) is not None
-            ),
-        ),
+        texts=tuple((d.x, d.y, d.lines[0]) for d in scene.directives),
+        text_extents=scene.sheet_text_extents(),
     )

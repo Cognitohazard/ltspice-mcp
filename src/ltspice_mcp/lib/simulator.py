@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path, PureWindowsPath
 
 from spicelib.simulators.ltspice_simulator import LTspice
@@ -155,9 +156,15 @@ _RUN_FAMILIES: tuple[str, ...] = tuple(SIMULATORS)
 _EXECUTABLE_NAME_PATTERN = r"[a-z0-9][a-z0-9._-]{0,31}"
 _EXECUTABLE_NAME_RE = re.compile(_EXECUTABLE_NAME_PATTERN)
 
-#: What ``execution.simulator`` accepts: a family, or a family and the name of
-#: one of its executables (``ltspice:xvii``).
-SIMULATOR_SELECTOR_PATTERN = rf"^(?:{'|'.join(_RUN_FAMILIES)})(?::{_EXECUTABLE_NAME_PATTERN})?$"
+
+def selector_pattern(families: Iterable[str]) -> str:
+    """A selector of one of ``families``: a family, or a family and the name of
+    one of its executables (``ltspice:xvii``)."""
+    return rf"^(?:{'|'.join(families)})(?::{_EXECUTABLE_NAME_PATTERN})?$"
+
+
+#: What ``execution.simulator`` accepts.
+SIMULATOR_SELECTOR_PATTERN = selector_pattern(_RUN_FAMILIES)
 
 
 def _exe_simulator_hint(exe_path: object) -> str | None:

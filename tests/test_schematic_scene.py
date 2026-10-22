@@ -28,8 +28,8 @@ from ltspice_mcp.lib.schematic_scene import (
     decode_text_lines,
     default_stock_paths,
     drawn_text_extent,
-    flag_label_anchor,
     flag_label_bbox,
+    flag_label_layout,
     font_px,
     ground_polygon,
     line_height,
@@ -251,7 +251,7 @@ class TestFlagPlacement:
         flag = NetFlag(
             100, 108, "OUT", is_ground=False, orientation=orientation, text_vertical=vertical
         )
-        assert flag_label_anchor(flag)[3] == turn
+        assert flag_label_layout(flag).rotation == turn
         box = flag_label_bbox(flag)
         assert getattr(box, edge) == (100 if edge.startswith("x") else 108)
         if turn:
@@ -489,8 +489,8 @@ class TestAscParsing:
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs("R90"))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         texts = {t.text: t for t in scene.symbols[0].texts}
-        assert texts["C1"].rotation == -90
-        assert texts["100n"].rotation == -90
+        assert texts["C1"].layout.rotation == -90
+        assert texts["100n"].layout.rotation == -90
         # Turned glyphs run down the sheet, so the strings occupy separate
         # columns — neither can grow into the other however long the value gets.
         assert texts["C1"].y == texts["100n"].y
@@ -521,7 +521,7 @@ class TestAscParsing:
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs(rotation))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         value = next(t for t in scene.symbols[0].texts if t.text == "100n")
-        assert (value.rotation, value.anchor) == expected
+        assert (value.layout.rotation, value.layout.anchor) == expected
 
     @pytest.mark.parametrize(
         ("align", "expected"),
@@ -547,7 +547,7 @@ class TestAscParsing:
         )
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         value = next(t for t in scene.symbols[0].texts if t.text == "100n")
-        assert (value.rotation, value.anchor) == expected
+        assert (value.layout.rotation, value.layout.anchor) == expected
 
     def test_asy_default_window_may_ask_for_turned_text(self, tmp_path: Path) -> None:
         # A .asy default can be V-prefixed too, and then it means the same thing
@@ -556,7 +556,7 @@ class TestAscParsing:
         asc = _write(tmp_path / "s.asc", _asc_with_stacked_attrs("R0"))
         scene = build_scene(asc, SymbolResolver(local_dir=tmp_path))
         value = next(t for t in scene.symbols[0].texts if t.text == "100n")
-        assert (value.rotation, value.anchor) == (-90, "end")
+        assert (value.layout.rotation, value.layout.anchor) == (-90, "end")
 
     def test_sheet_graphics_parsed(self, tmp_path: Path) -> None:
         asc = _write(

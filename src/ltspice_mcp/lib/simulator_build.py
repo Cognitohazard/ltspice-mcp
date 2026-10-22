@@ -98,6 +98,14 @@ def predates_logopinfo(program: str) -> bool:
     return is_cp1252_ltspice_executable(program)
 
 
+def ltspice_before_24(simulator: type | None) -> bool:
+    """Whether ``simulator`` launches an LTspice before 24, XVII or IV: the
+    builds that refuse ``.options logopinfo`` (:func:`predates_logopinfo`) and
+    write each subcircuit instance without its X. False for anything else, and
+    for a family with no executable."""
+    return predates_logopinfo(executable_path(simulator) or "")
+
+
 def is_cp1252_ltspice_build(reported: str) -> bool:
     """Whether a build a run reported (``reported_build``) is an LTspice that
     decodes decks as cp1252: XVII or earlier."""

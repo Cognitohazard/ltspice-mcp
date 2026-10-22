@@ -1028,7 +1028,7 @@ class TestExportEncoding:
             assert [site.misdecoded_micro for site in sites] == [True], sheet
         assert self.value(build, "micro_utf8") == "1Âµ"
 
-    def test_xvii_names_passes_a_utf8_sheets_bytes_through(self, build: str):
+    def test_ltspice_xvii_passes_a_utf8_sheets_bytes_through(self, build: str):
         if rec.generation(build) != "xvii":
             pytest.skip("LTspice 26 re-encodes what it read")
         data = rec.recorded(build, "export/micro_utf8.net").read_bytes()

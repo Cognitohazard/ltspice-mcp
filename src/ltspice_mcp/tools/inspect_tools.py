@@ -179,6 +179,7 @@ from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     dialect_for_simulator_name,
     family_refusal,
+    selector_pattern,
     simulator_family,
     simulator_library_roots,
     simulator_remediation,
@@ -186,8 +187,7 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    executable_path,
-    predates_logopinfo,
+    ltspice_before_24,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -651,7 +651,7 @@ class HierarchyQuery(StrictModel):
     kind: Literal["hierarchy"]
     path: str = Field(description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first.")
     simulator: str = Field(
-        pattern=r"^(?:ltspice|ngspice)(?::[a-z0-9][a-z0-9._-]{0,31})?$",
+        pattern=selector_pattern(("ltspice", "ngspice")),
         description=(
             "Offline semantic backend; installation is not required. 'ltspice:<name>' "
             "spells names for that named build."
@@ -674,9 +674,13 @@ class HierarchyQuery(StrictModel):
         description="Resume token bound to captured dependency content, profile and filters.",
     )
 
+    @property
+    def family(self) -> Literal["ltspice", "ngspice"]:
+        return "ltspice" if self.simulator.partition(":")[0] == "ltspice" else "ngspice"
+
     @model_validator(mode="after")
     def _profile(self) -> HierarchyQuery:
-        if self.simulator.startswith("ltspice") and self.ngbehavior is not None:
+        if self.family == "ltspice" and self.ngbehavior is not None:
             raise ValueError("ngbehavior is only valid for ngspice")
         return self
 
@@ -2084,27 +2088,25 @@ def _do_guide(q: GuideQuery, state: SessionState) -> dict[str, Any]:
 def _hierarchy_simulator(selector: str, state: SessionState) -> type | None:
     """The executable a hierarchy's spellings are for: a named build, or the
     session's executable of the family, which an offline query may lack."""
-    family, _sep, name = selector.partition(":")
-    if not name:
-        return state.available_simulators.get(family)
-    if selector not in state.named_simulators:
+    # A selector carries a ':' and a family name never does (resolve_run_simulator).
+    simulator = state.named_simulators.get(selector) or state.available_simulators.get(selector)
+    if simulator is None and ":" in selector:
         raise NetlistError(
             f"no executable is named {selector!r}; inspect(kind='capabilities') lists them"
         )
-    return state.named_simulators[selector]
+    return simulator
 
 
 def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict[str, Any]:
     prefix = _check_prefix(q.prefix)
-    family = "ltspice" if q.simulator.startswith("ltspice") else "ngspice"
+    family = q.family
     simulator = _hierarchy_simulator(q.simulator, state)
     profile = SemanticProfile(
         family,
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
         if family == "ngspice"
         else None,
-        # The same test that decides whether a run is asked for logopinfo.
-        xvii_names=family == "ltspice" and predates_logopinfo(executable_path(simulator) or ""),
+        xvii_names=family == "ltspice" and ltspice_before_24(simulator),
     )
     sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(

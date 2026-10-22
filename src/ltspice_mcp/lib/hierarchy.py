@@ -25,6 +25,7 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
     unquote,
 )
+from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import (
@@ -501,15 +502,6 @@ def _shape(card: SpiceCard) -> tuple[InstanceLine, bool]:
     return view, False
 
 
-def _ltspice_name(scope: tuple[str, ...], name: str, profile: SemanticProfile) -> str:
-    """How an LTspice raw names a node or device inside subcircuit instances:
-    the instances' names as written on LTspice 26 (``xa:xin:mid``), each
-    without its X on XVII (``a:in:mid``). Each build's ``.save`` takes only
-    its own spelling (recorded: ``raw/save_subckt_names*``)."""
-    instances = (p.lower()[1:] if profile.xvii_names else p.lower() for p in scope)
-    return ":".join((*instances, name.lower()))
-
-
 def _address(
     path: tuple[str, ...], kind: str, profile: SemanticProfile
 ) -> tuple[str | None, str | None, str | None]:
@@ -528,7 +520,7 @@ def _address(
         # table on every .op run, and XVII prints it unasked and ends the run
         # on .options logopinfo (recorded: log/subckt_names*).
         return device, None, None
-    return device, f".save I({_ltspice_name(path[:-1], path[-1], profile)})", None
+    return device, f".save I({raw_name(path[:-1], path[-1], xvii=profile.xvii_names)})", None
 
 
 def resolve_hierarchy(
@@ -660,7 +652,7 @@ def resolve_hierarchy(
         reason = None
         if all(_SAFE_NAME.fullmatch(p) for p in scope) and _SAFE_NODE.fullmatch(name):
             if profile.simulator == "ltspice":
-                trace = f"V({_ltspice_name(scope, name, profile)})"
+                trace = f"V({raw_name(scope, name, xvii=profile.xvii_names)})"
             else:
                 trace = "V(" + ".".join((*[p.lower() for p in scope], name.lower())) + ")"
         else:

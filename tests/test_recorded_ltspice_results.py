@@ -1522,7 +1522,7 @@ async def test_a_case_that_wrote_no_such_raw_is_missing_not_misread(
     assert missing["case_id"] == job.cases[0].case_id
 
 
-def test_xvii_names_refuses_a_frequency_response_analysis():
+def test_ltspice_xvii_refuses_a_frequency_response_analysis():
     """The analysis came with LTspice 17.1: XVII 17.0 names the analyzer as a
     device it does not know, writes no results, and the server reads that as
     the run's error."""

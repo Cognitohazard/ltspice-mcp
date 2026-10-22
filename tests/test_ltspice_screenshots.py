@@ -10,21 +10,15 @@ long and as thick.
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from ltspice_mcp.lib.geometry import BBox
-from ltspice_mcp.lib.schematic_scene import (
-    build_scene,
-    drawn_text_extent,
-    flag_label_bbox,
-    font_px,
-    text_extent,
-)
+from ltspice_mcp.lib.schematic_scene import Scene, build_scene, font_px, sheet_view
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests._schematic_fixtures import SCREENSHOT_SHEETS
 
@@ -97,10 +91,24 @@ def _crosses(wire: set[tuple[int, int]]) -> list[tuple[int, int]]:
     return found
 
 
+def _in_a_line(a: BBox, b: BBox, em: float) -> bool:
+    """True if ``a`` and ``b`` are pieces of one line running along x: no
+    thicker than a line, level with each other and up to an em and a half
+    apart."""
+    return (
+        min(a.y2, b.y2) - max(a.y1, b.y1) >= 0.6 * min(a.height, b.height)
+        and max(a.height, b.height) <= 2 * em
+        and max(a.x1, b.x1) - min(a.x2, b.x2) <= 1.5 * em
+    )
+
+
+def _turned(box: BBox) -> BBox:
+    return BBox(box.y1, box.x1, box.y2, box.x2)
+
+
 def _merge_across_bodies(boxes: list[BBox], em: float) -> list[BBox]:
-    """Join the pieces of a line of text that a symbol's body, or a gap LTspice
-    leaves for an underscore it does not draw, splits: pieces no thicker than a
-    line, in line with each other and up to an em and a half apart."""
+    """Join the pieces of a line of text, upright or turned, that a symbol's
+    body or a gap LTspice leaves for an underscore it does not draw splits."""
     merged = list(boxes)
     joined = True
     while joined:
@@ -108,20 +116,8 @@ def _merge_across_bodies(boxes: list[BBox], em: float) -> list[BBox]:
         for i, a in enumerate(merged):
             for j in range(i + 1, len(merged)):
                 b = merged[j]
-                level = (
-                    min(a.y2, b.y2) - max(a.y1, b.y1) >= 0.6 * min(a.height, b.height)
-                    and max(a.height, b.height) <= 2 * em
-                    and max(a.x1, b.x1) - min(a.x2, b.x2) <= 1.5 * em
-                )
-                upright = (
-                    min(a.x2, b.x2) - max(a.x1, b.x1) >= 0.6 * min(a.width, b.width)
-                    and max(a.width, b.width) <= 2 * em
-                    and max(a.y1, b.y1) - min(a.y2, b.y2) <= 1.5 * em
-                )
-                if level or upright:
-                    merged[i] = BBox(
-                        min(a.x1, b.x1), min(a.y1, b.y1), max(a.x2, b.x2), max(a.y2, b.y2)
-                    )
+                if _in_a_line(a, b, em) or _in_a_line(_turned(a), _turned(b), em):
+                    merged[i] = a.union(b)
                     del merged[j]
                     joined = True
                     break
@@ -130,53 +126,33 @@ def _merge_across_bodies(boxes: list[BBox], em: float) -> list[BBox]:
     return merged
 
 
-def _calibration(sheet: Path) -> tuple[tuple[int, int], tuple[int, int]]:
+def _calibration(scene: Scene) -> tuple[tuple[int, int], tuple[int, int]]:
     """The two crosses each sheet draws beyond its content, first in the file."""
-    middles = []
-    for match in re.finditer(
-        r"^WIRE (-?\d+) (-?\d+) (-?\d+) (-?\d+)\r?$", sheet.read_text(), re.M
-    ):
-        x1, y1, x2, y2 = map(int, match.groups())
-        if y1 == y2:
-            middles.append(((x1 + x2) // 2, y1))
-    return middles[0], middles[1]
+    low, high, *_ = [((w.x1 + w.x2) // 2, w.y1) for w in scene.wires if w.y1 == w.y2]
+    return low, high
 
 
-def _ours(sheet: Path) -> list[_Text]:
-    scene = build_scene(sheet, SymbolResolver(local_dir=SHOTS))
-    texts = [
-        _Text(t.text, (t.x, t.y), drawn_text_extent(t)) for sym in scene.symbols for t in sym.texts
-    ]
-    for d in scene.directives:
-        layout = d.layout
-        assert layout is not None
-        texts.append(_Text(d.lines[0], (d.x, d.y), text_extent(d.x, d.y, d.lines, d.size, layout)))
-    texts += [
-        _Text(flag.text, (flag.x, flag.y), flag_label_bbox(flag))
-        for flag in scene.flags
-        if not flag.is_ground
-    ]
-    return texts
+def _ours(scene: Scene) -> list[_Text]:
+    """Every text the layout checks read, where they read it drawn."""
+    view = sheet_view(scene)
+    drawn = [*(entry for part in view.parts for entry in part.text_extents), *view.text_extents]
+    return [_Text(text, (x, y), extent) for x, y, text, extent in drawn]
 
 
-def _ltspices(sheet: Path, picture: Path, ours: list[_Text]) -> tuple[list[_Text], float]:
+def _points(mask: np.ndarray) -> set[tuple[int, int]]:
+    ys, xs = np.nonzero(mask)
+    return set(zip(xs.tolist(), ys.tolist(), strict=True))
+
+
+def _ltspices(scene: Scene, picture: Path, ours: list[_Text]) -> tuple[list[_Text], float]:
     """Each of ``ours``' texts as LTspice drew it, in sheet units, and how many
     sheet units a pixel is."""
-    image = PIL.open(picture).convert("RGB")
-    pixels = image.load()
-    assert pixels is not None
-    wire: set[tuple[int, int]] = set()
-    ink: set[tuple[int, int]] = set()
-    for x in range(image.width):
-        for y in range(image.height):
-            colour = pixels[x, y]
-            if colour == _WIRE:
-                wire.add((x, y))
-            elif colour not in (_BACKGROUND, _BODY):
-                ink.add((x, y))
-    crosses = _crosses(wire)
+    pixels = np.asarray(PIL.open(picture).convert("RGB"))
+    wire = (pixels == _WIRE).all(axis=2)
+    ink = _points(~(wire | (pixels == _BACKGROUND).all(axis=2) | (pixels == _BODY).all(axis=2)))
+    crosses = _crosses(_points(wire))
     low_px, high_px = min(crosses, key=sum), max(crosses, key=sum)
-    low, high = _calibration(sheet)
+    low, high = _calibration(scene)
     scale_x = (high_px[0] - low_px[0]) / (high[0] - low[0])
     scale_y = (high_px[1] - low_px[1]) / (high[1] - low[1])
     assert scale_x == pytest.approx(scale_y, rel=0.02), "the calibration crosses were misread"
@@ -228,9 +204,10 @@ def _sides(text: _Text, edge: float) -> tuple[str, str]:
 @pytest.mark.parametrize("build", BUILDS)
 @pytest.mark.parametrize("sheet", SHEETS)
 def test_text_lies_where_ltspice_draws_it(sheet: str, build: str) -> None:
-    ours = _ours(SHOTS / f"{sheet}.asc")
+    scene = build_scene(SHOTS / f"{sheet}.asc", SymbolResolver(local_dir=SHOTS))
+    ours = _ours(scene)
     assert ours, "the sheet places no text"
-    drawn, unit = _ltspices(SHOTS / f"{sheet}.asc", SHOTS / build / f"{sheet}.png", ours)
+    drawn, unit = _ltspices(scene, SHOTS / build / f"{sheet}.png", ours)
     edge = _EDGE_PX * unit
     wrong = []
     for mine, theirs in zip(ours, drawn, strict=True):
