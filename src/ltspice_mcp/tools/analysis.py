@@ -36,10 +36,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired, Self
+from typing import Annotated, Any, Literal, NotRequired
 
 import numpy as np
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -91,6 +91,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
+    OtherRawFields,
     RawSelectionFields,
     ToolInput,
     format_observations,
@@ -153,8 +154,8 @@ async def _experiment_case(
     """The case a ``job_id`` names when it is a run_experiments job, else ``None``.
 
     Experiment runs are addressed by case, never through ``resolve_run`` — the
-    same split ``Api.load_raw`` makes. ``case_id`` only means something here, so
-    it is refused beside a raw_file. raw_file together with job_id is left to
+    same split ``Api.load_raw`` makes. ``case_id`` and ``other_raw`` only mean
+    something here, so they are refused beside a raw_file. raw_file together with job_id is left to
     ``_direct_source``'s exclusivity error.
     """
     job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
@@ -162,9 +163,10 @@ async def _experiment_case(
         return services.experiment_run_context(
             job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
         )
-    if case_id is not None:
+    if case_id is not None or other_raw is not None:
         raise ResultError(
-            "case_id selects a run_experiments case; pass it with that job's job_id."
+            "case_id and other_raw select a run_experiments case; pass them with that "
+            "job's job_id."
         )
     return None
 
@@ -970,7 +972,7 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
     return lines
 
 
-class PlotWaveformInput(RawSelectionFields, ToolInput):
+class PlotWaveformInput(RawSelectionFields, OtherRawFields, ToolInput):
     raw_file: str | None = Field(
         default=None,
         description="Path to .raw result file. Pass this or ``job_id`` (a job run), not both.",
@@ -991,13 +993,6 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
         description=(
             "For a run_experiments job_id: the case to plot, as named in its receipt "
             "and analysis identities (an alternative to ``run_index``)."
-        ),
-    )
-    other_raw: OtherRawKind | None = Field(
-        default=None,
-        description=(
-            "Plot the case's raw of this kind from its run row's other_raws instead "
-            "of its raw (an FRA's results). Needs job_id."
         ),
     )
     signals: list[str] | Literal["all"] = Field(
@@ -1082,14 +1077,6 @@ class PlotWaveformInput(RawSelectionFields, ToolInput):
         default=None,
         description=FORMAT_DESCRIPTION,
     )
-
-    @model_validator(mode="after")
-    def _other_raw_of_a_job(self) -> Self:
-        if self.other_raw is not None and self.job_id is None:
-            raise ValueError("other_raw selects a raw of an experiment job's case; pass job_id")
-        if self.other_raw is not None and self.in_ltspice:
-            raise ValueError("in_ltspice opens a run's own raw, not its other_raw")
-        return self
 
 
 _IMAGE_SCHEMA: dict[str, Any] = {
@@ -1635,7 +1622,9 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
             _show_in_ltspice,
             state,
             raw_path,
-            case.circuit_path if case is not None else None,
+            # An other raw is not the case's results: shown on its own, as its
+            # path would be, never as the results beside the case's sheet.
+            case.circuit_path if case is not None and args.other_raw is None else None,
             source.log,
             raw.descriptor.original_plot_name,
             [[sig.name for sig in group] for group in plan.groups if group],

@@ -166,7 +166,6 @@ from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
-from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.lib.routing import segment_json, segment_text
 from ltspice_mcp.lib.schematic_ops import (
     netlist_card_value,
@@ -203,6 +202,7 @@ from ltspice_mcp.tools._base import (
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
     OptionalRawSelectionFields,
+    OtherRawFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -726,7 +726,7 @@ class ModelQuery(StrictModel):
         return self
 
 
-class ResultsQuery(OptionalRawSelectionFields):
+class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
     """RAW inventory or detached log facts with snapshot-bound pages."""
 
     kind: Literal["results"]
@@ -738,13 +738,6 @@ class ResultsQuery(OptionalRawSelectionFields):
     job_id: str | None = None
     run_index: int = Field(default=0, strict=True, ge=0)
     case_id: str | None = None
-    other_raw: OtherRawKind | None = Field(
-        default=None,
-        description=(
-            "Read the case's raw of this kind from its run row's other_raws instead of "
-            "its raw (an FRA's results, a .tran's .op). Needs job_id; RAW views only."
-        ),
-    )
     prefix: str | None = Field(
         default=None,
         description="Literal signal, measurement or native quantity prefix; omitted lists all.",

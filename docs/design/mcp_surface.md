@@ -588,10 +588,12 @@ other raw the run wrote beside its raw to its path (`<run>.<kind>.raw`): `op`,
 a transient's operating point, and `fra_1`, a frequency response analysis's
 results. Only kinds recorded from LTspice are listed, and a run with no raw
 lists none. A read by job and case takes one of them in place of the case's
-raw with `other_raw`: a job source of `analyze_results`, `plot_waveform`,
-`inspect(kind="results")` and the Python API's `load_raw`. A case whose run
-wrote no raw of that kind fails with `other_raw_not_written` (a missing case
-in `analyze_results`). `simulator_version` is the build the run reported in its own
+raw with `other_raw`: a job source of `analyze_results`, `run_experiments`'
+attached `analyze` block, `plot_waveform`, `inspect(kind="results")` and the
+Python API's `load_raw`. A case whose run wrote no raw of that kind fails with
+`other_raw_not_written` (a missing case in `analyze_results`). A plot of one
+opened `in_ltspice` is shown on its own, never as the results beside the
+case's sheet. `simulator_version` is the build the run reported in its own
 output: the LTspice log banner
 (`LTspice 26.0.2 for Windows`), the Xyce log banner
 (`Xyce Release 7.8.0-opensource`), the ngspice console banner

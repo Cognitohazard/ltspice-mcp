@@ -659,7 +659,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 200 characters for execution.keep_partial_raw, which
     # keeps a stopped case's raw for reads; nothing else said a stopped run's
     # results could be read at all. Measured 16,656.
-    "run_experiments": 16700,
+    # Raised by about 225 characters for the attached analyze block's
+    # other_raw, so a job can measure its FRA results as its cases finish, as
+    # analyze_results can afterwards. Measured 16,882.
+    "run_experiments": 16900,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -708,7 +711,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # measured from), and its entry on the roster. Measured 20,959.
     # Raised by about 220 characters for a job source's other_raw, which reads
     # a case's frequency response analysis results or a transient's operating
-    # point by job and case instead of by path. Measured 21,180.
+    # point by job and case instead of by path. Measured 21,185.
     "analyze_results": 21200,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
@@ -748,7 +751,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 225 characters for the results query's other_raw, which
     # reads a case's FRA results or a transient's operating point by job and
     # case, as analyze_results does, where only their path could. Measured
-    # 11,574.
+    # 11,557.
     "inspect": 11590,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
@@ -826,7 +829,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # sheet's results that is open is reopened, which closes a pane the user
     # may have added traces to. Measured 4,451.
     # Raised by about 190 characters for other_raw, which plots a case's FRA
-    # results by job and case, where only their path could. Measured 4,642.
+    # results by job and case, where only their path could. Measured 4,656.
     "plot_waveform": 4660,
 }
 

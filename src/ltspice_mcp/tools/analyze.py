@@ -58,7 +58,6 @@ from ltspice_mcp.lib.projection import (
     split_field_path,
 )
 from ltspice_mcp.lib.raw_parser import (
-    OtherRawKind,
     get_step_count,
     safe_magnitude_db,
 )
@@ -81,6 +80,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     NotedModel,
     OptionalRawSelectionFields,
+    OtherRawFields,
     ResponseBudget,
     StrictModel,
     ToolInput,
@@ -132,7 +132,7 @@ class CaseSelection(NotedModel):
         return self
 
 
-class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
+class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     job_id: str | None = Field(
         default=None,
         description=(
@@ -158,13 +158,6 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, NotedModel):
         description=(
             "Which runs of this source to read: 'all', a list of run indices, "
             "or {case_ids: [...]} for an experiment job."
-        ),
-    )
-    other_raw: OtherRawKind | None = Field(
-        default=None,
-        description=(
-            "Read each case's raw of this kind from its row's other_raws instead "
-            "of its raw (an FRA's results, a .tran's .op). Jobs only."
         ),
     )
     label: str = Field(

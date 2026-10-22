@@ -254,8 +254,9 @@ C1 out 0 {C}
   over frequency that read like an AC result (its analysis reads `fra`). The
   run's row gives its path as `other_raws.fra_1`, beside `other_raws.op`, the
   transient's operating point. `other_raw: "fra_1"` reads it by job and case
-  in `analyze_results` (on a job source), `plot_waveform`,
-  `inspect(kind="results")` and `api.load_raw`; its path reads it too. A
+  in `analyze_results` (on a job source), `run_experiments`' attached
+  `analyze` block, `plot_waveform`, `inspect(kind="results")` and
+  `api.load_raw`; its path reads it too. A
   stepped FRA run is not recorded, so how its
   results file splits into steps is not modelled. Its `gain_N` is the negative of the loop
   gain the `stability` recipe takes: `stability` on `-gain_1` gives the crossover and phase margin

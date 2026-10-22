@@ -52,8 +52,14 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
-from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools.analyze import (
+    AnalyzeResultsInput,
+    handle_analyze_results,
+    render_attached_analysis,
+)
+from ltspice_mcp.tools.experiments import AttachedAnalysis, attached_analysis_callback
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import inspect_one
 from tests._ltspice_recorded import declared_points, header_fields
 from tests.conftest import SyncApi, make_experiment_job
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
@@ -1521,19 +1527,7 @@ async def test_a_case_that_wrote_no_such_raw_is_missing_not_misread(
     assert missing["case_id"] == job.cases[0].case_id
 
 
-async def _inspect_fra(state: SessionState, job_id: str) -> dict[str, Any]:
-    reply = await inspect_tools.handle_inspect(
-        inspect_tools.InspectInput.model_validate(
-            {
-                "queries": [
-                    {"kind": "results", "view": "signals", "job_id": job_id, "other_raw": "fra_1"}
-                ]
-            }
-        ),
-        state,
-    )
-    assert reply.structured_content is not None
-    return reply.structured_content["results"][0]
+_INSPECT_FRA = {"kind": "results", "view": "signals", "other_raw": "fra_1"}
 
 
 async def test_plot_and_inspect_read_a_jobs_fra_results_by_job_and_case(
@@ -1549,17 +1543,12 @@ async def test_plot_and_inspect_read_a_jobs_fra_results_by_job_and_case(
         ),
         state_no_sim,
     )
-    listed = await _inspect_fra(state_no_sim, job.job_id)
+    listed = await inspect_one(state_no_sim, {**_INSPECT_FRA, "job_id": job.job_id})
 
     assert plot.structured_content is not None
     assert plot.structured_content["analysis_type"] == "fra"
     assert plot.structured_content["signals"] == ["gain_1"]
-    assert listed["ok"], listed
-    assert [row["name"] for row in listed["data"]["signals"]] == [
-        "frequency",
-        "gain_1",
-        "V(stimulus_1)",
-    ]
+    assert [row["name"] for row in listed["signals"]] == ["frequency", "gain_1", "V(stimulus_1)"]
 
 
 async def test_plot_and_inspect_refuse_an_other_raw_the_run_did_not_write(
@@ -1572,10 +1561,39 @@ async def test_plot_and_inspect_refuse_an_other_raw_the_run_did_not_write(
             analysis.PlotWaveformInput(job_id=job.job_id, other_raw="fra_1", open=False),
             state_no_sim,
         )
-    listed = await _inspect_fra(state_no_sim, job.job_id)
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{**_INSPECT_FRA, "job_id": job.job_id}]}
+        ),
+        state_no_sim,
+    )
 
+    assert reply.structured_content is not None
+    [listed] = reply.structured_content["results"]
     assert not listed["ok"]
     assert "wrote no fra_1 raw" in listed["error"]["message"]
+
+
+async def test_an_attached_analysis_reads_a_jobs_fra_results(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """run_experiments' attached analyze block takes other_raw too, so a job
+    measures its FRA results as its cases finish."""
+    said = _FRA_RESULT.search(read_spice_text(rec.recorded("ltspice26", "raw/fra.log")))
+    assert said is not None
+    crossover_khz = float(said.group(1))
+    job = _fra_job(state_no_sim, work_dir, other_raws=["fra_1"])
+    job.analysis.request = AttachedAnalysis.model_validate(
+        {
+            "other_raw": "fra_1",
+            "recipes": [{"key": "loop", "metric": "stability", "signal": "-gain_1"}],
+        }
+    ).model_dump(mode="json", exclude_none=True)
+
+    stored = await attached_analysis_callback(state_no_sim)(job)
+
+    [row] = render_attached_analysis(stored, fields=None)["results"]["loop"]["values"]
+    assert row["value"]["unity_gain_hz"] == pytest.approx(crossover_khz * 1e3, rel=0.01)
 
 
 def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
@@ -1593,15 +1611,16 @@ def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
         api.load_raw(job_id=job.job_id, other_raw="op")
 
 
-def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
+async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
     """An other raw is a case's: a path names its file instead."""
     raw = work_dir / "fra.fra_1.raw"
-    with pytest.raises(TypeError, match="other_raw is only valid with job_id"):
+    with pytest.raises(TypeError, match="case_id and other_raw are only valid with job_id"):
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
-    with pytest.raises(ValidationError, match="other_raw selects a raw of an experiment job"):
-        analysis.PlotWaveformInput(raw_file=str(raw), other_raw="fra_1")
-    with pytest.raises(ValidationError, match="in_ltspice opens a run's own raw"):
-        analysis.PlotWaveformInput(job_id="exp_fra", other_raw="fra_1", in_ltspice=True)
+    with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(raw_file=str(raw), other_raw="fra_1", open=False),
+            state_no_sim,
+        )
     with pytest.raises(ValidationError, match="other_raw require job_id"):
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "path": str(raw), "other_raw": "fra_1"}

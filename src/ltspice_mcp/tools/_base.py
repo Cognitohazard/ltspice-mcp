@@ -27,6 +27,7 @@ from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
+from ltspice_mcp.lib.raw_parser import OtherRawKind
 
 # Re-exported, not defined here: both netlist injections live in the runner
 # layer so the experiment coordinator (lib/) can call them without importing
@@ -71,6 +72,18 @@ class RawSelectionFields(RawDialectFields):
         strict=True,
         ge=0,
         description="Zero-based plot in the result artifact; distinct from run and step index.",
+    )
+
+
+class OtherRawFields(StrictModel):
+    """Read a job case's other raw in place of its raw."""
+
+    other_raw: OtherRawKind | None = Field(
+        default=None,
+        description=(
+            "Read the case's raw of this kind from its run row's other_raws instead "
+            "of its raw (an FRA's results, a .tran's .op). Needs a job."
+        ),
     )
 
 

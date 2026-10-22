@@ -98,11 +98,19 @@ class _Owner:
     param: str | None = None
 
 
-def _owner(name: str, *, xvii: bool) -> _Owner | None:
+def _param_owner(name: str) -> _Owner | None:
+    """The device a ``@device[param]`` name holds a parameter of, as the log's
+    table or ngspice spells it; None for any other name."""
     table = _DEVICE_PARAM.search(name)
-    if table is not None:
-        device = table.group(1)
-        return _Owner(device, table_device_path(device), param=table.group(2))
+    if table is None:
+        return None
+    device = table.group(1)
+    return _Owner(device, table_device_path(device), param=table.group(2))
+
+
+def _owner(name: str, *, xvii: bool) -> _Owner | None:
+    if (owner := _param_owner(name)) is not None:
+        return owner
     current = _CURRENT.match(name)
     if current is None:
         return None
@@ -201,7 +209,7 @@ def find_device_param(names: Iterable[str], device: str, param: str) -> str | No
     found = [
         name
         for name in names
-        if (owner := _owner(name, xvii=False)) is not None
+        if (owner := _param_owner(name)) is not None
         and owner.param is not None
         and owner.param.casefold() == param.casefold()
         and (owner.text.casefold() == literal or (want and owner.path[-len(want) :] == want))

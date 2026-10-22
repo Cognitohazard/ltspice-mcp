@@ -1006,8 +1006,9 @@ recording that showed it.
   leave attribute text out. The text is placed where LTspice draws it, its
   extent estimated from the font's widths; a bounding box's empty corner, or
   two lines that only graze, are not counted.
-- `analyze_results`, `plot_waveform`, `inspect(kind="results")` and the
-  Python API's `load_raw` read a case's other raw by job and case:
+- `analyze_results`, `run_experiments`' attached `analyze` block,
+  `plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
+  read a case's other raw by job and case:
   `other_raw: "fra_1"` reads its frequency response analysis results, and
   `other_raw: "op"` a transient's operating point, where only a path to the
   file could before. A case whose run wrote no such raw fails with code
