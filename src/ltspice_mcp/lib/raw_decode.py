@@ -23,7 +23,7 @@ from typing import Any, BinaryIO
 import numpy as np
 from spicelib.raw.plot_data import PlotData
 
-from ltspice_mcp.lib.decoded_raw import Analysis, header_analysis
+from ltspice_mcp.lib.decoded_raw import Analysis, header_analysis, sampled_axis
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
 from ltspice_mcp.lib.parser_capture import CapturedFile, CapturedInputs
 from ltspice_mcp.lib.raw_header import (
@@ -393,16 +393,8 @@ def _step_facts(
         return result
     if header.dialect != "ltspice":
         return result
-    first = header.variables[0]
-    if analysis == "transient":
-        expected_axis = "time"
-    elif analysis == "dc":
-        expected_axis = None
-    else:
-        expected_axis = "frequency"
-    if expected_axis is not None and (
-        first.name.lower() != expected_axis or first.declared_type.lower() != expected_axis
-    ):
+    # Its first variable is the axis as a decoded plot reads it.
+    if sampled_axis(analysis, header.variables[0].declared_type) is None:
         return result
     starts = _validated_step_starts(header, analysis, data, row_limit)
     if starts is None or log["status"] != "parsed" or not log["rows"] or plot_count != 1:

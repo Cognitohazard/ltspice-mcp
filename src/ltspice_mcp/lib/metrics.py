@@ -50,7 +50,7 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw
 from ltspice_mcp.lib.device_names import (
     current_device,
     device_names,
@@ -61,7 +61,7 @@ from ltspice_mcp.lib.device_names import (
     writes_xvii_names,
 )
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -375,7 +375,7 @@ def unrecognized_matches(warning: str, signal: str) -> bool:
     is how a read decides whether a 0.0 trace it touched is the real result."""
     sig_l = signal.lower()
     parsed = parse_device_param(sig_l)
-    at_token = None if parsed is None else f"@{parsed[0]}[{parsed[1]}]"
+    at_token = None if parsed is None else device_key(*parsed)
     return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
 
 
@@ -1125,7 +1125,7 @@ async def value(
 async def _value_from_operating_point(
     source: services.AnalysisSource,
     recipe: ValueRecipe,
-    raw: RawData,
+    raw: DecodedRaw,
     step: int,
     state: SessionState,
 ) -> MetricValue:
@@ -1281,7 +1281,7 @@ async def signal_stats(
     if raw.descriptor.axis is None:
         # Nothing to take statistics along; the refusal names what reads it,
         # the value recipe for a point a step.
-        guarded_axis(raw, step)
+        raise _no_axis_error(raw, step)
     if analysis not in _STATS_ANALYSES:
         raise ResultError(
             f"signal_stats does not define statistics for {analysis!r}. "

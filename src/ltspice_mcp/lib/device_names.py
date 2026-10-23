@@ -119,31 +119,14 @@ def parse_shorthand(signal: str) -> tuple[str, str] | None:
     return None if match is None else (match.group(1), match.group(2))
 
 
-def device_param_forms(signal: str) -> list[str]:
-    """The result names a ``dev.param`` operating-point shorthand can address.
-
-    ngspice writes a device parameter bare (``@m1[gm]``), v-wrapped
-    (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``) depending on the quantity,
-    and LTspice's ``.log`` block is folded into ``device_op_points`` under the
-    bare form. Empty when the name is not a shorthand.
-
-    Public because two readers resolve the shorthand the docs promise —
-    ``resolve_signal`` against a raw's trace list, ``analyze_results``
-    against an operating-point result — and a second copy of the rule is how
-    one of them ends up rejecting a name the other accepts.
-    """
-    parsed = parse_shorthand(signal)
-    if parsed is None:
-        return []
-    dev, param = parsed
-    return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
-
-
 def device_param_name(names: Iterable[str], signal: str) -> str | None:
     """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
 
-    Its literal forms (``device_param_forms``) first, then the device by the
-    end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
+    Its literal forms first: ngspice writes a device parameter bare
+    (``@m1[gm]``), v-wrapped (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``)
+    depending on the quantity, and LTspice's ``.log`` block is folded into
+    ``device_op_points`` under the bare form. Then the device by the end of
+    its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
     ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``), refused when more than one
     matches: never a guess.
     The one rule behind both readers of the shorthand.
@@ -151,8 +134,9 @@ def device_param_name(names: Iterable[str], signal: str) -> str | None:
     parsed = parse_shorthand(signal)
     if parsed is None:
         return None
+    dev, param = parsed
     by_lower = {name.lower(): name for name in names}
-    for form in device_param_forms(signal):
+    for form in (f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"):
         if form in by_lower:
             return by_lower[form]
     return find_device_param(by_lower.values(), *parsed)

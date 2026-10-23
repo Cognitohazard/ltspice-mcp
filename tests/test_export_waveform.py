@@ -22,8 +22,8 @@ from ltspice_mcp.tools.analysis import (
     _complex_columns,
     build_waveform_csv,
 )
+from tests.conftest import header as decoded_header
 from tests.conftest import stage_recorded_fixture
-from tests.test_decoded_raw import header as decoded_header
 
 
 def _read_csv(path: Path) -> tuple[list[str], list[list[str]]]:

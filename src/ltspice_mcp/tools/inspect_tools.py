@@ -127,7 +127,6 @@ from ltspice_mcp.errors import (
     NetlistError,
     PathSecurityError,
     compact_validation_error,
-    raise_site_code,
 )
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
@@ -2344,7 +2343,6 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
             await _log_results_page(query, source, state, view), source.observations
         )
     raw = await services.load_raw(source, state)
-    observations = await asyncio.to_thread(services.read_observations, source, raw)
     descriptor = raw.descriptor
     prefix = _check_prefix(query.prefix)
     traces = [
@@ -2368,6 +2366,7 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
             raise _QueryError("no_table", "table view requires a plot with no sampled axis")
 
         rows = await asyncio.to_thread(_TableRows, raw, traces)
+    observations = await asyncio.to_thread(services.read_observations, source, raw)
     identity = {
         **query.model_dump(exclude={"cursor", "limit"}),
         "snapshot_id": descriptor.snapshot_id,
@@ -2812,7 +2811,7 @@ async def _run_queries(
             continue
         except LTSpiceMCPError as exc:
             # The error's own code (errors.py), as every other tool reports it.
-            code = raise_site_code(exc) or exc.code
+            code = exc.code
             results.append(_failure_item(index, raw, {"code": code, "message": str(exc)}))
             continue
         except Exception as exc:

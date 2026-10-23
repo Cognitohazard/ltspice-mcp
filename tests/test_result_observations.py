@@ -28,6 +28,7 @@ from ltspice_mcp.lib.result_observations import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import format_observations
+from tests import _ltspice_recorded as rec
 from tests.conftest import LTSPICE_TRAN_RC_VFINAL, make_raw_mock
 from tests.ltspice_recorder import INPUTS
 
@@ -612,10 +613,8 @@ class TestOperatingPointValueScan:
     the no-axis shape ``make_raw_mock`` (always axis-first) never constructs.
     """
 
-    def test_extreme_first_trace_is_surfaced(self):
-        from spicelib import RawRead
-
-        raw = RawRead(str(FIXTURES / "op_extreme_node.raw"))
+    def test_extreme_first_trace_is_surfaced(self, tmp_path: Path):
+        raw = rec.decode_file(FIXTURES / "op_extreme_node.raw", tmp_path).raw
         # Sanity: the extreme node really is the first trace (a non-axis signal).
         assert raw.get_trace_names()[0].lower() == "v(hot)"
         summary = build_simulation_summary(raw, None, value_scan=True)
@@ -641,17 +640,15 @@ class TestBuildSummaryRealLogPairs:
     """build_simulation_summary against recorded LTspice .raw/.log pairs.
 
     Everything above drives the surfacer with hand-built summary dicts and
-    mocked RawRead instances; these tests capture and decode logs LTspice
+    analytic raws; these tests capture and decode raws and logs LTspice
     actually wrote before passing the facts into summary reconciliation.
     """
 
     @staticmethod
     def _summarize(tmp_path: Path, name: str, requested: dict[str, list[str]]) -> dict:
-        from spicelib import RawRead
-
         from tests.test_summary_log_facts import captured_log_facts
 
-        raw = RawRead(str(FIXTURES / f"{name}.raw"))
+        raw = rec.decode_file(FIXTURES / f"{name}.raw", tmp_path).raw
         return build_simulation_summary(
             raw,
             captured_log_facts(tmp_path, FIXTURES / f"{name}.log"),

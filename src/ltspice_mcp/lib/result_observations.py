@@ -63,6 +63,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
+from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import Analysis, DecodedRaw
@@ -324,15 +325,12 @@ def tran_max_step(netlist_text: str) -> float | None:
     number (``.tran <Tstep> <Tstop> <Tstart> <Tmax>``). None when the card
     gives none, or a value that is not a number, or the deck has no ``.tran``."""
     for card in lex(netlist_text).cards:
-        tokens = card.body.split()
-        if card.kind != "directive" or not tokens or tokens[0].casefold() != ".tran":
+        if card.kind != "directive":
             continue
-        numbers: list[float] = []
-        for token in tokens[1:5]:
-            try:
-                numbers.append(parse_spice_value(token))
-            except (ValueError, TypeError):
-                break
+        tokens = card.body.split()
+        if not tokens or tokens[0].casefold() != ".tran":
+            continue
+        numbers = leading_numeric_tokens(tokens[1:5])
         return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
     return None
 

@@ -46,6 +46,7 @@ from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     has_valid_raw_header,
+    may_hold_compressed_transient,
     raw_writer_command,
     read_partial_raw_progress,
 )
@@ -54,7 +55,7 @@ from ltspice_mcp.lib.recipes import (
     StabilityRecipe,
     ValueRecipe,
 )
-from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, tran_max_step
+from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck_tran_max_step
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
@@ -479,6 +480,19 @@ def test_xvii_stores_a_compressed_transient_in_a_few_points_and_26_in_all(
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize(
+    ("case_id", "may_be"),
+    [("raw/compress_1mv", True), ("raw/compress_1mv_off", False), ("raw/ac", False)],
+)
+def test_a_header_says_whether_a_raw_may_hold_a_compressed_transient(
+    build: str, case_id: str, may_be: bool
+):
+    """Read off the first plot's header alone, so a reader that only needs the
+    compression fact decodes nothing else."""
+    assert may_hold_compressed_transient(rec.recorded(build, f"{case_id}.raw")) is may_be
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 def test_xvii_measures_a_compressed_run_apart_from_an_uncompressed_one(build: str):
     """XVII's own .meas results move with compression, though less than a
     straight line between the stored points would; 26's do not move."""
@@ -498,7 +512,7 @@ def test_a_gap_no_wider_than_the_decks_maximum_step_is_not_coarse(build: str, tm
     """XVII's 50 us maximum step still left a gap of most of a millisecond,
     which is reported; the same gap under a deck that asked for steps up to
     1 ms is what the deck asked for."""
-    deck = tran_max_step((INPUTS / "raw/compress_1mv_maxstep.cir").read_text(encoding="utf-8"))
+    deck = deck_tran_max_step(INPUTS / "raw/compress_1mv_maxstep.cir")
     assert deck == pytest.approx(50e-6)
     raw = rec.decode(build, "raw/compress_1mv_maxstep", tmp_path).raw
     found = coarse_compressed_waveform(raw, max_step=deck)

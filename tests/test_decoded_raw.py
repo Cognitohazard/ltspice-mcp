@@ -15,47 +15,15 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, RawTrace
-from ltspice_mcp.lib.raw_header import RawLimits, RawPlotHeader, RawVariable, preflight_raw
+from ltspice_mcp.lib.raw_header import RawLimits, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
     OffsetAwareRawRead,
     detect_sim_type,
 )
+from tests.conftest import header
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LIMITS = RawLimits(2_000_000, 64_000, 16_000, 16, 128, 10_000, 2_000_000)
-
-
-def header(plot, variables, points, *, index=0, dialect="ngspice", offset="0", flags=("real",)):
-    """Synthetic validated metadata; no file or dependency construction."""
-    return RawPlotHeader(
-        index=index,
-        header_offset=0,
-        encoding="utf-8",
-        fields=(
-            ("Title", "numeric example"),
-            ("Plotname", plot),
-            ("Flags", " ".join(flags)),
-            ("No. Variables", str(len(variables))),
-            ("No. Points", str(points)),
-            ("Offset", offset),
-        ),
-        plot_name=plot,
-        flags=flags,
-        variable_count=len(variables),
-        point_count=points,
-        variables=tuple(
-            RawVariable(i, name, kind, ()) for i, (name, kind) in enumerate(variables)
-        ),
-        dialect=dialect,
-        dialect_evidence=("explicit",),
-        storage="binary",
-        storage_order="point-major",
-        value_bytes=(8,) * len(variables),
-        payload_offset=0,
-        payload_end=0,
-        payload_bytes=0,
-        numeric_bytes=points * len(variables) * 8,
-    )
 
 
 def view(plot, variables, waves, **kwargs):

@@ -30,7 +30,7 @@ from ltspice_mcp.errors import (
 )
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import (
     device_param_name,
     find_trace_by_path,
@@ -45,7 +45,7 @@ from ltspice_mcp.lib.experiment_types import (
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.log_parser import LogDiagnostics
+from ltspice_mcp.lib.log_parser import LogDiagnostics, device_key
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
@@ -191,27 +191,6 @@ class AnalysisSource:
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
-    @classmethod
-    def for_raw(cls, raw_path: Path) -> AnalysisSource:
-        """The candidate log and console companions of a bare ``.raw`` path.
-
-        For a read that has only a path to go on. ``log`` is always a concrete
-        path (existence not guaranteed); ``netlist``, ``dialect`` and
-        ``identity`` are null because a bare path names no producing run. A read
-        that DOES know the run gets its source from ``source_for_run`` or
-        ``resolve_analysis_source`` instead — those carry the deck and identity
-        this cannot.
-        """
-        return cls(
-            raw=raw_path,
-            log=raw_path.with_suffix(".log"),
-            netlist=None,
-            dialect=None,
-            identity=None,
-            trusted_job_artifact=False,
-            console=raw_path.with_suffix(".exe.log"),
-        )
-
 
 def source_for_raw_path(
     raw: Path, state: SessionState, *, plot_index: int = 0, dialect: str | None = None
@@ -261,14 +240,24 @@ def source_for_run(
     )
 
 
+def coarse_waveform(source: AnalysisSource, raw: DecodedRaw) -> dict[str, float] | None:
+    """Whether waveform compression left ``raw``'s transient coarse
+    (``coarse_compressed_waveform``), judged against the maximum step of the
+    deck ``source`` names. The deck is read only for a plot already coarse by
+    its run's share alone, since the deck's step can only raise the bar.
+    Blocking: it may read the deck."""
+    found = coarse_compressed_waveform(raw)
+    if found is None or source.netlist is None:
+        return found
+    return coarse_compressed_waveform(raw, max_step=deck_tran_max_step(source.netlist))
+
+
 def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str, Any], ...]:
     """What a read of ``raw`` from ``source`` says of the results it read: the
     source's own (a stopped case's ``partial_raw``), and whether waveform
-    compression left a transient coarse (``coarse_compressed_waveform``),
-    judged against the deck's own maximum step when the source names a deck.
-    Blocking: it may read the deck."""
-    max_step = None if source.netlist is None else deck_tran_max_step(source.netlist)
-    found = coarse_compressed_waveform(raw, max_step=max_step)
+    compression left a transient coarse (:func:`coarse_waveform`). Blocking:
+    it may read the deck."""
+    found = coarse_waveform(source, raw)
     if found is None:
         return source.observations
     case_id = (source.identity or {}).get("case_id")
@@ -858,7 +847,7 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
     elif dev_param or "@" in sig_lo:
-        save_target = f"@{dev_param[0]}[{dev_param[1]}]" if dev_param else signal
+        save_target = device_key(*dev_param) if dev_param else signal
         hint = (
             f" Per-device small-signal params (gm/gds/vth/...) come back from "
             f"operating_point(device=...). As a raw trace (for a sweep/plot), ngspice "
@@ -868,7 +857,9 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
     return ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 
 
-def _node_pair(raw: RawData, signal: str, plus_node: str, minus_node: str) -> Signal:
+def _node_pair(
+    raw: DecodedRaw | DecodedPlot, signal: str, plus_node: str, minus_node: str
+) -> Signal:
     """``V(plus_node, minus_node)`` read from the two node voltages of ``raw``.
 
     A ground alias (``0``, ``gnd``) that the raw carries no voltage for is
@@ -908,7 +899,7 @@ def _node_spelling(trace: str | None, node: str) -> str:
     return match.group(1) if match else node
 
 
-def resolve_signal(raw: RawData, signal: str) -> Signal:
+def resolve_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> Signal:
     """Resolve ``signal`` against ``raw``: one trace, or a node pair ``V(a,b)``.
 
     A trace the raw actually carries wins, including one literally named

@@ -15,7 +15,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_ac_analysis,
     trace_unit,
 )
-from tests.test_decoded_raw import header
+from tests.conftest import header
 
 
 def selected(plot: DecodedPlot, wrapped: bool):

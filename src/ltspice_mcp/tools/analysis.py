@@ -1473,17 +1473,17 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     raw = await services.load_raw(source, state)
     assert raw_path is not None
-    if raw.descriptor.axis is None:
+    sampled = raw.descriptor.axis
+    if sampled is None:
         raise ResultError("This plot has no sampled axis; use inspect results table instead.")
     # Refuse unsupported coordinates before building a plot.
     guarded_axis(raw, 0)
 
     analysis_type = raw.descriptor.analysis
-    x_is_log = raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"
+    x_is_log = sampled.quantity == "frequency"
 
     trace_names = raw.get_trace_names()
-    assert raw.descriptor.axis is not None
-    axis_name = raw.descriptor.axis.name
+    axis_name = sampled.name
     # A signal list is one panel's worth; resolved once, whatever the spelling.
     requested = (
         args.panels

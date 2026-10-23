@@ -69,7 +69,7 @@ pytestmark = pytest.mark.usefixtures("numeric_raw_inputs")
 def _source(state: SessionState, raw_file: str | Path) -> services.AnalysisSource:
     """The source a caller-supplied raw path resolves to, as the tools resolve it."""
     raw = raw_file if isinstance(raw_file, Path) else safe_path(str(raw_file), state)
-    return services.AnalysisSource.for_raw(raw)
+    return services.source_for_raw_path(raw, state)
 
 
 async def _metric(

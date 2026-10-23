@@ -130,7 +130,8 @@ class RawResult:
     def observations(self) -> list[dict[str, Any]]:
         """What this result says of itself as it was read: ``partial_raw`` when
         it is a stopped case's kept raw, whose values end where the run was
-        stopped. Empty for a whole result."""
+        stopped, and ``coarse_compressed_waveform`` when waveform compression
+        left a transient with few points. Empty when neither applies."""
         return copy.deepcopy(list(self._observations))
 
     @property
@@ -419,7 +420,7 @@ async def load_log_section(
     return logs.value(name), source.observations
 
 
-def measurements_of(section: Any, observations: tuple[dict[str, Any], ...] = ()) -> LogResult[Any]:
+def measurements_of(section: Any, observations: tuple[dict[str, Any], ...]) -> LogResult[Any]:
     """The ``measurements`` section as ``Api.measurements`` returns it."""
     if section is None:
         raise ResultError("The log holds no measurements")

@@ -18,11 +18,11 @@ from ltspice_mcp.state import SessionState
 from tests.conftest import (
     LTSPICE_TRAN_RC_VFINAL,
     SyncApi,
+    header,
     make_experiment_job,
     patch_stub_bootstrap,
     stage_recorded_fixture,
 )
-from tests.test_decoded_raw import header
 
 EXPECTED_ALL = [
     "Api",

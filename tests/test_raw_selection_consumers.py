@@ -15,8 +15,7 @@ from ltspice_mcp.errors import PathSecurityError, ResultError
 from ltspice_mcp.lib import result_store, services
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.tools import analysis, analyze, experiments, inspect_tools
-from tests.conftest import SyncApi, stage_recorded_fixture
-from tests.test_decoded_raw import header
+from tests.conftest import SyncApi, header, stage_recorded_fixture
 from tests.test_log_consumer_migration import forbid_parent_reads
 
 

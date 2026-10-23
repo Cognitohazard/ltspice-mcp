@@ -83,7 +83,7 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
 
     heavy = asyncio.create_task(
         signal_stats(
-            services.AnalysisSource.for_raw(raw_path),
+            services.source_for_raw_path(raw_path, state_no_sim),
             SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)"),
             0,
             state_no_sim,

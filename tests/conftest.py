@@ -682,6 +682,54 @@ async def coordinator_returned(state: SessionState, job: ExperimentJob) -> None:
     await asyncio.wait_for(asyncio.shield(task), LIVENESS_S)
 
 
+def header(
+    plot,
+    variables,
+    points,
+    *,
+    index=0,
+    dialect="ngspice",
+    offset="0",
+    flags=("real",),
+    command=None,
+    value_bytes=8,
+):
+    """Synthetic validated metadata for a plot of ``variables`` as
+    ``(name, declared type)``; no file or dependency construction."""
+    from ltspice_mcp.lib.raw_header import RawPlotHeader, RawVariable
+
+    fields = (
+        ("Title", "numeric example"),
+        ("Plotname", plot),
+        ("Flags", " ".join(flags)),
+        ("No. Variables", str(len(variables))),
+        ("No. Points", str(points)),
+        ("Offset", offset),
+    )
+    return RawPlotHeader(
+        index=index,
+        header_offset=0,
+        encoding="utf-8",
+        fields=fields if command is None else (*fields, ("Command", command)),
+        plot_name=plot,
+        flags=flags,
+        variable_count=len(variables),
+        point_count=points,
+        variables=tuple(
+            RawVariable(i, name, kind, ()) for i, (name, kind) in enumerate(variables)
+        ),
+        dialect=dialect,
+        dialect_evidence=("explicit",),
+        storage="binary",
+        storage_order="point-major",
+        value_bytes=(value_bytes,) * len(variables),
+        payload_offset=0,
+        payload_end=0,
+        payload_bytes=0,
+        numeric_bytes=points * len(variables) * 8,
+    )
+
+
 def make_raw_mock(
     trace_names: list[str] | None = None,
     axis: typing.Any = None,
@@ -702,19 +750,19 @@ def make_raw_mock(
     import numpy as np
 
     from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, plot_analysis
-    from ltspice_mcp.lib.raw_header import RawPlotHeader, RawVariable
 
     if waves is None:
         t = np.linspace(0, 1, 100)
         waves = {"time": t, "V(out)": np.sin(2 * np.pi * t)}
     names = list(trace_names if trace_names is not None else ["time", "V(out)"])
     analysis = plot_analysis(plotname, "")
-    # A sampled plot's axis is its first variable; a caller may name only the
-    # traces and give the axis apart, as a reader asks for it apart.
-    axis_name = {"transient": "time", "ac": "frequency", "noise": "frequency"}.get(analysis)
-    if axis_name is not None and names[0].lower() != axis_name:
-        names.insert(0, axis_name)
-    if axis_name is not None or analysis == "dc":
+    # A sampled plot's axis is its first variable, named and typed as its
+    # simulator types it; a caller may name only the traces and give the axis
+    # apart, as a reader asks for it apart.
+    axis_type = {"transient": "time", "ac": "frequency", "noise": "frequency"}.get(analysis)
+    if axis_type is not None and names[0].lower() != axis_type:
+        names.insert(0, axis_type)
+    if axis_type is not None or analysis == "dc":
         if axis is not None:
             waves = {**waves, names[0]: axis}
         elif names[0] not in waves:
@@ -726,10 +774,8 @@ def make_raw_mock(
         arrays = [wave.astype(complex) for wave in arrays]
 
     def declared(index: int, name: str) -> str:
-        if index == 0 and analysis == "transient":
-            return "time"
-        if index == 0 and analysis in ("ac", "noise", "fra"):
-            return "frequency"
+        if index == 0 and axis_type is not None:
+            return axis_type
         if name.startswith("@"):
             return "notype"  # ngspice's word for a device parameter it cannot type
         if re.match(r"i[a-z]?\(", name, re.IGNORECASE):
@@ -746,40 +792,19 @@ def make_raw_mock(
         arrays = [np.tile(wave, len(lengths)) for wave in arrays]
     count, total = len(lengths), sum(lengths)
     flags = ("complex" if complex_values else "real", *(("stepped",) if count > 1 else ()))
-    header = RawPlotHeader(
-        index=0,
-        header_offset=0,
-        encoding="utf-8",
-        fields=(
-            ("Title", "analytic test input"),
-            ("Plotname", plotname),
-            ("Flags", " ".join(flags)),
-            ("No. Variables", str(len(names))),
-            ("No. Points", str(total)),
-            ("Offset", "0"),
-            ("Command", "LTspice 26" if dialect == "ltspice" else dialect),
-        ),
-        plot_name=plotname,
-        flags=flags,
-        variable_count=len(names),
-        point_count=total,
-        variables=tuple(
-            RawVariable(i, name, declared(i, name), ()) for i, name in enumerate(names)
-        ),
+    plot_header = header(
+        plotname,
+        [(name, declared(i, name)) for i, name in enumerate(names)],
+        total,
         dialect=dialect,
-        dialect_evidence=("explicit",),
-        storage="binary",
-        storage_order="point-major",
-        value_bytes=(16 if complex_values else 8,) * len(names),
-        payload_offset=0,
-        payload_end=0,
-        payload_bytes=0,
-        numeric_bytes=total * len(names) * 8,
+        flags=flags,
+        command="LTspice 26" if dialect == "ltspice" else dialect,
+        value_bytes=16 if complex_values else 8,
     )
     if count == 1:
-        return DecodedRaw([DecodedPlot(header, arrays, snapshot_id="analytic-test-input")])
+        return DecodedRaw([DecodedPlot(plot_header, arrays, snapshot_id="analytic-test-input")])
     plot = DecodedPlot(
-        header,
+        plot_header,
         arrays,
         snapshot_id="analytic-test-input",
         steps=[{"step": float(index)} for index in range(count)],

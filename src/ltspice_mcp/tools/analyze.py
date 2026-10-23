@@ -59,6 +59,7 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import (
     get_step_count,
+    may_hold_compressed_transient,
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import (
@@ -75,9 +76,7 @@ from ltspice_mcp.lib.recipes import (
     validate_recipe,
 )
 from ltspice_mcp.lib.result_observations import (
-    coarse_compressed_waveform,
     coarse_waveform_observation,
-    deck_tran_max_step,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
@@ -1179,14 +1178,21 @@ async def _capture_ltspice_raws(
     captures: MutableMapping[_CaptureKey, ParsedArtifacts],
     deadline: float | None,
 ) -> None:
-    """Read the raw of each run that may be LTspice's, for a recipe that reads
-    only the log. LTspice computes its own .meas results from the waveform it
-    stores, and XVII's move with compression (``raw/compress_*``), so whether
-    the run was left coarse is a fact about those results too. A raw that is
-    absent or cannot be read is not this recipe's failure."""
+    """Read the raw of each run that may be LTspice's compressed transient,
+    for a recipe that reads only the log. LTspice computes its own .meas
+    results from the waveform it stores, and XVII's move with compression
+    (``raw/compress_*``), so whether the run was left coarse is a fact about
+    those results too. Read before the log is, the capture serves both. A raw
+    whose header says it is no compressed transient is not read, and one that
+    is absent or cannot be read is not this recipe's failure."""
     for run in runs:
+        raw = run.source.raw
         dialect = run.source.explicit_dialect or run.source.dialect
-        if run.source.raw is None or dialect not in (None, "ltspice"):
+        if raw is None or dialect not in (None, "ltspice"):
+            continue
+        if run.source.plot_index == 0 and not await asyncio.to_thread(
+            may_hold_compressed_transient, raw
+        ):
             continue
         with contextlib.suppress(ResultError), services.analysis_deadline(deadline):
             await _captured_source(run.source, state, captures, require_raw=True)
@@ -1202,20 +1208,13 @@ def _coarse_waveform_observations(
     such run's.
     """
     coarse: list[tuple[str, dict[str, float]]] = []
-    max_steps: dict[Path, float | None] = {}
     for run in runs:
         artifacts = captures.get(_capture_key(run.source))
         if artifacts is None or artifacts.raw is None:
             continue
-        deck = run.source.netlist
-        if deck is not None and deck not in max_steps:
-            max_steps[deck] = deck_tran_max_step(deck)
         with contextlib.suppress(ResultError):
             raw = services.select_raw(artifacts, run.source.plot_index)
-            found = coarse_compressed_waveform(
-                raw, max_step=None if deck is None else max_steps[deck]
-            )
-            if found is not None:
+            if (found := services.coarse_waveform(run.source, raw)) is not None:
                 coarse.append((run.label, found))
     if not coarse:
         return []
@@ -3779,6 +3778,8 @@ async def _evaluate_unit(
             )
         )
 
+    if isinstance(recipe, MeasurementsRecipe):
+        await _capture_ltspice_raws(eligible_runs, state, captures, item_deadline)
     records, item_failures, pending = await _evaluate_item(
         recipe,
         eligible_runs,
@@ -3793,8 +3794,6 @@ async def _evaluate_unit(
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
     observations.extend(_log_precision_observations(records))
-    if isinstance(recipe, MeasurementsRecipe):
-        await _capture_ltspice_raws(eligible_runs, state, captures, item_deadline)
     observations.extend(
         await asyncio.to_thread(_coarse_waveform_observations, eligible_runs, captures)
     )

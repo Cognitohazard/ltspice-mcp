@@ -32,10 +32,8 @@ from ltspice_mcp.lib import atomic_write
 from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
 from ltspice_mcp.lib.decoded_raw import (
     AC_SHAPED,
-    Analysis,
     DecodedPlot,
     DecodedRaw,
-    PlotDescriptor,
     RawData,
     plot_analysis,
     sampled_axis,
@@ -304,71 +302,45 @@ def safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
     return 20 * np.log10(magnitude)
 
 
-def _selected_descriptor(raw: RawData) -> PlotDescriptor | None:
-    """Physical metadata only for actual decoded readers, never guessed from a stub."""
-    return raw.descriptor if isinstance(raw, (DecodedRaw, DecodedPlot)) else None
+def detect_sim_type(raw: DecodedRaw | DecodedPlot) -> str:
+    """The selected plot's name as the simulator wrote it (e.g. "Transient
+    Analysis", "AC Analysis"), or "Unknown" for a plot its decoder could not
+    classify."""
+    descriptor = raw.descriptor
+    return "Unknown" if descriptor.analysis == "unknown" else descriptor.original_plot_name
 
 
-def detect_sim_type(raw: RawData) -> str:
-    """Detect simulation type from raw file metadata.
-
-    Args:
-        raw: Selected decoded plot or structural reader
-
-    Returns:
-        Simulation type string (e.g., "Transient Analysis", "AC Analysis")
-        or "Unknown" if detection fails
-    """
-    descriptor = _selected_descriptor(raw)
-    if descriptor is None or descriptor.analysis == "unknown":
-        return "Unknown"
-    return descriptor.original_plot_name
-
-
-_NOISE: frozenset[Analysis] = frozenset({"noise"})
-_OP: frozenset[Analysis] = frozenset({"op"})
-_DC: frozenset[Analysis] = frozenset({"dc"})
-_TRANSIENT: frozenset[Analysis] = frozenset({"transient"})
-
-
-def _classified(raw: RawData, analyses: frozenset[Analysis]) -> bool:
-    """Whether ``raw``'s selected plot holds one of ``analyses``, as its
-    decoder read the plot (``decoded_raw.plot_analysis``)."""
-    descriptor = _selected_descriptor(raw)
-    return descriptor is not None and descriptor.analysis in analyses
-
-
-def is_ac_analysis(raw: RawData) -> bool:
+def is_ac_analysis(raw: DecodedRaw | DecodedPlot) -> bool:
     """Whether the plot is AC-shaped: an AC analysis, or the results of a
     frequency response analysis, which LTspice writes in the same layout."""
-    return _classified(raw, AC_SHAPED)
+    return raw.descriptor.analysis in AC_SHAPED
 
 
-def is_noise_analysis(raw: RawData) -> bool:
+def is_noise_analysis(raw: DecodedRaw | DecodedPlot) -> bool:
     """Whether the plot is a noise run."""
-    return _classified(raw, _NOISE)
+    return raw.descriptor.analysis == "noise"
 
 
-def is_operating_point(raw: RawData) -> bool:
+def is_operating_point(raw: DecodedRaw | DecodedPlot) -> bool:
     """Whether the plot is a bias-point solve (``.op``)."""
-    return _classified(raw, _OP)
+    return raw.descriptor.analysis == "op"
 
 
-def is_dc_analysis(raw: RawData) -> bool:
+def is_dc_analysis(raw: DecodedRaw | DecodedPlot) -> bool:
     """Whether the plot is a .DC sweep."""
-    return _classified(raw, _DC)
+    return raw.descriptor.analysis == "dc"
 
 
-def is_transient_analysis(raw: RawData) -> bool:
+def is_transient_analysis(raw: DecodedRaw | DecodedPlot) -> bool:
     """Whether the plot is a transient run."""
-    return _classified(raw, _TRANSIENT)
+    return raw.descriptor.analysis == "transient"
 
 
 def get_step_count(raw: RawData) -> int:
     """Get number of simulation steps (for .step directives).
 
     Args:
-        raw: Selected decoded plot or structural reader
+        raw: The selected plot
 
     Returns:
         Number of validated step slices; a decoded plot whose step
@@ -457,33 +429,28 @@ def declared_type(raw: RawData, name: str) -> str | None:
     return None
 
 
-def trace_unit(raw: RawData, name: str) -> str | None:
+def trace_unit(raw: DecodedRaw | DecodedPlot, name: str) -> str | None:
     """Physical unit from the selected decoded descriptor, None where it
     gives none. An absent unit is never guessed from the trace's name: native
     transfer, root and sensitivity quantities may be declared voltage, and a
     device parameter (``@m1[gm]``) has the unit the simulator typed it with or
     none — a guess from the name would be a vendor catalog, not a relay.
     """
-    descriptor = _selected_descriptor(raw)
-    if descriptor is None:
-        return None
-    for trace in descriptor.traces:
+    for trace in raw.descriptor.traces:
         if trace.name.lower() == name.lower():
             return trace.unit
     return None
 
 
-def dc_axis_name(raw: RawData) -> tuple[str | None, str | None]:
+def dc_axis_name(raw: DecodedRaw | DecodedPlot) -> tuple[str | None, str | None]:
     """``(name, SI unit)`` of the selected plot's sampled axis, ``(None, None)``
     for a table (which has none even when trace zero is declared voltage or
     frequency). Lets readers label a .dc sweep by its swept variable (e.g.
     ``Vin`` / ``Vin_V``) instead of a generic ``t``/``sweep`` tag — the one
     place that introspection lives, shared by the text and CSV paths.
     """
-    descriptor = _selected_descriptor(raw)
-    if descriptor is None or descriptor.axis is None:
-        return None, None
-    return descriptor.axis.name, descriptor.axis.unit
+    axis = raw.descriptor.axis
+    return (None, None) if axis is None else (axis.name, axis.unit)
 
 
 def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
@@ -747,7 +714,7 @@ _SIGNALS_STRUCTURED_CAP = 100
 
 
 def build_simulation_summary(
-    raw: RawData,
+    raw: DecodedRaw | DecodedPlot,
     logs: DecodedLog | None,
     duration: float | None = None,
     *,
@@ -759,7 +726,7 @@ def build_simulation_summary(
     """Build comprehensive, type-aware simulation summary.
 
     Args:
-        raw: Selected decoded plot or structural reader
+        raw: The selected plot
         logs: Optional resident facts from the captured log/console decode.
         duration: Optional simulation duration in seconds
         step: Which .step iteration to summarize (axis/range/point_count).
@@ -789,51 +756,37 @@ def build_simulation_summary(
     sim_type = detect_sim_type(raw)
     trace_names = raw.get_trace_names()
     step_count = get_step_count(raw)
-    descriptor = _selected_descriptor(raw)
+    descriptor = raw.descriptor
 
     # Collected here rather than in the log block below so a fault anywhere in
     # this function has somewhere to land; attached to the summary once, at the
     # end, so a warning raised after the attachment point is not lost.
     warnings: list[str] = []
 
-    # Stepped ``.op`` raw files have no axis — spicelib raises RuntimeError
-    # "This RAW file does not have an axis." Treat that as a valid degenerate
-    # case (no range, no point_count beyond step_count) instead of aborting
-    # the whole summary.
+    # A plot with no sampled axis (an operating point, a table) has a point
+    # count and no range. A step the plot cannot give is a different fact
+    # from that, and is said as one.
+    axis = None
+    point_count = step_count
     try:
-        axis = raw.get_axis(step=step)
-        point_count = len(axis)
-        has_axis = True
-    except (NoAxisError, RuntimeError, TypeError):
-        # TypeError is the same shape by another route: for a file that held no
-        # plots at all, spicelib's get_axis returns ``np.ndarray([])`` — an
-        # UNSIZED 0-d array — so ``len()`` raises instead of answering 0.
-        axis = None  # type: ignore[assignment]
-        point_count = (
-            len(raw.get_wave(trace_names[0], step=step))
-            if descriptor is not None and trace_names
-            else step_count
-        )
-        has_axis = False
+        if descriptor.axis is None:
+            if trace_names:
+                point_count = len(raw.get_wave(trace_names[0], step=step))
+        else:
+            axis = raw.get_axis(step=step)
+            point_count = len(axis)
     except _RAW_ACCESS_ERRORS as exc:
-        # Any OTHER read fault is not the axis-less shape above: the range and
-        # point count are missing because the raw could not be read, and that
-        # is a different fact from "this analysis has no axis".
-        axis = None  # type: ignore[assignment]
-        point_count = step_count
-        has_axis = False
         warnings.append(_parse_failure("axis (range, point_count)", exc))
 
     range_info: dict = {}
-    if has_axis and point_count > 0 and axis is not None:
+    if axis is not None and point_count > 0:
         if is_transient_analysis(raw):
             range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
         elif (
             is_ac_analysis(raw)
             or is_noise_analysis(raw)
             or (
-                descriptor is not None
-                and descriptor.axis is not None
+                descriptor.axis is not None
                 and descriptor.axis.unit == "Hz"
                 and descriptor.axis.real_coordinates
             )
@@ -987,12 +940,12 @@ def build_simulation_summary(
     # extracted here only when the caller signalled they're loaded.
     value_traces: dict | None = None
     if value_scan:
-        # The sweep axis (time / frequency / DC source) is trace 0 and isn't a
-        # signal worth scanning. Skip it only when the raw actually HAS an axis:
-        # an operating-point raw has none, so ITS trace 0 is a real node, and
-        # skipping it there hid a degenerate first-sorted value (e.g. a floating
-        # node at ~1e30) — exactly the case this scan exists to catch.
-        axis_name = trace_names[0] if (has_axis and trace_names) else None
+        # The sweep axis (time / frequency / DC source) isn't a signal worth
+        # scanning. Skip it only when the plot actually HAS an axis: an
+        # operating point has none, so ITS trace 0 is a real node, and skipping
+        # it there hid a degenerate first-sorted value (e.g. a floating node at
+        # ~1e30) — exactly the case this scan exists to catch.
+        axis_name = None if descriptor.axis is None else descriptor.axis.name
         value_traces = {}
         unreadable: list[str] = []
         for name in trace_names:
@@ -1017,7 +970,7 @@ def build_simulation_summary(
 
     summary["observations"] = surface_observations(
         summary,
-        analysis=descriptor.analysis if descriptor is not None else None,
+        analysis=descriptor.analysis,
         requested=requested,
         value_traces=value_traces,
         source_amplitudes=source_amplitudes,
@@ -1040,15 +993,10 @@ def _read_head(path: Path) -> bytes | None:
         return None
 
 
-def raw_writer_command(path: Path) -> str | None:
-    """The first plot header's ``Command:`` value: the writer naming itself.
-
-    ``Linear Technology Corporation LTspice XVII`` from LTspice XVII, or
-    ``ngspice-46, Build Mar 29 2026 15:02:07`` from ngspice 44 and later. None
-    when the file is not a raw, has no such field (ngspice before 44), or
-    cannot be read. Only the header text before the variables block is
-    searched, and only the first ``_SNIFF_BYTES`` of the file are read.
-    """
+def _first_header_fields(path: Path) -> dict[str, str] | None:
+    """The first plot header's fields, keyed in lower case, read from the
+    first ``_SNIFF_BYTES`` of the file; None when it is not a raw or cannot be
+    read."""
     head = _read_head(path)
     if head is None:
         return None
@@ -1059,7 +1007,34 @@ def raw_writer_command(path: Path) -> str | None:
     else:
         return None
     fields, _, _ = _parse_plot_header(head.decode(_RAW_CODECS[width], errors="replace"))
-    return fields.get("command") or None
+    return fields
+
+
+def raw_writer_command(path: Path) -> str | None:
+    """The first plot header's ``Command:`` value: the writer naming itself.
+
+    ``Linear Technology Corporation LTspice XVII`` from LTspice XVII, or
+    ``ngspice-46, Build Mar 29 2026 15:02:07`` from ngspice 44 and later. None
+    when the file is not a raw, has no such field (ngspice before 44), or
+    cannot be read. Only the header text before the variables block is
+    searched, and only the first ``_SNIFF_BYTES`` of the file are read.
+    """
+    fields = _first_header_fields(path)
+    return (fields or {}).get("command") or None
+
+
+def may_hold_compressed_transient(path: Path) -> bool:
+    """Whether the first plot of the raw at ``path`` may be a transient that
+    waveform compression thinned: its header names a transient and its flags
+    do not say ``nocompression``. True when the header cannot be read, so a
+    caller that must know decodes the file to find out."""
+    fields = _first_header_fields(path)
+    if fields is None:
+        return True
+    return (
+        plot_analysis(fields.get("plotname", ""), "") == "transient"
+        and "nocompression" not in fields.get("flags", "").lower().split()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1136,8 +1111,8 @@ class _Cut:
 class _PlotHeader:
     fields: dict[str, str]
     variables: list[str]
-    #: Each variable's declared type, in the same order.
-    types: list[str]
+    #: The first variable's declared type: what says whether it is an axis.
+    first_type: str
     data_start: int | None
     data_kind: str | None
 
@@ -1224,28 +1199,29 @@ def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
         match = _RE_DATA_START.search(text, max(0, searched - 16))
         if match is not None:
             prefix = text[: match.end()].encode(codec, errors="surrogatepass")
-            fields, variables, types = _parse_plot_header(text[: match.start()])
+            fields, variables, first_type = _parse_plot_header(text[: match.start()])
             return _PlotHeader(
-                fields, variables, types, offset + len(prefix), match.group(1).lower()
+                fields, variables, first_type, offset + len(prefix), match.group(1).lower()
             )
-    fields, variables, types = _parse_plot_header(text)
-    return _PlotHeader(fields, variables, types, None, None)
+    fields, variables, first_type = _parse_plot_header(text)
+    return _PlotHeader(fields, variables, first_type, None, None)
 
 
-def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], list[str]]:
-    """Header fields keyed in lower case, and the variable names and their
-    declared types in order."""
+def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], str]:
+    """Header fields keyed in lower case, the variable names in order, and
+    the first variable's declared type."""
     fields: dict[str, str] = {}
     variables: list[str] = []
-    types: list[str] = []
+    first_type = ""
     in_variables = False
     for line in text.split("\n"):
         line = line.rstrip("\r")
         if in_variables:
             parts = line.lstrip().split("\t")
             if len(parts) >= 2:
+                if not variables and len(parts) >= 3:
+                    first_type = parts[2]
                 variables.append(parts[1])
-                types.append(parts[2] if len(parts) >= 3 else "")
             continue
         key, sep, value = line.partition(":")
         if not sep:
@@ -1255,7 +1231,7 @@ def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], list[str]]
             in_variables = True
             continue
         fields.setdefault(key, value.strip())
-    return fields, variables, types
+    return fields, variables, first_type
 
 
 def _int_field(fields: dict[str, str], key: str) -> int:
@@ -1295,10 +1271,8 @@ def _progress_of_plot(
     flags = fields.get("flags", "").lower().split()
     # Read as a full read reads the plot (decoded_raw.sampled_axis): a stepped
     # one-frequency .ac stores a step's parameter first, not a frequency.
-    first_type = header.types[0] if header.types else ""
-    has_axis = bool(header.variables) and (
-        sampled_axis(plot_analysis(plot or "", first_type), first_type) is not None
-    )
+    analysis = plot_analysis(plot or "", header.first_type)
+    has_axis = bool(header.variables) and sampled_axis(analysis, header.first_type) is not None
     axis = header.variables[0] if has_axis else None
 
     def progress(
@@ -1334,7 +1308,7 @@ def _progress_of_plot(
         return progress(*_ascii_last_point(handle, header.data_start, size, width, n_vars))
 
     writer = _raw_writer(fields, width, dialect)
-    complex_values = "complex" in flags or plot_analysis(plot or "", "") == "ac"
+    complex_values = "complex" in flags or analysis == "ac"
     if complex_values:
         value_size = 16
     elif writer != "ltspice" or "double" in flags:

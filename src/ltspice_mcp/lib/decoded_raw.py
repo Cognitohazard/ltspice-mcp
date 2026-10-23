@@ -64,7 +64,7 @@ class RawTrace(Protocol):
 class RawData(Protocol):
     """Reader access used by numerical helpers, independent of plot descriptors.
 
-    Structural typing also accepts existing spicelib test readers. Implementing
+    Structural typing also accepts the reader stubs numeric tests use. Implementing
     this interface alone does not establish residency or parser safety; the
     production loader supplies those guarantees through DecodedRaw.
     """
@@ -284,14 +284,13 @@ def sampled_axis(analysis: Analysis, first_type: str) -> tuple[str, str] | None:
     return None
 
 
-def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | None:
-    return sampled_axis(analysis, header.variables[0].declared_type)
-
-
 def transient_time_offset(header: RawPlotHeader) -> float:
     """Validate the time offset using header facts before numeric allocation."""
     analysis = header_analysis(header)
-    if analysis != "transient" or _axis_kind(header, analysis) is None:
+    if (
+        analysis != "transient"
+        or sampled_axis(analysis, header.variables[0].declared_type) is None
+    ):
         return 0.0
     offset = float(next((value for key, value in header.fields if key.lower() == "offset"), "0"))
     if not math.isfinite(offset):
@@ -405,7 +404,7 @@ class DecodedPlot:
                 raise ValueError("Step metadata cannot be associated without validated boundaries")
             descriptors = ()
         analysis = header_analysis(header)
-        kind = _axis_kind(header, analysis)
+        kind = sampled_axis(analysis, header.variables[0].declared_type)
         arrays = list(waves)
         offset = transient_time_offset(header)
         if kind is not None and analysis == "transient":

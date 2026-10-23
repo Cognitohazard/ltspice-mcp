@@ -321,8 +321,9 @@ class TestSummarySurfacesParserFaults:
     """
 
     @staticmethod
-    def _tran_fixture() -> tuple[RawRead, Path]:
-        return _recorded("ltspice_tran_rc"), FIXTURES_DIR / "ltspice_tran_rc.log"
+    def _tran_fixture(tmp_path: Path) -> tuple[DecodedRaw, Path]:
+        raw = rec.decode_file(FIXTURES_DIR / "ltspice_tran_rc.raw", tmp_path).raw
+        return raw, FIXTURES_DIR / "ltspice_tran_rc.log"
 
     @staticmethod
     def _raiser(exc: Exception):
@@ -330,13 +331,13 @@ class TestSummarySurfacesParserFaults:
 
     def test_the_fixture_reports_these_fields_when_nothing_raises(self, tmp_path):
         """Baseline: the fields the fault tests remove are really there."""
-        raw, log = self._tran_fixture()
+        raw, log = self._tran_fixture(tmp_path)
         summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
         assert "vfinal" in {k.lower() for k in summary["measurements"]}
         assert summary.get("warnings") is None
 
     def test_measurement_parse_failure_is_named(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
-        raw, log = self._tran_fixture()
+        raw, log = self._tran_fixture(tmp_path)
         fault = self._raiser(ValueError("bad measure block"))
         monkeypatch.setattr(log_parser, "parse_measurements", fault)
         summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
@@ -350,7 +351,7 @@ class TestSummarySurfacesParserFaults:
     def test_log_diagnostics_failure_is_named(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
         """The diagnostics channel itself: no errors list must not be able to
         mean "the error scan crashed"."""
-        raw, log = self._tran_fixture()
+        raw, log = self._tran_fixture(tmp_path)
         fault = self._raiser(RuntimeError("walker died"))
         monkeypatch.setattr(log_parser, "extract_log_diagnostics", fault)
         summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
@@ -362,7 +363,7 @@ class TestSummarySurfacesParserFaults:
         assert "walker died" in joined
 
     def test_fourier_parse_failure_is_named(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
-        raw, _ = self._tran_fixture()
+        raw, _ = self._tran_fixture(tmp_path)
         fault = self._raiser(KeyError("harmonics"))
         monkeypatch.setattr(log_parser, "parse_fourier_data", fault)
         summary = raw_parser.build_simulation_summary(
@@ -381,7 +382,7 @@ class TestSummarySurfacesParserFaults:
         from ltspice_mcp.errors import ResultError
         from ltspice_mcp.lib import log_parser
 
-        raw, log = self._tran_fixture()
+        raw, log = self._tran_fixture(tmp_path)
         fault = self._raiser(ResultError("Could not parse log file"))
         monkeypatch.setattr(log_parser, "make_log_reader", fault)
         summary = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
@@ -392,48 +393,39 @@ class TestSummarySurfacesParserFaults:
         assert "measurements" in joined and "fourier" in joined
         assert "ResultError" in joined
 
-    def test_an_axis_read_fault_is_named_but_an_axis_less_raw_is_not(
-        self, tmp_path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_an_axis_read_fault_is_named_but_an_axis_less_raw_is_not(self, tmp_path):
         """The two reasons for a missing range are different facts.
 
-        A stepped ``.op`` raw has no axis at all — spicelib says so with a
-        RuntimeError, and that is the documented degenerate shape, not a
-        problem. Any other read fault means the range is missing because the
-        file could not be read, which the caller should be told."""
-        from spicelib.raw.raw_classes import SpiceReadException
-
-        raw, log = self._tran_fixture()
-        monkeypatch.setattr(
-            raw, "get_axis", self._raiser(RuntimeError("This RAW file does not have an axis."))
+        An operating point has no axis at all, the documented degenerate
+        shape, not a problem. A step the plot cannot give means the range is
+        missing because it could not be read, which the caller should be told."""
+        op = make_raw_mock(
+            ["V(out)"], waves={"V(out)": np.array([1.0])}, plotname="Operating Point"
         )
-        quiet = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log))
+        quiet = raw_parser.build_simulation_summary(op, None)
         assert quiet["range"] == {}
-        assert not [w for w in (quiet.get("warnings") or []) if "axis" in w]
+        assert "warnings" not in quiet
 
-        raw2, log2 = self._tran_fixture()
-        monkeypatch.setattr(
-            raw2, "get_axis", self._raiser(SpiceReadException("Not enough data in the binary"))
-        )
-        loud = raw_parser.build_simulation_summary(raw2, captured_log_facts(tmp_path, log2))
+        raw, log = self._tran_fixture(tmp_path)
+        loud = raw_parser.build_simulation_summary(raw, captured_log_facts(tmp_path, log), step=5)
         assert loud["range"] == {}
         joined = " ".join(loud["warnings"])
         assert "axis" in joined
-        assert "SpiceReadException" in joined
+        assert "IndexError" in joined
 
     def test_a_trace_the_value_scan_cannot_read_is_reported(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ):
         """A narrowed scan must not look like a complete one."""
-        raw, log = self._tran_fixture()
-        real_get_wave = raw.get_wave
+        raw, log = self._tran_fixture(tmp_path)
+        real_get_wave = DecodedRaw.get_wave
 
-        def refuse_one(trace, step=0):
+        def refuse_one(self, trace, step=0):
             if str(trace).lower() == "v(out)":
                 raise IndexError(f'does not contain trace "{trace}"')
-            return real_get_wave(trace, step)
+            return real_get_wave(self, trace, step)
 
-        monkeypatch.setattr(raw, "get_wave", refuse_one)
+        monkeypatch.setattr(DecodedRaw, "get_wave", refuse_one)
         summary = raw_parser.build_simulation_summary(
             raw, captured_log_facts(tmp_path, log), value_scan=True
         )
