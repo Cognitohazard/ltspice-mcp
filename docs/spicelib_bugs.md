@@ -3041,9 +3041,10 @@ appends as text, the workaround can call it again.
 on a resistor named `X9`.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor._load_asc_file`, the `SYMATTR InstName` branch).
-**Our workaround:** `lib/schematic_ops.py:level_label_lint` decides whether a
-part is a subcircuit call by `element_class`, the letter LTspice netlists it
-as, and no longer reads spicelib's `_SUBCKT` attribute.
+**Our workaround:** the sheet rule `subcircuit_value_slot`
+(`lib/sheet_findings.py`) decides whether a part is a subcircuit call by
+`SheetPart.element`, the letter LTspice netlists it as, read off the sheet
+and its symbol, and never reads spicelib's `_SUBCKT` attribute.
 
 ### Summary
 

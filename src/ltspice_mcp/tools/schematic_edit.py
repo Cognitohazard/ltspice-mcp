@@ -1205,8 +1205,7 @@ def _op_warnings(results: list[dict]) -> list[str]:
     """The batch's per-op advisories, attributed to the op that raised them.
 
     An op can succeed and still have something to say of what it did itself —
-    a subcircuit value LTspice would write as a stray token, a route that
-    passes over a pin already on its net. What the finished sheet holds is the sheet
+    a route that passes over a pin already on its net. What the finished sheet holds is the sheet
     rules' to say, not an op's. The envelope carries one flat ``warnings`` list,
     so each is prefixed with its op; the repeats are already collapsed by
     ``collapse_result_warnings``, which keeps the first occurrence and

@@ -16310,6 +16310,12 @@
   "edit": {
    "warnings": [
     {
+     "kind": "subcircuit_value_slot",
+     "message": "X3: its model is selected by its SpiceModel attribute ('mdl'), and LTspice writes Value 'sub3' after it on the X line, so 'sub3' is named as the subcircuit and 'mdl' as one more node. Clear the Value",
+     "ref": "X3",
+     "value": "sub3"
+    },
+    {
      "kind": "floating_pin",
      "message": "Floating pin: X1.a at (112,192)",
      "pin": "a",
@@ -17247,6 +17253,22 @@
     "rule_id": "floating_pin",
     "severity": "observation",
     "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "attributes.asc"
+    },
+    "evidence": {
+     "coords": [],
+     "detail": "X3: its model is selected by its SpiceModel attribute ('mdl'), and LTspice writes Value 'sub3' after it on the X line, so 'sub3' is named as the subcircuit and 'mdl' as one more node. Clear the Value",
+     "refs": [
+      "X3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "subcircuit_value_slot",
+    "severity": "warning",
+    "subject": "X3"
    }
   ]
  },

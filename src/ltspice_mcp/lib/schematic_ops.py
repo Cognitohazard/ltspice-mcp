@@ -317,12 +317,6 @@ def _parse_rotation(rotation: str) -> ERotation:
 # token, then only parameters.
 _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 
-# A GUI opamp complexity-level label (e.g. ``Level.2``) that belongs in the
-# SpiceModel/level selector, NOT the Value slot. On a subcircuit (X) symbol
-# LTspice emits the Value as an extra positional token on the instance line,
-# so netlisting fails downstream with "sub-circuit name is not defined".
-_LEVEL_LABEL_RE = re.compile(r"^\s*level\.\d+\s*$", re.IGNORECASE)
-
 
 # Element classes with exactly two terminals before a value that runs to the
 # end of the line: an independent source's spec (``DC 5 AC 1``). LTspice writes
@@ -484,52 +478,6 @@ def _asc_component_value(editor, reference: str) -> str | None:
         return str(editor.get_component_value(reference))
     except Exception:
         return None
-
-
-def level_label_lint(editor, reference: str, value: str) -> str | None:
-    """Warn when a subcircuit (X) symbol's Value slot will corrupt the netlist.
-
-    Two shapes, both ending in "sub-circuit name is not defined" at netlist
-    time because LTspice appends the Value as a stray positional token on the X
-    instance line:
-
-    - a GUI opamp complexity label (``Level.2``) written to Value; or
-    - any Value set on a symbol whose model is selected via the ``SpiceModel``
-      attribute (e.g. UniversalOpamp2), whose Value slot must stay empty.
-
-    The subcircuit gate is the element letter the part netlists as
-    (``element_class``: its own Prefix, its symbol's, or its name's first
-    letter), or a ``SpiceModel``. A symbol that carries its subckt name IN Value (the common
-    library part, no SpiceModel) is left alone. Returns the warning text, or
-    ``None`` when neither shape applies.
-    """
-    if not value.strip():
-        return None
-    comp = editor.components.get(reference)
-    attrs = getattr(comp, "attributes", None) or {}
-    has_spicemodel = "SpiceModel" in attrs
-    # Not spicelib's _SUBCKT, which it sets for every part named X...
-    # (docs/spicelib_bugs.md, Bug 30).
-    is_subckt = element_class(editor, reference) == "X" or has_spicemodel
-    if not is_subckt:
-        return None
-    if _LEVEL_LABEL_RE.match(value):
-        return (
-            f"{reference}: Value {value!r} is a GUI opamp complexity-level label, not a "
-            "subcircuit value. LTspice emits it as an extra positional token on the X "
-            "instance line, so netlisting fails with 'sub-circuit name is not defined'. "
-            "Select the level via the SpiceModel attribute (or the symbol's default), "
-            "not the Value slot."
-        )
-    if has_spicemodel:
-        return (
-            f"{reference}: this symbol's model is selected via its SpiceModel attribute, "
-            f"so its Value slot must stay empty. LTspice emits Value {value!r} as an "
-            "extra positional token on the X instance line, and netlisting fails with "
-            "'sub-circuit name is not defined'. Clear the Value; pick the model through "
-            "SpiceModel instead."
-        )
-    return None
 
 
 def _attributes_of(editor, reference: str) -> dict[str, str]:
@@ -2389,7 +2337,6 @@ def apply_op_inplace(
     if isinstance(op, OpSetComponentValue):
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
-        lint = level_label_lint(editor, op.reference, op.value)
         before = _attributes_of(editor, op.reference)
         _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result: dict[str, object] = {
@@ -2399,8 +2346,6 @@ def apply_op_inplace(
         }
         if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
             result["changed"] = changed
-        if lint:
-            result["warnings"] = [lint]
         return result
 
     if isinstance(op, OpSetComponentAttribute):

@@ -113,6 +113,15 @@ class SheetPart:
         return self.record.attr(name)
 
     @property
+    def element(self) -> str:
+        """The element letter the part netlists as: its own ``Prefix``'s,
+        else its symbol's (``QN`` is ``Q``), else its reference's first
+        letter, as ``schematic_ops.element_class`` reads an editor's part."""
+        found = self.symbol if self.usable else None
+        prefix = self.attribute("Prefix") or (found.file.prefix if found is not None else "")
+        return (prefix or self.reference)[:1].upper()
+
+    @property
     def parameters(self) -> tuple[tuple[str, str], ...]:
         """Each of :data:`PARAMETER_ATTRIBUTES` the part gives, as ``(name, text)``."""
         return tuple(

@@ -505,6 +505,10 @@ class PlacedSymbol:
     texts: list[DrawText] = field(default_factory=list)
     #: The part's parameter attributes, ``SheetPart.parameters``.
     parameters: tuple[tuple[str, str], ...] = ()
+    #: The element letter it netlists as (``SheetPart.element``), and the
+    #: model its ``SpiceModel`` attribute selects, if any.
+    element: str = ""
+    spice_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -694,6 +698,8 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
             missing=True,
             problem=part.symbol.problem if part.symbol is not None else "",
             parameters=part.parameters,
+            element=part.element,
+            spice_model=part.attribute("SpiceModel") or "",
         )
         placed.graphics.append(
             DrawRect(placeholder.x1, placeholder.y1, placeholder.x2, placeholder.y2)
@@ -723,6 +729,8 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
         box=part.box,
         body=part.body,
         parameters=part.parameters,
+        element=part.element,
+        spice_model=part.attribute("SpiceModel") or "",
     )
     for x1, y1, x2, y2 in drawing.lines:
         placed.graphics.append(
@@ -938,6 +946,8 @@ def sheet_view(scene: Scene) -> SheetView:
                 missing=sym.missing,
                 problem=sym.problem,
                 parameters=sym.parameters,
+                element=sym.element,
+                spice_model=sym.spice_model,
             )
             for sym in scene.symbols
             for drawn in [

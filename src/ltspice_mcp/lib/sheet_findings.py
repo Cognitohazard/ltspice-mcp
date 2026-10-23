@@ -33,6 +33,7 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -105,6 +106,17 @@ _RULES = (
         "SpiceLine and SpiceLine2, which LTspice writes onto one netlist line.",
         check="quality",
         provenance="export-attributes",
+    ),
+    Rule(
+        "subcircuit_value_slot",
+        "electrical",
+        "part",
+        "A Value on a subcircuit call that LTspice writes last on its line, where the "
+        "subcircuit is named: an opamp's complexity level (Level.2), or any Value on a "
+        "part whose model its SpiceModel attribute selects.",
+        check="quality",
+        provenance="export-attributes",
+        severity="warning",
     ),
     Rule(
         "net_with_two_names",
@@ -279,6 +291,10 @@ class Part:
     #: The attributes whose text LTspice writes onto the part's netlist line,
     #: as ``(name, text)`` in that order (``sheet.PARAMETER_ATTRIBUTES``).
     parameters: tuple[tuple[str, str], ...] = ()
+    #: The element letter the part netlists as (``sheet.SheetPart.element``),
+    #: and the model its ``SpiceModel`` attribute selects, if any.
+    element: str = ""
+    spice_model: str = ""
 
     @property
     def name(self) -> str:
@@ -488,6 +504,44 @@ def floating_pins(view: SheetView) -> list[tuple[Part, tuple[str, int, int]]]:
     A wire of no length connects nothing.
     """
     return _floating(_Index(view))
+
+
+#: An opamp's complexity level as LTspice's symbol dialog names it.
+_LEVEL_LABEL = re.compile(r"\s*level\.\d+\s*", re.IGNORECASE)
+
+
+@_finds("subcircuit_value_slot")
+def _subcircuit_value_slots(ix: _Index) -> list[Finding]:
+    # A part that netlists as a subcircuit call (element letter X) writes its
+    # Value last, after its nodes and any SpiceModel (export-attributes). A
+    # library part that names its subcircuit in Value, with no SpiceModel, is
+    # the ordinary case and is not said; on a transistor or diode a Value after
+    # its SpiceModel is an area factor.
+    found: list[Finding] = []
+    for part in ix.view.parts:
+        value = dict(part.parameters).get("Value", "")
+        if part.element != "X" or not value.strip():
+            continue
+        if _LEVEL_LABEL.fullmatch(value):
+            detail = (
+                f"{part.name}: Value {value!r} is an opamp's complexity-level label, but "
+                "LTspice writes a subcircuit call's Value last on its X line, where the "
+                f"subcircuit it calls is named, so it calls one named {value!r}. Select "
+                "the level through the SpiceModel attribute (or the symbol's default)"
+            )
+        elif part.spice_model:
+            detail = (
+                f"{part.name}: its model is selected by its SpiceModel attribute "
+                f"({part.spice_model!r}), and LTspice writes Value {value!r} after it on "
+                f"the X line, so {value!r} is named as the subcircuit and "
+                f"{part.spice_model!r} as one more node. Clear the Value"
+            )
+        else:
+            continue
+        found.append(
+            Finding("subcircuit_value_slot", detail, refs=(part.name,), facts={"value": value})
+        )
+    return found
 
 
 @_finds("net_with_two_names")
@@ -1018,6 +1072,9 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       (``connectivity.same_instance_dropped_segments``).
     - ``duplicate_parameter``: a part giving one parameter, in any case, more
       than once across the attributes LTspice writes onto its line.
+    - ``subcircuit_value_slot``: a Value on a part that netlists as a
+      subcircuit call (element letter X), where it is an opamp's complexity
+      level or the part's model comes from SpiceModel.
     - ``net_with_two_names``: a net, labels of one name being one node, whose
       labels carry two or more names, compared as LTspice compares them, ground
       no name. LTspice gives the node one of them.

@@ -667,6 +667,7 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
     }
     assert quality["rules_run"] == {
         "duplicate_parameter": 0,
+        "subcircuit_value_slot": 0,
         "label_over_component": 1,
         "text_in_symbol_body": 0,
         "stacked_directive": 1,

@@ -55,6 +55,7 @@ class TestTheRegistry:
                 "unresolved_symbol",
                 "dropped_wire",
                 "duplicate_parameter",
+                "subcircuit_value_slot",
                 "net_with_two_names",
                 "joined_at_crossing",
                 "unjoined_crossing",
@@ -99,6 +100,7 @@ class TestTheRegistry:
             },
             "quality": {
                 "duplicate_parameter",
+                "subcircuit_value_slot",
                 "label_over_component",
                 "text_in_symbol_body",
                 "stacked_directive",
@@ -109,6 +111,7 @@ class TestTheRegistry:
     def test_a_finding_on_a_whole_sheet_is_called_what_it_always_was(self) -> None:
         called = {rule.rule_id: rule.severity for rule in RULES.values()}
         assert called.pop("dropped_wire") == "warning"
+        assert called.pop("subcircuit_value_slot") == "warning"
         assert called.pop("unresolved_symbol") == "error"
         assert set(called.values()) == {"observation"}
 
@@ -599,6 +602,43 @@ class TestHowTheSheetReads:
             "inside",
             "on the slope",
         ]
+
+    @pytest.mark.parametrize(
+        ("element", "spice_model", "value", "said"),
+        [
+            ("X", "", "Level.2", True),
+            ("X", "UniversalOpamp2", "level.1", True),
+            ("X", "UniversalOpamp2", "10k", True),
+            ("R", "", "Level.2", False),
+            ("R", "", "10k", False),
+            ("X", "", "LT1013", False),
+            ("Q", "mdl", "2", False),
+        ],
+        ids=[
+            "level-on-subcircuit",
+            "level-with-spicemodel",
+            "any-value-with-spicemodel",
+            "level-on-resistor",
+            "resistor-value",
+            "subcircuit-named-in-value",
+            "transistor-area-factor",
+        ],
+    )
+    def test_a_value_slot_a_subcircuit_call_cannot_hold(
+        self, element: str, spice_model: str, value: str, said: bool
+    ) -> None:
+        """LTspice writes a subcircuit call's Value last, where the subcircuit
+        is named: an opamp's complexity label there, or any Value after a
+        SpiceModel, names the wrong one. A library part naming its subcircuit
+        in Value is the ordinary case, and a transistor's Value after its
+        SpiceModel is its area factor."""
+        part = Part("U1", element=element, spice_model=spice_model, parameters=(("Value", value),))
+        found = only(SheetView(parts=(part,)), "subcircuit_value_slot")
+        assert [one.facts for one in found] == ([{"value": value}] if said else [])
+
+    def test_an_empty_value_slot_is_not_said(self) -> None:
+        part = Part("U1", element="X", spice_model="UniversalOpamp2")
+        assert only(SheetView(parts=(part,)), "subcircuit_value_slot") == []
 
     def test_attribute_text_across_a_wire_names_the_wire(self) -> None:
         value = Part("R1", text_extents=((0, 0, "10k", BBox(0, -8, 60, 14)),))

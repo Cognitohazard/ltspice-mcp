@@ -194,15 +194,10 @@ def test_every_op_said_to_keep_wiring_is_an_op_this_tool_takes():
     assert _op_kinds() >= KEEPS_WIRING
 
 
-async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
-    """A batch is where the same advisory repeats.
-
-    Listing it once per op spends a line on each saying one thing, and
-    dropping them all instead (what this surface did) means the caller never
-    learns the ops warned at all. One entry, with how many ops it covers. A
-    subcircuit given an opamp's complexity label is warned of on every op that
-    sets it.
-    """
+async def test_a_value_set_on_several_ops_is_said_once_of_the_sheet(asc_state):
+    """A subcircuit given an opamp's complexity label by three ops holds it
+    once when the batch ends, and the sheet says so once, of the part, not of
+    each op that set it."""
     level = {"op": "set_component_value", "reference": "X1", "value": "Level.2"}
     # Its own Prefix makes the part a subcircuit call.
     place = {"op": "add_component", "reference": "X1", "symbol": "res", "x": 400, "y": 300}
@@ -211,10 +206,10 @@ async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
 
     data = await _build_blank(asc_state, "dupwarn", ops)
 
-    repeated = [w for w in data["warnings"] if "complexity-level label" in w]
-    assert len(repeated) == 1, data["warnings"]
-    assert repeated[0].startswith("op 1 (set_component_value): X1: Value 'Level.2'")
-    assert repeated[0].endswith("(identical warning on 3 ops in this batch; collapsed)")
+    said = [w for w in data["warnings"] if "complexity-level label" in w]
+    assert said == [w for w in _sheet_findings(data) if "complexity-level label" in w]
+    assert len(said) == 1
+    assert said[0].startswith("X1: Value 'Level.2'")
 
 
 async def test_committed_sha_matches_file(asc_state, work_dir):
@@ -1047,6 +1042,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "unresolved_symbol": 0,
         "dropped_wire": 0,
         "duplicate_parameter": 0,
+        "subcircuit_value_slot": 0,
         "net_with_two_names": 0,
         "joined_at_crossing": 0,
         "unjoined_crossing": 0,

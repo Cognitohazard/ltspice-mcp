@@ -1679,15 +1679,19 @@ class TestInstancePrefix:
     ):
         """A resistor named X9 netlists as R§X9, no subcircuit, so a Value of
         Level.2 is a resistor's value; with its own Prefix X it is a
-        subcircuit call, and the complexity label is warned of."""
+        subcircuit call, and the sheet says the complexity label is no value."""
         attributes = {"Prefix": prefix} if prefix else None
         add_component(asc_state, asc_file, "X9", "res", 600, 600, attributes=attributes)
-        result = apply_one(
+        apply_one(
             asc_state,
             asc_file,
             {"op": "set_component_value", "reference": "X9", "value": "Level.2"},
         )
-        assert bool(result.get("warnings")) is warned
+        data = await run_verify_circuit(
+            asc_state, path=str(asc_file), checks=["quality"], render=False
+        )
+        said = [f for f in data["findings"] if f["rule_id"] == "subcircuit_value_slot"]
+        assert bool(said) is warned
 
 
 @pytest.mark.asyncio
