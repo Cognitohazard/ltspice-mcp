@@ -2,7 +2,7 @@
 
 ``tests/fixtures/ltspice_screenshots`` holds sheets that place text every way
 LTspice justifies it, at every placement and size, and each LTspice build's own
-drawing of them (``docs/TESTING.md``, "LTspice screenshots"). This reads from
+drawing of them (``docs/TESTING.md``, "How LTspice draws text"). This reads from
 each picture where LTspice drew every text relative to the point it is placed
 by, and checks the scene puts the same text on the same sides of that point, as
 long and as thick.

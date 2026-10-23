@@ -61,7 +61,7 @@ PWL file=<filename>
 An `.ac` sweep needs an `AC <mag> [phase]` term on a source, such as
 `V1 in 0 AC 1`. It sets only the small-signal amplitude (the transfer function
 is normalized to it) and is independent of the time-domain waveform, so one
-source can carry both: in `V1 in 0 AC 1 SINE(0 1 1k)`, `AC 1` drives `.ac` and
+source can have both. In `V1 in 0 AC 1 SINE(0 1 1k)`, `AC 1` drives `.ac` and
 the `SINE` drives `.tran`. Without an `AC` term, an `.ac` run has no excitation
 and every node reads 0.
 
@@ -96,17 +96,16 @@ Using one for the other gives wrong initial states or convergence failures.
 .meas TRAN energy INTEG V(out)*I(R1)
 ```
 
-Prefer `.meas` for a scalar it can express: the simulator computes it, it stays
-in the deck, and the `measurements` recipe reads it back. Use the other recipes
-for what `.meas` cannot express, such as FFT and THD, the amplitude and phase of
-one frequency (`tone`, guide section 'signals'), Bode structure or windowed
-statistics. On ngspice a top-level `.meas` is skipped and its value
-comes back absent (guide section 'ngspice').
+Prefer `.meas` for a scalar it can express, because the simulator computes it,
+it stays in the deck, and the `measurements` recipe reads it back. Use the
+other recipes for what `.meas` cannot express, such as FFT and THD, the
+amplitude and phase of one frequency (`tone`, guide section 'signals'), Bode
+structure or windowed statistics. On ngspice a top-level `.meas` is skipped and
+its value is absent from the result (guide section 'ngspice').
 
-A single `.meas` cannot return where a peak is:
-`.meas AC fpeak MAX mag(V(out))` gives the peak's value, not its frequency.
-Capture the peak, then
-find where the signal equals it:
+A single `.meas` cannot return the location of a peak.
+`.meas AC fpeak MAX mag(V(out))` returns the peak's value; to get its
+frequency, capture the peak, then find where the signal equals it:
 
 ```spice
 .meas AC vpeak  MAX  mag(V(out))
@@ -120,19 +119,19 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
 - On LTspice, trig functions inside a `.meas` take and give degrees, where a
   B source uses radians (guide section 'ltspice').
 - On LTspice, `db(V(out))` in an AC `.meas` is the complex logarithm of the
-  complex voltage, and it reads back as that number's magnitude: 7.46 where
-  the gain is -3.01 dB. Write `db(mag(V(out)))`. A `WHEN db(V(out))=-3`
+  complex voltage, and it reads back as that number's magnitude, which is 7.46
+  where the gain is -3.01 dB. Write `db(mag(V(out)))`. A `WHEN db(V(out))=-3`
   crossing is found either way.
 - `MAX` returns the largest signed value. On a trace that stays negative, such
   as a PMOS drain current from −3 mA to −1 mA, `.meas TRAN imax MAX I(V1)`
   returns −1 mA. For the peak magnitude, measure `MAX abs(I(V1))`.
 - If the TRIG event never occurs, the measurement fails silently.
-- Without `TD=`, TARG matches from t=0 and can hit the wrong edge.
+- Without `TD=`, TARG matches from t=0 and can match the wrong edge.
 - AC measurements use a 65k-point ceiling; exceeding it silently reduces
   resolution.
 - A WHEN or AT measurement returns the crossing time (`.tran`) or frequency
-  (`.ac`) in the result's `at` field; the headline `values` scalar is the
-  target level, not the crossing point.
+  (`.ac`) in the result's `at` field; the `values` scalar reports the target
+  level.
 
 ## General notes
 

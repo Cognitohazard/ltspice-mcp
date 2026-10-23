@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something behaves differently from what the docs or the tool schema say
+about: Something behaves differently from the docs or the tool schema
 title: ''
 labels: bug
 assignees: ''

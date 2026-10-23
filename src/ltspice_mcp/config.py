@@ -927,13 +927,9 @@ def generate_default_config(path: Path) -> None:
 
     # Simulator section
     doc.add(comment("LTSpice MCP Server Configuration"))
-    doc.add(
-        comment(
-            "All settings have sensible defaults and can be overridden with environment variables"
-        )
-    )
-    doc.add(comment("Every key is commented out, showing its default or, where it has none to"))
-    doc.add(comment("write, an example. Uncomment a line to set it."))
+    doc.add(comment("Each setting has a default, and an environment variable can override it."))
+    doc.add(comment("Every key is commented out and shows its default, or an example where there"))
+    doc.add(comment("is no default to write. Uncomment a line to set it."))
     doc.add(nl())
 
     sim = table()
@@ -953,8 +949,8 @@ def generate_default_config(path: Path) -> None:
     _shown_default(sim, "ltspice_ini", example="C:/SPICE/LTspice.ini")
     sim.add(nl())
     sim.add(comment("On Windows, start LTspice on a desktop of its own, so its window does not"))
-    sim.add(comment("take the keyboard focus on every run. false shows the window, and any"))
-    sim.add(comment("message box LTspice stops on, on your own desktop."))
+    sim.add(comment("take the keyboard focus on every run. Set false to show the window, and"))
+    sim.add(comment("any message box that stops LTspice, on your own desktop."))
     _shown_default(sim, "hidden_desktop")
     sim.add(nl())
     sim.add(comment("ngspice compatibility mode (ngbehavior). Unset = spicelib's default"))
@@ -963,10 +959,11 @@ def generate_default_config(path: Path) -> None:
     sim.add(comment('"hsa" or "kia", for standard-SPICE / PDK decks.'))
     _shown_default(sim, "ngbehavior", example="hsa")
     sim.add(nl())
-    sim.add(comment("More executables of one family, each run by naming it per call as"))
-    sim.add(comment('execution.simulator = "ltspice:<name>"; the plain family name keeps'))
-    sim.add(comment("running the one above. The family is read off the file name; when the"))
-    sim.add(comment('name says nothing, write the key as "family:name". Probed at startup.'))
+    sim.add(comment("Additional executables of one simulator family. Select one per call with"))
+    sim.add(comment('execution.simulator = "ltspice:<name>"; the plain family name still runs'))
+    sim.add(comment("the executable above. The family is taken from the file name. If the file"))
+    sim.add(comment('name does not identify it, write the key as "family:name". Each executable'))
+    sim.add(comment("is probed at startup."))
     xvii = tomlkit.inline_table()
     xvii.update({"xvii": "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"})
     _shown_default(sim, "simulator_executables", example=xvii)
@@ -975,13 +972,13 @@ def generate_default_config(path: Path) -> None:
 
     # Security section
     sec = table()
-    sec.add(comment("Sandbox: the directories every path a tool is given must lie in. Unset"))
-    sec.add(comment("(the default), there is no sandbox and a path may name any file this"))
-    sec.add(comment("process can open. Set a list to confine the server to it; a relative"))
-    sec.add(comment("path is then taken from the list's first entry. run_code is not"))
-    sec.add(comment("confined by it: set [tools] run_code = false as well to keep a client"))
-    sec.add(comment("to these directories. The server re-reads this list on the next call"))
-    sec.add(comment("after you save the file:"))
+    sec.add(comment("Sandbox. Every path given to a tool must be inside one of these"))
+    sec.add(comment("directories. If unset (the default), there is no sandbox and a path may"))
+    sec.add(comment("name any file this process can open. When the list is set, a relative path"))
+    sec.add(comment("is resolved against its first entry. The list does not confine run_code,"))
+    sec.add(comment("so also set [tools] run_code = false to keep a client inside these"))
+    sec.add(comment("directories. The server reads the list again on the next call after you"))
+    sec.add(comment("save the file."))
     _shown_default(sec, "allowed_paths", example=["."])
     doc.add(SANDBOX_SECTION, sec)
     doc.add(nl())
@@ -1032,10 +1029,10 @@ def generate_default_config(path: Path) -> None:
 
     # Tools section
     tools_tbl = table()
-    tools_tbl.add(comment('How much of each tool definition the tool list carries. "compact"'))
+    tools_tbl.add(comment('How much of each tool definition the tool list includes. "compact"'))
     tools_tbl.add(comment("(the default) advertises the tools with the per-argument descriptions"))
     tools_tbl.add(comment('removed, read on demand through inspect(kind="reference"); "full"'))
-    tools_tbl.add(comment("advertises them as registered. No tool gains or loses a capability."))
+    tools_tbl.add(comment("advertises them as registered. Both give the same capabilities."))
     _shown_default(tools_tbl, "tool_listing")
     tools_tbl.add(
         comment("run_code = false removes the tool that runs a Python snippet with the engine")
@@ -1043,9 +1040,9 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(
         comment("in scope (loops over runs, numpy on samples). The snippet has the server's")
     )
-    tools_tbl.add(comment("own file and process authority, which allowed_paths does not confine:"))
+    tools_tbl.add(comment("own file and process authority, which allowed_paths does not confine."))
     tools_tbl.add(
-        comment("permission it in your client the way you would a shell, and turn it off")
+        comment("Approve it in your client as you would a shell command, and turn it off")
     )
     tools_tbl.add(
         comment("when the server is reachable by more than one trusted client, for example")
@@ -1063,14 +1060,14 @@ def generate_default_config(path: Path) -> None:
     _shown_default(schem, "symbol_paths", example=["/path/to/LTspice/lib/sym"])
     schem.add(nl())
     schem.add(comment("Show an edit_schematic commit in the LTspice window that has the sheet"))
-    schem.add(comment("open, and refuse an edit while that window holds unsaved changes."))
-    schem.add(comment("Windows with LTspice 26.1 or later; LTspice is never started for it."))
-    schem.add(comment("false leaves windows alone."))
+    schem.add(comment("open, and refuse an edit while that window has unsaved changes. Needs"))
+    schem.add(comment("Windows and LTspice 26.1 or later; LTspice is never started for it. Set"))
+    schem.add(comment("false to leave LTspice windows unchanged."))
     _shown_default(schem, "sync_open_window")
     schem.add(nl())
     schem.add(comment("Start LTspice when asked to show a sheet or a run in it and no LTspice"))
-    schem.add(comment("window is open. It opens in view and takes the keyboard focus. false"))
-    schem.add(comment("shows things only in a window that is already open."))
+    schem.add(comment("window is open. It opens in view and takes the keyboard focus. Set false"))
+    schem.add(comment("to show sheets and runs only in a window that is already open."))
     _shown_default(schem, "start_ltspice")
     doc.add("schematic", schem)
     doc.add(nl())
@@ -1090,17 +1087,12 @@ def generate_default_config(path: Path) -> None:
     )
     state_tbl.add(comment("directory."))
     state_tbl.add(
-        comment(
-            "Lets a restarted server surface prior runs and recent circuits; set to false to disable."
-        )
+        comment("A restarted server can then list earlier runs and recent circuits. Set false")
     )
+    state_tbl.add(comment("to disable."))
     _shown_default(state_tbl, "persist_jobs")
-    state_tbl.add(
-        comment(
-            "preload_recent_count: at startup, eagerly load persisted jobs for this many "
-            "recently-touched circuits. 0 disables preload (lazy-only)."
-        )
-    )
+    state_tbl.add(comment("At startup, load the saved jobs of this many recently used circuits."))
+    state_tbl.add(comment("0 disables preloading, so jobs load only when they are requested."))
     _shown_default(state_tbl, "preload_recent_count")
     doc.add("state", state_tbl)
 

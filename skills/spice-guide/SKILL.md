@@ -1,19 +1,19 @@
 ---
 name: spice-guide
 description: >
-  Use for any circuit simulation or SPICE task: LTspice, ngspice, netlists,
-  .asc schematics, analog or power circuits, simulation results. Read this
-  before writing a deck, running a simulator, or writing analysis code
-  yourself: it points to the ltspice-mcp server's guide.
+  Use for any circuit simulation or SPICE task, including LTspice, ngspice,
+  netlists, .asc schematics, analog or power circuits and simulation results.
+  Read this before writing a deck, running a simulator, or writing analysis
+  code yourself, because it points to the ltspice-mcp server's guide.
 ---
 
 # Read the server's guide first
 
-The ltspice-mcp server carries the guide for this work: how to use the
-server, when to use Python or the tools, the Python API, the rules that cause
-silent errors, and sections on each simulator, the tools, and whole tasks such
-as characterizing an amplifier. Read its core once per session, before you
-start:
+The ltspice-mcp server provides the guide for this work. The guide covers how
+to use the server, when to use Python or the tools, the Python API and the
+rules that cause silent errors, and has sections on each simulator, the tools,
+and whole tasks such as characterizing an amplifier. Read its core once per
+session, before you start:
 
 - With the MCP tools: `inspect(queries=[{"kind": "guide"}])`
 - In Python, in `run_code` or a script with `from ltspice_mcp.api import Api`:

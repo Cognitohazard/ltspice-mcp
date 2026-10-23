@@ -1,8 +1,8 @@
 # LTSpice MCP Server Configuration
 # Copy to ltspice-mcp.toml and edit for your environment.
-# All settings have sensible defaults and can be overridden with environment variables
-# Every key is commented out, showing its default or, where it has none to
-# write, an example. Uncomment a line to set it.
+# Each setting has a default, and an environment variable can override it.
+# Every key is commented out and shows its default, or an example where there
+# is no default to write. Uncomment a line to set it.
 
 [simulator]
 # Preferred simulator: ltspice, ngspice, qspice, xyce
@@ -21,8 +21,8 @@
 # ltspice_ini = "C:/SPICE/LTspice.ini"
 
 # On Windows, start LTspice on a desktop of its own, so its window does not
-# take the keyboard focus on every run. false shows the window, and any
-# message box LTspice stops on, on your own desktop.
+# take the keyboard focus on every run. Set false to show the window, and
+# any message box that stops LTspice, on your own desktop.
 # hidden_desktop = true
 
 # ngspice compatibility mode (ngbehavior). Unset = spicelib's default
@@ -31,20 +31,21 @@
 # "hsa" or "kia", for standard-SPICE / PDK decks.
 # ngbehavior = "hsa"
 
-# More executables of one family, each run by naming it per call as
-# execution.simulator = "ltspice:<name>"; the plain family name keeps
-# running the one above. The family is read off the file name; when the
-# name says nothing, write the key as "family:name". Probed at startup.
+# Additional executables of one simulator family. Select one per call with
+# execution.simulator = "ltspice:<name>"; the plain family name still runs
+# the executable above. The family is taken from the file name. If the file
+# name does not identify it, write the key as "family:name". Each executable
+# is probed at startup.
 # executables = {xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"}
 
 [security]
-# Sandbox: the directories every path a tool is given must lie in. Unset
-# (the default), there is no sandbox and a path may name any file this
-# process can open. Set a list to confine the server to it; a relative
-# path is then taken from the list's first entry. run_code is not
-# confined by it: set [tools] run_code = false as well to keep a client
-# to these directories. The server re-reads this list on the next call
-# after you save the file:
+# Sandbox. Every path given to a tool must be inside one of these
+# directories. If unset (the default), there is no sandbox and a path may
+# name any file this process can open. When the list is set, a relative path
+# is resolved against its first entry. The list does not confine run_code,
+# so also set [tools] run_code = false to keep a client inside these
+# directories. The server reads the list again on the next call after you
+# save the file.
 # allowed_paths = ["."]
 
 [simulation]
@@ -84,15 +85,15 @@
 # attach_plot = false
 
 [tools]
-# How much of each tool definition the tool list carries. "compact"
+# How much of each tool definition the tool list includes. "compact"
 # (the default) advertises the tools with the per-argument descriptions
 # removed, read on demand through inspect(kind="reference"); "full"
-# advertises them as registered. No tool gains or loses a capability.
+# advertises them as registered. Both give the same capabilities.
 # listing = "compact"
 # run_code = false removes the tool that runs a Python snippet with the engine
 # in scope (loops over runs, numpy on samples). The snippet has the server's
-# own file and process authority, which allowed_paths does not confine:
-# permission it in your client the way you would a shell, and turn it off
+# own file and process authority, which allowed_paths does not confine.
+# Approve it in your client as you would a shell command, and turn it off
 # when the server is reachable by more than one trusted client, for example
 # through a proxy.
 # run_code = true
@@ -104,14 +105,14 @@
 # symbol_paths = ["/path/to/LTspice/lib/sym"]
 
 # Show an edit_schematic commit in the LTspice window that has the sheet
-# open, and refuse an edit while that window holds unsaved changes.
-# Windows with LTspice 26.1 or later; LTspice is never started for it.
-# false leaves windows alone.
+# open, and refuse an edit while that window has unsaved changes. Needs
+# Windows and LTspice 26.1 or later; LTspice is never started for it. Set
+# false to leave LTspice windows unchanged.
 # sync_open_window = true
 
 # Start LTspice when asked to show a sheet or a run in it and no LTspice
-# window is open. It opens in view and takes the keyboard focus. false
-# shows things only in a window that is already open.
+# window is open. It opens in view and takes the keyboard focus. Set false
+# to show sheets and runs only in a window that is already open.
 # start_ltspice = true
 
 [logging]
@@ -122,7 +123,9 @@
 [state]
 # Persist experiment job records to .ltspice-mcp/experiments/ in the working
 # directory.
-# Lets a restarted server surface prior runs and recent circuits; set to false to disable.
+# A restarted server can then list earlier runs and recent circuits. Set false
+# to disable.
 # persist_jobs = true
-# preload_recent_count: at startup, eagerly load persisted jobs for this many recently-touched circuits. 0 disables preload (lazy-only).
+# At startup, load the saved jobs of this many recently used circuits.
+# 0 disables preloading, so jobs load only when they are requested.
 # preload_recent_count = 10

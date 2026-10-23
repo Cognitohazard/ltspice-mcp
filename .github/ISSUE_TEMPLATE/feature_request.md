@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Something the surface cannot express, or expresses badly
+about: A task the tools or the Python API cannot express, or express badly
 title: ''
 labels: enhancement
 assignees: ''
@@ -9,16 +9,16 @@ assignees: ''
 ## What are you trying to do
 
 <!--
-The circuit task, not the API change. "Measure loop gain across three PVT
-corners" tells us more than "add a parameter to run_experiments".
+Describe the circuit task. "Measure loop gain across three PVT corners"
+tells us more than "add a parameter to run_experiments".
 -->
 
 ## How you do it today
 
 <!--
-The call sequence or the manual steps, and where it falls down: an argument
-shape that cannot say what you mean, a result that omits something, work you
-have to do outside the tools.
+The call sequence or the manual steps, and where they fail, such as an
+argument that cannot express your request, a result that omits something, or
+work you have to do outside the tools.
 -->
 
 ## Environment
@@ -27,10 +27,10 @@ have to do outside the tools.
 - OS, and whether you are on WSL:
 - MCP client, or the Python API (`ltspice_mcp.api`):
 
-## What a good answer would look like
+## Proposed call and response
 
 <!--
 A sketch of the call and the response you would want. If a deck directive or
-a shell one-liner already does this, say so — it is a real argument against
-adding a tool parameter, and we would rather know.
+a shell one-liner already does this, say so, because that is an argument
+against adding a tool parameter.
 -->

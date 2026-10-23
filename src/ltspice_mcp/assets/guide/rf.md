@@ -22,11 +22,11 @@ I1 0 in AC 1      ; + at ground, - at the probed node
 .ac dec 50 1meg 1g
 ```
 
-`V(in)` comes back complex: its magnitude is |Zin| in ohms and its phase is
-∠Zin. Read it with a `value` recipe at one frequency, or with a `waveform`
-recipe at `"format": "csv"` for the |Zin|(f) table; `resonance` finds the peak
-or notch frequency. A `magnitude_db` reading of this trace is in dBΩ, not dBV:
--10.56 dB means 0.30 Ω. `magnitude_linear` gives the ohms directly.
+`V(in)` is complex, with magnitude |Zin| in ohms and phase ∠Zin. Read it with
+a `value` recipe at one frequency, or with a `waveform` recipe at
+`"format": "csv"` for the |Zin|(f) table; `resonance` finds the peak or notch
+frequency. A `magnitude_db` reading of this trace is in dBΩ, so -10.56 dB means
+0.30 Ω. `magnitude_linear` gives the ohms directly.
 
 Sign convention: `I1 0 in` (`+` at ground) gives `V(in) = +Zin`. The reversed
 `I1 in 0` gives `V(in) = -Zin`, a phase flipped by 180° that reads as a
@@ -41,11 +41,11 @@ RL_dB = -20*log10(|Γ|)              ; return loss (positive dB = better match)
 VSWR  = (1 + |Γ|) / (1 - |Γ|)
 ```
 
-The `return_loss` recipe applies exactly this: pass the impedance trace and
+The `return_loss` recipe applies these formulas. Pass the impedance trace and
 `z0` (default 50), and it returns Γ (magnitude and phase), `return_loss_db` and
 `vswr` at a given `at` frequency, or at the worst-match point of the sweep when
-`at` is omitted. It flags a negative-real Zin (a reversed probe) in its
-warnings.
+`at` is omitted. Its warnings report a Zin with a negative real part (a
+reversed probe).
 
 ## Noise figure from `.noise`
 
@@ -55,8 +55,6 @@ Rs  in n1 50            ; the source resistance whose noise sets the reference
 * ... DUT from n1 to out ...
 .noise V(out) Vin dec 20 1k 1g
 ```
-
-Two routes, by simulator.
 
 **LTspice: per-source contribution traces.** LTspice's `.noise` raw has one
 trace per noise source (`V(Rs)`, `V(R2)`, …) beside `V(onoise)` and
@@ -80,11 +78,11 @@ NF_dB = 10*log10( inoise_spectrum^2 / (4*k*T*Rs) )
 
 with `4*k*T = 1.657e-20` V²/Hz at the 27 °C default (`.noise` prints
 `TEMP = 27.000000`; scale by `T/300.15` for other temperatures). This is the
-route on ngspice, whose `.noise` raw holds `inoise_spectrum` and
+route on ngspice, whose `.noise` raw contains `inoise_spectrum` and
 `onoise_spectrum` but no per-device noise traces.
 
-A quick check of either route: `Rs` plus an equal series resistor reads
-3.01 dB (noise factor 2).
+To check either route, use a DUT that is only a series resistor equal to `Rs`;
+the noise figure reads 3.01 dB (noise factor 2).
 
 ## Insertion loss / S21
 

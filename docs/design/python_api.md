@@ -10,11 +10,11 @@ document.
 
 ## 1. Relation to the MCP contract
 
-**The API has no contract of its own.** It binds the six-operation MCP
-contract (`docs/design/mcp_surface.md`) to Python: the same operations, the
-same argument shapes, the same validation (the same Pydantic input models),
-and the same completeness and observation semantics. Only presentation
-differs: calls are synchronous, returns are complete and structured,
+**The API has no contract of its own.** It binds the MCP contract for the six
+operations (`docs/design/mcp_surface.md`) to Python. It has the same
+operations, argument shapes, validation (through the same Pydantic input
+models), and completeness and observation semantics. Only the presentation
+differs. Calls are synchronous, returns are complete and structured,
 call-level errors raise exceptions, and there is no response-budget
 negotiation.
 
@@ -25,26 +25,26 @@ negotiation.
 - No analysis the MCP tools do not offer.
 - `ltspice_mcp.api` ships in the same package as the server.
 - An API process and an MCP server process may share a working directory. They
-  coordinate through the same circuit-file locks, owner-pid liveness and
-  token-scoped kills that separate server sessions use. **One process cannot
-  run both** (§4).
+  coordinate as separate server sessions do, through circuit-file locks,
+  checks that the owning PID is still alive, and token-scoped kills. **One
+  process cannot run both** (§4).
 
 ## 3. Configuration
 
 Constructor keyword arguments override environment variables, which override
 the TOML file, which overrides the defaults. `Api(working_dir=...)` reads the
-TOML **under that directory**, not the process CWD, and with it that file's
-`[security] allowed_paths`; if that is unset, there is no sandbox. An unknown
-or irrelevant constructor override raises `TypeError`, and so does a wire-only
-or server-only name such as `tool_profile`.
+TOML **under that directory**, not the process CWD, and takes `[security]
+allowed_paths` from that file. If that setting is unset, there is no sandbox.
+An unknown or irrelevant constructor override raises `TypeError`, and so does
+a wire-only or server-only name such as `tool_profile`.
 
 The precedence holds for the life of the session. The engine re-reads
 `[security] allowed_paths` when the config file changes, so a sandbox can be
 set, widened or removed without a restart. An explicit `Api(allowed_paths=...)`
-pins the sandbox (an empty list pins no sandbox): a TOML written or edited
-later does not replace it (a server session in the same directory writes its
-default config on its first tool call), and a refusal in that session names
-the argument rather than the file.
+pins the sandbox, and an empty list pins the session to no sandbox. A TOML
+file written or edited later does not replace it, including the default config
+that a server session in the same directory writes on its first tool call. A
+refusal in that session names the argument rather than the file.
 
 The API does not configure logging. It never calls `logging.basicConfig` and
 writes only through module loggers.
@@ -75,8 +75,8 @@ blocked waiting on it.
 deadlock.
 
 **`close()`** cancels the jobs this process owns, as server shutdown does.
-Calls made after it starts raise `ApiClosedError`. It is idempotent:
-concurrent callers get `ApiClosedError` (or a `CancelledError` mapped to one).
+Calls made after it starts raise `ApiClosedError`. It is idempotent.
+Concurrent callers get `ApiClosedError` (or a `CancelledError` mapped to one).
 After it returns, the process can open a new `Api`.
 
 **Live jobs this process owns do not survive `close()` or process exit.**
@@ -87,11 +87,11 @@ separate process and so a separate owner.
 
 The API states this rule in three places:
 
-- `reference()` and `reference('run_experiments')` say that `wait=False`
+- `reference()` and `reference('run_experiments')` state that `wait=False`
   returns a receipt *and* that the submitting process must outlive the run
   unless `detach=True` hands the job to its own owner, because a job is
   cancelled when its owning process exits.
-- The receipt carries a `process_owned_job` observation.
+- The receipt includes a `process_owned_job` observation.
 - A case abandoned because its owner died is reconciled with an error naming
   the owning process and this rule.
 
@@ -100,8 +100,8 @@ The API states this rule in three places:
 Each method takes the operation's arguments as keyword arguments, validates
 them with the operation's own input model, and returns a `dict`. A validation
 failure raises `ApiValidationError` (a `ValueError`) with the message the MCP
-server gives for the same arguments: the same locations, semantics and
-referrals to other operations. It is not a raw `pydantic.ValidationError`,
+server returns for the same arguments, including the same locations, semantics
+and referrals to other operations. It is not a raw `pydantic.ValidationError`,
 which renders differently.
 
 ```python
@@ -116,9 +116,9 @@ api.verify_circuit(**args)
 **Complete results.** Where an MCP tool pages or caps a result, the method
 returns all of it:
 
-- `analyze_results` runs the evaluation to completion, each step bounded by
-  `[analysis] analysis_budget_s`. If capturing the sources and their
-  diagnostics does not finish within that budget, the call raises
+- `analyze_results` runs the evaluation to completion, and
+  `[analysis] analysis_budget_s` bounds each step. If capturing the sources
+  and their diagnostics does not finish within that budget, the call raises
   `AnalysisDeadlineExceeded` and creates no result set or cursor; retry the
   original request with fewer sources or a larger `analysis_budget_s`.
 - `verify_circuit` returns every finding for each rule. The MCP tool caps the
@@ -131,48 +131,47 @@ returns all of it:
   changes during collection starts again once; a second change raises
   `ApiCallError`.
 - `run_experiments`, `jobs(status|wait)` and `jobs(runs)` return one
-  consistent snapshot of the job: rows keyed by `(case_id, run_index)`, status,
-  completeness, `outcome`, `failures`, `observations`, `artifacts`, and the
-  attached analysis's status, result, error and observations, all read at one
-  moment. `outcome` and `hint` are derived from that snapshot. The receipt's
-  projection (`run_fields`, or whole rows) applies to every row, and the result
-  keeps the page shape with `returned == total`, `truncated == false` and
-  `next_cursor == null`.
-- `jobs(list)` returns the whole circuit-group inventory. `jobs(cancel)`
-  returns its kill receipts, which neither interface pages.
+  consistent snapshot of the job. The snapshot contains the rows keyed by
+  `(case_id, run_index)`, status, completeness, `outcome`, `failures`,
+  `observations`, `artifacts`, and the attached analysis's status, result,
+  error and observations, all read at the same moment. `outcome` and `hint`
+  are derived from that snapshot. The receipt's projection (`run_fields`, or
+  whole rows) applies to every row, and the result keeps the page shape with
+  `returned == total`, `truncated == false` and `next_cursor == null`.
+- `jobs(list)` returns every circuit group. `jobs(cancel)` returns its kill
+  receipts, which neither interface pages.
 
 If assembling a complete result fails after the submission, `ApiCallError`
-carries the original receipt and control token.
+contains the original receipt and control token.
 
 **Two-phase `run_experiments`.** The API always submits with
 `execution.wait_s=0`; a `wait_s` the caller passes is dropped with a warning
-(§7). A Ctrl-C during submission does not cancel it: the submission still ends
+(§7). A Ctrl-C during submission does not cancel it. The submission still ends
 either in a failure before anything was submitted or in a durable receipt.
 `wait=True` (the default) then blocks in successive `jobs(wait)` calls:
 
 - Ctrl-C cancels only the current wait. The job keeps running, and the API
-  raises `ApiInterrupted` (a `KeyboardInterrupt`) **carrying the receipt and
-  job id**, so the caller keeps the handle.
-- `api.wait(job_id, timeout_s=None)` waits for a job (`timeout=` is the older
-  spelling, still accepted). On timeout it returns
-  the current `jobs(wait)` snapshot with `timed_out: true` and leaves the job
-  running.
+  raises `ApiInterrupted` (a `KeyboardInterrupt`) **that contains the receipt
+  and job id**, so the caller keeps the handle.
+- `api.wait(job_id, timeout_s=None)` waits for a job. The older spelling
+  `timeout=` is still accepted. On timeout it returns the current `jobs(wait)`
+  snapshot with `timed_out: true` and leaves the job running.
 - `wait=False` returns the submission receipt immediately, with the
   `process_owned_job` observation.
 - `wait=False, detach=True` is the only combination that does not submit
-  in-process: a spawned per-job owner submits the job, so it survives this
-  process (§11).
+  in-process. A spawned per-job owner submits the job, so the job survives
+  this process (§11).
 - Leaving the `Api` context still cancels the live jobs this process owns (§4).
 
 **Recovery through `Api.jobs`.** Opt in at initial submission with
 `execution={"recoverable": True}`. `api.jobs(action="resume", job_id=parent_id,
 resume_request_id="retry-1", control_token=parent_token)` returns the complete
-resume receipt, including lineage, per-case attempt provenance and reused-case
-accounting. Optional `case_ids`, `retry_failed` and `retry_cancelled` select
-eligible cases; `wait_s` bounds how long the call waits and defaults to zero. A
-child receipt keeps its control token after completion. A resume with nothing
-to do returns `resumed=false` and no child token; to retry only the analysis,
-call `analyze_results` on its own.
+resume receipt, including lineage, the provenance of each case's attempt, and
+the accounting of reused cases. Optional `case_ids`, `retry_failed` and
+`retry_cancelled` select eligible cases; `wait_s` bounds how long the call
+waits and defaults to zero. A child receipt keeps its control token after
+completion. A resume with nothing to do returns `resumed=false` and no child
+token; to retry only the analysis, call `analyze_results` on its own.
 
 Controlled startup supports ngspice on Linux and native Windows, and the
 audited LTspice 26.0.2 executable on native Windows. For other LTspice builds
@@ -183,15 +182,15 @@ captures established settings from `simulator.ltspice_ini` (environment
 directory. The source file is not changed; each attempt gets its own writable
 copy of the captured template.
 
-The LTspice template must contain an update-query time that LTspice itself
-wrote within the preceding 15 days. This is checked again on resume and before
-launch. If the check refuses, resolve the update reminder in LTspice before
-submitting. Recovery never changes the timestamp, chooses usage consent or
-answers dialogs. The build restriction and freshness check depend on the
-reminder behavior inspected in that build; they are not a permanent,
-vendor-supported way to suppress update queries.
+The LTspice template must contain the time of the last update query, written
+by LTspice itself within the preceding 15 days. This is checked again on
+resume and before launch. If the check fails, resolve the update reminder in
+LTspice before submitting. Recovery never changes the timestamp, chooses usage
+consent or answers dialogs. The build restriction and the freshness check rely
+on how the update reminder behaved when that build was inspected. They are not
+a permanent, vendor-supported way to suppress update queries.
 
-For reproducible static ngspice randomness, pass
+To make ngspice's static random functions reproducible, pass
 `execution={"simulator": "ngspice", "recoverable": True, "simulator_seed": 17}`
 to `api.run_experiments`. The API keeps this field when it sets `wait_s` to
 zero. The seed must be a strict integer in `1..2147483646`; every case and
@@ -204,28 +203,28 @@ with exactly one `.op`, `.ac`, `.dc` or `.tran` analysis. Noise, stepped inputs
 and combinations of analyses are refused with
 `recovery_seed_analysis_unsupported` before the request id is claimed.
 Unknown functions, transient random functions, caller controls and external
-modules are not supported. The recorded compatibility mode still applies:
-statistical two-argument `limit` works in `hsa`; the default `kiltpsa`
-supplies a different three-argument clamping function. Configure the mode the
+modules are not supported. The recorded compatibility mode still applies.
+Statistical two-argument `limit` works in `hsa`, while the default `kiltpsa`
+supplies a different, three-argument clamping function. Configure the mode the
 deck needs separately; the seed does not override it.
 
 Of the `jobs` actions, only resume accepts `api.jobs(detach=True, ...)`, and
 not with `raw_page=True`. It starts a detached owner as `run_experiments` does
-(§11). Before starting the owner, the API checks the caller's authority against
-a fresh read of the parent's durable record. A caller without a token must be
+(§11). Before starting the owner, the API re-reads the parent's durable record
+and checks the caller's authority against it. A caller without a token must be
 the parent's owning process, matching both its PID and its creation time; the
 parent token is then passed privately to the new owner. The owner checks the
 resume again itself. Neither the handoff nor a caller-supplied PID grants
 authority. The control token, `detach` and `wait_s` do not change the resume
-fingerprint. Save root and child tokens from submission and resume receipts:
-`status`, `list` and `runs` are read-only and do not return them.
+fingerprint. Save root and child tokens from submission and resume receipts,
+because `status`, `list` and `runs` are read-only and do not return them.
 
 This example sweeps a divider over corner, temperature and supply, cancels the
 first attempt, resumes the cancelled cases and checks every operating point
 against its analytic value. Caller code maps cases to conditions and computes
 expected values; the server keeps case identity and the captured electrical
-inputs. The library sections are synthetic, not measured process data or
-foundry models.
+inputs. The library sections are synthetic. They are not measured process data
+or foundry models.
 
 ```python
 from pathlib import Path
@@ -282,20 +281,21 @@ with TemporaryDirectory() as directory:
 ```
 
 **`Api.reference(op=None) -> str`** returns the argument catalogue.
-`reference()` returns the six-operation index; `reference('edit_schematic')`
-returns that operation's resolved argument tree: every field with type,
-default, enum members and union branches written out, nested models flattened
-onto dotted paths, and one worked example, with no JSON Schema syntax or
-`$ref` chains. It is a **staticmethod** and needs no engine session, so it
-works before any `Api` is opened. It renders from the Pydantic models the call
-validates against, so it always matches them.
+`reference()` returns the index of the six operations.
+`reference('edit_schematic')` returns that operation's resolved argument tree.
+The tree writes out every field with its type, default, enum members and union
+branches, flattens nested models onto dotted paths, and includes one worked
+example. It contains no JSON Schema syntax or `$ref` chains. It is a
+**staticmethod** and needs no engine session, so it works before any `Api` is
+opened. It renders from the Pydantic models the call validates against, so it
+always matches them.
 
 **`Api.guide(section=None) -> str`** returns the guide the MCP server serves.
-With no argument it returns the core, which a session reads first, and its
-index of topic sections and task playbooks; with a name from that index, it
-returns that part. It is a staticmethod for the same reason as `reference()`,
-and returns the same text as `inspect(kind: "guide")` and the `spice://guide`
-resources. Its `python` section covers this interface.
+With no argument it returns the core, which a session reads first, and the
+core's index of topic sections and task playbooks. Given a name from that
+index, it returns that part. It is a staticmethod for the same reason as
+`reference()`, and returns the same text as `inspect(kind: "guide")` and the
+`spice://guide` resources. Its `python` section covers this interface.
 
 `python -m ltspice_mcp.api reference [OP]` prints the same catalogue without
 starting the engine, and `python -m ltspice_mcp.api guide [SECTION]` prints the
@@ -313,23 +313,24 @@ directory otherwise.
 ## 6. Errors
 
 - A typed engine exception raised out of a handler propagates unchanged. A
-  `PathSecurityError` gets one note (PEP 678) with the guidance a tool call's
-  `hint` gives, so the traceback says what to change (with a sandbox, the
+  `PathSecurityError` gets one note (PEP 678) with the same guidance as a tool
+  call's `hint`, so the traceback shows what to change (with a sandbox, the
   setting that defines it); its type and message are not changed.
-- A result with `isError=True` raises `ApiCallError`, which carries the
-  complete structured payload and the attributes `code`, `commit_state`,
+- A result with `isError=True` raises `ApiCallError`, which contains the
+  complete structured payload and has the attributes `code`, `commit_state`,
   `job_id` and `control_token`. When the error follows a submission or a
   commit, the payload keeps every recovery handle.
 - Per-item failures, and `outcome="partial"|"failed"` envelopes with
-  `isError=False`, are **returned data**, not exceptions, as on the MCP
+  `isError=False`, are **returned data** and raise no exception, as on the MCP
   interface.
 - An error code is never turned into a typed exception; read it from
   `ApiCallError.code`.
 - A result with no structured payload raises `ApiInternalError`; a method never
   returns `None`.
 
-Exception hierarchy: `ApiError` is the base; `ApiCallError`, `ApiSessionError`
-(with `ApiClosedError` beneath it) and `ApiInternalError` derive from it.
+`ApiError` is the base of the exception hierarchy. `ApiCallError`,
+`ApiSessionError` (with `ApiClosedError` beneath it) and `ApiInternalError`
+derive from it.
 `ApiValidationError` derives from `ValueError` and `ApiInterrupted` from
 `KeyboardInterrupt`, so ordinary `except ValueError` / Ctrl-C handling still
 works.
@@ -342,9 +343,9 @@ and `execution.wait_s`, and lists each dropped field in the result's
 call replayed through the API with them attached is the same request. It
 **rejects** any cursor or continuation field and `view_cursors` with an
 `ApiValidationError` that names `raw_page=True` as the fix. It never changes
-request fields that are part of the fingerprint: `per_run`, `outliers` and
-`signals_available` are passed exactly as the caller wrote them, so replaying
-an MCP request through the API cannot cause an idempotency conflict.
+request fields that are part of the fingerprint. It passes `per_run`,
+`outliers` and `signals_available` exactly as the caller wrote them, so
+replaying an MCP request through the API cannot cause an idempotency conflict.
 Presentation-only fields (`include.fields`, `run_fields`, `provenance`) pass
 through.
 
@@ -373,41 +374,44 @@ api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sour
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
-- `observations` is what the result says of itself as it was read:
+- `observations` describes the result as it was read. It contains
   `partial_raw` for a stopped case's raw kept with
   `execution.keep_partial_raw`, whose values end where the run was stopped.
-  Empty for a whole result.
-- `value` reads a plot of one point a step, such as an operating point, as a
-  number: a float, or a complex for a complex trace. A trace of more points
-  is refused rather than cut to its first; read it with `trace`.
-- `compare` says how far `other`'s traces are from this result's:
-  `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
-  only_there, span, points}`. A signal named in `signals` is found in each
-  result as `trace` finds it; by default every signal both hold is compared,
-  the axis aside, paired by name without case and by the path to a node or
-  device inside subcircuits however each build spells it (LTspice 26's
-  `V(xa:xin:mid)` is XVII's `V(a:in:mid)`). `other_step`
-  defaults to the step of `other` whose parameters are this step's (step 0 of
-  a result that is not stepped); a step with no match is refused. On a sampled
-  axis each signal is compared at this result's points within the span both
-  axes cover, `other` read there by linear interpolation when its axis
-  differs: in log frequency, dB and unwrapped phase on a frequency axis, as
-  `log_interp_complex` reads one. A plot of no axis compares point by point and needs as many points.
-  `max_rel` is `max_abs` over this result's largest magnitude of the signal,
-  null when that is 0; complex values compare as complex numbers. No
-  tolerance is applied.
-- `device_op_points` reads the semiconductor operating points LTspice prints in
-  the log of an `.op` run, by device and parameter: LTspice 26 prints them
-  under `.options logopinfo`, and XVII always, refusing that option. The
-  table holds three significant digits; a node voltage or a device current
-  read from the raw with `value` holds the raw's own precision (single, about
-  seven digits, in both builds' operating-point recordings). A device in a
-  subcircuit is keyed by its path (`x1.m1`), where the table names it
-  `x1:m1` on LTspice 26 and `m:1:1` on XVII (the device's letter, the
-  instance's name without its X, the device's name without its letter), and
-  a value the log did not print as a finite number is `None`. Empty
-  when the log has no table, as an ngspice log never does: ngspice writes the
-  same parameters as traces of its raw, read with `raw.value("@m1[gm]")`.
+  It is empty for a whole result.
+- `value` reads a plot with one point per step, such as an operating point, as
+  a number. It returns a float, or a complex number for a complex trace. A
+  trace with more points is refused rather than cut to its first point; read
+  it with `trace`.
+- `compare` reports how far `other`'s traces are from this result's and
+  returns `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
+  only_there, span, points}`. A signal named in `signals` is looked up in each
+  result the way `trace` looks it up. By default it compares every signal both
+  results hold except the axis. It pairs signals by name, ignoring case; a
+  node or device inside subcircuits is matched by its path, however each
+  build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
+  `other_step` defaults to the step of `other` whose parameters match this
+  step's (step 0 of a result that is not stepped); a step with no match is
+  refused. On a sampled axis, each signal is compared at this result's points
+  within the span both axes cover. When `other`'s axis differs, `other` is
+  read at those points by linear interpolation, which on a frequency axis is
+  in log frequency, dB and unwrapped phase, as `log_interp_complex` does it. A
+  plot with no axis is compared point by point and must have the same number
+  of points. `max_rel` is `max_abs` divided by the signal's largest magnitude
+  in this result, and is null when that magnitude is 0. Complex values are
+  compared as complex numbers. No tolerance is applied.
+- `device_op_points` reads, by device and parameter, the semiconductor
+  operating points that LTspice prints in the log of an `.op` run. LTspice 26
+  prints them under `.options logopinfo`; XVII always prints them and refuses
+  that option. The table has three significant digits. A node voltage or a
+  device current read from the raw with `value` has the raw's own precision
+  (single, about seven digits, in the operating-point recordings of both
+  builds). A device in a subcircuit is keyed by its path (`x1.m1`), where the
+  table names it `x1:m1` on LTspice 26 and `m:1:1` on XVII (the device's
+  letter, the instance's name without its X, and the device's name without
+  its letter). A value the log did not print as a finite number is `None`.
+  The result is empty when the log has no table. An ngspice log never has
+  one, because ngspice writes the same parameters as traces of its raw; read
+  them with `raw.value("@m1[gm]")`.
 - `plot_index` is a strict nonnegative integer, independent of case/run and
   step selection. `dialect` is `None` or `ltspice`, `ngspice`, `qspice`,
   `xyce`; an explicit dialect must agree with the producing simulator and the
@@ -454,26 +458,27 @@ for that name, and the name is then listed in
 `row["value"]["failed_measurements"]`. Any crossing or `AT` point the log
 printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
 off the default row; `include={"fields": ["value"]}` returns it. A stepped
-run's row carries only `stats`. Reductions read `stats` either way, so
+run's row contains only `stats`. Reductions read `stats` either way, so
 `reduced` does not depend on how a row was rendered. A name the log holds no
-number for is counted, not skipped: its reduced rows carry `no_value_count`,
-and a spec on it reports the same count beside `pass_count` and `fail_count`
-and is `"indeterminate"` unless `allow_incomplete` is set. The API returns the
-same dict as the MCP result.
+number for is counted rather than skipped. Its reduced rows include
+`no_value_count`, and a spec on it reports the same count beside `pass_count`
+and `fail_count` and is `"indeterminate"` unless `allow_incomplete` is set.
+The API returns the same dict as the MCP result.
 
 A direct log import captures no RAW sibling, even when one exists. Log views
-take no `plot_index`. In analysis, attached analysis included, an omitted plot
-selector selects plot zero, for RAW recipes only. Whole-log measurements run
-once per source and reject `step`/`all_steps`; RAW recipes in the same batch
-can still use those selectors. A malformed or missing RAW fails only the RAW
-recipes. A result set's manifest records which RAW, log and console files were
-captured and their content, so an empty file is distinguishable from a missing
-one. A source whose files changed since capture is captured again, and a
-continuation refuses a source whose companion files or content changed (the
-`analyze_results` section of `docs/design/mcp_surface.md` lists what a file's
-stat stamp cannot detect). Under `include.provenance`, the manifest lists
-explicit dialect hints separately from the recorded evidence of which
-simulator produced the files; a whole-log row's producer dialect can be null.
+take no `plot_index`. In analysis, including attached analysis, an omitted plot
+selector selects plot zero; this applies only to RAW recipes. Whole-log
+measurements run once per source and reject `step`/`all_steps`; RAW recipes in
+the same batch can still use those selectors. A malformed or missing RAW fails
+only the RAW recipes. A result set's manifest records which RAW, log and
+console files were captured and their content, so an empty file is
+distinguishable from a missing one. A source whose files changed since capture
+is captured again, and a continuation refuses a source whose companion files
+or content changed (the `analyze_results` section of
+`docs/design/mcp_surface.md` lists what a file's stat stamp cannot detect).
+Under `include.provenance`, the manifest lists explicit dialect hints
+separately from the recorded evidence of which simulator produced the files.
+In a whole-log row, the dialect of the producing simulator can be null.
 A log alone does not show that a simulator solve completed or that a case was
 produced; reads by job still check that the job is terminal and the case was
 produced.
@@ -498,8 +503,8 @@ functions take complex `H`, and axes are real.
 **Typing policy.** Every *project-defined* alias, TypedDict or nested output
 type in a public annotation is importable from `ltspice_mcp.api`.
 Standard-library and dependency types (`numpy.ndarray`, `Sequence`, ...) are
-exempt. A type's defining module is not part of the contract: its
-`__module__`, repr, documentation links and pickling behavior may change; only
+exempt. A type's defining module is not part of the contract, so its
+`__module__`, repr, documentation links and pickling behavior may change. Only
 the import from `ltspice_mcp.api` is stable. `typing.get_type_hints` resolves
 on every public function.
 
@@ -529,7 +534,7 @@ and these typing names:
 ## 10. `ltspice_mcp.api.types` — the argument models
 
 A separate module, **`ltspice_mcp.api.types`**, re-exports the *argument* models
-the six operations validate against: the render and compare policies
+the six operations validate against. These are the render and compare policies
 (`CompareSpec`, which `edit_schematic` takes, `VerifyRenderPolicy` and
 `VerifyCompareSpec`, which `verify_circuit` takes, and `RenderPolicy`, the base
 the verify render policy subclasses), the recipe union and its members, the
@@ -544,10 +549,11 @@ the calling process. `detach` defaults to `False`, so existing calls behave as
 before.
 
 **Only with `wait=False`.** `detach=True, wait=True` raises an
-`ApiValidationError` that names two fixes: drop `detach`, or pass `wait=False`
-and wait later with `api.wait(job_id)`. `detach=True` with `raw_page=True` is
-also refused, because `raw_page` returns one handler page of a submission made
-in this process, and a detached submission is made in another process.
+`ApiValidationError` that names two fixes, dropping `detach` or passing
+`wait=False` and waiting later with `api.wait(job_id)`. `detach=True` with
+`raw_page=True` is also refused, because `raw_page` returns one handler page
+of a submission made in this process, and a detached submission is made in
+another process.
 
 **Submission.** The calling process validates the arguments against
 `RunExperimentsInput`, so a malformed request raises in the caller's own
@@ -562,9 +568,9 @@ appended to a log file. The owner runs on the same interpreter and install as
 the caller. It opens an ordinary `Api` on the same working directory, config
 file and constructor overrides, submits with `run_experiments(wait=False)`,
 sends the receipt back, waits until the job is terminal, and exits. The caller
-returns that receipt. The owner stages and submits the job: until its
-submission writes the job record, a lookup by `request_id` finds no job, and
-from then on the record names the owner's pid.
+returns that receipt. The owner stages and submits the job. Until its
+submission writes the job record, a lookup by `request_id` finds no job; after
+that, the record names the owner's pid.
 
 On Windows, each owner holds a Job Object containing itself and its simulator
 descendants. Windows closes that handle when the owner exits, including a
@@ -587,28 +593,28 @@ artifacts are on disk, as it does for a crashed server.
 the owner may itself wait on another submission of the same `request_id`, plus
 startup time. After that, the owner and the processes it started are
 stopped and the call raises. A Ctrl-C during the wait raises
-`KeyboardInterrupt` and leaves the owner running: on POSIX the owner is in its
+`KeyboardInterrupt` and leaves the owner running. On POSIX the owner is in its
 own session, so the signal does not reach it. In both cases, calling again
 with the same `request_id` replays whatever the owner submitted.
 
 **Ownership.** The calling process never owns a detached job. `close()`,
 leaving a `with` block and interpreter exit cancel only jobs whose `owner_pid`
-is this process, so they do not cancel a detached job. Read it as any job
-another process owns: `jobs(action="status"|"wait"|"runs")` by `job_id` or
-`request_id`, from this process, a later one, or a running MCP server. Cancel
-it the same way: `jobs(action="cancel")` with the receipt's `control_token`
-writes the durable cancellation marker, and the owner reads it and stops its
-cases with a token-scoped kill.
+is this process, so they do not cancel a detached job. Read it as you would
+any job another process owns, with `jobs(action="status"|"wait"|"runs")` by
+`job_id` or `request_id`, from this process, a later one, or a running MCP
+server. Cancel it the same way. `jobs(action="cancel")` with the receipt's
+`control_token` writes the durable cancellation marker, and the owner reads
+the marker and stops its cases with a token-scoped kill.
 
 **Replay.** A detached call whose `request_id` was already submitted starts an
-owner that takes the ordinary idempotent-replay path: it returns the existing
-job's receipt and submits nothing. The receipt's owner pid is read from the
-record, so it names the process that owns the job, which may not be the owner
-just started.
+owner that takes the ordinary idempotent-replay path. That owner returns the
+existing job's receipt and submits nothing. The receipt's owner pid is read
+from the record, so it names the process that owns the job, which may not be
+the owner just started.
 
-**The receipt.** The caller returns the owner's receipt with its
-`process_owned_job` observation, which is true in the owner and wrong in the
-caller, replaced by:
+**The receipt.** The caller returns the owner's receipt, replacing its
+`process_owned_job` observation (correct in the owner but wrong in the caller)
+with:
 
 ```
 code:     "detached_owner"
@@ -618,7 +624,7 @@ detail:   names the owning pid, says this process does not own the job and
 evidence: {"owner_pid": <int>, "log_file": "<path>"}
 ```
 
-For a replay of a job that is already terminal, the detail says instead that
+For a replay of a job that is already terminal, the detail states instead that
 the pid is the process the record names as having run the job, that no process
 supervises it now, and that there is nothing to cancel.
 
@@ -627,10 +633,10 @@ its jobs in memory, so the caller could not see the owner's job. `detach=True`
 then raises `ApiValidationError`, on `run_experiments` and on a resume.
 
 **Limitations.** `max_parallel_sims` is a per-process cap, so each detached
-owner has its own: N detached jobs can run up to N times the cap in total, as
-N separate sessions can. On Windows the owner starts in the caller's console
-process group, so a Ctrl-C in that console also reaches it. Ownership, records
-and cancellation work the same on both platforms.
+owner has its own cap, and N detached jobs can run up to N times the cap in
+total, as N separate sessions can. On Windows the owner starts in the caller's
+console process group, so a Ctrl-C in that console also reaches it.
+Ownership, records and cancellation work the same on both platforms.
 
 ## Coexistence with a server
 
@@ -660,6 +666,6 @@ The store is `<working_dir>/.ltspice-mcp/` unless `LTSPICE_MCP_STORE_DIR` is
 set. With it set, the store is one directory per working directory under the
 named directory, so records are still scoped by working directory, but a script
 sees the server's jobs (and replays its `request_id`s) only if it has the same
-setting: an `Api` started without it opens `<working_dir>/.ltspice-mcp/` and
+setting. An `Api` started without it opens `<working_dir>/.ltspice-mcp/` and
 sees none of them. A detached owner and a `run_code` worker inherit the setting
 from the process that starts them.

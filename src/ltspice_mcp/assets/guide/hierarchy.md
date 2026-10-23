@@ -18,23 +18,23 @@ This lists the devices inside a repeated block:
 `instance` is a list of exact reference segments, matched without regard to
 case; keep it as the device's identity. A row's source file, line and section
 identify the declaration, and its instance list identifies one runtime device
-(`components` stays a flat read of the source). Hierarchy reads netlists only,
-so export a schematic first. It is read-only: to change a device, pass its
-instance list to a variation (below).
+(the `components` kind still reads the source without expanding it). The
+`hierarchy` kind reads only netlists, so export a schematic first. It is
+read-only; to change a device, pass its instance list to a variation (below).
 
-Each row carries the scoped nodes and port mappings, the model source, raw and
+Each row contains the scoped nodes and port mappings, the model source, raw and
 resolved values and parameters, MOS W/L in metres, and the backend addresses.
 
-A number discovery cannot evaluate is reported, not guessed: it has
-`status: "unresolved"`, no value, and a `reason`. Discovery evaluates static
-arithmetic, defaults and caller overrides, with each simulator's parameter
-precedence. Functions, missing parameters, cycles, simulator steps, ngspice
+When discovery cannot evaluate a number, it reports `status: "unresolved"`, no
+value and a `reason` instead of a guess. Discovery evaluates static arithmetic,
+defaults and caller overrides, with each simulator's parameter precedence.
+Functions, missing parameters, cycles, simulator steps, ngspice
 sibling-dependent X-call overrides and expressions with several powers stay
 unresolved. LTspice caret expressions are not supported, since `^` is not
-exponentiation there. What discovery cannot expand is refused with a reason:
-conditional structure, opaque control scripts, local definitions, recursion,
-missing dependencies, ambiguous declarations, resource limits, and an explicit
-LTspice `scale` (use SI dimensions; the `mil` suffix is 25.4 µm).
+exponentiation there. Discovery cannot expand conditional structure, opaque
+control scripts, local definitions, recursion, missing dependencies, ambiguous
+declarations, resource limits or an explicit LTspice `scale` (use SI
+dimensions; the `mil` suffix is 25.4 µm), and refuses each with a reason.
 
 Declare the simulator even when only inspecting. For ngspice, `ngbehavior`
 defaults to the configured mode, and sectioned libraries need a mode without
@@ -56,15 +56,16 @@ Put the row's `address.save` line in the deck, if it has one, run it with
 | deck line | `.save @m.xa.xleaf.m0[gm]` | none (gm comes from the log) | none (gm comes from the log) |
 | a nested resistor's current | `.save @r.xa.xleaf.r1[i]` | `.save I(xa:xleaf:r1)` | `.save I(a:leaf:r1)` |
 
-LTspice needs no line for a MOS: the server asks LTspice 26 for the log's
-device table on every `.op` run, and XVII prints it unasked and stops on
-`.options logopinfo`. Each build's `.save` takes a name inside a subcircuit
-only as its raw spells it, each instance without its X on XVII; the other
-spelling stores nothing on LTspice 26 and makes XVII save everything but the
-current. `simulator: "ltspice"` spells for the session's LTspice, and
-`"ltspice:<name>"` for a named build; `profile.xvii_names` says which.
+LTspice needs no line for a MOS, because the server asks LTspice 26 for the
+log's device table on every `.op` run, and XVII prints it by default and stops
+on `.options logopinfo`. Each build's `.save` accepts a name inside a
+subcircuit only in the spelling its raw file uses, which on XVII drops the X
+from each instance. The other spelling stores nothing on LTspice 26 and makes
+XVII save everything but the current. `simulator: "ltspice"` gives the
+spelling for the session's LTspice, and `"ltspice:<name>"` the spelling for a
+named build; `profile.xvii_names` reports which spelling applies.
 
-Keep the full name: it is what tells repeated peers apart. When a row has no
+Keep the full name, because it distinguishes repeated peers. When a row has no
 address, it gives the reason; do not shorten or guess a selector. A node
 voltage's spelling does not mean the run saved that trace.
 
@@ -81,7 +82,7 @@ Use the exact reference-segment list from discovery:
 ```
 
 This changes only the selected runtime instances, in private case files; peers
-and your own files stay unchanged. Values use the deck's units: on a Sky130
+and your own files stay unchanged. Values use the deck's units. On a Sky130
 deck, whose scale is `1e-6`, the widths `1` and `2` above are micrometres,
 where a typical LTspice MOS width would be `"2u"`. Use `combine: "zip"` for
 paired lists of equal length. Conflicting fields, and edits to both an ancestor

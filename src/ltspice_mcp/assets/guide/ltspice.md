@@ -8,11 +8,11 @@ description: >
 
 # LTspice-Specific
 
-This section is about decks: what LTspice accepts and where it differs. For
-the program itself (a keyboard shortcut, a menu, the waveform viewer, the
-`.asc` file format) LTspice 26.1 and later installs its own reference, which
-`inspect(kind="simulator_docs")` lists and reads. Prefer it to memory for
-anything about using the LTspice window.
+This section covers decks. For the LTspice program itself (a keyboard
+shortcut, a menu, the waveform viewer, the `.asc` file format), LTspice 26.1
+and later installs its own reference, which `inspect(kind="simulator_docs")`
+lists and reads. Prefer it to memory for anything about using the LTspice
+window.
 
 ## Parameters and Expressions
 
@@ -25,8 +25,8 @@ anything about using the LTspice window.
 - Component values referencing params must use braces: `R1 in out {Rval}`
 - `.param` using other params must use braces: `.param x={y*2}`
 - `.func` body uses braces: `.func myfn(x) {x*2}`
-- B source expressions: do not wrap the expression itself in braces, but do
-  brace the parameters inside it: `B1 out 0 V=V(in)*{Rval}`
+- In a B source, do not wrap the expression itself in braces, but do brace
+  the parameters inside it, as in `B1 out 0 V=V(in)*{Rval}`
 
 ## Parameter sweeps (`.step`)
 
@@ -36,9 +36,9 @@ anything about using the LTspice window.
 .step param STM list 3904 2222    ; model stepping, with Q1 ... {STM}
 ```
 
-A stepped run holds every step in one raw; reading one step or all of them is
-in guide section 'signals'. With `run_experiments`, a variation sweeps without
-editing the deck (guide section 'variations').
+A stepped run stores every step in one raw; guide section 'signals' covers
+reading one step or all of them. With `run_experiments`, a variation sweeps
+without editing the deck (guide section 'variations').
 
 ## PWL extras
 
@@ -60,8 +60,8 @@ B3 out 0 R=<expression>                       ; resistor (undocumented)
 B4 out 0 P=<expression> [VprXover=x]          ; power sink (undocumented)
 ```
 
-**Conditional:** `IF(cond, true, false)`, not the ternary `?:` (that is
-ngspice). B source expressions must be one line in a schematic; a netlist can
+**Conditional:** use `IF(cond, true, false)`; the ternary `?:` is ngspice
+syntax. B source expressions must be one line in a schematic; a netlist can
 continue them with `+`.
 
 **Operator precedence:**
@@ -76,13 +76,13 @@ Boolean: >0.5 is True, ≤0.5 is False.
 
 **Math functions:**
 - Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y,x)`, `hypot(y,x)`.
-  In a B source an angle is in radians. Inside a `.meas` it is in degrees on
-  the default settings of LTspice 26 and XVII: `atan2(1,1)` is 45 there and
+  In a B source an angle is in radians. Inside a `.meas` it is in degrees with
+  the default settings of LTspice 26 and XVII. There `atan2(1,1)` is 45 and
   `cos(pi)` is 0.998497, the cosine of 3.14 degrees, so
   `INTEG V(out)*cos(2*pi*f*time)` integrates against a waveform 57 times
-  slower than meant. `ph()` in a `.meas` gives degrees too. The `.meas` unit
-  is a per-user setting, "Use radian measure in waveform expressions", so the
-  deck does not decide it. Compute the trig in a B source and measure its
+  slower than intended. `ph()` in a `.meas` gives degrees too. The `.meas`
+  unit is a per-user setting, "Use radian measure in waveform expressions", so
+  the deck cannot set it. Compute the trig in a B source and measure its
   node (`B1 x 0 V=V(out)*cos(2*pi*f*time)`, then `.meas tran r INTEG V(x)`),
   or work out an angle from measured values after the run. `run_experiments`
   refuses a `.meas` that calls a trig function (lint `meas-trig-degrees`) and
@@ -120,8 +120,8 @@ roll off at high frequencies.
   `**` for power.
 - A behavioral resistor `R=<expr>` must never reach zero; it fails to
   converge.
-- Avoid the `NoJacob` flag: LTspice's own help says it greatly increases the
-  risk of convergence problems.
+- Avoid the `NoJacob` flag, because LTspice's own help says it greatly
+  increases the risk of convergence problems.
 
 ## Monte Carlo
 
@@ -134,8 +134,9 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 
 `mc(nominal, tolerance)` — uniform between `nom*(1-tol)` and `nom*(1+tol)`.
 
-`run_experiments` draws the same without editing the deck: a `random`
-variation, including per-instance mismatch (guide section 'variations').
+`run_experiments` draws the same values without editing the deck, with a
+`random` variation that can include per-instance mismatch (guide section
+'variations').
 
 ## Convergence
 
@@ -150,18 +151,19 @@ variation, including per-instance mismatch (guide section 'variations').
 **Circuit design tips:**
 - p/n junctions should have some series resistance and parallel capacitance.
 - Avoid strict ideal voltage sources — add realistic parasitics.
-- Be suspicious of circuits needing `cshunt` — may indicate unrealistic models.
+- Be suspicious of a circuit that needs `cshunt`; it may indicate unrealistic
+  models.
 
 **Bistable/multi-root circuits (bandgaps, current mirrors, latches):** the DC
-solver converges to one root, not necessarily the intended one: a bandgap can
-settle at the degenerate 0 V state, a mirror at a spurious high-current root,
-with no convergence warning. `.nodeset` alone often fails to steer it: it is
-only an initial guess, released before the final solve. What works: a startup
-circuit in the deck, as in real silicon; ramping the supply in a `.tran` with
-`V1 ... PWL(0 0 1m VDD)` and reading the settled state; or a `.dc` sweep of the
-supply upward, so each solution seeds the next. Verify which root you got
-(e.g. the `operating_point` recipe on a known-current branch) instead of
-trusting `status: completed`.
+solver converges to one root, which may not be the intended one. A bandgap can
+settle at the degenerate 0 V state and a mirror at a spurious high-current
+root, with no convergence warning. `.nodeset` alone often fails to steer it,
+because it is only an initial guess and is released before the final solve.
+Instead, put a startup circuit in the deck, as in real silicon; ramp the
+supply in a `.tran` with `V1 ... PWL(0 0 1m VDD)` and read the settled state;
+or sweep the supply upward with `.dc`, so each solution seeds the next. Verify
+which root you got (e.g. the `operating_point` recipe on a known-current
+branch) instead of trusting `status: completed`.
 
 **Hidden defaults (LTspice-specific):**
 - `Gfarad` — parallel conductance on every capacitor (1e-12). Disable with
@@ -186,13 +188,13 @@ trusting `status: completed`.
 | `baudrate=<rate>` | Enable eye diagram plotting |
 | `plotwinsize=0` | Store every computed point of a transient (no waveform compression) |
 
-LTspice XVII compresses a transient's waveform by default: it stored a 1 mV
-RC charge over 5 ms in 13 points, even with a 50 us maximum step, and its own
-`.meas` results moved with it. LTspice 26 stored every point of the same run.
-When a recipe reads a compressed transient's samples, `analyze_results`
-reports it in `observations` (`coarse_compressed_waveform`) if the widest gap
-between stored points spans more than a twentieth of its time. Add
-`.options plotwinsize=0` before measuring a small or slow signal.
+LTspice XVII compresses a transient's waveform by default. It stored a 1 mV
+RC charge over 5 ms in 13 points, even with a 50 us maximum step, and the
+compression changed its own `.meas` results. LTspice 26 stored every point of
+the same run. When a recipe reads a compressed transient's samples,
+`analyze_results` reports it in `observations` (`coarse_compressed_waveform`)
+if the widest gap between stored points spans more than 5% of the transient's
+duration. Add `.options plotwinsize=0` before measuring a small or slow signal.
 
 ## Subcircuits
 
@@ -205,8 +207,9 @@ C1 out 0 {C}
 
 - `.include <path>` — include file contents verbatim.
 - `.lib <path>` — same as .include in LTspice. LTspice has no library
-  sections: `.lib file section` makes it look for a file named `file section`,
-  and `run_experiments` refuses that deck (lint `lib-section-ltspice`).
+  sections, so `.lib file section` makes it look for a file named
+  `file section`, and `run_experiments` refuses that deck (lint
+  `lib-section-ltspice`).
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 
 
@@ -219,11 +222,11 @@ C1 out 0 {C}
   elsewhere. `verify_circuit` reports µ suffixes (`value_suffix_micro_sign`)
   in a netlist as one observation per file, and as a warning per value only
   when it knows of an LTspice XVII that would misread the file. In an `.asc`'s
-  exported netlist, where both builds write µ whatever the sheet spells, only
-  that warning is reported. A suffix that shows the file
-  was decoded in the wrong encoding (`value_suffix_mojibake`, such as `Âµ`) is
-  an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`) is a
-  warning, read as the bare number. These checks run on a netlist and on an
+  exported netlist, where both builds write µ however the sheet spells it,
+  only that warning is reported. A suffix that shows the file was decoded in
+  the wrong encoding (`value_suffix_mojibake`, such as `Âµ`) is an error; any
+  other symbol (`value_suffix_nonascii`, such as `10Ω`) is a warning, read as
+  the bare number. These checks run on a netlist and on an
   `.asc`'s exported netlist.
 - **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
   engine and cannot name a measurement. LTspice 26 refuses the whole deck and
@@ -236,7 +239,7 @@ C1 out 0 {C}
   are ignored (`2Hz` is 2, `9V1` is 9). `M` is milli wherever it stands, so
   `1MHz` is a millihertz. `8%` is an error on LTspice 24 and later.
 - **One analysis per deck**: two of `.tran`, `.ac`, `.dc` and `.noise` stop
-  LTspice before it runs (`.op` may sit beside one), and `vdb()`, `phase()`
+  LTspice before it runs (`.op` may appear with one), and `vdb()`, `phase()`
   and `group_delay()` are not `.meas` functions. `run_experiments` refuses
   both decks (`analysis-count-ltspice`, `meas-function-ltspice`).
 - **8-bit decks**: LTspice reads a deck that is not UTF-8 as Latin-1. Byte
@@ -250,25 +253,25 @@ C1 out 0 {C}
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
 - **Frequency response analysis** (`.fra` with an analyzer `@N`): the run
-  writes its transient raw and, beside it, `<run>.fra_N.raw`, complex values
-  over frequency that read like an AC result (its analysis reads `fra`). The
-  run's row gives its path as `other_raws.fra_1`, beside `other_raws.op`, the
-  transient's operating point. `other_raw: "fra_1"` reads it by job and case
-  in `analyze_results` (on a job source), `run_experiments`' attached
-  `analyze` block, `plot_waveform`, `inspect(kind="results")` and
-  `api.load_raw`; its path reads it too. A
-  stepped FRA run is not recorded, so how its
-  results file splits into steps is not modelled. Its `gain_N` is the negative of the loop
-  gain the `stability` recipe takes: `stability` on `-gain_1` gives the crossover and phase margin
-  LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
-  refuses the analyzer.
+  writes its transient raw and, beside it, `<run>.fra_N.raw`, which holds
+  complex values over frequency in the same form as an AC result (its
+  analysis is `fra`). The run's row gives its path as `other_raws.fra_1`,
+  beside `other_raws.op`, the transient's operating point. `other_raw: "fra_1"`
+  reads it by job and case in `analyze_results` (on a job source),
+  `run_experiments`' attached `analyze` block, `plot_waveform`,
+  `inspect(kind="results")` and `api.load_raw`; its path reads it too. No
+  stepped FRA run has been recorded, so how its results file splits into steps
+  is not modelled. Its `gain_N` is the negative of the loop gain the
+  `stability` recipe takes, so `stability` on `-gain_1` gives the crossover and
+  phase margin LTspice prints at the end of the log. LTspice XVII 17.0 has no
+  FRA and refuses the analyzer.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
   `\n`. On export, both builds write a comment of several lines as one netlist
   comment with the `\n` kept as it is, and split a directive at each `\n` into
   cards of its own.
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)
-  are LTspice's own, netlisted with prefix `A`. What one is and the
-  parameters it takes are attributes of its symbol, which
+  are LTspice's own, netlisted with prefix `A`. An A-device's description and
+  the parameters it takes are attributes of its symbol, which
   `inspect(kind="symbol")` lists.
 - **`*!LTspice: <directive>`** is read as a directive, not a comment, despite
   the `*`.

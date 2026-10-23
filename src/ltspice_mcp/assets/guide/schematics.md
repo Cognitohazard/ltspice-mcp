@@ -11,84 +11,87 @@ description: >
 
 Settle the design as a netlist first, then build the sheet, which is for
 presentation and review. Edit `.asc` files only through `edit_schematic` (or
-LTspice's GUI): it routes wires orthogonally and checks pin collisions and
-junctions. `edit_schematic(target=..., base="blank")` starts a new sheet; every
-mutation below is an entry in its `ops` list, applied as one guarded
+LTspice's GUI), because it routes wires orthogonally and checks pin collisions
+and junctions. `edit_schematic(target=..., base="blank")` starts a new sheet;
+every mutation below is an entry in its `ops` list, applied as one guarded
 transaction, so batch a whole build into one call. Place components with the
-`add_component` op; the response's `touched` view gives their placed pins and
-nets, `warnings` any overlap, and `inspect(kind="symbol")` previews the same
-geometry before you place anything. A pin on a net no label names has
-`net: null`; with a `compare`, it also has `net_export`, the name LTspice's
-export gives it (`N001`). It also lists every attribute the
-symbol carries (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`):
-the model name and parameters an instance is netlisted with.
+`add_component` op. The response's `touched` view lists their placed pins and
+nets, and `warnings` reports any overlap. A pin on a net that no label names
+has `net: null`; with a `compare`, it also has `net_export`, the name LTspice's
+export gives it (`N001`). `inspect(kind="symbol")` previews the same geometry
+before you place anything, and lists every attribute the symbol has
+(`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes
+hold the model name and parameters that an instance is netlisted with.
 
-When the user says "this circuit" and names no file, ask what they have open:
-`inspect(kind="open_in_ltspice")` lists the sheets and netlists open in LTspice
-and marks the one in front `active`. Work on that path as on any other. A
-sheet with `differs_from_file: true` has changes in the window that are not in
-the file, so a run would simulate something else than they see: say so, and
-ask them to save. `only_in_window` and `only_in_file` list where the two
-differ, as `.asc` lines; a part whose value changed is in both, once with each
-value. Use them to tell the user what is unsaved, not as the circuit to work
-on.
+When the user says "this circuit" and names no file, find out what they have
+open with `inspect(kind="open_in_ltspice")`. It lists the sheets and netlists
+open in LTspice and marks the one in front `active`. Work on that path as on
+any other. A sheet with `differs_from_file: true` has changes in the window
+that are not in the file, so a run would simulate something other than what
+they see. Tell them, and ask them to save. `only_in_window` and `only_in_file`
+list the `.asc` lines where the two differ; a part whose value changed appears
+in both, once with each value. Use them to tell the user what is unsaved, and
+do not treat them as the circuit to work on.
 
 When they ask to see a sheet you built or changed, `verify_circuit(path=...,
 in_ltspice=true)` opens it in their LTspice window, in front. If the reply's
-`ltspice` block says `differs_from_file: true`, the window already had the
-sheet open and is showing an older copy, not the one you checked: tell them.
+`ltspice` block has `differs_from_file: true`, the window already had the
+sheet open and shows an older copy than the one you checked, so tell them.
 With no LTspice window open, `in_ltspice` starts LTspice (`started: true` in
-the block), which comes to the front of their screen: pass it when they asked
-to see something there, never to check your own work. Where the block says
-none was started, starting is turned off (`[schematic] start_ltspice`): ask
-them to open LTspice.
+the block), and LTspice comes to the front of their screen. Pass it only when
+they asked to see something there, never to check your own work. If the block
+reports that none was started, starting is turned off
+(`[schematic] start_ltspice`), so ask them to open LTspice.
 
 When they want to plot nets by clicking the sheet in LTspice, show them a run
-of the sheet: `plot_waveform(job_id=..., signals=[...], in_ltspice=true)` for a
-job that ran an `.asc`. The run's results are put beside the sheet under its
-name, replacing the ones there, and opened from the sheet, which is what makes
-LTspice tie the plot to it: the reply's `ltspice` block names the `sheet`, says
-`tied: true`, and a click on a net there plots it. Results beside a sheet of
-the same name, which is what a run in LTspice leaves, open the same way by
-`raw_file`. LTspice reads a plot only when it opens it, so if a plot of these
-results is already open it is closed and reopened: the block says
-`reopened: true`. Traces the user added to that plot by hand are lost, so tell
-them if they had been working in it. LTspice also looks for a sheet's results
+of the sheet with `plot_waveform(job_id=..., signals=[...], in_ltspice=true)`
+on a job that ran an `.asc`. The run's results are written beside the sheet
+under its name, replacing any results there, and opened from the sheet, which
+makes LTspice tie the plot to the sheet. The reply's `ltspice` block then
+names the `sheet` and has `tied: true`, and a click on a net in the sheet
+plots it. Results already beside a sheet under its name, as a run in LTspice
+leaves them, open the same way when you pass them as `raw_file`. LTspice reads
+a plot only when it opens it, so a plot of these results that is already open
+is closed and reopened, and the block reports `reopened: true`. Traces the
+user added to that plot by hand are lost, so tell them if they had been
+working in it. LTspice also looks for a sheet's results
 only when it opens the sheet, so a sheet it opened before it had results is
 closed and reopened too (`sheet_reopened: true`), which clears its undo
 history in LTspice. This is done only when the sheet in LTspice matches the
 file. If it has changes that are not in the file, the sheet stays open and the
-plot opens separately: the block says `tied: false` and
-`differs_from_file: true`. Tell the user that clicking nets will work after
-they save or close the sheet in LTspice and you show the run again. A
-netlist's run has no sheet to tie to and opens as a separate plot; it is also
-closed and reopened if it was already open.
+plot opens separately, with `tied: false` and `differs_from_file: true` in the
+block. Tell the user that clicking nets will work after they save or close the
+sheet in LTspice and you show the run again. A netlist's run has no sheet to
+tie to and opens as a separate plot; it is also closed and reopened if it was
+already open.
 
-LTspice ships an MCP server of its own, which a session may have beside this
-one (its tools include `set_design_content` and `start_simulation`). It works
-on the window, not the file. Make edits with `edit_schematic`: a sheet changed
-through LTspice's server is changed in the window only, and `edit_schematic`
-then refuses that sheet until the user saves it. Run with `run_experiments`:
-a run started through LTspice's server is of the window's copy and leaves no
-job. When one of its tools answers that it could not start or attach an
-LTspice instance, no LTspice window is open: do not try its `start_headless`,
-show the user what they asked for with `in_ltspice`, which opens one.
+LTspice ships its own MCP server, which a session may have beside this one
+(its tools include `set_design_content` and `start_simulation`). It acts on
+the copy in the LTspice window instead of the file. Make edits with
+`edit_schematic`. A sheet changed through LTspice's server changes only in the
+window, and `edit_schematic` then refuses that sheet until the user saves it.
+A run started through LTspice's server simulates the window's copy and leaves
+no job, so run with `run_experiments`. When one of its tools reports that it
+could not start or attach an LTspice instance, no LTspice window is open. Do
+not try its `start_headless`; show the user what they asked for with
+`in_ltspice`, which opens one.
 
 A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
-in step: a commit's reply lists the window under `open_in_ltspice`, and with
-`shown: true` the user is already looking at the edit. `shown: false` means
-the window still shows the old sheet and a save from it would overwrite yours,
-so tell the user to close it without saving and open it again. An edit that
-fails as `open_window_differs` wrote nothing: the window's copy is not the
-file's. Only the user can settle that, so ask them to save the sheet (Ctrl+S)
-or close it, then read its `sha256` again and resubmit.
+in step with the file. A commit's reply lists the window under
+`open_in_ltspice`, and `shown: true` means the user already sees the edit.
+`shown: false` means the window still shows the old sheet and a save from it
+would overwrite yours, so tell the user to close it without saving and open it
+again. An edit that fails with `open_window_differs` wrote nothing, because the
+window's copy differs from the file. Only the user can resolve that, so ask
+them to save the sheet (Ctrl+S) or close it, then read its `sha256` again and
+resubmit.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
-  `Prefix` replaces its symbol's element letter on export, on both builds:
+  `Prefix` replaces its symbol's element letter on export, on both builds, so
   `Prefix X` with the subcircuit's name in `Value` makes a resistor or MOSFET
-  symbol a subcircuit call (`X§R2 ... mysub`), with no new symbol file.
-- Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to
-  individual nets).
+  symbol a subcircuit call (`X§R2 ... mysub`) without a new symbol file.
+- Bus notation: `Data[0:7]` creates 8 nets. The bus is cosmetic, because the
+  netlister flattens it to individual nets.
 
 ### Common symbol pin offsets (at R0)
 
@@ -111,14 +114,15 @@ in an order that need not be their SpiceOrder. `inspect(kind="symbol")` lists
 each pin's `name` and `order`.
 
 **3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols
-are 3-terminal, and the export writes four nodes for them: a MOSFET's bulk at
-its source, a BJT's substrate at `0`. When you need the body/substrate on
-its own net (e.g. a non-source bulk bias), use the 4-terminal variants
-(`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
+are 3-terminal, and the export writes four nodes for them, with a MOSFET's
+bulk at its source and a BJT's substrate at `0`. When you need the
+body/substrate on its own net (e.g. a non-source bulk bias), use the
+4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose
+bulk/substrate as a 4th pin.
 In a reference netlist for the `compare` check, write such a MOSFET with four
-nodes, `M1 d g s s NMOS_MOD`: LTspice does not read a three-node card with a
-level-1 model as the bulk at the source. A three-node `Q1 c b e QN` is the
-substrate at `0` and compares equal.
+nodes, `M1 d g s s NMOS_MOD`, because LTspice does not read a three-node card
+with a level-1 model as having its bulk at the source. A three-node
+`Q1 c b e QN` card has its substrate at `0` and compares equal.
 
 ### MOSFET orientation conventions
 
@@ -148,7 +152,7 @@ mechanical work, and an agent doing design and layout in one pass tends to tag
 pins with net labels instead of routing wires. If your environment supports
 subagents, give one the final netlist and guide section 'schematics' as its
 whole brief. It builds with `edit_schematic`, never by writing the `.asc`
-itself, and verifies before returning: `verify_circuit` with the `export` and
+itself, and verifies before it returns. `verify_circuit` with the `export` and
 `compare` checks must match the source netlist, and `inspect(kind="net")` must
 show no multi-label shorts. Review the result with `inspect(kind="components")`.
 
@@ -160,16 +164,16 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   PMOS load stacked above NMOS input), position components so the drain pin of
   the upper device is on the same x-column as the drain pin of the lower
   device. This eliminates horizontal jogs between stacked transistors.
-- **Pin-to-rail alignment**: Place voltage/current sources so their pins land
-  directly on the rail they connect to — no wire through the source body. For a
-  VDD source, position it so the `+` pin y-coordinate equals the VDD rail
+- **Pin-to-rail alignment**: Place voltage/current sources so their pins are
+  directly on the rail they connect to, with no wire through the source body.
+  For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail
   y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement
   origin from the desired pin position (e.g., for voltage `+` at y=128, place
   origin at y=128-16=112).
-- **Minimum 128 units vertical spacing between pin levels** of adjacent tiers
-  (e.g., between PMOS drain y and NMOS drain y), so a horizontal bus and its
-  labels fit between one tier's bounding boxes and the next. With a MOSFET bbox
-  height of 96, plan tier origins ~192 units apart.
+- **Keep at least 128 units of vertical space between the pin levels** of
+  adjacent tiers (e.g., between PMOS drain y and NMOS drain y), so a
+  horizontal bus and its labels fit between one tier's bounding boxes and the
+  next. With a MOSFET bbox height of 96, plan tier origins ~192 units apart.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the
   y-level of their functional counterpart (e.g., M3 tail current source).
 - **Plan the full layout before placing**: Decide VDD rail y, tier
@@ -200,63 +204,64 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
 - **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires,
   pin collisions, and wire junction overlaps. Read its warnings too (a crossed
   wire, a junction made along the route). It does not report a route through
-  a part; that appears in the sheet findings below.
+  a part; the sheet findings below report that.
 - **Keep wires short; nothing reports wire length.** In LTspice's own example
   schematics 50% of wire segments are 32 units or shorter, 90% are 192 or
   shorter, and about 3% exceed 400. A long wire is not an error, but if it
-  only carries a signal across the sheet, a net label at each end is easier
+  only runs a signal across the sheet, a net label at each end is easier
   to read.
 - **Read the `wiring` profile `edit_schematic` returns.** It reports
-  `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only`
-  high with `wire_segments` near zero means you tagged pins with net-labels
-  instead of drawing wires. Such a sheet connects only through its label names,
-  which the profile does not check. Draw wires with the `wire_pins` op for
-  local nets; reserve net-labels for ground, power rails, and distant nets.
-  Also heed the sheet findings in `warnings`: they are what `verify_circuit`
-  reports of the same sheet (a floating pin, a loose wire end, parts that
-  overlap, a wire through a part, a label or text inside one, a part's name or
-  value drawn across a wire, another part or other text, a wire LTspice
-  leaves out of the netlist), said as soon as the edit that caused them. A
-  part's text moves with the part, so move the part or what its text crosses.
-- **On an existing sheet, the reported findings are the edit's.** `warnings`
-  and `wiring.label_only_pins` list only what your ops introduced or named;
-  older ones are counted in `preexisting`, not listed. A batch that only sets
-  values or attributes lists no pins at all, since it leaves every pin joined
-  as it was. Before calling a sheet
-  done, list them with `return_views: ["preexisting"]` (on an op-less read,
+  `pins_wired` and `pins_label_only` out of `pins_total`. A high
+  `pins_label_only` with `wire_segments` near zero means you tagged pins with
+  net-labels instead of drawing wires. Such a sheet connects only through its
+  label names, which the profile does not check. Draw wires with the
+  `wire_pins` op for local nets; reserve net-labels for ground, power rails,
+  and distant nets. Also heed the sheet findings in `warnings`. They are the
+  findings `verify_circuit` reports for the same sheet (a floating pin, a
+  loose wire end, parts that overlap, a wire through a part, a label or text
+  inside one, a part's name or value drawn across a wire, another part or
+  other text, a wire LTspice leaves out of the netlist), returned by the edit
+  that caused them. A part's text moves with the part, so move the part or the
+  item its text crosses.
+- **On an existing sheet, the reply lists only your edit's findings.**
+  `warnings` and `wiring.label_only_pins` list only the findings your ops
+  introduced or named; older ones are only counted, in `preexisting`. A batch
+  that only sets values or attributes lists no pins at all, since it leaves
+  every pin joined as it was. Before calling a sheet done, list the older
+  findings with `return_views: ["preexisting"]` (on an op-less read,
   `ops: []`, that is the whole sheet) or run `verify_circuit`.
 
 **Moving what is drawn:** the `move` op shifts parts, wires, labels and
-texts by one offset (`dx`, `dy`), chosen by name or by a `region`. Give
-`drag: true` to keep what is attached to what moves: other wires' ends, and
-the labels and grounds on a moved pin, go with it. A wire dragged off its axis
-turns diagonal, and the sheet says so (`diagonal_wire`). To move one part to a
+texts by one offset (`dx`, `dy`), chosen by name or by a `region`. With
+`drag: true`, other wires' ends and the labels and grounds on a moved pin move
+with it, so they stay attached. A wire dragged off its axis turns diagonal,
+and the sheet findings report it (`diagonal_wire`). To move one part to a
 position, or to turn it, use `move_component`.
 
 **Ground and net labels:**
 - **Ground**: give each grounded pin its own ground (`0`) label with an
   `add_net_label` op on that pin (`net="0", pin="M3.S"`); no wire is needed,
-  and no ground flag is shared or reached by a long wire. A `GND` label, in
-  any case, is ground too. Once several ground labels exist, `net:0` is
-  ambiguous; reach one with its point, `to_pin: {"x": 400, "y": 340}`.
+  and no ground flag is shared or reached by a long wire. A `GND` label in any
+  letter case is ground too. Once several ground labels exist, `net:0` is
+  ambiguous; address one by its point, `to_pin: {"x": 400, "y": 340}`.
 - **A label or ground flag at a crossing joins the two wires.** Place it on
   the one wire you mean. `add_net_label` refuses it when both wires are on
   named nets; otherwise it is placed and the sheet reports the join
   (`joined_at_crossing`).
 - **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins
-  ties them together — the netlist merges same-name labels into one net
-  (correct, not a short), and no routing is needed. Names that differ only in
-  case (`OUT`, `out`) are one name. Wire nearby pins with the `wire_pins` op.
-  Once a name carries several labels, `net:NAME` is ambiguous; end the route
-  on the one you mean by its point instead.
+  ties them together, because the netlist merges same-name labels into one
+  net. That merge is intended and is not a short, and no routing is needed.
+  Names that differ only in case (`OUT`, `out`) are one name. Wire nearby pins
+  with the `wire_pins` op. Once several labels have the same name, `net:NAME`
+  is ambiguous; end the route on the one you mean by its point instead.
 - **A wire ending in a label**: put the label on the free point first, then
-  route to that point with the `wire_pins` op. A coordinate endpoint must land
+  route to that point with the `wire_pins` op. A coordinate endpoint must be
   on a pin, a wire or a label; one on nothing is refused.
 - **Label any net you reference by name in a directive.** The `wire_pins` op
   wires pins but assigns no name — at export an unlabeled net becomes `N001`,
   `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a
   behavioral `B`-source referencing `V(name)` silently breaks unless that exact
-  net carries an `add_net_label`. A net you never name needs no label.
+  net has an `add_net_label`. A net you never name needs no label.
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at
@@ -276,26 +281,28 @@ position, or to turn it, use `move_component`.
 ### Waveform panes for the person the sheet is for
 
 The `set_plot_panes` op writes the `.plt` beside the sheet, which LTspice's
-waveform window reads when the sheet is run there:
+waveform window reads when the sheet is run there. For example,
 `{"op": "set_plot_panes", "analysis": "tran", "panes": [{"traces": ["V(out)"]},
 {"traces": ["V(in)", "I(R1)"]}]}` opens `V(out)` in a pane above `V(in)` and
 `I(R1)`. Panes are listed top to bottom. A trace is an expression as typed into
-LTspice's Add Traces dialog, written without spaces (`V(in)-V(out)`): LTspice
-reads a trace in the file only up to its first space, so the op refuses one.
-`analysis` is `tran`, `ac`, `dc` (a DC sweep) or `noise`. The run ranges every
-axis to its data; `x_scale` and `y_scale` set a pane's log or dB scales and
-default to LTspice's own (linear for `tran` and `dc`, log frequency and dB
-magnitude for `ac`, log frequency for `noise`). The op replaces that analysis's
-panes, leaves the file's other analyses alone and does not change the sheet. New panes keep the
-waveform grid the replaced ones all had; a pane in a new file has none, even
-for a person whose LTspice draws one on panes it makes. Its `results` entry
-names the file and the `replaced_panes`, which passed back as `panes` restore
-them; `panes: []` removes them.
+LTspice's Add Traces dialog, written without spaces (`V(in)-V(out)`). LTspice
+reads a trace in the file only up to its first space, so the op refuses a
+trace that contains one.
+`analysis` is `tran`, `ac`, `dc` (a DC sweep) or `noise`. The run sets each
+axis range to fit its data; `x_scale` and `y_scale` set a pane's log or dB
+scales and default to LTspice's own (linear for `tran` and `dc`, log frequency
+and dB magnitude for `ac`, log frequency for `noise`). The op replaces that
+analysis's panes, leaves the file's other analyses alone and does not change
+the sheet. New panes keep the waveform grid the replaced ones all had; a pane
+in a new file has none, even for a person whose LTspice draws one on panes it
+makes. Its `results` entry names the file and lists the `replaced_panes`; pass
+them back as `panes` to restore them. `panes: []` removes that analysis's
+panes.
 
 `plot_waveform(in_ltspice=true)` writes these panes itself for the traces it
-plots, unless the `.plt` there was saved from LTspice: that one is the user's
-and is left as it is. The reply's `ltspice` block then lists the panes the
-window draws instead under `saved_panes`, in the form this op takes. When the
-user wants others, or more, set them with this op: pass `saved_panes` with your
-own panes added to keep both. The axis ranges they saved with them are not
-kept.
+plots, unless the `.plt` there was saved from LTspice. That file belongs to
+the user and is left unchanged. The reply's `ltspice` block then lists the
+panes the window draws instead under `saved_panes`, in the form this op takes.
+When the user wants different or more panes, set them with this op; to keep
+the user's panes as well, pass `saved_panes` with your own panes added. The
+axis ranges they saved with them are not kept.
