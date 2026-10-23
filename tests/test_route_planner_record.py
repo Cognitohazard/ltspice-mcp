@@ -135,7 +135,6 @@ def _answer(editor: AscEditor, proposal: Proposal) -> dict[str, Any]:
         return {"refused": str(refused)}
     return {
         "segments": [list(segment) for segment in plan.segments],
-        "warnings": list(plan.warnings),
         "junctions": list(plan.junctions),
     }
 
@@ -145,7 +144,8 @@ def _shape(answer: dict[str, Any]) -> str:
     if "refused" in answer:
         text = "refused: " + answer["refused"]
     else:
-        text = "routed: " + " | ".join(answer["warnings"]) if answer["warnings"] else "routed"
+        joined = sorted({str(junction["via"]) for junction in answer["junctions"]})
+        text = "routed: joins its net by " + ", ".join(joined) if joined else "routed"
     return without_particulars(text)
 
 
@@ -217,8 +217,7 @@ def test_the_record_asks_enough_to_hold_every_check():
         "will create unintended junction",
         "runs along the wire",
         "Route touches",
-        "already wired to this net",
-        "The route touches",
+        "joins its net by",
     ):
         seen = sum(count for shape, count in shapes.items() if said in shape)
         assert seen >= 3, f"{said!r} is in {seen} recorded answers"

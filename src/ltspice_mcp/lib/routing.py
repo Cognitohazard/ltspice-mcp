@@ -2,12 +2,13 @@
 
 ``judge`` takes a sheet as plain data, the view and the net partition the sheet
 rules read, and a :class:`Route` someone proposes, and returns what its rules
-find: the findings that refuse the route, the ones that only advise, and the
-junctions the route would make on the way. Nothing here resolves an endpoint,
+find: the findings that refuse the route, and the junctions the route would
+make on the way, onto wiring already on its net, which LTspice joins and no
+rule faults. Nothing here resolves an endpoint,
 chooses a path or writes a wire. The caller decides the route; this says what
 drawing it would do.
 
-``RULES`` lists the rules, with what each does to a proposal. They are a
+``RULES`` lists the rules; a finding of any refuses the route. They are a
 registry of their own, apart from the rules of a whole sheet in
 ``sheet_findings``: a route rule reads a proposal, and a sheet has none.
 
@@ -39,16 +40,11 @@ Wire = tuple[int, int, int, int]
 
 @dataclass(frozen=True)
 class RouteRule:
-    """One thing that can be said of a proposed route.
-
-    ``on_a_proposal`` is what a finding of the rule does to the route: it
-    ``blocks`` it, and the route is not drawn, or it ``advises``, and the
-    route is drawn with the finding said.
-    """
+    """One thing that refuses a proposed route: with a finding of it, the
+    route is not drawn."""
 
     rule_id: str
     family: Literal["electrical", "drawing"]
-    on_a_proposal: Literal["blocks", "advises"]
     summary: str
 
 
@@ -56,44 +52,27 @@ _RULES = (
     RouteRule(
         "route_diagonal",
         "drawing",
-        "blocks",
         "A segment of the route that is neither horizontal nor vertical.",
     ),
     RouteRule(
         "route_through_pin",
         "electrical",
-        "blocks",
         "The route passes over a pin that is not on its net, and would connect it.",
     ),
     RouteRule(
         "route_over_wire",
         "electrical",
-        "blocks",
         "The route runs along an existing wire, and would join it along that stretch.",
     ),
     RouteRule(
         "route_along_its_end",
         "electrical",
-        "blocks",
         "An end on a wire's interior whose leg runs along that wire.",
     ),
     RouteRule(
         "route_touches_net",
         "electrical",
-        "blocks",
         "The route touches wiring or a label of a net it does not end on, and would merge it.",
-    ),
-    RouteRule(
-        "route_passes_own_pin",
-        "electrical",
-        "advises",
-        "The route passes over a pin already wired to its net, and joins it there.",
-    ),
-    RouteRule(
-        "route_touches_own_net",
-        "electrical",
-        "advises",
-        "The route touches wiring or a label already on its net, and joins it there.",
     ),
 )
 
@@ -127,13 +106,13 @@ class Judgement:
     """What the rules find of a route.
 
     ``refusals`` are the findings of rules that block it; with any, the route
-    is not to be drawn. ``advisories`` are the findings of rules that advise.
-    ``junctions`` are the points other than its two ends where the route joins
-    wiring already on its net, and each end that lands on a wire's interior.
+    is not to be drawn. ``junctions`` are the points other than its two ends
+    where the route joins wiring already on its net (a pin passed over, a
+    wire's end, a waypoint on a wire, a label), and each end that lands on a
+    wire's interior: what drawing it does, which LTspice joins, and no fault.
     """
 
     refusals: list[Finding] = field(default_factory=list)
-    advisories: list[Finding] = field(default_factory=list)
     junctions: list[dict[str, object]] = field(default_factory=list)
 
 
@@ -220,16 +199,6 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
             pin_label = f"{part.ref}.{name}"
             if pin_on_target_net(px, py):
                 said.junctions.append({"x": px, "y": py, "via": "pin", "pin": pin_label})
-                said.advisories.append(
-                    Finding(
-                        "route_passes_own_pin",
-                        f"The route passes over {pin_label} at ({px},{py}), already wired "
-                        "to this net; LTspice joins it there.",
-                        refs=(part.ref,),
-                        points=((px, py),),
-                        facts={"pin": name},
-                    )
-                )
                 continue
             said.refusals.append(
                 Finding(
@@ -402,15 +371,6 @@ def _wiring_met(
             )
         if touched in end_nets:
             said.junctions.append(entry)
-            said.advisories.append(
-                Finding(
-                    "route_touches_own_net",
-                    f"The route touches {what}, already on {describe_net(touched)}; "
-                    "LTspice joins them there.",
-                    points=((cx, cy),),
-                    facts={"via": via},
-                )
-            )
             continue
         remedy = (
             f"To join it on purpose, end a route there with "

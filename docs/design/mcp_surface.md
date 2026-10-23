@@ -946,7 +946,8 @@ sheet, and reports a finding only if it is new (no finding with the same rule,
 parts, points and facts existed before; any change makes it new) or if it
 names a part or point the batch named. An op names a reference through its
 `reference` or a `REF.PIN` endpoint, and a coordinate through its `x`/`y`, a
-segment's two ends, a waypoint or an `{x, y}` endpoint. All other findings go
+segment's two ends, a waypoint or an `{x, y}` endpoint, and through the labels
+and wire ends a `move` names, where they were and where they went. All other findings go
 in the `preexisting` block:
 
 ```
@@ -971,9 +972,8 @@ first the findings, each a row with its `kind`, its sentence, every part
 (`ref`, and `refs` when there are several) and point (`x`/`y` and `points`, or
 a wire's `from`/`to`) it names, and the rule's facts; then the label-only
 pins, with `kind: "label_only_pin"`. A `base: "blank"` build starts from an
-empty sheet, so nothing is preexisting. The op advisories in `warnings`,
-prefixed with the op that raised them, describe the batch and are never
-scoped.
+empty sheet, so nothing is preexisting. An op judges nothing itself: what
+it did is in `results`, and `warnings` holds the sheet findings alone.
 
 The op union is discriminated on `op`: an unknown op fails with one error
 listing every op kind, and a bad field on a known op is reported against that
@@ -1044,8 +1044,8 @@ reports that the window could not be checked.
 **Per-op facts.** `results` has one entry per op that found something on the
 sheet, keyed by `index` and `op` as a `failures` entry is: for `wire_pins`, the
 segments it found `already_present` and the `junctions` it made; for the
-removals, how much they removed. Everything else an op reports is in
-`warnings` and the views. `results` is not a page: like `failures`, its length
+removals, how much they removed. Everything else an op reports is in the
+views. `results` is not a page: like `failures`, its length
 is bounded by the batch the caller sent. The Python API returns the same list.
 
 **Wire ops.** A routed segment identical to one already on the sheet is not
@@ -1072,17 +1072,15 @@ Wherever else the route touches existing wiring (a waypoint on a wire, a
 segment through another wire's end or a lone label, or a segment over a pin
 already wired to an endpoint), it connects to that wiring, so the planner
 checks the touch against the nets the two endpoints already join. A touch on
-one of those nets is a redundant junction: it is drawn and reported with a
-warning and a `junctions` entry in the op's `results` entry, whose `via` gives
+one of those nets is a redundant junction: it is drawn and reported as a
+`junctions` entry in the op's `results` entry, whose `via` gives
 what it touched (`waypoint`, `wire_end`, `label` or `pin`) and whose `wire`,
 `label` or `pin` identifies it. A touch on any other net is refused, and the
 error names the wire and the `{x, y}` endpoint that would make the same T
 deliberately, because the op does not join a net no argument asked for. A
 route crossing a wire where neither ends is drawn; LTspice does not connect
 the crossing, so the nets stay separate, and the finished sheet reports it
-(`unjoined_crossing`). The planner's advisories about the route itself (a
-junction made on the way) also appear in `warnings`. Route length is not
-reported.
+(`unjoined_crossing`). Route length is not reported.
 
 Ops do not repeat sheet findings, and what an op makes of the sheet is said
 by the sheet, once: a route through a part, a part placed or moved over

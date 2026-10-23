@@ -2914,7 +2914,7 @@ class TestWirePinsTJunction:
         self, asc_state: SessionState, work_dir: Path
     ):
         # R1.1 is on the rail, so passing through the stub's end joins the net
-        # the route already joins: allowed, and said.
+        # the route already joins: allowed, and listed as a junction it made.
         asc = _write_sheet(work_dir / "own_net.asc", *_RAIL, _res("R4", 400, 308))
         result = wire_pins(asc_state, asc, "R4.1", "R1.1", waypoints=[{"x": 96, "y": 260}])
         assert result["junctions"] == [
@@ -2925,7 +2925,7 @@ class TestWirePinsTJunction:
                 "wire": {"from": {"x": 192, "y": 196}, "to": {"x": 192, "y": 260}},
             }
         ]
-        assert any("(192,260)" in w and "LTspice joins them" in w for w in result["warnings"])
+        assert "warnings" not in result
         assert await _net_pins(asc_state, asc, "R4.1") == {"R1.1", "R2.1", "R4.1"}
 
     async def test_passing_over_a_pin_already_on_the_net_is_reported(
@@ -2940,7 +2940,7 @@ class TestWirePinsTJunction:
         add_component(asc_state, asc, "R7", "res", 0, 244)
         result = wire_pins(asc_state, asc, "R2.1", "R7.1")
         assert {"x": 96, "y": 196, "via": "pin", "pin": "R1.1"} in result["junctions"]
-        assert any("R1.1" in w and "already wired" in w for w in result["warnings"])
+        assert "warnings" not in result
 
     async def test_a_crossing_a_route_makes_reaches_the_edit_response(
         self, asc_state: SessionState, work_dir: Path

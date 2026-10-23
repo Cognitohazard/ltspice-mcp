@@ -36,7 +36,7 @@ import importlib
 import math
 import re
 import traceback
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -1611,7 +1611,6 @@ class _ConnectPlan(NamedTuple):
     y2: int
     points: list[tuple[int, int]]
     segments: list[tuple[int, int, int, int]]
-    warnings: list[str]
     # Every point other than the two endpoints where the route joins existing
     # wiring, and each endpoint that ends on a wire's interior (a T-junction).
     junctions: list[dict[str, object]]
@@ -1707,7 +1706,7 @@ def _plan_connect_route(
     resolve, a route of no length, two named nets joined, a wire LTspice
     would drop. What drawing the route would do to the rest of the sheet (a
     diagonal segment, a pin passed over, a wire run along, another net's
-    wiring touched) is ``routing.judge``'s, and so are the advisories.
+    wiring touched) is ``routing.judge``'s, and so are the junctions it makes.
 
     Backs the ``wire_pins`` op, so a route the planner refuses is never
     written by any caller.
@@ -1853,9 +1852,8 @@ def _plan_connect_route(
         error_lines.extend(f"  {found.detail}" for found in judged.refusals)
         error_lines.append("\nFix the route with different waypoints to avoid these issues.")
         raise NetlistError("\n".join(error_lines))
-    warnings = [found.detail for found in judged.advisories]
 
-    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings, judged.junctions)
+    return _ConnectPlan(x1, y1, x2, y2, points, segments, judged.junctions)
 
 
 # ---------------------------------------------------------------------------
@@ -2239,8 +2237,9 @@ KEEPS_WIRING = frozenset(
 
 # The keys of an op's result that report what applying it found on the sheet:
 # the segments a route found already drawn, the junctions it made, how much a
-# removal took. A value or attribute change reports what it changed. The rest of a result restates the op or carries geometry and
-# advisories a surface reports through views and warnings of its own. A route's
+# removal took. A value or attribute change reports what it changed. The rest
+# of a result restates the op or carries geometry a surface reports through
+# views of its own. A route's
 # ``wire_count`` is not one: ``already_present`` names the segments it did not
 # draw, and relaying the count would put a line per route on every build. Nor
 # is ``remove_directive``'s ``removed``, which names a kind, not an amount. An
@@ -2513,8 +2512,6 @@ def apply_op_inplace(
             result["already_present"] = [segment_json(seg) for seg in already]
         if plan.junctions:
             result["junctions"] = plan.junctions
-        if plan.warnings:
-            result["warnings"] = plan.warnings
         return result
 
     if isinstance(op, OpAddDirective):
@@ -2537,40 +2534,6 @@ def apply_op_inplace(
         return {"op": "remove_directive", "instruction": op.instruction, "removed": removed}
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
-
-
-def collapse_result_warnings(results: list[dict[str, object]]) -> None:
-    """Collapse identical per-op warnings across one ops batch, in place.
-
-    An advisory that repeats across a batch, such as one value set on one part
-    by several ops, would otherwise be listed once per op. Keep the first
-    occurrence (annotated with the repeat count) and drop the copies.
-    """
-    counts: Counter[str] = Counter()
-    for entry in results:
-        warnings = entry.get("warnings")
-        if isinstance(warnings, list):
-            counts.update(warnings)
-    if not counts or max(counts.values()) < 2:
-        return
-    emitted: set[str] = set()
-    for entry in results:
-        warnings = entry.get("warnings")
-        if not isinstance(warnings, list):
-            continue
-        kept: list[str] = []
-        for w in warnings:
-            if w in emitted:
-                continue
-            emitted.add(w)
-            n = counts[w]
-            kept.append(
-                w if n == 1 else f"{w} (identical warning on {n} ops in this batch; collapsed)"
-            )
-        if kept:
-            entry["warnings"] = kept
-        else:
-            del entry["warnings"]
 
 
 def run_op_batch(

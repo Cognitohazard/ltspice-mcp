@@ -197,10 +197,11 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   that only cross are not joined. A waypoint that touches another net's wiring
   is refused rather than silently merging it; `inspect(kind="net")` at a point
   on a wire traces that wire (`snapped_to_wire`).
-- **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires,
-  pin collisions, and wire junction overlaps. Read its warnings too (a crossed
-  wire, a junction made along the route). It does not report a route through
-  a part; that appears in the sheet findings below.
+- **Heed the `wire_pins` op's errors and junctions**: it refuses diagonal
+  wires, pin collisions, and wire junction overlaps. Where the route joins its
+  own net on the way, its `results` entry lists the point under `junctions`.
+  A crossed wire or a route through a part is the sheet findings' to report
+  (below).
 - **Keep wires short; nothing reports wire length.** In LTspice's own example
   schematics 50% of wire segments are 32 units or shorter, 90% are 192 or
   shorter, and about 3% exceed 400. A long wire is not an error, but if it

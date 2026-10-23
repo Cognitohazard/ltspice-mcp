@@ -80,7 +80,6 @@ from ltspice_mcp.lib.schematic_ops import (
     OpWirePins,
     SheetPlotSettings,
     blank_sheet,
-    collapse_result_warnings,
     collect_component_geometry,
     edit_guard,
     export_parts,
@@ -1173,12 +1172,10 @@ def _apply_ops(
 
     Delegates the loop to the shared ``run_op_batch`` runner (abort-on-first-
     failure unless ``dry_run``), then splits its unified entries into this
-    surface's separate success/failure lists. Identical advisories across the
-    batch are collapsed on the way out — see ``_op_warnings``. ``plot`` takes
-    the batch's plot panes, for the commit to write beside the sheet.
+    surface's separate success/failure lists. ``plot`` takes the batch's plot
+    panes, for the commit to write beside the sheet.
     """
     entries, abort_reason = run_op_batch(editor, ops, target, stop_on_error=not dry_run, plot=plot)
-    collapse_result_warnings(entries)
     results = [e for e in entries if e["ok"]]
     failures = [
         {"index": e["index"], "op": e["op"], "error": e["error"]} for e in entries if not e["ok"]
@@ -1189,8 +1186,8 @@ def _apply_ops(
 def _op_results(results: list[dict]) -> list[dict]:
     """What each op found on the sheet: its result's ``OP_RESULT_FACTS`` keys.
 
-    The rest of a runner entry restates the op or rides on ``warnings`` and
-    the views. An op with no fact to report has no entry, so a large build
+    The rest of a runner entry restates the op or rides on the views. An op
+    with no fact to report has no entry, so a large build
     pays for what its ops found, not a line per op.
     """
     relayed: list[dict] = []
@@ -1199,23 +1196,6 @@ def _op_results(results: list[dict]) -> list[dict]:
         if facts:
             relayed.append({"index": entry["index"], "op": entry["op"], **facts})
     return relayed
-
-
-def _op_warnings(results: list[dict]) -> list[str]:
-    """The batch's per-op advisories, attributed to the op that raised them.
-
-    An op can succeed and still have something to say of what it did itself —
-    a route that passes over a pin already on its net. What the finished sheet holds is the sheet
-    rules' to say, not an op's. The envelope carries one flat ``warnings`` list,
-    so each is prefixed with its op; the repeats are already collapsed by
-    ``collapse_result_warnings``, which keeps the first occurrence and
-    annotates it with how many ops it covers.
-    """
-    return [
-        f"op {entry['index']} ({entry['op']}): {message}"
-        for entry in results
-        for message in entry.get("warnings", ())
-    ]
 
 
 def _mirror_commit_state(commit_state: str) -> Literal["not_started", "committed", "unknown"]:
@@ -1642,10 +1622,10 @@ async def _evaluate_edit_schematic(
             # the batch is told of and what is counted as there before.
             rules_run = dict.fromkeys(RULES, 0) | Counter(one.rule for one in found)
             left_out_hint = _preexisting_hint(preexisting, listed="preexisting" in views)
-            # Two sources, one channel: what the ops themselves reported, then
-            # what the finished sheet reports about itself that this batch
-            # accounts for. The rest is counted under preexisting.
-            warnings = _op_warnings(results) + [one.detail for one in findings_reported]
+            # What the finished sheet reports about itself that this batch
+            # accounts for; the rest is counted under preexisting. An op says
+            # what it did in ``results``, and judges nothing.
+            warnings = [one.detail for one in findings_reported]
             op_results = _op_results(results)
             encoding = _commit_codec(loaded_as, original, committed_text)
 

@@ -29,6 +29,12 @@ tool-surface changes.
   element letter from its own or its symbol's `Prefix`, so a transistor or
   diode whose Value after its `SpiceModel` is an area factor is no longer
   warned of.
+- `edit_schematic` ops judge nothing themselves, so `warnings` holds the
+  sheet's findings alone. `wire_pins` no longer warns that a route passing
+  over a pin or touching wiring already on its net is joined there; the point
+  is in its `results` entry under `junctions`, as it already was.
+- A finding about a label or wire a `move` op names counts as the batch's,
+  as a finding about any point an op names does.
 
 ### Fixed
 
