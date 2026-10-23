@@ -2055,6 +2055,55 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/hier_amp.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "9ebd7f1480f5aeb6b65cef0d302476088951c5911b8160111dd50980341c253a",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "c0f9039d130cdadfbc699683a86e6b95fd22b6063726af088a4649c6d78e27da",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_top.asc": {
+   "labels": {
+    "proposals": 39,
+    "sha256": "d3d0862c81b54dff570378623cfcca3fdf8db1f25ab05e7591cd15e5cca54a0b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "proposals": 65,
+    "sha256": "0d8c03254cbdb690a33d4c46bc1cec160f47e854b81afb7bb488d6b877a81a62",
+    "shapes": {
+     "moved": 65
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/export/instance_names.asc": {
    "labels": {
     "proposals": 38,

@@ -192,6 +192,15 @@ model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py",
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
+[behaviour.export-hierarchical-block]
+summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it: the netlist each build exports for it, and what a build writes when it runs the sheet."
+model = ["lib/deck_staging.py", "lib/schematic_ops.py"]
+# hier_amp.asy is a block symbol with pins IN and OUT; hier_amp.asc, the
+# block's own sheet, is a 1k/1k divider between ports of those names. The top
+# sheet drives the block from a 1 V source into a 10k load and runs .op.
+inputs = ["export/hier_top.asc"]
+extra = ["export/hier_amp.asc", "export/hier_amp.asy"]
+
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
 model = ["lib/schematic_ops.py"]
@@ -374,9 +383,9 @@ model = ["lib/raw_header.py", "lib/raw_parser.py"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
-summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces."
+summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step."
 model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
-inputs = ["raw/noise.cir"]
+inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir"]
 
 [behaviour.raw-op]
 summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
@@ -389,9 +398,9 @@ model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/met
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_ac_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
-summary = "A .tf run: the Transfer Function plot and what the log says."
+summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
 model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
-inputs = ["raw/tf.cir"]
+inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
 summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout."
@@ -1028,3 +1037,24 @@ behaviour = "schematic-save-encoding"
 kind = "save"
 source = "export/micro_utf16le_bom.asc"
 extra = ["export/res.asy"]
+
+# The hierarchical sheet run with -Run -b, rather than exported: whether a
+# build writes the netlist beside the sheet, and the block's node names in the
+# raw and the log.
+[[case]]
+id = "export/hier_top_run"
+behaviour = "export-hierarchical-block"
+kind = "run"
+source = "export/hier_top.asc"
+extra = ["export/hier_amp.asc", "export/hier_amp.asy"]
+keep = ["net", "log", "raw"]
+
+# A frequency response analysis over two .step values: how the results file
+# beside the transient raw holds each step. LTspice XVII 17.0 refuses the
+# analyzer (raw/fra records that), so only the current build runs this.
+[[case]]
+id = "raw/fra_step"
+behaviour = "raw-fra"
+source = "raw/fra_step.cir"
+keep = ["log", "raw", "fra_1.raw"]
+builds = ["current"]
