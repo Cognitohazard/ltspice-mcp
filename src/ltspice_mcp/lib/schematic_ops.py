@@ -116,7 +116,13 @@ from ltspice_mcp.lib.routing import (
     segment_text,
     wires_through,
 )
-from ltspice_mcp.lib.sheet import PARAMETER_ATTRIBUTES, PlacedPin, find_pin
+from ltspice_mcp.lib.sheet import (
+    INSTANCE_PREFIX,
+    PARAMETER_ATTRIBUTES,
+    PlacedPin,
+    element_letter,
+    find_pin,
+)
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -273,12 +279,6 @@ async def edit_guard(path: Path, *beside: Path) -> AsyncIterator[None]:
             await stack.enter_async_context(circuit_file_lock(other))
         yield
 
-
-#: An instance's own ``Prefix`` overrides its symbol's: both builds write the
-#: part's card with that element letter, in either case of the letter, on a
-#: library, stock or block symbol (recorded: ``export/instance_prefix``).
-#: spicelib reads the attribute back in upper case.
-INSTANCE_PREFIX = "Prefix"
 
 # Standard LTspice SYMATTR slot names. Anything outside this set is
 # silently ignored at netlist-export time, so we reject up-front rather
@@ -641,22 +641,16 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
 
 
 def element_class(editor: AscEditor, reference: str) -> str:
-    """The element letter a placed part netlists as.
-
-    LTspice takes it from the part's own ``Prefix`` when it has one, else from
-    its symbol's (``QN`` → ``Q``), and prepends that letter to an instance name
-    that does not already start with it, so a part named ``Vin`` on a resistor
-    symbol is a resistor. Falls back to the reference's own first letter when
-    neither gives one.
-    """
+    """The element letter a placed part netlists as (``sheet.element_letter``),
+    read from the editor's part and its symbol."""
     comp = editor.components.get(reference)
-    own = (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX)
-    if own:
-        return own[:1].upper()
     symbol = getattr(comp, "symbol", None)
     info = symbol_info_for(editor, symbol) if symbol else None
-    prefix = info.prefix if info is not None and info.prefix else reference
-    return prefix[:1].upper()
+    return element_letter(
+        (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX),
+        info.prefix if info is not None else None,
+        reference,
+    )
 
 
 def export_parts(editor: AscEditor, geometry: Iterable[dict]) -> list[tuple[str, str, list[str]]]:

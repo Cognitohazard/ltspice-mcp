@@ -302,6 +302,12 @@ class Part:
         return self.ref or self.symbol or "<unnamed>"
 
     @property
+    def draws_known(self) -> bool:
+        """Whether the lines, rectangles or circles it draws are known; a part
+        drawn without them counts as drawing its whole body."""
+        return bool(self.strokes or self.areas)
+
+    @property
     def drawn(self) -> BBox | None:
         """The extent of what the part draws: its body where known, else its box."""
         return self.body if self.body is not None else self.box
@@ -839,32 +845,28 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
         for a, b in ix.wires
         for _index, part, box in ix.drawn
         if _through(a, b, box)
-        and _meets_drawing(part, a, b)
         and not _way_out_from_own_pin(a, b, part, box)
+        and _meets_drawing(part, a, b)
     ]
+
+
+def _side(p: Point, q: Point, r: Point) -> int:
+    """Which side of the line ``p``-``q`` the point ``r`` lies on: 1, -1, or
+    0 on the line."""
+    cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    return (cross > 0) - (cross < 0)
 
 
 def _meet(a: Point, b: Point, c: Point, d: Point) -> bool:
     """True if segments ``a``-``b`` and ``c``-``d`` share a point, crossing or
     touching."""
-
-    def side(p: Point, q: Point, r: Point) -> int:
-        cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
-        return (cross > 0) - (cross < 0)
-
-    def spans(p: Point, q: Point, r: Point) -> bool:
-        return min(p[0], q[0]) <= r[0] <= max(p[0], q[0]) and min(p[1], q[1]) <= r[1] <= max(
-            p[1], q[1]
-        )
-
-    s1, s2, s3, s4 = side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b)
-    if s1 * s2 < 0 and s3 * s4 < 0:
+    if _side(a, b, c) * _side(a, b, d) < 0 and _side(c, d, a) * _side(c, d, b) < 0:
         return True
     return (
-        (s1 == 0 and spans(a, b, c))
-        or (s2 == 0 and spans(a, b, d))
-        or (s3 == 0 and spans(c, d, a))
-        or (s4 == 0 and spans(c, d, b))
+        point_on_segment(c, a, b)
+        or point_on_segment(d, a, b)
+        or point_on_segment(a, c, d)
+        or point_on_segment(b, c, d)
     )
 
 
@@ -872,7 +874,7 @@ def _meets_drawing(part: Part, a: Point, b: Point) -> bool:
     """True if segment ``a``-``b`` meets what ``part`` draws: crosses or
     touches one of its lines, or passes through one of its rectangles or
     circles. A part drawn without those is met anywhere."""
-    if not (part.strokes or part.areas):
+    if not part.draws_known:
         return True
     return any(_meet(a, b, c, d) for c, d in part.strokes) or any(
         _through(a, b, area) for area in part.areas
@@ -898,7 +900,7 @@ def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
     those reaches wherever its body does."""
     if not body.overlaps(box):
         return False
-    if not (part.strokes or part.areas):
+    if not part.draws_known:
         return True
     return any(_through(a, b, box) for a, b in part.strokes) or any(
         area.overlaps(box) for area in part.areas

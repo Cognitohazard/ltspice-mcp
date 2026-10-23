@@ -22,10 +22,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import crossing_points
 from ltspice_mcp.lib.schematic_ops import OpAddNetLabel, apply_op_inplace, make_editor
 from ltspice_mcp.lib.sheet import editor_symbol_resolver
-from tests.test_label_and_move_record import (
-    _sheet_says,  # pyright: ignore[reportPrivateUsage]
-    _what_is_there,  # pyright: ignore[reportPrivateUsage]
-)
+from tests._proposal_record import sheet_says, what_is_there
 
 Wire = tuple[int, int, int, int]
 
@@ -68,7 +65,7 @@ def test_a_label_where_nets_cross_is_refused_or_said(
         target.write_text(text, encoding="utf-8")
         editor = make_editor(target)
         assert isinstance(editor, AscEditor)
-        there = _what_is_there(editor)
+        there = what_is_there(editor)
         resolver = editor_symbol_resolver(target)
         for x, y in crossing_points(((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wires):
             _said, met, _named = there(name, (x, y))
@@ -81,5 +78,5 @@ def test_a_label_where_nets_cross_is_refused_or_said(
                 )
             except NetlistError:
                 continue
-            assert _sheet_says(editor, {(x, y)}, resolver), (text, name, (x, y))
+            assert sheet_says(editor, {(x, y)}, resolver), (text, name, (x, y))
             del editor.labels[had:]

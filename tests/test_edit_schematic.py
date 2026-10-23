@@ -207,7 +207,6 @@ async def test_a_value_set_on_several_ops_is_said_once_of_the_sheet(asc_state):
     data = await _build_blank(asc_state, "dupwarn", ops)
 
     said = [w for w in data["warnings"] if "complexity-level label" in w]
-    assert said == [w for w in _sheet_findings(data) if "complexity-level label" in w]
     assert len(said) == 1
     assert said[0].startswith("X1: Value 'Level.2'")
 
@@ -839,12 +838,6 @@ _UNTIDY_FINDINGS = 7
 _UNTIDY_LABEL_ONLY = 2
 
 
-def _sheet_findings(data: dict) -> list[str]:
-    """The sheet's own findings in the warnings channel; op advisories are
-    attributed to their op and prefixed with it."""
-    return [w for w in data["warnings"] if not w.startswith("op ")]
-
-
 def _whole_sheet(state: SessionState, path: Path) -> tuple[list[str], list[str]]:
     """Every finding message and label-only pin on the sheet as committed.
 
@@ -875,7 +868,7 @@ async def _untidy_sheet(state: SessionState, name: str) -> Path:
 async def test_a_blank_build_withholds_nothing(asc_state):
     """Everything on a sheet built from blank is new, so everything is reported."""
     data = await _build_blank(asc_state, "untidy-blank", _UNTIDY_OPS)
-    assert len(_sheet_findings(data)) == _UNTIDY_FINDINGS
+    assert len(data["warnings"]) == _UNTIDY_FINDINGS
     assert data["wiring"]["label_only_pins"]["total"] == _UNTIDY_LABEL_ONLY
     assert data["preexisting"] == {
         "count": 0,
@@ -897,7 +890,7 @@ async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state)
     )
 
     assert data["commit_state"] == "committed"
-    assert _sheet_findings(data) == [
+    assert data["warnings"] == [
         "Floating pin: R5.1 at (1100,252)",
         "Floating pin: R5.2 at (1100,348)",
     ]
@@ -911,7 +904,7 @@ async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state)
     assert "view_cursors.preexisting" in data["hint"]
     # Reported plus withheld is the whole sheet: nothing was dropped.
     whole, _ = _whole_sheet(asc_state, sheet)
-    assert len(whole) == len(_sheet_findings(data)) + data["preexisting"]["findings"]
+    assert len(whole) == len(data["warnings"]) + data["preexisting"]["findings"]
 
 
 async def test_a_finding_on_a_reference_the_batch_named_is_reported(asc_state):
@@ -922,7 +915,7 @@ async def test_a_finding_on_a_reference_the_batch_named_is_reported(asc_state):
         asc_state, sheet, [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
     )
 
-    assert _sheet_findings(data) == [
+    assert data["warnings"] == [
         "Floating pin: R1.1 at (100,252)",
         "Floating pin: R1.2 at (100,348)",
     ]
@@ -939,7 +932,7 @@ async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
         [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
     )
 
-    assert _sheet_findings(data) == ["Dangling label 'orphan' at (900,900)"]
+    assert data["warnings"] == ["Dangling label 'orphan' at (900,900)"]
     assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
 
 
@@ -972,7 +965,7 @@ async def test_a_finding_at_a_routes_coordinate_endpoint_is_reported(asc_state, 
     )
 
     assert data["commit_state"] == "committed"
-    assert any(w.startswith("Duplicate wire (2×)") for w in _sheet_findings(data))
+    assert any(w.startswith("Duplicate wire (2×)") for w in data["warnings"])
 
 
 # Two resistors drawn over one another, a comment inside them, and (written
@@ -1061,7 +1054,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
     }
     assert list(data["rules_run"]) == list(se.RULES)
     assert sum(data["rules_run"].values()) == (
-        len(_sheet_findings(data)) + data["preexisting"]["findings"]
+        len(data["warnings"]) + data["preexisting"]["findings"]
     )
     # A check of the same sheet ran all of them but the one its export check holds.
     assert checked["rules_run"] == {
@@ -1091,7 +1084,7 @@ async def test_an_edit_reports_what_it_drew_badly(asc_state):
     )
 
     assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
-    said = _sheet_findings(data)
+    said = data["warnings"]
     assert _OVERLAP in said
     assert "Wire end at (500,252) meets no pin, net label, or other wire" in said
     # R1's free pin was there before, and the batch did not name R1.
@@ -1194,7 +1187,6 @@ async def test_a_route_already_drawn_through_a_part_is_not_the_batchs(asc_state)
     (drawn,) = data["results"]
     assert drawn["already_present"] == [{"from": {"x": 100, "y": 252}, "to": {"x": 500, "y": 252}}]
     assert _THROUGH_R4 not in data["warnings"]
-    assert [w for w in data["warnings"] if w.startswith("op ")] == []
     assert _THROUGH_R4 in [row["message"] for row in data["views"]["preexisting"]["items"]]
 
 
@@ -1209,9 +1201,9 @@ async def test_a_finding_is_the_batchs_by_any_part_it_names(asc_state):
         asc_state, sheet, [{"op": "set_component_value", "reference": "R3", "value": "2k"}]
     )
 
-    assert _OVERLAP in _sheet_findings(about_r2)
-    assert _OVERLAP not in _sheet_findings(about_r3)
-    assert _sheet_findings(about_r3) == [
+    assert _OVERLAP in about_r2["warnings"]
+    assert _OVERLAP not in about_r3["warnings"]
+    assert about_r3["warnings"] == [
         "Floating pin: R3.1 at (500,252)",
         "Floating pin: R3.2 at (500,348)",
     ]
@@ -1277,7 +1269,7 @@ async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_st
     )
 
     assert data["commit_state"] == "committed"
-    assert _sheet_findings(data) == [
+    assert data["warnings"] == [
         "Floating pin: R9.1 at (500,252)",
         "Floating pin: R9.2 at (500,348)",
     ]
@@ -1319,7 +1311,7 @@ async def test_a_label_moved_away_and_back_owns_what_the_sheet_says_of_it(asc_st
         ],
     )
 
-    assert _sheet_findings(data) == ["Dangling label 'orphan' at (900,900)"]
+    assert data["warnings"] == ["Dangling label 'orphan' at (900,900)"]
     assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
 
 
@@ -1413,7 +1405,7 @@ async def test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call
     pins = [row["pin"] for row in page["items"] if row["kind"] == "label_only_pin"]
     assert sorted(pins) == ["R3.1", "R4.1"]
     whole, _ = _whole_sheet(asc_state, sheet)
-    assert sorted(findings + _sheet_findings(data)) == sorted(whole)
+    assert sorted(findings + data["warnings"]) == sorted(whole)
 
 
 async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
@@ -1527,7 +1519,7 @@ async def test_the_python_seam_scopes_the_same_way_and_completes_the_view(asc_st
 
     complete = complete_edit_schematic_data(await evaluate_edit_schematic(args, asc_state), args)
 
-    assert _sheet_findings(complete) == [
+    assert complete["warnings"] == [
         "Floating pin: R5.1 at (1100,252)",
         "Floating pin: R5.2 at (1100,348)",
     ]
@@ -2675,4 +2667,3 @@ async def test_a_move_reply_says_what_moved(asc_state):
         }
     ]
     # Dragged along its own axis, the wire stays straight: the op says nothing.
-    assert [w for w in data["warnings"] if w.startswith("op ")] == []

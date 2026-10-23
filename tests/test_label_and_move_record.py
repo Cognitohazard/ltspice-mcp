@@ -35,39 +35,32 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.connectivity import crossing_points, label_folded_nets
+from ltspice_mcp.lib.connectivity import crossing_points
 from ltspice_mcp.lib.routing import wires_through
 from ltspice_mcp.lib.schematic_ops import (
     OpAddNetLabel,
     OpMoveComponent,
     apply_op_inplace,
     collect_component_geometry,
-    named_labels,
-    net_partition,
     placed_geometry,
     resolve_pin,
     wire_segments_of,
 )
-from ltspice_mcp.lib.schematic_scene import scene_of_text, sheet_view
 from ltspice_mcp.lib.sheet import editor_symbol_resolver
-from ltspice_mcp.lib.sheet_findings import findings
-from ltspice_mcp.lib.symbol_library import SymbolResolver
-from ltspice_mcp.tools.schematic_edit import (
-    _render_editor_text,  # pyright: ignore[reportPrivateUsage]
-)
 from tests._proposal_record import (
     Asked,
     entry_of,
     every_nth,
     open_staged,
+    sheet_says,
+    what_is_there,
     without_particulars,
     write_record,
 )
@@ -87,22 +80,6 @@ _MOST_ELSEWHERE = 300
 
 #: A label placed where two or more nets met with nothing said of it.
 _SILENT_JOIN = re.compile(r"^placed \[.*; [2-9] at the point")
-
-#: The sheet rules that say what placing a label or moving a part joined.
-_JOIN_RULES = ("net_with_two_names", "joined_at_crossing")
-
-
-def _sheet_says(editor: AscEditor, points: set[Point], resolver: SymbolResolver) -> str:
-    """The join rules the sheet as the editor holds it reports at ``points``:
-    the word an edit's reply carries of them. Read as ``edit_schematic`` reads
-    it (``sheet_findings_of``), with one resolver for every reading of a sheet."""
-    view = sheet_view(
-        scene_of_text(_render_editor_text(editor), Path(editor.asc_file_path), resolver)
-    )
-    said = sorted(
-        {found.rule for found in findings(view, _JOIN_RULES) if points & set(found.points)}
-    )
-    return f" | sheet: {', '.join(said)}" if said else ""
 
 
 Point = tuple[int, int]
@@ -174,45 +151,10 @@ def _move_proposals(editor: AscEditor) -> list[dict[str, Any]]:
     return every_nth(onto_rare, _MOST_AT_RARE_POINTS) + every_nth(elsewhere, _MOST_ELSEWHERE)
 
 
-def _what_is_there(editor: AscEditor) -> Any:
-    """For a point and a name: whether the name is already on the sheet, and
-    the nets that meet at the point with how many of them carry a name, as a
-    sentence and as the two counts.
-
-    Worked out here from the partition, apart from the op's own reading of it:
-    it is what tells apart answers the op words alike.
-    """
-    partition = net_partition(editor)
-    node_of = label_folded_nets(partition)
-    wires = wire_segments_of(editor)
-    names_of: dict[Point, set[str]] = defaultdict(set)
-    for coord, texts in partition.label_texts.items():
-        names_of[node_of(coord)].update(named_labels(frozenset(texts)))
-    on_the_sheet = {text for texts in partition.label_texts.values() for text in texts}
-
-    def there(net: str, at: Point) -> tuple[str, int, int]:
-        nodes = {node_of(wire[:2]) for wire in wires_through(at, wires)}
-        # A pin or a label there with no wire is a net too; a bare point is none.
-        if at in partition.members.get(partition.root(at), ()):
-            nodes.add(node_of(at))
-        named = [node for node in nodes if names_of[node]]
-        if net == "0":
-            name = "ground"
-        elif any(net in names_of[node] for node in nodes):
-            name = "a name already here"
-        elif net in on_the_sheet:
-            name = "a name already elsewhere"
-        else:
-            name = "a new name"
-        return f"{name}; {len(nodes)} at the point, {len(named)} named", len(nodes), len(named)
-
-    return there
-
-
 def _labels_asked(editor: AscEditor) -> list[Asked]:
     sheet = Path(editor.asc_file_path)
     resolver = editor_symbol_resolver(sheet)
-    there = _what_is_there(editor)
+    there = what_is_there(editor)
     asked: list[Asked] = []
     for proposal in _label_proposals(editor):
         had = len(editor.labels)
@@ -223,17 +165,17 @@ def _labels_asked(editor: AscEditor) -> list[Asked]:
         )
         said, met, named = there(proposal["net"], at)
         try:
-            placed = apply_op_inplace(editor, OpAddNetLabel(op="add_net_label", **proposal), sheet)
+            apply_op_inplace(editor, OpAddNetLabel(op="add_net_label", **proposal), sheet)
         except NetlistError as refused:
             answer: dict[str, Any] = {"refused": str(refused)}
             text = "refused: " + answer["refused"]
         else:
-            answer = {"warnings": list(cast("list[str]", placed.get("warnings", [])))}
-            text = "placed: " + " | ".join(answer["warnings"]) if answer["warnings"] else "placed"
+            answer = {}
+            text = "placed"
             # The sheet can say something only where nets met or a named net
             # took another name; it is read only there, which keeps the run short.
             if met > 1 or (named and proposal["net"] != "0"):
-                text += _sheet_says(editor, {at}, resolver)
+                text += sheet_says(editor, {at}, resolver)
         # The sheet is put back as it was, so each proposal is put to the same sheet.
         del editor.labels[had:]
         answer["there"] = said
@@ -249,15 +191,13 @@ def _moves_asked(editor: AscEditor) -> list[Asked]:
     for proposal in _move_proposals(editor):
         at, rotation = editor.get_component_position(proposal["reference"])
         try:
-            moved = apply_op_inplace(
-                editor, OpMoveComponent(op="move_component", **proposal), sheet
-            )
+            apply_op_inplace(editor, OpMoveComponent(op="move_component", **proposal), sheet)
         except NetlistError as refused:
             answer: dict[str, Any] = {"refused": str(refused)}
             text = "refused: " + answer["refused"]
         else:
-            answer = {"warnings": list(cast("list[str]", moved.get("warnings", [])))}
-            text = "moved: " + " | ".join(answer["warnings"]) if answer["warnings"] else "moved"
+            answer = {}
+            text = "moved"
             # A pin on two or more wires is where a join can be made; the sheet
             # is read only then.
             geometry = placed_geometry(editor, proposal["reference"])
@@ -268,7 +208,7 @@ def _moves_asked(editor: AscEditor) -> list[Asked]:
                 if len(wires_through((pin["x"], pin["y"]), wires)) > 1
             }
             if crossed:
-                text += _sheet_says(editor, crossed, resolver)
+                text += sheet_says(editor, crossed, resolver)
         editor.set_component_position(proposal["reference"], at, rotation)
         asked.append(Asked(proposal, answer, without_particulars(text)))
     return asked
@@ -352,8 +292,8 @@ def _shapes(record: dict[str, Any], op: str) -> dict[str, int]:
     ],
 )
 def test_the_record_asks_enough_to_hold_every_answer(op: str, said: tuple[str, ...]):
-    """Each refusal and each advisory the two ops have is in it more than once,
-    and so is each place where an op says nothing."""
+    """Each refusal the two ops have, and each thing the sheet says of what
+    they placed, is in it more than once."""
     assert not [shape for shape in _shapes(_recorded(), "labels") if _SILENT_JOIN.search(shape)]
     shapes = _shapes(_recorded(), op)
     seen = sum(count for shape, count in shapes.items() if all(part in shape for part in said))
