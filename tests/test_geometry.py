@@ -1,14 +1,13 @@
-"""Unit tests for the BBox dataclass and miss-caching in get_symbol_info."""
+"""Unit tests for the BBox dataclass, and for a symbol miss searched for once per request."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib import symbol_library
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 
 # ---------------------------------------------------------------------------
 # BBox normalization, properties, and set ops
@@ -107,48 +106,35 @@ class TestBBoxFactories:
 
 
 # ---------------------------------------------------------------------------
-# Miss-caching in get_symbol_info
+# Misses within one request
 # ---------------------------------------------------------------------------
 
 
-class TestGetSymbolInfoMissCache:
-    """A failed resolution should be cached so repeated lookups don't re-walk
-    the library search path. Before this fix, ``get_symbol_info`` only stored
-    successful parses, leaving misses to redo ``rglob`` on every call.
+class TestAMissIsSearchedForOncePerRequest:
+    """A symbol no library holds is searched for once by a request's resolver,
+    however often the request asks: without that, every reference to a missing
+    symbol walks the library again. The next request searches afresh, so a
+    symbol added meanwhile is found."""
 
-    Each test swaps in a fresh cache dict (via monkeypatch) so we don't
-    mutate the shared module-global one — that would race with other tests
-    in the same xdist worker that rely on cached symbol lookups.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _isolated_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
-
-    def test_miss_is_cached(self) -> None:
-        with patch.object(symbol_geometry, "_find_asy_file", return_value=None) as find_mock:
-            assert symbol_geometry.get_symbol_info("nope_xyz", None) is None
-            assert symbol_geometry.get_symbol_info("nope_xyz", None) is None
-            assert symbol_geometry.get_symbol_info("nope_xyz", None) is None
+    def test_one_resolver_searches_once(self, tmp_path: Path) -> None:
+        library = SymbolLibrary([tmp_path])
+        with patch.object(symbol_library, "find_symbol", return_value=None) as find_mock:
+            resolver = library.for_sheet(None)
+            assert resolver.resolve("nope_xyz") is None
+            assert resolver.resolve("nope_xyz") is None
+            assert resolver.load("nope_xyz") is None
         assert find_mock.call_count == 1
 
-    def test_miss_then_hit_separate_keys(self) -> None:
-        with patch.object(symbol_geometry, "_find_asy_file", return_value=None) as find_mock:
-            symbol_geometry.get_symbol_info("missing_a", None)
-            symbol_geometry.get_symbol_info("missing_b", None)
+    def test_each_name_is_searched_for_once(self, tmp_path: Path) -> None:
+        with patch.object(symbol_library, "find_symbol", return_value=None) as find_mock:
+            resolver = SymbolLibrary([tmp_path]).for_sheet(None)
+            resolver.resolve("missing_a")
+            resolver.resolve("missing_b")
         assert find_mock.call_count == 2
 
-    def test_hit_after_miss_does_not_repath(self, tmp_path: Path) -> None:
-        # First lookup misses and caches None. Then we replace the cache
-        # entry with a real symbol and ensure the cached value wins.
-        with patch.object(symbol_geometry, "_find_asy_file", return_value=None):
-            assert symbol_geometry.get_symbol_info("res_test", None) is None
-
-        asy = tmp_path / "res_test.asy"
-        asy.write_text("Version 4\nLINE Normal 0 0 10 10\n")
-        info = symbol_geometry.parse_asy_file(asy)
-        symbol_geometry._symbol_cache["res_test"] = info
-
-        # No filesystem walk should occur — cache hit.
-        with patch.object(symbol_geometry, "_find_asy_file", side_effect=AssertionError):
-            assert symbol_geometry.get_symbol_info("res_test", None) is info
+    def test_the_next_request_searches_again(self, tmp_path: Path) -> None:
+        library = SymbolLibrary([tmp_path])
+        with patch.object(symbol_library, "find_symbol", return_value=None) as find_mock:
+            library.for_sheet(None).resolve("nope_xyz")
+            library.for_sheet(None).resolve("nope_xyz")
+        assert find_mock.call_count == 2

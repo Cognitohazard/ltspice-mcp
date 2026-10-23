@@ -1,23 +1,18 @@
 """Symbol geometry: pin positions, bounding boxes, and rotation transforms.
 
-Reads .asy symbol files from LTspice's library directories to extract pin
-positions and bounding boxes, then applies rotation/mirror transforms to
-compute absolute coordinates for placed components.
+Reads a .asy symbol file for its pins and bounding box, and applies the
+rotation and mirror transforms that place them on a sheet. Which file a
+symbol's name means is the session's library's to say
+(``symbol_library.SymbolLibrary``).
 """
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from spicelib import AscEditor
-
-from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolFile, read_symbol
-from ltspice_mcp.lib.symbol_library import find_beside, find_symbol
-
-logger = logging.getLogger(__name__)
+from ltspice_mcp.lib.symbol_library import FoundSymbol
 
 # Rotation transforms applied to (x, y) relative to symbol origin.
 # LTspice coordinate system: x increases right, y increases down.
@@ -123,26 +118,6 @@ def _pin_direction(
     return _DIRECTION_NAMES.get((rx, ry), "unknown")
 
 
-def library_roots() -> list[Path]:
-    """The libraries a symbol is looked for in, in order: the paths the session
-    configured for spicelib's editor, then the simulator's own.
-
-    They are class attributes of ``AscEditor`` for as long as it opens sheets,
-    so this reads them at each call.
-    """
-    roots = [*(AscEditor.custom_lib_paths or ()), *(AscEditor.simulator_lib_paths or ())]
-    return [Path(root) for root in roots]
-
-
-def _find_asy_file(symbol: str) -> Path | None:
-    """Find a .asy symbol file in the libraries (``library_roots``).
-
-    The search is ``symbol_library.find_symbol``, the rule the renderer's
-    lookup follows too.
-    """
-    return find_symbol(symbol, None, library_roots())
-
-
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
     """Parse a .asy symbol file to extract pins, bounding box, and description.
 
@@ -154,7 +129,7 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
 
     Raises ``ValueError`` for a symbol with a pin line that does not read: a
     pin left out is a terminal no wire could be checked against, so the symbol
-    is refused whole (``_parse_or_none`` turns that into an unusable symbol).
+    is refused whole.
     """
     return symbol_info_of(asy_path.stem, read_symbol(read_spice_text(asy_path)))
 
@@ -177,50 +152,12 @@ def symbol_info_of(name: str, symbol: SymbolFile) -> SymbolInfo:
     )
 
 
-# Library symbols by name, misses included, so a repeat never re-walks the paths.
-_symbol_cache: dict[str, SymbolInfo | None] = {}
-
-# Symbols saved beside a schematic, by file and content stamp: two sheets in
-# different folders may each carry their own same-named symbol, and a sheet's
-# own symbol is the one a user redraws mid-session.
-_local_symbol_cache: FileCache[SymbolInfo | None] = FileCache(maxsize=256)
-
-
-def _parse_or_none(asy_path: Path) -> SymbolInfo | None:
-    try:
-        return parse_asy_file(asy_path)
-    except Exception:
-        # A malformed/binary .asy (or an unhandled encoding) must not crash the
-        # caller — callers treat None as "unusable symbol" and degrade cleanly
-        # (add_component → a clear NetlistError; overlap scan → skip it).
-        logger.warning("Failed to parse symbol file %s", asy_path, exc_info=True)
+def usable_symbol_info(found: FoundSymbol | None) -> SymbolInfo | None:
+    """What the placement of a part needs of a symbol a resolver found; ``None``
+    for one not found, and for one that cannot be used (``FoundSymbol.problem``)."""
+    if found is None or found.problem:
         return None
-
-
-def get_symbol_info(symbol: str, asc_path: Path | None) -> SymbolInfo | None:
-    """Get symbol info by name. Returns ``None`` if symbol file not found.
-
-    ``asc_path`` is the schematic the symbol is placed on, or ``None`` for a
-    library-only lookup. Its folder is searched first, as LTspice does, so a
-    symbol saved beside the sheet wins over a same-named library one. That
-    search is ``symbol_library.find_beside``: the place the name says, or the
-    bare name right beside the sheet, and never a walk.
-    ``schematic_ops.symbol_info_for`` is the per-request memo placed
-    components go through.
-
-    Library results are cached by name, negative ones too — without that,
-    every reference to a missing symbol re-walks the entire library search
-    path via ``rglob``.
-    """
-    if asc_path is not None:
-        local = find_beside(asc_path.parent, symbol)
-        if local is not None:
-            return _local_symbol_cache.get(local, _parse_or_none)
-
-    if symbol not in _symbol_cache:
-        asy_path = _find_asy_file(symbol)
-        _symbol_cache[symbol] = _parse_or_none(asy_path) if asy_path is not None else None
-    return _symbol_cache[symbol]
+    return symbol_info_of(found.name, found.file)
 
 
 def compute_placed_geometry(

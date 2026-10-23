@@ -37,14 +37,13 @@ from ltspice_mcp.lib.runner_base import (
     inject_ngspice_control_write as inject_ngspice_control_write,
 )
 from ltspice_mcp.lib.schematic_renderer import render_svg
-from ltspice_mcp.lib.schematic_scene import Scene, default_stock_paths
+from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import RULES as SHEET_RULES
 from ltspice_mcp.lib.simulator import (
     family_refusal,
     no_simulator_message,
     simulator_family,
 )
-from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._schema import (
     ToolInput,
@@ -1432,32 +1431,6 @@ def make_include_resolver(state: SessionState) -> IncludeResolver:
             return None
 
     return resolver
-
-
-def symbol_resolver_for(
-    asc_path: Path | None, state: SessionState | None = None
-) -> SymbolResolver:
-    """Resolver with the sheet's own dir first, then configured/stock libraries.
-
-    Mirrors the precedence the compiler and LTspice's own export use so a
-    schematic that resolves for them resolves here too. When ``state`` is given,
-    its configured ``symbol_paths`` take precedence over the stock libraries.
-    ``asc_path`` may be ``None`` for a vocabulary lookup with no schematic in
-    hand (``inspect(symbols)`` without a ``path``): the local dir is then simply
-    absent from the precedence and only the configured/stock libraries apply.
-    """
-    from spicelib import AscEditor
-
-    project: list[Path] = []
-    if state is not None:
-        project += [Path(p) for p in state.config.symbol_paths]
-    project += [Path(p) for p in (AscEditor.custom_lib_paths or [])]
-    project += [Path(p) for p in (getattr(AscEditor, "simulator_lib_paths", None) or [])]
-    return SymbolResolver(
-        local_dir=asc_path.parent if asc_path is not None else None,
-        project_paths=project,
-        stock_paths=default_stock_paths(),
-    )
 
 
 def render_scene_artifact(

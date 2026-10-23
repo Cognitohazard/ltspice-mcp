@@ -8,6 +8,27 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `edit_schematic` read each library symbol once per session. A symbol
+  redrawn in a library while the server ran kept its old pins in every later
+  edit, and a symbol not found stayed not found after it was added, until the
+  server restarted. Every tool now reads a symbol again after its file
+  changes, and looks again beside the sheet and in the configured folders for
+  one it did not find. LTspice's own library, which does not change while the
+  server runs, is searched once per name.
+- With LTspice XVII and a later LTspice both installed, a server running XVII
+  read the later build's symbols when it edited and checked sheets: ahead of
+  XVII's own on Windows and under Wine, and in place of them on WSL. On WSL,
+  with XVII the only build installed, it found no symbols at all. It now
+  reads the symbols of the build it runs, as it already did for model
+  libraries.
+
+### Changed
+
+- `inspect(kind="symbols")` lists the LTspice build's `sym` folder as the
+  `stock` library, where it listed the `lib` folder above it.
+
 ## [0.7.0] - 2026-10-22
 
 ### Fixed
