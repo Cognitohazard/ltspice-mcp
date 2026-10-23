@@ -17,7 +17,7 @@ import pytest
 from spicelib.editor.asc_editor import AscEditor
 from spicelib.utils.file_search import search_file_in_containers
 
-from ltspice_mcp.lib import schematic_ops, symbol_geometry
+from ltspice_mcp.lib import schematic_ops
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.connectivity import (
     label_folded_nets,
@@ -45,11 +45,12 @@ from ltspice_mcp.lib.simulator import _in_generation
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
-from ltspice_mcp.lib.symbol_library import SymbolResolver, find_symbol
+from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver, find_symbol
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as verify_tool
 from tests import _ltspice_recorded as rec
 from tests._asc_ops import apply_ops, inspect_one, sha_of, sheet_findings
+from tests._schematic_fixtures import open_editor
 from tests.conftest import FIXTURES_DIR, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_verify_circuit import _run as run_verify_circuit
@@ -65,22 +66,25 @@ PLACEMENTS = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
 def _symbols_resolve_from_the_sheet() -> Iterator[None]:
     """Each test resolves symbols from beside its own sheet and nowhere else.
 
-    Both symbol caches are keyed by name for the whole process, and other
-    modules warm them with the stand-in library, where ``res`` has other pins
-    than the build's own.
+    spicelib's symbol cache is keyed by file name for the whole process, and
+    other modules warm it with the stand-in library, where ``res`` has other
+    pins than the build's own. The server's side reads beside the sheet only
+    (``_editor``).
     """
     editor_cache, editor_paths = dict(AscEditor.symbol_cache), AscEditor.custom_lib_paths
-    geometry_cache = dict(symbol_geometry._symbol_cache)
     AscEditor.symbol_cache = {}
     AscEditor.custom_lib_paths = []
-    symbol_geometry._symbol_cache.clear()
     try:
         yield
     finally:
         AscEditor.symbol_cache = editor_cache
         AscEditor.custom_lib_paths = editor_paths
-        symbol_geometry._symbol_cache.clear()
-        symbol_geometry._symbol_cache.update(geometry_cache)
+
+
+def _editor(sheet: Path) -> AscEditor:
+    """spicelib's editor of ``sheet``, its pin geometry finding symbols beside the
+    sheet and nowhere else, as the recorded builds did."""
+    return open_editor(Path(sheet), SymbolResolver(local_dir=Path(sheet).parent))
 
 
 def exported_card(build: str, case_id: str, reference: str):
@@ -99,7 +103,7 @@ def exported_card(build: str, case_id: str, reference: str):
 
 def placed_pins(sheet: Path) -> dict[str, dict[int, tuple[int, int]]]:
     """Each component's pins by SpiceOrder, as the schematic editor places them."""
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     return {
         row["ref"]: {pin["order"]: (pin["x"], pin["y"]) for pin in row["pins"]}
@@ -191,7 +195,7 @@ def exported_groups(build: str, case_id: str) -> set[frozenset[str]]:
 
 def modelled_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins the editor's net partition puts on each node."""
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     node_of = label_folded_nets(net_partition(editor))
     nodes: dict[tuple[int, int], set[str]] = {}
@@ -231,7 +235,7 @@ def test_each_pin_is_given_the_node_ltspice_exported_it_on(
     node get one exported node, and two nodes two; a node's name is compared
     without case, as LTspice reads it."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     geometry = collect_component_geometry(editor)
     nodes = exported_pin_nodes(rec.export_text(build, case_id), export_parts(editor, geometry))
@@ -333,7 +337,7 @@ def test_a_labelled_net_is_named_by_one_of_its_labels_and_ground_wins(
     build: str, case_id: str, tmp_path: Path
 ):
     sheet = rec.stage_sheet(build, case_id, tmp_path)
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     part = net_partition(editor)
     node_of = label_folded_nets(part)
@@ -378,7 +382,7 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
     """The export keeps a part's two pins on separate nodes exactly when the
     editor reports the wire between them as one LTspice discards."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     part = net_partition(editor)
     dropped = same_instance_dropped_segments(
@@ -414,7 +418,7 @@ async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
 
 def netlisted_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins on each net of the sheet's signature, as ``REF.order`` sets."""
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     pins = [
         ((pin["x"], pin["y"]), (canon_ref(row["ref"]), str(pin["order"])))
@@ -478,7 +482,7 @@ def test_both_tools_call_floating_the_pins_ltspice_left_on_nothing(build: str, t
     assert alone == ["r1.1", "r1.2", "r2.1", "r6.1", "r8.1"]
 
     sheet = rec.stage_sheet(build, case_id, tmp_path)
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     # The stacked symbols name each pin by its SpiceOrder.
     from_the_editor = sorted(
@@ -575,16 +579,15 @@ class TestTheServerFindsASymbolWhereEitherBuildDoes:
         either = any(_found_by(build, case_id) for build in rec.BUILDS)
         assert (find_symbol(name, sheet.parent, libraries) is not None) == either
 
-    def test_the_editors_pin_geometry(
-        self, case_id: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_the_sessions_library(self, case_id: str, tmp_path: Path):
+        """What every reader of a sheet's symbols asks: the edit's pin geometry,
+        the check, the inspection and the drawing."""
         sheet, name, libraries = _staged_search(case_id, tmp_path)
-        monkeypatch.setattr(AscEditor, "custom_lib_paths", [str(root) for root in libraries])
         either = any(_found_by(build, case_id) for build in rec.BUILDS)
-        info = symbol_geometry.get_symbol_info(name, sheet)
-        assert (info is not None) == either
-        if info is not None:
-            assert len(info.pins) == 2
+        found = SymbolLibrary(libraries).for_sheet(sheet).load(name)
+        assert (found is not None) == either
+        if found is not None:
+            assert len(found.file.pins) == 2
 
     def test_the_renderer(self, case_id: str, tmp_path: Path):
         sheet, name, libraries = _staged_search(case_id, tmp_path)
@@ -625,7 +628,7 @@ def test_a_bus_label_is_its_first_member_to_ltspice_and_a_name_to_the_server(
     # That one node is all the two disagree on.
     assert exported - {joined} == modelled - apart
 
-    editor = make_editor(sheet)
+    editor = _editor(sheet)
     assert isinstance(editor, AscEditor)
     assert trace_nets(editor)[placed_pins(sheet)["R1"][1]] == {"D[0:3]"}
 
@@ -1244,7 +1247,7 @@ class TestExportedNames:
             return search_file_in_containers(filename, *containers)
 
         monkeypatch.setattr(schematic_ops, "search_file_in_containers", search)
-        editor = make_editor(sheet)
+        editor = _editor(sheet)
         assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
         # A search walks every folder it is given, so the block the sheet
         # places three times is searched for once.
@@ -1300,7 +1303,7 @@ class TestExportedNames:
         self, build: str, sheet: str, tmp_path: Path
     ):
         sheet_path = rec.stage_sheet(build, f"export/{sheet}", tmp_path)
-        editor = make_editor(sheet_path)
+        editor = _editor(sheet_path)
         assert isinstance(editor, AscEditor)
         cards = rec.export_instances(build, f"export/{sheet}")
         for reference in editor.get_components():

@@ -114,6 +114,11 @@ class FoundSymbol:
     problem: str = ""
 
 
+#: Symbol files as read, by file, content stamp and the bare name they were
+#: asked for under. Shared by every resolver of one ``SymbolLibrary``.
+ParseCache = dict[tuple[str, tuple[int, int], str], FoundSymbol]
+
+
 class SymbolResolver:
     """Resolve a symbol name to a ``.asy`` file and read it, with caching.
 
@@ -123,17 +128,14 @@ class SymbolResolver:
     2. configured project symbol paths (``project_paths``),
     3. stock LTspice library paths (``stock_paths``).
 
-    Each resolver owns its caches; its search roots (and therefore its
-    ``active_set``) are fixed at construction. The parse cache is keyed by
-    ``(resolved path, content stamp, active library-path set)`` — never by bare
-    symbol name — so rewriting a local ``.asy`` bumps the content stamp and
-    invalidates the entry, while an unchanged file is served from cache. The
-    active-set component is what keeps entries from bleeding across resolvers
-    configured with different libraries: a different library set is a different
-    resolver, and because it never resolves to a foreign entry, ``resolve`` for
-    a symbol whose winning file changed with the search order returns the right
-    path. Resolution results (including misses) are cached per instance, so a
-    repeated miss does not re-walk the stock tree.
+    Its search roots are fixed at construction. Where each name resolved,
+    misses included, is kept for the resolver's life, so a repeated miss does
+    not walk the stock tree again; a resolver is made for one request
+    (``SymbolLibrary.for_sheet``), so a symbol added between requests is found.
+    A file read is kept by its path, content stamp and the bare name asked
+    for, so a rewritten ``.asy`` is read again. That cache is the library's
+    when the resolver comes from one (``parse_cache``), and the resolver's own
+    otherwise.
     """
 
     def __init__(
@@ -141,6 +143,8 @@ class SymbolResolver:
         local_dir: Path | None,
         project_paths: Sequence[Path] = (),
         stock_paths: Sequence[Path] = (),
+        *,
+        parse_cache: ParseCache | None = None,
     ) -> None:
         roots: list[Path] = []
         if local_dir is not None:
@@ -158,11 +162,16 @@ class SymbolResolver:
         self._local_dir = local_dir
         self._active_set: frozenset[str] = frozenset(str(r) for r in self._roots)
         self._resolve_cache: dict[str, Path | None] = {}
-        self._parse_cache: dict[tuple[str, tuple[int, int], frozenset[str]], FoundSymbol] = {}
+        self._parse_cache: ParseCache = {} if parse_cache is None else parse_cache
 
     @property
     def active_set(self) -> frozenset[str]:
         return self._active_set
+
+    @property
+    def roots(self) -> tuple[Path, ...]:
+        """The folders searched, in order: the sheet's own first, then the libraries."""
+        return tuple(self._roots)
 
     def resolve(self, symbol: str) -> Path | None:
         """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.
@@ -189,11 +198,11 @@ class SymbolResolver:
             stamp = file_stamp(path)
         except OSError:
             return None
-        key = (str(path), stamp, self._active_set)
+        name = spellings(symbol)[1]
+        key = (str(path), stamp, name)
         cached = self._parse_cache.get(key)
         if cached is not None:
             return cached
-        name = spellings(symbol)[1]
         try:
             read = read_symbol(read_spice_text(path))
         except Exception as failed:
@@ -207,3 +216,73 @@ class SymbolResolver:
             found = FoundSymbol(name, path, read, problem)
         self._parse_cache[key] = found
         return found
+
+
+# ---------------------------------------------------------------------------
+# The session's library
+# ---------------------------------------------------------------------------
+
+
+class SymbolLibrary:
+    """The symbol libraries a session reads, and one cache of the files read from them.
+
+    A session builds one (``SessionState.symbols``) from its configuration and
+    the LTspice it runs: the folders ``[schematic] symbol_paths`` names, then
+    the ``sym`` folder of that LTspice build's own library (``build_roots`` are
+    the build's ``lib`` folders, which spicelib's editor is given and appends
+    ``sym`` to itself). Every reader of a sheet's symbols asks it, so the edit,
+    the check, the inspection and the drawing of one sheet find the same file
+    for each symbol.
+
+    ``for_sheet`` hands out a resolver with the sheet's own folder in front.
+    Each resolver keeps where names resolved only for its own life, and all of
+    them share the library's cache of files read, keyed by file and content
+    stamp, so a symbol redrawn or added while the session runs is seen by the
+    next request.
+    """
+
+    def __init__(
+        self,
+        configured: Sequence[Path] = (),
+        build_roots: Sequence[Path] = (),
+        *,
+        build: str | None = None,
+    ) -> None:
+        self.configured: tuple[Path, ...] = tuple(configured)
+        self.build_roots: tuple[Path, ...] = tuple(build_roots)
+        #: Which LTspice the library is: ``"current"`` (LTspice 24 and later),
+        #: ``"xvii"``, or None when no build could be told.
+        self.build = build
+        self._parse_cache: ParseCache = {}
+
+    @property
+    def stock(self) -> tuple[Path, ...]:
+        """The build's symbol folders: ``sym`` under each of its ``lib`` folders."""
+        return tuple(root / "sym" for root in self.build_roots)
+
+    @property
+    def roots(self) -> tuple[Path, ...]:
+        """The libraries searched after a sheet's own folder, in order."""
+        return (*self.configured, *self.stock)
+
+    def for_sheet(self, path: Path | None) -> SymbolResolver:
+        """The resolver for the sheet at ``path``: its folder first, then the libraries.
+
+        ``path`` None is a lookup with no sheet in hand: the libraries only.
+        """
+        return SymbolResolver(
+            local_dir=path.parent if path is not None else None,
+            project_paths=self.configured,
+            stock_paths=self.stock,
+            parse_cache=self._parse_cache,
+        )
+
+    def precedence(self, sheet_folder: Path | None) -> list[tuple[Path, str]]:
+        """The folders a lookup searches, in order, each with its tier:
+        ``schematic-local``, ``configured`` or ``stock``."""
+        ordered: list[tuple[Path, str]] = []
+        if sheet_folder is not None:
+            ordered.append((sheet_folder, "schematic-local"))
+        ordered += [(path, "configured") for path in self.configured]
+        ordered += [(path, "stock") for path in self.stock]
+        return ordered

@@ -53,7 +53,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib import asc_document
-from ltspice_mcp.lib.sheet import editor_symbol_resolver
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.tools import schematic_edit
 from ltspice_mcp.tools._base import safe_path
 from tests._proposal_record import write_record
@@ -165,9 +165,8 @@ def _given_paths(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _symbols(target: Path, names: set[str]) -> list[Any]:
-    """Each symbol name with the digest of the file it resolves to."""
-    resolver = editor_symbol_resolver(target)
+def _symbols(target: Path, names: set[str], resolver: SymbolResolver) -> list[Any]:
+    """Each symbol name with the digest of the file ``resolver`` finds for it."""
     found = []
     for name in sorted(names):
         path = resolver.resolve(name)
@@ -184,10 +183,12 @@ def key_of(
     args: Any,
     folders: tuple[Path, ...],
     *,
+    resolver: SymbolResolver,
     per_platform: bool = False,
 ) -> str:
     """The key of an ``edit_schematic`` call with ``args`` on ``target``, which
-    held ``before``; with the platform in it when ``per_platform``."""
+    held ``before``, its symbols found with ``resolver``; with the platform in
+    it when ``per_platform``."""
     names = {op.symbol for op in args.ops if getattr(op, "op", "") == "add_component"}
     tokens: dict[str, str] = {}
     form = None
@@ -207,7 +208,7 @@ def key_of(
             {
                 "before": form if before is None or form else _digest(before),
                 "args": scrubbed(arguments, folders, tokens),
-                "symbols": _symbols(target, names),
+                "symbols": _symbols(target, names, resolver),
                 "beside": beside,
                 **({"platform": _PLATFORM} if per_platform else {}),
             },
@@ -246,7 +247,14 @@ async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool =
         return await _evaluate(args, state, present_mcp_views=present_mcp_views)
     folders = (target.parent, Path(state.working_dir))
     before = target.read_bytes() if target.is_file() else None
-    key = key_of(target, before, args, folders, per_platform=_per_platform)
+    key = key_of(
+        target,
+        before,
+        args,
+        folders,
+        resolver=state.symbols.for_sheet(target),
+        per_platform=_per_platform,
+    )
     if not _recording and "varies" in _record.get(key, {}):
         _counts["varying"] += 1
         return await _evaluate(args, state, present_mcp_views=present_mcp_views)

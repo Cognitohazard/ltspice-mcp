@@ -107,10 +107,9 @@ def libfile(work_dir: Path) -> Path:
 
 @pytest.fixture
 def isolated_stock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Collapse the symbol precedence to the fixture library only, so the
-    enumerated names and the precedence are deterministic regardless of any
-    real LTspice install on the test host."""
-    monkeypatch.setattr(insp, "default_stock_paths", lambda: [])
+    """Keep spicelib's own search to the fixture library too. The session's
+    library is already the suite's (the ``config`` fixture), so the enumerated
+    names and the precedence are the same whatever LTspice the host has."""
     monkeypatch.setattr(AscEditor, "simulator_lib_paths", [], raising=False)
 
 
@@ -1500,9 +1499,9 @@ class TestASheetReadOncePerCall:
         reads: list[Path] = []
         original = insp.read_sheet_file
 
-        def counted(path: Path) -> typing.Any:
+        def counted(path: Path, resolver: typing.Any) -> typing.Any:
             reads.append(path)
-            return original(path)
+            return original(path, resolver)
 
         monkeypatch.setattr(insp, "read_sheet_file", counted)
         queries = [{"kind": "components", "path": sheet}]

@@ -172,7 +172,6 @@ from ltspice_mcp.lib.schematic_ops import (
     require_asc,
     wires_of_one_net,
 )
-from ltspice_mcp.lib.schematic_scene import default_stock_paths
 from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
@@ -215,7 +214,6 @@ from ltspice_mcp.tools._base import (
     safe_library_path,
     safe_path,
     sandboxed,
-    symbol_resolver_for,
     window_difference,
 )
 from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
@@ -248,20 +246,21 @@ _SHEETS_READ: ContextVar[dict[tuple[str, object], tuple[Sheet, str]] | None] = C
 )
 
 
-async def _sheet_of_file(path: Path) -> tuple[Sheet, str]:
+async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
     """The sheet at ``path`` and the SHA-256 of the bytes it was read from.
 
     Read from the file, never from the editor an edit in progress may be
-    changing, and off the event loop. The digest is the edit token
-    ``edit_schematic`` takes as ``expected_sha256``, of exactly the bytes the
-    answer describes.
+    changing, and off the event loop, with the session's symbols. The digest
+    is the edit token ``edit_schematic`` takes as ``expected_sha256``, of
+    exactly the bytes the answer describes.
     """
+    resolver = state.symbols.for_sheet(path)
     memo = _SHEETS_READ.get()
     if memo is None:
-        return await asyncio.to_thread(read_sheet_file, path)
+        return await asyncio.to_thread(read_sheet_file, path, resolver)
     key = (str(path), await asyncio.to_thread(stamps.file_stamp, str(path)))
     if key not in memo:
-        memo[key] = await asyncio.to_thread(read_sheet_file, path)
+        memo[key] = await asyncio.to_thread(read_sheet_file, path, resolver)
     return memo[key]
 
 
@@ -323,7 +322,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     """
     asc_path = safe_path(args.path, state)
     require_asc(asc_path)
-    sheet, _digest = await _sheet_of_file(asc_path)
+    sheet, _digest = await _sheet_of_file(asc_path, state)
 
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
@@ -1243,26 +1242,15 @@ def _do_capabilities(
 
 
 def _symbol_precedence(asc_dir: Path | None, state: SessionState) -> list[tuple[Path, str]]:
-    """The ordered (dir, tier) search precedence, mirroring ``symbol_resolver_for``.
+    """The ordered (dir, tier) search precedence of the session's library
+    (``SymbolLibrary.precedence``), the order every lookup searches in.
 
     A schematic-local dir (when a ``path`` is given) leads, then configured
-    project libraries, then the stock LTspice/symbol libraries. Duplicates —
-    including a symlink pointing at an already-listed directory — collapse to
-    their highest-precedence occurrence (keyed by resolved real path).
+    project libraries, then the LTspice build's own. Duplicates — including a
+    symlink pointing at an already-listed directory — collapse to their
+    highest-precedence occurrence (keyed by resolved real path).
     """
-    from spicelib import AscEditor
-
-    ordered: list[tuple[Path, str]] = []
-    if asc_dir is not None:
-        ordered.append((asc_dir, "schematic-local"))
-    for p in state.config.symbol_paths:
-        ordered.append((Path(p), "configured"))
-    for p in AscEditor.custom_lib_paths or []:
-        ordered.append((Path(p), "configured"))
-    for p in getattr(AscEditor, "simulator_lib_paths", None) or []:
-        ordered.append((Path(p), "stock"))
-    for p in default_stock_paths():
-        ordered.append((Path(p), "stock"))
+    ordered = state.symbols.precedence(asc_dir)
 
     seen: set[str] = set()
     deduped: list[tuple[Path, str]] = []
@@ -1372,7 +1360,7 @@ async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
     asc_path: Path | None = None
     if q.path is not None:
         asc_path = safe_path(q.path, state)
-    resolver = symbol_resolver_for(asc_path, state)
+    resolver = state.symbols.for_sheet(asc_path)
     payload = await asyncio.to_thread(_symbol_geometry, resolver, q.name)
     if payload is None:
         raise _QueryError(
@@ -1539,7 +1527,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
         }
 
     # .asc: a geometric trace of the sheet as the file holds it.
-    _sheet, digest = await _sheet_of_file(path)
+    _sheet, digest = await _sheet_of_file(path, state)
     trace_input = _trace_input_for(q.path, q.at)
     trace = await handle_trace_net(trace_input, state)
     tdata = trace.structured_content or {}
@@ -1695,7 +1683,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     lex_notes: list[str] = []
 
     if _route_circuit_kind(path, "components") == "asc":
-        sheet, digest = await _sheet_of_file(path)
+        sheet, digest = await _sheet_of_file(path, state)
         # By reference; two parts of one reference both listed, in file order.
         parts = sorted(sheet.parts, key=lambda part: part.reference)
         if prefix is not None:

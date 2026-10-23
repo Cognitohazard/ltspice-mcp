@@ -16,6 +16,8 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate, point_on_segment
 from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import OpWirePins, blank_sheet
+from ltspice_mcp.lib.symbol_file import SymbolFile
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import TraceNetInput, handle_trace_net
 from tests._asc_ops import (
@@ -33,7 +35,7 @@ from tests._asc_ops import (
     structured_warnings,
     wire_pins,
 )
-from tests._schematic_fixtures import write_file
+from tests._schematic_fixtures import open_editor, write_file
 from tests.conftest import FIXTURES_DIR
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -695,17 +697,21 @@ _SWAPPED_DIGITS_ASY = _block_asy("Pin 1 is SpiceOrder 2", ("2", 1, 0, -48), ("1"
 
 @pytest.fixture
 def ordinal_symbols(
-    asc_symbols: Path,
+    asc_state: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     isolated_spicelib_symbol_cache: None,
 ) -> Path:
-    """Put the two symbols above on the library path beside the fixture library."""
+    """Put the two symbols above in the session's library, beside the fixture library."""
     from spicelib import AscEditor
 
     sym_dir = work_dir / "ordinal_syms"
     write_file(sym_dir / "lettered_block.asy", _LETTERED_BLOCK_ASY)
     write_file(sym_dir / "swapped_digits.asy", _SWAPPED_DIGITS_ASY)
+    library = asc_state.symbols
+    asc_state.symbols = SymbolLibrary(
+        [*library.configured, sym_dir], library.build_roots, build=library.build
+    )
     monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
     return sym_dir
 
@@ -908,13 +914,13 @@ class TestSheetLocalSymbols:
         from tests._asc_ops import build_sheet
 
         lookups: Counter[str] = Counter()
-        real_lookup = schematic_ops.get_symbol_info
+        real_lookup = schematic_ops.symbol_info_of
 
-        def counting_lookup(symbol: str, asc_path: Path | None):
-            lookups[symbol] += 1
-            return real_lookup(symbol, asc_path)
+        def counting_lookup(name: str, symbol: SymbolFile):
+            lookups[name] += 1
+            return real_lookup(name, symbol)
 
-        monkeypatch.setattr(schematic_ops, "get_symbol_info", counting_lookup)
+        monkeypatch.setattr(schematic_ops, "symbol_info_of", counting_lookup)
         ops = [
             {"op": "add_component", "reference": f"R{i}", "symbol": "res", "x": 128 * i, "y": 128}
             for i in range(1, 13)
@@ -1625,14 +1631,12 @@ class TestInstancePrefix:
     async def test_clearing_a_prefix_gives_the_part_its_symbols_letter_back(
         self, asc_state: SessionState, asc_file: Path
     ):
-        from spicelib import AscEditor
-
         from ltspice_mcp.lib.schematic_ops import element_class
 
         op = {"op": "set_component_attribute", "reference": "R1", "attribute": "Prefix"}
         apply_one(asc_state, asc_file, {**op, "value": "C"})
         apply_one(asc_state, asc_file, {**op, "value": ""})
-        editor = AscEditor(str(asc_file))
+        editor = open_editor(asc_file, asc_state.symbols.for_sheet(asc_file))
         assert "Prefix" not in editor.get_component("R1").attributes
         assert element_class(editor, "R1") == "R"
 
@@ -3227,21 +3231,17 @@ class TestAddComponentRealSymbols:
     def real_state(self, state_no_sim: SessionState, work_dir: Path):
         from spicelib import AscEditor
 
-        from ltspice_mcp.lib import symbol_geometry
-
         saved_paths = AscEditor.custom_lib_paths
         saved_cache = AscEditor.symbol_cache
-        saved_geo = dict(symbol_geometry._symbol_cache)
         AscEditor.custom_lib_paths = [_REAL_SYM]  # type: ignore[list-item]
         AscEditor.symbol_cache = {}
-        symbol_geometry._symbol_cache.clear()
+        assert _REAL_SYM is not None  # the class skips without a real library
+        state_no_sim.symbols = SymbolLibrary([Path(_REAL_SYM)])
         try:
             yield state_no_sim
         finally:
             AscEditor.custom_lib_paths = saved_paths
             AscEditor.symbol_cache = saved_cache
-            symbol_geometry._symbol_cache.clear()
-            symbol_geometry._symbol_cache.update(saved_geo)
 
     async def test_add_real_symbols_round_trip(self, real_state: SessionState):
         blank_sheet_file(real_state, "real")

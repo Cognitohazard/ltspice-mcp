@@ -231,20 +231,25 @@ class TestParseAsyFile:
         assert "µV" in info.description
         assert info.pins[0].name == "A"
 
-    def test_get_symbol_info_returns_none_on_unparseable(self, tmp_path: Path, monkeypatch):
+    def test_an_unreadable_symbol_is_no_symbol_to_the_edit(self, tmp_path: Path, monkeypatch):
         """A malformed/binary .asy must degrade to None, not crash the caller."""
-        from ltspice_mcp.lib import symbol_geometry as sg
+        from ltspice_mcp.lib import symbol_library
+        from ltspice_mcp.lib.schematic_ops import symbol_info_for
+        from ltspice_mcp.lib.symbol_library import SymbolLibrary
+        from tests._schematic_fixtures import open_editor
 
-        bad = tmp_path / "bad.asy"
-        bad.write_bytes(b"\x00\x01\x02 not a symbol \xff\xfe")
-        monkeypatch.setattr(sg, "_find_asy_file", lambda _s: bad)
+        library = tmp_path / "library"
+        library.mkdir()
+        (library / "bad_xyz.asy").write_bytes(b"\x00\x01\x02 not a symbol \xff\xfe")
+        sheet = tmp_path / "s.asc"
+        sheet.write_text("Version 4\nSHEET 1 880 680\n", encoding="utf-8")
 
-        def _boom(_p):
+        def _boom(_text):
             raise ValueError("simulated parse failure")
 
-        monkeypatch.setattr(sg, "parse_asy_file", _boom)
-        sg._symbol_cache.pop("bad_xyz", None)
-        assert sg.get_symbol_info("bad_xyz", None) is None
+        monkeypatch.setattr(symbol_library, "read_symbol", _boom)
+        editor = open_editor(sheet, SymbolLibrary([library]).for_sheet(sheet))
+        assert symbol_info_for(editor, "bad_xyz") is None
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import hashlib
 import shutil
 import threading
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 from spicelib import AscEditor
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.schematic_ops import (
@@ -45,6 +47,7 @@ from ltspice_mcp.tools.schematic_edit import (
 )
 from tests import _fake_netlister as fake_netlister
 from tests._asc_ops import apply_ops, file_at, sheet_findings
+from tests._schematic_fixtures import BOX2_ASY, write_file
 from tests.ltspice_recorder import INPUTS
 from tests.test_api_reference import _op_kinds
 from tests.test_verify_circuit import _run as run_verify_circuit
@@ -1297,9 +1300,9 @@ async def test_the_sheets_findings_are_read_off_the_event_loop(asc_state, monkey
     read_on: list[bool] = []
     real = se._findings_before_and_after
 
-    def watched(before, after, target):
+    def watched(before, after, target, resolver):
         read_on.append(threading.current_thread() is threading.main_thread())
-        return real(before, after, target)
+        return real(before, after, target, resolver)
 
     monkeypatch.setattr(se, "_findings_before_and_after", watched)
     data = await _build_blank(asc_state, "off-loop", _CROWDED_OPS)
@@ -2661,3 +2664,43 @@ async def test_a_move_reply_says_what_moved(asc_state):
     ]
     # Dragged along its own axis, the wire stays straight: the op says nothing.
     assert [w for w in data["warnings"] if w.startswith("op ")] == []
+
+
+# ---------------------------------------------------------------------------
+# A library symbol redrawn while the session runs
+# ---------------------------------------------------------------------------
+
+
+async def test_a_library_symbol_redrawn_between_edits_is_read_again(
+    config: ServerConfig,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_spicelib_symbol_cache: None,
+):
+    """The next edit finds the pin where the redrawn symbol has it, not where
+    the first edit read it."""
+    library = work_dir / "library"
+    write_file(library / "redrawn_between_edits.asy", BOX2_ASY)
+    monkeypatch.setattr(AscEditor, "custom_lib_paths", [str(library)])
+    state = SessionState.create(replace(config, symbol_paths=[library]), available={})
+    write_file(
+        work_dir / "s.asc",
+        "Version 4\nSHEET 1 880 680\nSYMBOL redrawn_between_edits 96 0 R0\nSYMATTR InstName U1\n",
+    )
+
+    first = await apply_ops(
+        state, "s.asc", [{"op": "add_net_label", "net": "before", "pin": "U1.B"}]
+    )
+    assert first["commit_state"] == "committed", first.get("error") or first.get("failures")
+    redrawn = BOX2_ASY.replace("PIN 32 8 NONE 0", "PIN 32 16 NONE 0")
+    write_file(library / "redrawn_between_edits.asy", redrawn)
+    second = await apply_ops(
+        state, "s.asc", [{"op": "add_net_label", "net": "after", "pin": "U1.B"}]
+    )
+    assert second["commit_state"] == "committed", second.get("error") or second.get("failures")
+
+    text = (work_dir / "s.asc").read_text()
+    assert [line for line in text.splitlines() if line.startswith("FLAG")] == [
+        "FLAG 128 8 before",
+        "FLAG 128 16 after",
+    ]

@@ -5,7 +5,7 @@ import os
 import platform
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path, PureWindowsPath
 
 from spicelib.simulators.ltspice_simulator import LTspice
@@ -23,6 +23,7 @@ from ltspice_mcp.config import (
     ServerConfig,
 )
 from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
@@ -474,6 +475,20 @@ def simulator_library_roots(simulator_class: type | None) -> list[Path]:
         for root in found
         if not any(other != root and root.is_relative_to(other) for other in found)
     ]
+
+
+def symbol_library_for(symbol_paths: Sequence[Path], ltspice: type | None) -> SymbolLibrary:
+    """The symbol library a session reads: the configured folders that exist,
+    then the library of the LTspice build ``ltspice`` launches.
+
+    The build's ``lib`` folders come from ``simulator_library_roots``, so a
+    session running LTspice XVII reads XVII's symbols even when a later LTspice
+    is installed beside it, as its model libraries already are.
+    """
+    configured = [Path(path) for path in symbol_paths if Path(path).is_dir()]
+    return SymbolLibrary(
+        configured, simulator_library_roots(ltspice), build=generation_of(ltspice)
+    )
 
 
 def is_ltspice(simulator_class: type | None) -> bool:

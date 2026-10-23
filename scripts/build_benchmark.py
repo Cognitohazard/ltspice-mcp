@@ -29,7 +29,8 @@ from tests._build_benchmark import (
     read_circuit,
 )
 
-from ltspice_mcp.lib.sheet import editor_symbol_resolver, read_sheet
+from ltspice_mcp.engine import local_symbol_library
+from ltspice_mcp.lib.sheet import read_sheet
 
 RECORD = Path(__file__).resolve().parent.parent / "tests/fixtures/build_benchmark_record.json"
 
@@ -63,7 +64,7 @@ def table() -> int:
 
 
 def score(sheet_path: Path, netlist: Path) -> int:
-    resolver = editor_symbol_resolver(sheet_path)
+    resolver = local_symbol_library().for_sheet(sheet_path)
     print("symbols found in:", ", ".join(sorted(resolver.active_set)) or "nowhere")
     sheet = read_sheet(sheet_path.read_bytes(), resolver)
     said = {

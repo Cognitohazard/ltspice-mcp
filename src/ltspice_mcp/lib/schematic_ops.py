@@ -128,7 +128,8 @@ from ltspice_mcp.lib.spice_lex import (
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
-from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, get_symbol_info
+from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, symbol_info_of
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 
 
@@ -664,20 +665,51 @@ def _set_instance_params(editor, reference: str, params: dict[str, str]) -> None
             )
 
 
-# Each editor's symbols, resolved once per request: get_asc_editor hands every
-# editor out on a fresh memo, so a symbol redrawn between requests is read
-# again, while the many geometry passes one request makes over a sheet cost one
-# lookup per distinct symbol rather than a file check per part per pass.
+# The resolver each editor's sheet finds its symbols with, and what it found,
+# for one request: get_asc_editor attaches a fresh resolver from the session's
+# library to every editor it hands out, so a symbol redrawn or added between
+# requests is read again, while the many geometry passes one request makes over
+# a sheet cost one lookup per distinct symbol rather than a file check per part
+# per pass.
+_resolver_of_editor: WeakKeyDictionary[AscEditor, SymbolResolver] = WeakKeyDictionary()
 _symbols_by_editor: WeakKeyDictionary[AscEditor, dict[str, SymbolInfo | None]] = (
     WeakKeyDictionary()
 )
 
 
+def attach_symbols(editor: AscEditor, resolver: SymbolResolver) -> AscEditor:
+    """Have ``editor``'s pin geometry find its symbols with ``resolver``, afresh."""
+    _resolver_of_editor[editor] = resolver
+    _symbols_by_editor.pop(editor, None)
+    return editor
+
+
+def symbols_of(editor: AscEditor) -> SymbolResolver:
+    """The resolver ``editor``'s sheet finds its symbols with (``attach_symbols``)."""
+    resolver = _resolver_of_editor.get(editor)
+    if resolver is None:
+        raise RuntimeError(
+            "This schematic editor has no symbol library attached; open it with "
+            "get_asc_editor, or attach one with attach_symbols."
+        )
+    return resolver
+
+
 def symbol_info_for(editor: AscEditor, symbol: str) -> SymbolInfo | None:
-    """``symbol`` as ``editor``'s sheet resolves it: beside the sheet, then the libraries."""
+    """``symbol`` as ``editor``'s sheet resolves it: beside the sheet, then the
+    session's libraries (``attach_symbols``).
+
+    ``None`` for a symbol no file is found for, and for one that cannot be used
+    (a pin line that does not read leaves a terminal no wire could be checked
+    against).
+    """
+    resolver = symbols_of(editor)
     memo = _symbols_by_editor.setdefault(editor, {})
     if symbol not in memo:
-        memo[symbol] = get_symbol_info(symbol, editor.asc_file_path)
+        found = resolver.load(symbol)
+        memo[symbol] = (
+            None if found is None or found.problem else symbol_info_of(found.path.stem, found.file)
+        )
     return memo[symbol]
 
 
@@ -1081,8 +1113,8 @@ def get_asc_editor(path: Path, state: SessionState) -> AscEditor:
     editor = _get_editor(path, state)
     if not isinstance(editor, AscEditor):
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
-    _symbols_by_editor.pop(editor, None)  # this request resolves symbols afresh
-    return editor
+    # This request resolves symbols afresh, from the session's library.
+    return attach_symbols(editor, state.symbols.for_sheet(path))
 
 
 def is_asc(path: Path) -> bool:

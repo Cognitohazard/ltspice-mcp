@@ -23,7 +23,6 @@ from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     compute_placed_geometry,
-    library_roots,
     place_box,
     symbol_info_of,
 )
@@ -303,24 +302,12 @@ def read_sheet(data: bytes, resolver: SymbolResolver) -> Sheet:
     return read_sheet_text(decode_spice_bytes(data), resolver)
 
 
-def editor_symbol_resolver(asc_path: Path) -> SymbolResolver:
-    """A resolver that finds a symbol where the schematic editor's pin geometry does.
-
-    The sheet's own folder, then ``symbol_geometry.library_roots``, which is
-    what ``symbol_geometry.get_symbol_info`` searches, and nothing more. A
-    sheet read with it has a part's pins exactly when the editor has them, so
-    what is said of a sheet and what an edit of it resolves are about the same
-    parts.
-    """
-    return SymbolResolver(local_dir=asc_path.parent, project_paths=library_roots())
-
-
-def read_sheet_file(path: Path) -> tuple[Sheet, str]:
+def read_sheet_file(path: Path, resolver: SymbolResolver) -> tuple[Sheet, str]:
     """The sheet at ``path``, with the SHA-256 of the bytes it was read from.
 
-    Its symbols are found with ``editor_symbol_resolver``. One read, so the
-    digest is of exactly what the sheet holds. Blocking: call it off the event
-    loop.
+    Its symbols are found with ``resolver``, the session's for that sheet
+    (``SymbolLibrary.for_sheet``). One read, so the digest is of exactly what
+    the sheet holds. Blocking: call it off the event loop.
     """
     data = path.read_bytes()
-    return read_sheet(data, editor_symbol_resolver(path)), hashlib.sha256(data).hexdigest()
+    return read_sheet(data, resolver), hashlib.sha256(data).hexdigest()

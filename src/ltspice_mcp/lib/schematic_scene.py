@@ -22,7 +22,6 @@ symbol file's lines, rectangles, circles and arcs, placed the same way.
 from __future__ import annotations
 
 import hashlib
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from functools import cached_property
@@ -633,27 +632,6 @@ class Scene:
 # ---------------------------------------------------------------------------
 
 
-def default_stock_paths() -> list[Path]:
-    """Best-effort stock LTspice symbol directories (may be empty).
-
-    Used by the CLI so a schematic that references stock symbols renders their
-    bodies when a library is installed. Never required: tests pass their own
-    local ``.asy`` fixtures and do not depend on a stock install.
-    """
-    paths: list[Path] = []
-    try:
-        from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
-
-        if is_wsl():
-            paths.extend(Path(p) for p in get_ltspice_lib_paths())
-    except Exception:
-        pass
-    env = os.environ.get("LTSPICE_MCP_SYMBOL_PATHS")
-    if env:
-        paths.extend(Path(p) for p in env.split(os.pathsep) if p)
-    return [p for p in paths if p.is_dir()]
-
-
 # ---------------------------------------------------------------------------
 # Placement: symbol-local geometry → absolute scene primitives
 # ---------------------------------------------------------------------------
@@ -788,12 +766,12 @@ def _attr_texts(
 def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene:
     """Parse ``asc_path`` and build a fully-placed :class:`Scene`.
 
-    If ``resolver`` is omitted, one is created rooted at the schematic's own
-    directory plus best-effort stock library paths.
+    Its symbols are found with ``resolver``, the session's for the sheet
+    (``SymbolLibrary.for_sheet``); without one, only beside the sheet.
     """
     asc_path = Path(asc_path)
     if resolver is None:
-        resolver = SymbolResolver(local_dir=asc_path.parent, stock_paths=default_stock_paths())
+        resolver = SymbolResolver(local_dir=asc_path.parent)
 
     # One read: the digest and the parse describe the same bytes, so a peer
     # that commits between them cannot make the reported provenance a hash of

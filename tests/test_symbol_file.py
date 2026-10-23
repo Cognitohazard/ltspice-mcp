@@ -7,7 +7,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from spicelib import AscEditor
 
 from ltspice_mcp.lib.asc_document import ROTATIONS, Window
 from ltspice_mcp.lib.geometry import BBox
@@ -17,7 +16,7 @@ from ltspice_mcp.lib.schematic_scene import sheet_view as scene_view
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolArc, read_symbol
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from ltspice_mcp.lib.symbol_library import SymbolResolver
-from tests._schematic_fixtures import SUITE_SYMBOLS, suite_name
+from tests._schematic_fixtures import SUITE_SYMBOLS, open_editor, suite_name
 
 NMOS = (
     "Version 4\n"
@@ -272,8 +271,7 @@ class TestBothReadersUseIt:
             f"Version 4\nSHEET 1 880 680\nSYMBOL coil 160 160 {rotation}\nSYMATTR InstName L1\n",
             encoding="utf-8",
         )
-        editor = make_editor(sheet)
-        assert isinstance(editor, AscEditor)
+        editor = open_editor(sheet, SymbolResolver(local_dir=tmp_path))
         (reported,) = collect_component_geometry(editor)
         scene = build_scene(sheet, SymbolResolver(local_dir=tmp_path))
         (for_the_checker,) = scene_view(scene).parts

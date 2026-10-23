@@ -79,6 +79,7 @@ from ltspice_mcp.lib.schematic_ops import (
     OpSetPlotPanes,
     OpWirePins,
     SheetPlotSettings,
+    attach_symbols,
     blank_sheet,
     collapse_result_warnings,
     collect_component_geometry,
@@ -97,7 +98,6 @@ from ltspice_mcp.lib.schematic_scene import (
     scene_of_text,
     sheet_view,
 )
-from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from ltspice_mcp.lib.sheet_findings import RULES, Finding, findings
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -709,25 +709,21 @@ async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist:
 _LABEL_ONLY_KIND = "label_only_pin"
 
 
-def sheet_findings_of(
-    text: str, target: Path, resolver: SymbolResolver | None = None
-) -> list[Finding]:
+def sheet_findings_of(text: str, target: Path, resolver: SymbolResolver) -> list[Finding]:
     """What every sheet rule finds of the sheet ``text``, to be written at ``target``.
 
     Read as ``verify_circuit`` reads a file, through its scene, so what an edit
     reports of a sheet is what the checker says of it once written. Its symbols
-    are found where the editor's own pin geometry finds them
-    (``editor_symbol_resolver``, unless a resolver is given), so a finding and
-    the edit's pin counts are about the same parts. A function of the text and
-    the symbol files alone: nothing here touches an editor, and it is safe off
-    the event loop.
+    are found with ``resolver``, the session's for ``target``, which the
+    editor's own pin geometry uses too, so a finding and the edit's pin counts
+    are about the same parts. A function of the text and the symbol files
+    alone: nothing here touches an editor, and it is safe off the event loop.
     """
-    resolver = resolver or editor_symbol_resolver(target)
     return findings(sheet_view(scene_of_text(text, target, resolver)))
 
 
 def _findings_before_and_after(
-    before: str | None, after: str, target: Path
+    before: str | None, after: str, target: Path, resolver: SymbolResolver
 ) -> tuple[list[Finding], list[Finding]]:
     """The findings of a sheet's text before a batch and after it.
 
@@ -737,7 +733,6 @@ def _findings_before_and_after(
     for a sheet that starts from nothing. One resolver serves both, so each
     symbol is read once.
     """
-    resolver = editor_symbol_resolver(target)
     found = sheet_findings_of(after, target, resolver)
     if before is None:
         return [], found
@@ -1157,7 +1152,7 @@ def _build_editor(target: Path, use_template: bool, state: SessionState) -> AscE
     # saved beside the sheet is looked up, by spicelib and by the pin geometry,
     # and nothing re-reads the sheet through it.
     editor.asc_file_path = target
-    return editor
+    return attach_symbols(editor, state.symbols.for_sheet(target))
 
 
 def _apply_ops(
@@ -1611,6 +1606,7 @@ async def _evaluate_edit_schematic(
                 committed_text if sheet_kept else before_text,
                 committed_text,
                 target,
+                state.symbols.for_sheet(target),
             )
             refs, coords = touched_refs(args.ops), touched_coords(args.ops)
             findings_reported, findings_left_out = _split_findings(

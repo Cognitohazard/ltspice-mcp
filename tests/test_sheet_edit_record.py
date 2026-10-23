@@ -19,6 +19,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from tests import sheet_edit_record
 from tests._asc_ops import build_sheet
+from tests._schematic_fixtures import suite_resolver
 from tests.sheet_edit_record import key_of, scrubbed, sheet_form
 
 _SHEET = [
@@ -125,7 +126,9 @@ def test_a_call_on_two_writings_of_one_sheet_has_one_key(tmp_path: Path):
                 "ops": [{"op": "add_directive", "instruction": ".tran 1m"}],
             }
         )
-        keys.append(key_of(target, target.read_bytes(), args, (folder,)))
+        keys.append(
+            key_of(target, target.read_bytes(), args, (folder,), resolver=suite_resolver(target))
+        )
     assert keys[0] == keys[1]
 
 
@@ -148,7 +151,9 @@ def test_a_file_beside_the_sheet_makes_one_key_in_either_line_ending(
                 "ops": [{"op": "add_directive", "instruction": ".tran 1m"}],
             }
         )
-        keys.append(key_of(target, target.read_bytes(), args, (folder,)))
+        keys.append(
+            key_of(target, target.read_bytes(), args, (folder,), resolver=suite_resolver(target))
+        )
     assert keys[0] == keys[1]
 
 
@@ -158,8 +163,14 @@ def test_a_call_whose_reply_differs_by_platform_has_a_key_of_its_own(tmp_path: P
     args = EditSchematicInput.model_validate(
         {"target": str(target), "ops": [{"op": "add_directive", "instruction": ".op"}]}
     )
-    plain = key_of(target, target.read_bytes(), args, (tmp_path,))
-    assert key_of(target, target.read_bytes(), args, (tmp_path,), per_platform=True) != plain
+    resolver = suite_resolver(target)
+    plain = key_of(target, target.read_bytes(), args, (tmp_path,), resolver=resolver)
+    assert (
+        key_of(
+            target, target.read_bytes(), args, (tmp_path,), resolver=resolver, per_platform=True
+        )
+        != plain
+    )
 
 
 class _AnswersOtherwise(dict[str, Any]):
