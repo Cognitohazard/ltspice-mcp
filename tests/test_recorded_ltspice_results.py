@@ -404,6 +404,23 @@ class TestSteppedRuns:
         assert progress is not None
         assert (progress.points, progress.axis, progress.last_axis_value) == (2, None, None)
 
+    async def test_signal_stats_on_a_point_a_step_points_at_the_value_recipe(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A stepped .ac at one frequency has one point a step, which has no
+        statistics to take; the refusal names the recipe that reads it."""
+        raw = rec.stage_run(build, "raw/step_ac_one_freq", work_dir)
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None
+        [failure] = data["failures"]
+        assert "value recipe" in failure["message"]
+
     async def test_the_value_recipe_reads_a_step_at_one_frequency_without_at(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
@@ -1688,6 +1705,7 @@ async def test_plot_and_inspect_refuse_an_other_raw_the_run_did_not_write(
     assert reply.structured_content is not None
     [listed] = reply.structured_content["results"]
     assert not listed["ok"]
+    assert listed["error"]["code"] == "other_raw_not_written"
     assert "wrote no fra_1 raw" in listed["error"]["message"]
 
 

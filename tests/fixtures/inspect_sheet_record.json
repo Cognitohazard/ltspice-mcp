@@ -590,42 +590,42 @@
      96,
      96
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
      96,
      96
     ],
-    "error": "error"
-   },
-   {
-    "at": [
-     96,
-     400
-    ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
      96,
      400
     ],
-    "error": "error"
+    "error": "netlist_invalid"
+   },
+   {
+    "at": [
+     96,
+     400
+    ],
+    "error": "netlist_invalid"
    },
    {
     "at": [
      400,
      96
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
      400,
      96
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
@@ -720,21 +720,21 @@
      96,
      608
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
      96,
      608
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
      96,
      704
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
@@ -80106,7 +80106,7 @@
      192,
      96
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [
@@ -107323,7 +107323,7 @@
      192,
      96
     ],
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": [

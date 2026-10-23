@@ -1313,9 +1313,11 @@ async def signal_stats(
     signal = resolved.name
     services.validate_step(raw, step)
     analysis = raw.descriptor.analysis if isinstance(raw, (DecodedRaw, DecodedPlot)) else None
+    if analysis is not None and raw.descriptor.axis is None:
+        # Nothing to take statistics along; the refusal names what reads it,
+        # the value recipe for a point a step.
+        guarded_axis(raw, step)
     if analysis is not None and analysis not in _STATS_ANALYSES:
-        if raw.descriptor.axis is None:
-            guarded_axis(raw, step)
         raise ResultError(
             f"signal_stats does not define statistics for {raw.descriptor.analysis!r}. "
             "Read this plot's quantities through inspect(kind='results') or "
@@ -1338,6 +1340,12 @@ async def signal_stats(
     if len(wave) == 0:
         raise ResultError(
             f"Signal {signal!r} has no data points at step {step}; cannot compute statistics."
+        )
+    if len(wave) == 1:
+        raise ResultError(
+            f"Signal {signal!r} holds one point at step {step}, so its statistics would be "
+            "that point. Read it with the value recipe, or api.load_raw(...).value(name).",
+            show_hint=False,
         )
 
     if np.iscomplexobj(wave):

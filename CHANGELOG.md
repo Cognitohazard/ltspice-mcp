@@ -8,6 +8,16 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Changed
+
+- `inspect` reports a failed query by its failure's own error code, as every
+  other tool does, where every one read `error`: `netlist_invalid` for a
+  netlist or sheet it cannot read, `symbol_unresolved`, `library_error`,
+  `other_raw_not_written`, and so on. The code `error` is no longer emitted.
+- `signal_stats` refuses a plot with one point a step, such as a stepped `.ac`
+  at one frequency, and a trace of one point, and names the `value` recipe,
+  where it returned statistics of one point.
+
 ### Fixed
 
 - The compressed-transient observation (`coarse_compressed_waveform`) reported
