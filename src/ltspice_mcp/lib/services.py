@@ -58,6 +58,11 @@ from ltspice_mcp.lib.raw_parser import (
     other_raw_path,
     points_reached,
 )
+from ltspice_mcp.lib.result_observations import (
+    coarse_compressed_waveform,
+    coarse_waveform_observation,
+    deck_tran_max_step,
+)
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
@@ -253,6 +258,21 @@ def source_for_run(
         simulator_version=run.simulator_version,
         observations=run.observations,
     )
+
+
+def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str, Any], ...]:
+    """What a read of ``raw`` from ``source`` says of the results it read: the
+    source's own (a stopped case's ``partial_raw``), and whether waveform
+    compression left a transient coarse (``coarse_compressed_waveform``),
+    judged against the deck's own maximum step when the source names a deck.
+    Blocking: it may read the deck."""
+    max_step = None if source.netlist is None else deck_tran_max_step(source.netlist)
+    found = coarse_compressed_waveform(raw, max_step=max_step)
+    if found is None:
+        return source.observations
+    case_id = (source.identity or {}).get("case_id")
+    label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
+    return (*source.observations, dict(coarse_waveform_observation([(label, found)], run_cap=1)))
 
 
 _analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(

@@ -74,7 +74,11 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,
 )
-from ltspice_mcp.lib.result_observations import coarse_compressed_waveform
+from ltspice_mcp.lib.result_observations import (
+    coarse_compressed_waveform,
+    coarse_waveform_observation,
+    deck_tran_max_step,
+)
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -1169,6 +1173,25 @@ _SOLVE_FAILURE_RUN_CAP = 10
 """How many run labels a relayed solve failure names before deferring to ``runs``."""
 
 
+async def _capture_ltspice_raws(
+    runs: list[_ResolvedRun],
+    state: SessionState,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
+    deadline: float | None,
+) -> None:
+    """Read the raw of each run that may be LTspice's, for a recipe that reads
+    only the log. LTspice computes its own .meas results from the waveform it
+    stores, and XVII's move with compression (``raw/compress_*``), so whether
+    the run was left coarse is a fact about those results too. A raw that is
+    absent or cannot be read is not this recipe's failure."""
+    for run in runs:
+        dialect = run.source.explicit_dialect or run.source.dialect
+        if run.source.raw is None or dialect not in (None, "ltspice"):
+            continue
+        with contextlib.suppress(ResultError), services.analysis_deadline(deadline):
+            await _captured_source(run.source, state, captures, require_raw=True)
+
+
 def _coarse_waveform_observations(
     runs: list[_ResolvedRun], captures: Mapping[_CaptureKey, ParsedArtifacts]
 ) -> list[Observation]:
@@ -1179,42 +1202,24 @@ def _coarse_waveform_observations(
     such run's.
     """
     coarse: list[tuple[str, dict[str, float]]] = []
+    max_steps: dict[Path, float | None] = {}
     for run in runs:
         artifacts = captures.get(_capture_key(run.source))
         if artifacts is None or artifacts.raw is None:
             continue
+        deck = run.source.netlist
+        if deck is not None and deck not in max_steps:
+            max_steps[deck] = deck_tran_max_step(deck)
         with contextlib.suppress(ResultError):
             raw = services.select_raw(artifacts, run.source.plot_index)
-            if (found := coarse_compressed_waveform(raw)) is not None:
+            found = coarse_compressed_waveform(
+                raw, max_step=None if deck is None else max_steps[deck]
+            )
+            if found is not None:
                 coarse.append((run.label, found))
     if not coarse:
         return []
-    label, first = coarse[0]
-    span = first["span_s"]
-    gap = first["gap_to_s"] - first["gap_from_s"]
-    labels = [label for label, _ in coarse]
-    return [
-        Observation(
-            code="coarse_compressed_waveform",
-            kind="value",
-            detail=(
-                f"{len(labels)} LTspice transient run(s) read here were saved with "
-                f"waveform compression on and store few points. In {label}, "
-                f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
-                f"between two, from {first['gap_from_s']:.3g} s to "
-                f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
-                "read between stored points is interpolated across the gap, and "
-                "LTspice's own .meas results can differ from an uncompressed run's "
-                "too. '.options plotwinsize=0' stores every point."
-            ),
-            evidence={
-                "run": label,
-                **first,
-                "runs": labels[:_SOLVE_FAILURE_RUN_CAP],
-                "run_count": len(labels),
-            },
-        )
-    ]
+    return [Observation.of(coarse_waveform_observation(coarse, run_cap=_SOLVE_FAILURE_RUN_CAP))]
 
 
 def _relay_solve_failures(
@@ -3788,6 +3793,8 @@ async def _evaluate_unit(
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
     observations.extend(_log_precision_observations(records))
+    if isinstance(recipe, MeasurementsRecipe):
+        await _capture_ltspice_raws(eligible_runs, state, captures, item_deadline)
     observations.extend(
         await asyncio.to_thread(_coarse_waveform_observations, eligible_runs, captures)
     )

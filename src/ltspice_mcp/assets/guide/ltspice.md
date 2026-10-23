@@ -191,7 +191,8 @@ RC charge over 5 ms in 13 points, even with a 50 us maximum step, and its own
 `.meas` results moved with it. LTspice 26 stored every point of the same run.
 When a recipe reads a compressed transient's samples, `analyze_results`
 reports it in `observations` (`coarse_compressed_waveform`) if the widest gap
-between stored points spans more than a twentieth of its time. Add
+between stored points spans more than a twentieth of its time, and more than
+the maximum step a job's deck gives `.tran`. Add
 `.options plotwinsize=0` before measuring a small or slow signal.
 
 ## Subcircuits

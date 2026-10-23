@@ -560,7 +560,8 @@ count need not run on in time. An ngspice raw keeps every complete record. The
 `evidence` adds `partial_raw: {points, axis, last_axis_value}`, what the kept
 raw holds, and the run row's `raw` is its path. Reads
 of that case (`analyze_results`, `plot_waveform`, `inspect(kind="results")`,
-the Python API's `load_raw`) take it as they take a produced case's, and each
+the Python API's `load_raw`, and its `measurements` and `device_op_points` of
+the case's log) take it as they take a produced case's, and each
 carries a `partial_raw` observation, `{case_id, stop, points, axis,
 last_axis_value}`: every value read ends at the last kept point. A raw with no
 point to keep, a text (`Values:`) raw and an LTspice Fast Access raw are

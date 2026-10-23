@@ -162,16 +162,22 @@ _ANALYSIS_NAMES: dict[str, Analysis] = {
 }
 
 
-def _analysis(header: RawPlotHeader) -> Analysis:
-    label = header.plot_name.strip().lower()
+def plot_analysis(plot_name: str, first_type: str) -> Analysis:
+    """The analysis a plot holds, from its name and its first variable's
+    declared type: the one reading of a plot's kind, header in hand or not."""
+    label = plot_name.strip().lower()
     if label == "sensitivity analysis":
-        first = header.variables[0]
-        return "sens_ac" if first.declared_type.lower() in ("frequency", "hertz") else "sens_dc"
+        return "sens_ac" if first_type.lower() in ("frequency", "hertz") else "sens_dc"
     if label.startswith("distortion -"):
         return "disto"
     if label.startswith("noise spectral density"):
         return "noise"
     return _ANALYSIS_NAMES.get(label, "unknown")
+
+
+def _analysis(header: RawPlotHeader) -> Analysis:
+    first = header.variables[0].declared_type if header.variables else ""
+    return plot_analysis(header.plot_name, first)
 
 
 def _trace_descriptor(
@@ -259,8 +265,12 @@ def _step_descriptors(
     return tuple(descriptors), (*starts, points)
 
 
-def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | None:
-    declared = header.variables[0].declared_type.lower()
+def sampled_axis(analysis: Analysis, first_type: str) -> tuple[str, str] | None:
+    """The quantity and kind of a plot's sampled axis, from its analysis and
+    its first variable's declared type; None for a plot with no sampled axis,
+    such as an operating point or a stepped one-frequency .ac, whose first
+    variable is a step's parameter."""
+    declared = first_type.lower()
     if analysis == "transient" and declared == "time":
         return "time", "deck_time"
     if (analysis in AC_SHAPED or analysis in ("sens_ac", "disto", "noise")) and declared in (
@@ -271,6 +281,10 @@ def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | N
     if analysis == "dc":
         return "swept_variable", "sweep"
     return None
+
+
+def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | None:
+    return sampled_axis(analysis, header.variables[0].declared_type)
 
 
 def transient_time_offset(header: RawPlotHeader) -> float:

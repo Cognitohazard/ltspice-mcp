@@ -24,6 +24,7 @@ from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
@@ -49,6 +50,7 @@ from ltspice_mcp.lib.recipes import (
     StabilityRecipe,
     ValueRecipe,
 )
+from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, tran_max_step
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
@@ -388,6 +390,20 @@ class TestSteppedRuns:
             (gain,) = parsed.raw.get_wave("V(out)", step)
             assert gain == pytest.approx(expected, rel=1e-5)
 
+    def test_a_stepped_ac_at_one_frequency_cut_part_way_reads_with_no_axis(
+        self, build: str, tmp_path: Path
+    ):
+        """A run stopped part way is read as a full read reads its plot: the
+        stepped parameter the plot opens with is not an axis to report."""
+        whole = rec.recorded(build, "raw/step_ac_one_freq.raw").read_bytes()
+        cut = tmp_path / "step_ac_one_freq.raw"
+        cut.write_bytes(whole[:-1])
+
+        progress = read_partial_raw_progress(cut, "ltspice")
+
+        assert progress is not None
+        assert (progress.points, progress.axis, progress.last_axis_value) == (2, None, None)
+
     async def test_the_value_recipe_reads_a_step_at_one_frequency_without_at(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
@@ -456,6 +472,24 @@ def test_xvii_measures_a_compressed_run_apart_from_an_uncompressed_one(build: st
         assert compressed == uncompressed
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_gap_no_wider_than_the_decks_maximum_step_is_not_coarse(build: str, tmp_path: Path):
+    """XVII's 50 us maximum step still left a gap of most of a millisecond,
+    which is reported; the same gap under a deck that asked for steps up to
+    1 ms is what the deck asked for."""
+    deck = tran_max_step((INPUTS / "raw/compress_1mv_maxstep.cir").read_text(encoding="utf-8"))
+    assert deck == pytest.approx(50e-6)
+    raw = rec.decode(build, "raw/compress_1mv_maxstep", tmp_path).raw
+    found = coarse_compressed_waveform(raw, max_step=deck)
+    _, gap = COMPRESSION[build, "raw/compress_1mv_maxstep"]
+    if gap is None:
+        assert found is None
+        return
+    assert found is not None
+    assert (found["gap_from_s"], found["gap_to_s"]) == pytest.approx(gap, rel=1e-4)
+    assert coarse_compressed_waveform(raw, max_step=1e-3) is None
+
+
 @pytest.mark.parametrize(("build", "case_id"), list(COMPRESSION))
 async def test_analyze_results_reports_a_transient_compression_left_coarse(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
@@ -487,6 +521,89 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     assert evidence["span_s"] == pytest.approx(5e-3)
     assert (evidence["gap_from_s"], evidence["gap_to_s"]) == pytest.approx(gap, rel=1e-4)
     assert "plotwinsize=0" in observation["detail"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_measurements_only_call_reports_a_transient_compression_left_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """No recipe here reads the samples, but XVII computed its .meas results
+    from the few points it kept, so the call still says so."""
+    _, gap = COMPRESSION[build, "raw/compress_1mv"]
+    raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"raw_path": str(raw), "label": "dut"}],
+            "recipes": [{"key": "m", "metric": "measurements"}],
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None
+    found = [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"]
+    if gap is None:
+        assert found == []
+        return
+    (observation,) = found
+    assert observation["evidence"]["gap_from_s"] == pytest.approx(gap[0], rel=1e-4)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The Python API, plot_waveform and inspect's results report it as
+    analyze_results does."""
+    _, gap = COMPRESSION[build, "raw/compress_1mv"]
+    raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
+    plot = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
+        state_no_sim,
+    )
+    listed = await inspect_one(
+        state_no_sim, {"kind": "results", "view": "signals", "path": str(raw)}
+    )
+    assert plot.structured_content is not None
+    readers = {
+        "plot_waveform": plot.structured_content["observations"],
+        "inspect": listed.get("observations", []),
+    }
+    for reader, observations in readers.items():
+        codes = [o["code"] for o in observations]
+        assert ("coarse_compressed_waveform" in codes) == (gap is not None), reader
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_api_says_compression_left_a_raw_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    _, gap = COMPRESSION[build, "raw/compress_1mv"]
+    raw = SyncApi(state_no_sim).load_raw(rec.stage_run(build, "raw/compress_1mv", work_dir))
+    codes = [o["code"] for o in raw.observations]
+    assert ("coarse_compressed_waveform" in codes) == (gap is not None)
+
+
+def test_the_apis_log_readers_say_a_stopped_cases_results_end_early(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A stopped case that kept its raw is read with the partial_raw
+    observation; the log readers carry it as load_raw does."""
+    raw = rec.stage_run("ltspice26", "raw/compress_1mv", work_dir)
+    job = make_experiment_job(state_no_sim, job_id="exp_stopped", raw=raw)
+    case = job.cases[0]
+    case.status, case.failure_code = "failed", "run_timeout"
+    held = {"points": 600, "axis": "time", "last_axis_value": 2.5e-3}
+    case.failure_evidence = {PARTIAL_RAW_KEY: held}
+    api = SyncApi(state_no_sim)
+
+    measured = api.measurements(job_id=job.job_id)
+    ops = api.device_op_points(job_id=job.job_id)
+    loaded = api.load_raw(job_id=job.job_id)
+
+    assert measured["measurements"]["vat"] is not None
+    for result in (measured, ops, loaded):
+        [read] = result.observations
+        assert read["code"] == "partial_raw"
+        assert read["evidence"]["last_axis_value"] == pytest.approx(2.5e-3)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

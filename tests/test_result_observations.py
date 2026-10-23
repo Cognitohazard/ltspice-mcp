@@ -23,6 +23,7 @@ from ltspice_mcp.lib.result_observations import (
     reconciliation_observations,
     relay_observations,
     surface_observations,
+    tran_max_step,
     value_observations,
 )
 from ltspice_mcp.state import SessionState
@@ -67,6 +68,25 @@ class TestParseRequestedOutputs:
     def test_ignores_non_directives(self):
         out = parse_requested_outputs("R1 n1 n2 1k\nV1 in 0 1\n.tran 1m")
         assert out["meas"] == [] and out["four"] == []
+
+
+class TestTranMaxStep:
+    """The maximum step is a .tran card's fourth number."""
+
+    @pytest.mark.parametrize(
+        ("deck", "step"),
+        [
+            (".tran 0 5m 0 1m\n", 1e-3),
+            (".tran 0 5m 0 1m startup\n", 1e-3),
+            (".TRAN 1u 5m\n+ 0 20u\n", 20e-6),
+            (".tran 5m\n", None),
+            (".tran 1u 5m 0\n", None),
+            (".tran 0 5m 0 {tmax}\n", None),
+            ("* .tran 0 5m 0 1m\nR1 a 0 1k\n", None),
+        ],
+    )
+    def test_the_fourth_number_of_the_first_tran(self, deck: str, step: float | None):
+        assert tran_max_step(deck) == (None if step is None else pytest.approx(step))
 
 
 class TestRelayObservations:

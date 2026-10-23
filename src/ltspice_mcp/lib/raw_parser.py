@@ -37,6 +37,8 @@ from ltspice_mcp.lib.decoded_raw import (
     DecodedRaw,
     PlotDescriptor,
     RawData,
+    plot_analysis,
+    sampled_axis,
 )
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
@@ -1102,7 +1104,7 @@ def raw_writer_command(path: Path) -> str | None:
         width = 1
     else:
         return None
-    fields, _ = _parse_plot_header(head.decode(_RAW_CODECS[width], errors="replace"))
+    fields, _, _ = _parse_plot_header(head.decode(_RAW_CODECS[width], errors="replace"))
     return fields.get("command") or None
 
 
@@ -1110,8 +1112,6 @@ def raw_writer_command(path: Path) -> str | None:
 # How far a stopped run got
 # ---------------------------------------------------------------------------
 
-#: Plots whose first variable is a value, not a swept axis (spicelib's list).
-_AXISLESS_PLOTS = frozenset({"operating point", "transfer function", "integrated noise"})
 #: Header text by character width: every raw header is ASCII or UTF-16LE.
 #: ``surrogatepass`` round-trips any UTF-16 code unit, and latin-1 any byte, so
 #: re-encoding a decoded prefix gives its byte length exactly.
@@ -1182,6 +1182,8 @@ class _Cut:
 class _PlotHeader:
     fields: dict[str, str]
     variables: list[str]
+    #: Each variable's declared type, in the same order.
+    types: list[str]
     data_start: int | None
     data_kind: str | None
 
@@ -1268,16 +1270,20 @@ def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
         match = _RE_DATA_START.search(text, max(0, searched - 16))
         if match is not None:
             prefix = text[: match.end()].encode(codec, errors="surrogatepass")
-            fields, variables = _parse_plot_header(text[: match.start()])
-            return _PlotHeader(fields, variables, offset + len(prefix), match.group(1).lower())
-    fields, variables = _parse_plot_header(text)
-    return _PlotHeader(fields, variables, None, None)
+            fields, variables, types = _parse_plot_header(text[: match.start()])
+            return _PlotHeader(
+                fields, variables, types, offset + len(prefix), match.group(1).lower()
+            )
+    fields, variables, types = _parse_plot_header(text)
+    return _PlotHeader(fields, variables, types, None, None)
 
 
-def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str]]:
-    """Header fields keyed in lower case, and the variable names in order."""
+def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], list[str]]:
+    """Header fields keyed in lower case, and the variable names and their
+    declared types in order."""
     fields: dict[str, str] = {}
     variables: list[str] = []
+    types: list[str] = []
     in_variables = False
     for line in text.split("\n"):
         line = line.rstrip("\r")
@@ -1285,6 +1291,7 @@ def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str]]:
             parts = line.lstrip().split("\t")
             if len(parts) >= 2:
                 variables.append(parts[1])
+                types.append(parts[2] if len(parts) >= 3 else "")
             continue
         key, sep, value = line.partition(":")
         if not sep:
@@ -1294,7 +1301,7 @@ def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str]]:
             in_variables = True
             continue
         fields.setdefault(key, value.strip())
-    return fields, variables
+    return fields, variables, types
 
 
 def _int_field(fields: dict[str, str], key: str) -> int:
@@ -1332,7 +1339,12 @@ def _progress_of_plot(
     fields = header.fields
     plot = fields.get("plotname") or None
     flags = fields.get("flags", "").lower().split()
-    has_axis = bool(header.variables) and (plot or "").lower() not in _AXISLESS_PLOTS
+    # Read as a full read reads the plot (decoded_raw.sampled_axis): a stepped
+    # one-frequency .ac stores a step's parameter first, not a frequency.
+    first_type = header.types[0] if header.types else ""
+    has_axis = bool(header.variables) and (
+        sampled_axis(plot_analysis(plot or "", first_type), first_type) is not None
+    )
     axis = header.variables[0] if has_axis else None
 
     def progress(

@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -61,7 +62,7 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.spice_lex import extract_meas_name
+from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
@@ -318,10 +319,40 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
     return out
 
 
-def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
+def tran_max_step(netlist_text: str) -> float | None:
+    """The maximum time step a deck's first ``.tran`` asks for, its fourth
+    number (``.tran <Tstep> <Tstop> <Tstart> <Tmax>``). None when the card
+    gives none, or a value that is not a number, or the deck has no ``.tran``."""
+    for card in lex(netlist_text).cards:
+        tokens = card.body.split()
+        if card.kind != "directive" or not tokens or tokens[0].casefold() != ".tran":
+            continue
+        numbers: list[float] = []
+        for token in tokens[1:5]:
+            try:
+                numbers.append(parse_spice_value(token))
+            except (ValueError, TypeError):
+                break
+        return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
+    return None
+
+
+def deck_tran_max_step(netlist: Path) -> float | None:
+    """``tran_max_step`` of the deck at ``netlist``; None when it cannot be read."""
+    try:
+        return tran_max_step(read_spice_text(netlist))
+    except OSError:
+        return None
+
+
+def coarse_compressed_waveform(
+    raw: DecodedRaw, *, max_step: float | None = None
+) -> dict[str, float] | None:
     """The first step of a compressed LTspice transient whose widest gap
-    between stored points spans more than a twentieth of its time: the step,
-    its points and span, and where the gap lies. None for any other plot.
+    between stored points spans more than a twentieth of its time, and more
+    than ``max_step``, the step its deck asked the solver not to exceed: the
+    step, its points and span, and where the gap lies. None for any other
+    plot. A gap no wider than the deck's own maximum step is what it asked for.
 
     LTspice adds ``nocompression`` to a transient's flags when waveform
     compression is off (``raw/compress_*``).
@@ -341,7 +372,9 @@ def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
             span = float(times[-1] - times[0])
             gaps = np.diff(times)
             widest = int(np.argmax(gaps))
-            if span > 0 and gaps[widest] > span * _COARSE_GAP_SHARE:
+            # A stored time can round past the step by a few parts in a billion.
+            limit = max(span * _COARSE_GAP_SHARE, (max_step or 0.0) * (1 + 1e-6))
+            if span > 0 and gaps[widest] > limit:
                 return {
                     "step": step,
                     "points": times.size,
@@ -352,6 +385,38 @@ def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
     except ResultError:
         return None  # step boundaries unresolved: no step to read
     return None
+
+
+def coarse_waveform_observation(
+    coarse: Sequence[tuple[str, Mapping[str, float]]], *, run_cap: int
+) -> Observation:
+    """The observation for the transient runs ``coarse_compressed_waveform``
+    found coarse, each with its label: the first one's evidence, and up to
+    ``run_cap`` labels."""
+    label, first = coarse[0]
+    span = first["span_s"]
+    gap = first["gap_to_s"] - first["gap_from_s"]
+    labels = [label for label, _ in coarse]
+    return Observation(
+        code="coarse_compressed_waveform",
+        kind="value",
+        detail=(
+            f"{len(labels)} LTspice transient run(s) read here were saved with "
+            f"waveform compression on and store few points. In {label}, "
+            f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
+            f"between two, from {first['gap_from_s']:.3g} s to "
+            f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
+            "read between stored points is interpolated across the gap, and "
+            "LTspice's own .meas results can differ from an uncompressed run's "
+            "too. '.options plotwinsize=0' stores every point."
+        ),
+        evidence={
+            "run": label,
+            **first,
+            "runs": labels[:run_cap],
+            "run_count": len(labels),
+        },
+    )
 
 
 def deck_observation_inputs(

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 
@@ -355,6 +356,7 @@ async def load_raw_result(
         resolved = source.raw
 
     raw = await services.load_raw(source, state)
+    observations = await asyncio.to_thread(services.read_observations, source, raw)
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
     steps = [dict(step.parameters) for step in raw.descriptor.steps]
@@ -364,8 +366,29 @@ async def load_raw_result(
         dialect=raw.descriptor.dialect,
         step_count=step_count,
         steps=steps,
-        observations=source.observations,
+        observations=observations,
     )
+
+
+_V = TypeVar("_V")
+
+
+class LogResult(dict[str, _V]):
+    """A section of a log as the Python API returns it: a plain ``dict``, and
+    what the read says of it, as ``RawResult.observations`` says of a raw."""
+
+    def __init__(
+        self, data: Mapping[str, _V], *, observations: tuple[dict[str, Any], ...] = ()
+    ) -> None:
+        super().__init__(data)
+        self._observations = observations
+
+    @property
+    def observations(self) -> list[dict[str, Any]]:
+        """What this log says of itself as it was read: ``partial_raw`` when it
+        is the log of a stopped case whose raw was kept, whose results end
+        where the run was stopped. Empty for a whole run's log."""
+        return copy.deepcopy(list(self._observations))
 
 
 async def load_log_section(
@@ -376,10 +399,11 @@ async def load_log_section(
     run_index: int,
     case_id: str | None,
     log_path: str | Path | None,
-) -> Any:
+) -> tuple[Any, tuple[dict[str, Any], ...]]:
     """One section of a log, read through the shared log capture: of the log at
-    ``log_path``, or of one experiment case's. None when the log has no such
-    section."""
+    ``log_path``, or of one experiment case's, and what the read says of it
+    (``AnalysisSource.observations``). The section is None when the log has no
+    such section."""
     if log_path is not None:
         source = services.resolve_analysis_source(state, log_file=str(log_path))
     else:
@@ -392,17 +416,19 @@ async def load_log_section(
             raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
         source = services.source_for_run(context)
     logs = await services.load_logs(source, state)
-    return logs.value(name)
+    return logs.value(name), source.observations
 
 
-def measurements_of(section: Any) -> dict[str, Any]:
+def measurements_of(section: Any, observations: tuple[dict[str, Any], ...] = ()) -> LogResult[Any]:
     """The ``measurements`` section as ``Api.measurements`` returns it."""
     if section is None:
         raise ResultError("The log holds no measurements")
-    return dict(section)
+    return LogResult(section, observations=observations)
 
 
-def device_op_points_of(section: Any) -> dict[str, dict[str, float | None]]:
+def device_op_points_of(
+    section: Any, observations: tuple[dict[str, Any], ...] = ()
+) -> LogResult[dict[str, float | None]]:
     """The ``device_op`` section by device and parameter, as
     ``Api.device_op_points`` returns it: a device inside a subcircuit by its
     path (``xa.xin.mtail``), however the build that wrote the table names it.
@@ -411,4 +437,4 @@ def device_op_points_of(section: Any) -> dict[str, dict[str, float | None]]:
     for key, number in (section or {}).items():
         device, param = split_device_key(key)
         by_device.setdefault(path_text(table_device_path(device)), {})[param] = number
-    return by_device
+    return LogResult(by_device, observations=observations)

@@ -8,6 +8,27 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The compressed-transient observation (`coarse_compressed_waveform`) reported
+  a run whose deck asked for a maximum time step wider than a twentieth of the
+  run, though a gap no wider than that step is what the deck asked for. A
+  job's deck's maximum step now raises the bar.
+- A stopped case's progress named the stepped parameter of a stepped `.ac` at
+  one frequency as the axis it reached (`r = 2000`). It now reads the plot as a
+  full read does: such a plot has no axis, and the progress gives its points.
+
+### Added
+
+- `plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
+  report a compressed transient left coarse (`coarse_compressed_waveform`) as
+  `analyze_results` does, and `analyze_results` reports it for a call whose
+  only recipe is `measurements`, since XVII computes its `.meas` results from
+  the few points it keeps.
+- The Python API's `measurements` and `device_op_points` return a `LogResult`,
+  a `dict` with `observations`, so a stopped case's log says, as `load_raw`
+  does, that its results end where the run was stopped (`partial_raw`).
+
 ## [0.7.0] - 2026-10-22
 
 ### Fixed
