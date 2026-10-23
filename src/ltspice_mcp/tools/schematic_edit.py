@@ -1561,13 +1561,16 @@ async def _evaluate_edit_schematic(
             # keeps the sheet changes nothing in it, so its "before" is its
             # "after". A sheet the editor cannot render yet has no "before" to
             # read either: everything said of it then counts as the batch's, and
-            # the render after the ops raises what there is to raise.
+            # the render after the ops raises what there is to raise. A batch
+            # that rewires nothing (``KEEPS_WIRING``) has the same pins before
+            # and after, so it reads them once, after the ops.
             before_text: str | None = None
             before_pins: list[dict] | None = [] if use_template else None
             if not use_template and not sheet_kept:
                 with contextlib.suppress(NetlistError):
                     before_text = _render_editor_text(editor, data_flags)
-                before_pins = _pin_tables(editor, include_legend=False)[1]
+                if any(op.op not in KEEPS_WIRING for op in args.ops):
+                    before_pins = _pin_tables(editor, include_legend=False)[1]
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run, plot)
 
             # --- op failure → transactional abort (nothing written)
