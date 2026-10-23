@@ -1,0 +1,8 @@
+* a 1 mV RC charge, compressed, with a maximum time step of a fifth of the run
+V1 in 0 PWL(0 0 1u 1m)
+R1 in out 1k
+C1 out 0 1u
+.tran 0 5m 0 1m
+.meas tran vavg AVG V(out)
+.meas tran vat FIND V(out) AT 1m
+.end
