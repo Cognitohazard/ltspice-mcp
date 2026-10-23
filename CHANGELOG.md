@@ -52,6 +52,10 @@ tool-surface changes.
 
 ### Added
 
+- `run_experiments`' deck lint warns of an instance, `.model` or `.subckt`
+  card that gives one parameter more than once (`duplicate-param`,
+  `linter_version` 9), as `verify_circuit` reports it (`duplicate_parameter`):
+  which copy the simulator reads is not known.
 - `plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
   report a compressed transient left coarse (`coarse_compressed_waveform`) as
   `analyze_results` does, and `analyze_results` reports it for a call whose
