@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     SpiceLexErrorCategory,
@@ -1127,6 +1128,27 @@ class TestInstanceLineRepeatedParameter:
             view.set_param(key, value)
         assert emit(cards) == expected
         assert view.param_pairs() == InstanceLine.from_card(cards[0]).param_pairs()
+
+    @pytest.mark.parametrize(
+        "deck",
+        ["M1 d g s b NMOS w=1u W=1u\n", "M1 d g s b NMOS w=1u w=1u\n", "M1 d g s b NMOS W=1u\n"],
+        ids=["two_spellings", "same_spelling", "once"],
+    )
+    def test_copies_that_agree_read_as_their_value(self, deck: str) -> None:
+        view = InstanceLine.from_card(lex(deck).cards[0])
+        assert view.get_param("w") == "1u"
+
+    @pytest.mark.parametrize(
+        "deck", ["M1 d g s b NMOS w=1u W=2u\n", "M1 d g s b NMOS w=1u w=2u\n"]
+    )
+    def test_copies_that_disagree_are_not_read_as_either(self, deck: str) -> None:
+        """Which copy a simulator reads is not recorded here, so a reader
+        such as a Monte Carlo mismatch, which sizes a shift by W, is told."""
+        view = InstanceLine.from_card(lex(deck).cards[0])
+        with pytest.raises(
+            NetlistError, match=r"M1 gives W 2 times.*w=1u.*w=2u|M1 gives W 2 times.*w=1u.*W=2u"
+        ):
+            view.get_param("W")
 
     def test_removing_a_parameter_removes_every_copy(self) -> None:
         cards = lex("M1 d g s b NMOS w=1u l=1u W=2u\n").cards

@@ -18,6 +18,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
 from ltspice_mcp.lib.format import is_scaled_number
 from ltspice_mcp.lib.spice_lex import (
@@ -687,9 +688,20 @@ class InstanceLine:
         ``set_param``/``remove_param``. ``params`` preserves source casing
         (ngspice decks conventionally write lowercase ``w=``/``l=``), so a
         plain dict lookup silently misses — readers must come through here.
+
+        A parameter the card gives more than once reads as its value when
+        every copy agrees, and copies that differ are refused: which one a
+        simulator reads is not recorded here.
         """
-        key_lower = key.lower()
-        return next((v for k, v in self.params.items() if k.lower() == key_lower), None)
+        name = key.casefold()
+        copies = [(k, v) for k, v in self._params.pairs if k.casefold() == name]
+        if len({v for _k, v in copies}) > 1:
+            given = ", ".join(f"{k}={v}" for k, v in copies)
+            raise NetlistError(
+                f"{self.ref} gives {key} {len(copies)} times with different values ({given}), "
+                "and which one the simulator reads is not known. Keep one."
+            )
+        return copies[0][1] if copies else None
 
     def set_param(self, key: str, value: float | str) -> None:
         """Set a parameter, or add it, flipping the card dirty.
