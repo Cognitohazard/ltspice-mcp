@@ -10,10 +10,14 @@ path's own injection in test_experiment_runner.py.
 
 from pathlib import Path
 
+import pytest
+
+from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.log_parser import read_device_op_points
 from ltspice_mcp.lib.metrics import (
     filter_operating_point as _filter_operating_point,
 )
+from ltspice_mcp.lib.metrics import unrecognized_matches
 from ltspice_mcp.tools._base import inject_logopinfo
 from tests import _ltspice_recorded as rec
 
@@ -162,3 +166,28 @@ class TestFilterByDevice:
     def test_filter_no_match_returns_false(self):
         op_data = {"device_op_points": {"@m1[gm]": 1e-3}, "voltages": {}, "currents": {}}
         assert not _filter_operating_point(op_data, "q99")
+
+
+@pytest.mark.parametrize(
+    ("name", "parsed"),
+    [
+        ("@m1[gm]", ("m1", "gm")),
+        ("v(@m1[vth])", ("m1", "vth")),
+        ("i(@m.x1.mn[id])", ("m.x1.mn", "id")),
+        ("@xa:xin:mtail[gm]", ("xa:xin:mtail", "gm")),
+        ("@m:a:in:tail[gm]", ("m:a:in:tail", "gm")),
+        ("V(out)", None),
+        ("m1.gm", None),
+    ],
+)
+def test_one_reader_takes_a_device_parameter_name_apart(name, parsed):
+    """Every form a log table, ngspice or a caller writes a device parameter
+    in, a subcircuit path's colons among them."""
+    assert parse_device_param(name) == parsed
+
+
+def test_a_warning_about_a_nested_device_parameter_is_matched():
+    """An LTspice path's colons were not read as part of the device name."""
+    warning = "WARNING: Unknown parameter @xa:xin:mtail[gm] in .save"
+    assert unrecognized_matches(warning, "@xa:xin:mtail[gm]")
+    assert unrecognized_matches(warning, "v(@xa:xin:mtail[gm])")

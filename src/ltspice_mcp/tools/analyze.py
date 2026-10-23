@@ -1127,10 +1127,10 @@ async def _resolve_sources(
                 )
                 continue
             try:
-                ctx = services.experiment_run_context(
+                ctx = services.case_run_context(
                     job,
+                    case,
                     state,
-                    case_id=case.case_id,
                     require_raw=False,
                     other_raw=source_input.other_raw,
                 )

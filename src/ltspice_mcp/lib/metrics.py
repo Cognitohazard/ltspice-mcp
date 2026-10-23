@@ -56,11 +56,12 @@ from ltspice_mcp.lib.device_names import (
     device_names,
     device_query,
     owner_path,
+    parse_device_param,
     path_text,
     writes_xvii_names,
 )
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log, split_device_key
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -404,8 +405,8 @@ def unrecognized_matches(warning: str, signal: str) -> bool:
     only tell a ``.save``'d variable is bogus is its mention in the log, so this
     is how a read decides whether a 0.0 trace it touched is the real result."""
     sig_l = signal.lower()
-    at_match = re.search(r"@[\w.]+\[[^\]]*\]", sig_l)
-    at_token = at_match.group(0) if at_match else None
+    parsed = parse_device_param(sig_l)
+    at_token = None if parsed is None else f"@{parsed[0]}[{parsed[1]}]"
     return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
 
 
@@ -2200,7 +2201,9 @@ async def operating_point(
     # The log's table holds fewer digits than a raw trace: mark a result that
     # carries a value from it (analyze_results says so in its observations).
     table = {
-        split_device_key(key)[0] for key in op_data["device_op_points"] if key not in from_raw
+        parsed[0]
+        for key in op_data["device_op_points"]
+        if key not in from_raw and (parsed := parse_device_param(key)) is not None
     }
     if table:
         op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS

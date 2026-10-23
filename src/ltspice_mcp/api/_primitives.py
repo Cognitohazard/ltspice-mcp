@@ -18,12 +18,12 @@ from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     TraceKey,
+    parse_device_param,
     path_text,
     table_device_path,
     trace_key,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.log_parser import split_device_key
 from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.state import SessionState
 
@@ -435,6 +435,8 @@ def device_op_points_of(
     A value the log printed as not a finite number is None."""
     by_device: dict[str, dict[str, float | None]] = {}
     for key, number in (section or {}).items():
-        device, param = split_device_key(key)
+        if (parsed := parse_device_param(key)) is None:
+            continue
+        device, param = parsed
         by_device.setdefault(path_text(table_device_path(device)), {})[param] = number
     return LogResult(by_device, observations=observations)

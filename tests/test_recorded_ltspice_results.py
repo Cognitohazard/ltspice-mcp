@@ -22,7 +22,12 @@ from pydantic import ValidationError
 
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
-from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
+from ltspice_mcp.lib.device_names import (
+    owner_path,
+    parse_device_param,
+    path_text,
+    table_device_path,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
 from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
@@ -35,7 +40,6 @@ from ltspice_mcp.lib.log_parser import (
     parse_step_iterations,
     parse_temperatures,
     read_device_op_points,
-    split_device_key,
 )
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
@@ -1304,7 +1308,7 @@ class TestSubcircuitDeviceNames:
         XVII the device's letter, each instance's name without its X, and the
         device's name without its letter."""
         points = read_device_op_points(rec.recorded(build, f"{self._table_case(build)}.log"))
-        names = sorted({split_device_key(key)[0] for key in points})
+        names = sorted({parsed[0] for key in points if (parsed := parse_device_param(key))})
         if rec.generation(build) == "xvii":
             assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
         else:

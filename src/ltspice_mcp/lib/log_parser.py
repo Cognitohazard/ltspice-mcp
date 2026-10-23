@@ -449,12 +449,6 @@ def device_key(device: str, param: str) -> str:
     return f"@{device.lower()}[{param.lower()}]"
 
 
-def split_device_key(key: str) -> tuple[str, str]:
-    """A ``device_key`` taken apart: ``("m1", "gm")`` for ``@m1[gm]``."""
-    device, _bracket, param = key[1:-1].partition("[")
-    return device, param
-
-
 def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
     """Resolve ``(log_path, text)`` to a text buffer, preferring an
     explicit ``text`` over re-reading the file. Empty string on missing

@@ -40,6 +40,7 @@ from ltspice_mcp.lib.decoded_raw import (
     plot_analysis,
     sampled_axis,
 )
+from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
 from ltspice_mcp.lib.result_observations import surface_observations
@@ -663,7 +664,7 @@ def extract_operating_point(
         # current, so the '@' marker takes precedence over the V(/I( wrapping:
         # otherwise v(@m1[vth]) is mislabeled a node voltage and bare @m1[gm]
         # falls through both buckets and is dropped entirely.
-        if "@" in trace:
+        if parse_device_param(trace) is not None:
             buckets["device_op_points"][trace] = value
             continue
 

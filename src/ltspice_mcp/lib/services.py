@@ -15,7 +15,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -32,8 +32,9 @@ from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import (
-    find_device_param,
+    device_param_name,
     find_trace_by_path,
+    parse_shorthand,
     writes_xvii_names,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -377,7 +378,21 @@ def experiment_run_context(
     if not matches:
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
-    case = matches[0]
+    return case_run_context(job, matches[0], state, require_raw=require_raw, other_raw=other_raw)
+
+
+def case_run_context(
+    job: ExperimentJob,
+    case: ExperimentCase,
+    state: SessionState,
+    *,
+    require_raw: bool = True,
+    other_raw: OtherRawKind | None = None,
+) -> RunContext:
+    """``experiment_run_context`` for a caller already holding the case, of a
+    job whose runs it has checked are terminal. A caller reading every case of
+    a job takes each this way rather than finding it again by its id."""
+    job_id = job.job_id
     if not has_readable_raw(case) or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
     raw = case.raw_file
@@ -693,50 +708,6 @@ def load_logs_sync(source: AnalysisSource, state: SessionState) -> DecodedLog:
     return _parse_logs_sync(source, state, deadline=deadline)
 
 
-# A ``dev.param`` operating-point shorthand: everything before the LAST dot is
-# the device, so a flattened subcircuit path ('m.x1.mn.gm') parses too.
-DEV_PARAM_RE = re.compile(r"([a-z][\w.]*)\.([a-z]\w*)")
-
-
-def device_param_forms(signal: str) -> list[str]:
-    """The result names a ``dev.param`` operating-point shorthand can address.
-
-    ngspice writes a device parameter bare (``@m1[gm]``), v-wrapped
-    (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``) depending on the quantity,
-    and LTspice's ``.log`` block is folded into ``device_op_points`` under the
-    bare form. Empty when the name is not a shorthand.
-
-    Public because two readers resolve the shorthand the docs promise —
-    ``resolve_signal`` against a raw's trace list, ``analyze_results``
-    against an operating-point result — and a second copy of the rule is how
-    one of them ends up rejecting a name the other accepts.
-    """
-    match = DEV_PARAM_RE.fullmatch(signal.lower())
-    if match is None:
-        return []
-    dev, param = match.group(1), match.group(2)
-    return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
-
-
-def device_param_name(names: Iterable[str], signal: str) -> str | None:
-    """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
-
-    Its literal forms (``device_param_forms``) first, then the device by the
-    end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
-    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``), refused when more than one
-    matches: never a guess.
-    The one rule behind both readers of the shorthand.
-    """
-    match = DEV_PARAM_RE.fullmatch(signal.lower())
-    if match is None:
-        return None
-    by_lower = {name.lower(): name for name in names}
-    for form in device_param_forms(signal):
-        if form in by_lower:
-            return by_lower[form]
-    return find_device_param(by_lower.values(), *match.groups())
-
-
 #: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
 #: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
 #: no comma, parenthesis or space, which keeps the split unambiguous.
@@ -876,7 +847,7 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
         )
     hint = ""
     sig_lo = signal.lower()
-    dev_param = DEV_PARAM_RE.fullmatch(sig_lo)
+    dev_param = parse_shorthand(sig_lo)
     trace_lo = {t.lower() for t in trace_names}
     if sig_lo in ("v(onoise)", "v(inoise)") and (
         "onoise_spectrum" in trace_lo or "inoise_spectrum" in trace_lo
@@ -887,7 +858,7 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
     elif dev_param or "@" in sig_lo:
-        save_target = f"@{dev_param.group(1)}[{dev_param.group(2)}]" if dev_param else signal
+        save_target = f"@{dev_param[0]}[{dev_param[1]}]" if dev_param else signal
         hint = (
             f" Per-device small-signal params (gm/gds/vth/...) come back from "
             f"operating_point(device=...). As a raw trace (for a sweep/plot), ngspice "

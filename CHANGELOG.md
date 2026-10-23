@@ -24,6 +24,10 @@ tool-surface changes.
   a run whose deck asked for a maximum time step wider than a twentieth of the
   run, though a gap no wider than that step is what the deck asked for. A
   job's deck's maximum step now raises the bar.
+- A wrapped device parameter of a device inside a subcircuit, such as
+  `v(@xa:xin:mtail[gm])`, was not matched to LTspice's warning that it is
+  unknown, so its zero trace read as a value. Every reader of
+  `@device[param]` names now takes them apart one way.
 - A stopped case's progress named the stepped parameter of a stepped `.ac` at
   one frequency as the axis it reached (`r = 2000`). It now reads the plot as a
   full read does: such a plot has no axis, and the progress gives its points.

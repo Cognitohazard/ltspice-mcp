@@ -31,8 +31,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
-
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import RawData
 
@@ -40,6 +38,9 @@ DevicePath = tuple[str, ...]
 
 #: A ``@device[param]`` name, bare or as ngspice wraps it (``v(@m1[vth])``).
 _DEVICE_PARAM = re.compile(r"@([^\[\]()]+)\[([^\]]*)\]")
+#: A caller's ``dev.param`` shorthand: everything before the last dot is the
+#: device, so a flattened subcircuit path (``m.x1.mn.gm``) parses too.
+_SHORTHAND = re.compile(r"([a-z][\w.]*)\.([a-z]\w*)")
 _CURRENT = re.compile(r"^(i[a-z]?)\(([^)]+)\)$", re.IGNORECASE)
 #: A trace of one node or one device: ``V(xa:xin:mid)``, ``Id(a:in:Mtail)``.
 _TRACE = re.compile(r"^([a-z]+)\(([^(),]+)\)$", re.IGNORECASE)
@@ -48,6 +49,10 @@ _TRACE = re.compile(r"^([a-z]+)\(([^(),]+)\)$", re.IGNORECASE)
 def writes_xvii_names(raw: RawData) -> bool:
     """Whether the build that wrote ``raw`` names devices as XVII does:
     LTspice XVII, and LTspice IV before it, by the header's ``Command``."""
+    # Here, not at the top: the raw parser reads device names through this
+    # module, and simulator_build reads a raw's writer through the raw parser.
+    from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
+
     command = raw.raw_params.get("Command")
     return isinstance(command, str) and is_cp1252_ltspice_build(command)
 
@@ -98,14 +103,69 @@ class _Owner:
     param: str | None = None
 
 
+def parse_device_param(name: str) -> tuple[str, str] | None:
+    """The device and parameter a ``@device[param]`` name holds, bare or as
+    ngspice wraps it: ``("m1", "vth")`` for ``v(@m1[vth])``, the log table's
+    ``@xa:xin:mtail[gm]`` too. None for any other name. The one reader of the
+    form, wherever a result or a caller writes it."""
+    match = _DEVICE_PARAM.search(name)
+    return None if match is None else (match.group(1), match.group(2))
+
+
+def parse_shorthand(signal: str) -> tuple[str, str] | None:
+    """The device and parameter a caller's ``dev.param`` shorthand names,
+    lowercased: ``("x1.mn", "gm")`` for ``X1.MN.gm``. None for another name."""
+    match = _SHORTHAND.fullmatch(signal.lower())
+    return None if match is None else (match.group(1), match.group(2))
+
+
+def device_param_forms(signal: str) -> list[str]:
+    """The result names a ``dev.param`` operating-point shorthand can address.
+
+    ngspice writes a device parameter bare (``@m1[gm]``), v-wrapped
+    (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``) depending on the quantity,
+    and LTspice's ``.log`` block is folded into ``device_op_points`` under the
+    bare form. Empty when the name is not a shorthand.
+
+    Public because two readers resolve the shorthand the docs promise —
+    ``resolve_signal`` against a raw's trace list, ``analyze_results``
+    against an operating-point result — and a second copy of the rule is how
+    one of them ends up rejecting a name the other accepts.
+    """
+    parsed = parse_shorthand(signal)
+    if parsed is None:
+        return []
+    dev, param = parsed
+    return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+
+
+def device_param_name(names: Iterable[str], signal: str) -> str | None:
+    """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
+
+    Its literal forms (``device_param_forms``) first, then the device by the
+    end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
+    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``), refused when more than one
+    matches: never a guess.
+    The one rule behind both readers of the shorthand.
+    """
+    parsed = parse_shorthand(signal)
+    if parsed is None:
+        return None
+    by_lower = {name.lower(): name for name in names}
+    for form in device_param_forms(signal):
+        if form in by_lower:
+            return by_lower[form]
+    return find_device_param(by_lower.values(), *parsed)
+
+
 def _param_owner(name: str) -> _Owner | None:
     """The device a ``@device[param]`` name holds a parameter of, as the log's
     table or ngspice spells it; None for any other name."""
-    table = _DEVICE_PARAM.search(name)
-    if table is None:
+    parsed = parse_device_param(name)
+    if parsed is None:
         return None
-    device = table.group(1)
-    return _Owner(device, table_device_path(device), param=table.group(2))
+    device, param = parsed
+    return _Owner(device, table_device_path(device), param=param)
 
 
 def _owner(name: str, *, xvii: bool) -> _Owner | None:
