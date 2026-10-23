@@ -104,7 +104,6 @@ def exported_card(build: str, case_id: str, reference: str):
 def placed_pins(sheet: Path) -> dict[str, dict[int, tuple[int, int]]]:
     """Each component's pins by SpiceOrder, as the schematic editor places them."""
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     return {
         row["ref"]: {pin["order"]: (pin["x"], pin["y"]) for pin in row["pins"]}
         for row in collect_component_geometry(editor)
@@ -196,7 +195,6 @@ def exported_groups(build: str, case_id: str) -> set[frozenset[str]]:
 def modelled_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins the editor's net partition puts on each node."""
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     node_of = label_folded_nets(net_partition(editor))
     nodes: dict[tuple[int, int], set[str]] = {}
     for row in collect_component_geometry(editor):
@@ -236,7 +234,6 @@ def test_each_pin_is_given_the_node_ltspice_exported_it_on(
     without case, as LTspice reads it."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     geometry = collect_component_geometry(editor)
     nodes = exported_pin_nodes(rec.export_text(build, case_id), export_parts(editor, geometry))
     node_of = label_folded_nets(net_partition(editor))
@@ -338,7 +335,6 @@ def test_a_labelled_net_is_named_by_one_of_its_labels_and_ground_wins(
 ):
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     part = net_partition(editor)
     node_of = label_folded_nets(part)
     labels: dict[tuple[int, int], set[str]] = {}
@@ -383,7 +379,6 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
     editor reports the wire between them as one LTspice discards."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     part = net_partition(editor)
     dropped = same_instance_dropped_segments(
         part.pin_owners, wire_segments_of(editor), part.label_texts.keys()
@@ -419,7 +414,6 @@ async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
 def netlisted_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins on each net of the sheet's signature, as ``REF.order`` sets."""
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     pins = [
         ((pin["x"], pin["y"]), (canon_ref(row["ref"]), str(pin["order"])))
         for row in collect_component_geometry(editor)
@@ -483,7 +477,6 @@ def test_both_tools_call_floating_the_pins_ltspice_left_on_nothing(build: str, t
 
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     # The stacked symbols name each pin by its SpiceOrder.
     from_the_editor = sorted(
         f"{found.refs[0]}.{found.facts['pin']}".lower()
@@ -629,7 +622,6 @@ def test_a_bus_label_is_its_first_member_to_ltspice_and_a_name_to_the_server(
     assert exported - {joined} == modelled - apart
 
     editor = _editor(sheet)
-    assert isinstance(editor, AscEditor)
     assert trace_nets(editor)[placed_pins(sheet)["R1"][1]] == {"D[0:3]"}
 
 
@@ -1304,7 +1296,6 @@ class TestExportedNames:
     ):
         sheet_path = rec.stage_sheet(build, f"export/{sheet}", tmp_path)
         editor = _editor(sheet_path)
-        assert isinstance(editor, AscEditor)
         cards = rec.export_instances(build, f"export/{sheet}")
         for reference in editor.get_components():
             letter = element_class(editor, reference)

@@ -65,7 +65,7 @@ def table() -> int:
 
 def score(sheet_path: Path, netlist: Path) -> int:
     resolver = local_symbol_library().for_sheet(sheet_path)
-    print("symbols found in:", ", ".join(sorted(resolver.active_set)) or "nowhere")
+    print("symbols found in:", ", ".join(str(root) for root in resolver.roots) or "nowhere")
     sheet = read_sheet(sheet_path.read_bytes(), resolver)
     said = {
         "equivalence": equivalence(sheet, read_circuit(netlist)),

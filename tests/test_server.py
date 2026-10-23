@@ -217,38 +217,34 @@ class TestConfigureAscEditor:
         monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
         return home
 
-    @staticmethod
-    def _config(tmp_path: Path, *symbol_paths: Path) -> ServerConfig:
-        cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
-        cfg.symbol_paths = list(symbol_paths)
-        return cfg
-
-    def test_configured_folders_are_given_as_they_are(self, tmp_path: Path):
+    def test_configured_folders_are_given_as_they_are(self, config: ServerConfig, tmp_path: Path):
         from spicelib.editor.asc_editor import AscEditor
 
         symdir = tmp_path / "syms"
         symdir.mkdir()
-        library = configure_asc_editor(self._config(tmp_path, symdir), available={})
+        library = configure_asc_editor(replace(config, symbol_paths=[symdir]), available={})
         assert library.configured == (symdir,)
         assert AscEditor.custom_lib_paths == [str(symdir)]
 
-    def test_a_configured_folder_that_does_not_exist_is_left_out(self, tmp_path: Path):
+    def test_a_configured_folder_that_does_not_exist_is_left_out(
+        self, config: ServerConfig, tmp_path: Path
+    ):
         from spicelib.editor.asc_editor import AscEditor
 
         missing = tmp_path / "nonexistent"
-        library = configure_asc_editor(self._config(tmp_path, missing), available={})
+        library = configure_asc_editor(replace(config, symbol_paths=[missing]), available={})
         assert library.roots == ()
         assert (AscEditor.custom_lib_paths, AscEditor.simulator_lib_paths) == ([], [])
 
-    def test_with_no_library_anywhere_nothing_is_searched(self, tmp_path: Path):
+    def test_with_no_library_anywhere_nothing_is_searched(self, config: ServerConfig):
         from spicelib.editor.asc_editor import AscEditor
 
-        library = configure_asc_editor(self._config(tmp_path), available={})
+        library = configure_asc_editor(replace(config, symbol_paths=[]), available={})
         assert library.roots == ()
         assert (AscEditor.custom_lib_paths, AscEditor.simulator_lib_paths) == ([], [])
 
     def test_on_wsl_with_no_simulator_detected_the_symbols_still_resolve(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, config: ServerConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """Schematic editing needs the symbol library, not the simulator."""
         from spicelib.editor.asc_editor import AscEditor
@@ -260,20 +256,20 @@ class TestConfigureAscEditor:
             "ltspice_mcp.lib.wsl.get_ltspice_lib_paths",
             lambda generation=None: [str(lib), str(lib / "sym")],
         )
-        library = configure_asc_editor(self._config(tmp_path), available={})
+        library = configure_asc_editor(replace(config, symbol_paths=[]), available={})
         assert library.stock == (lib.resolve() / "sym",)
         # spicelib appends ``sym`` to a simulator path itself.
         assert AscEditor.simulator_lib_paths == [str(lib.resolve())]
         assert AscEditor.custom_lib_paths == []
 
     def test_on_wsl_with_no_library_found_nothing_is_searched(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, config: ServerConfig, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: True)
         monkeypatch.setattr(
             "ltspice_mcp.lib.wsl.get_ltspice_lib_paths", lambda generation=None: []
         )
-        library = configure_asc_editor(self._config(tmp_path), available={})
+        library = configure_asc_editor(replace(config, symbol_paths=[]), available={})
         assert library.roots == ()
 
 

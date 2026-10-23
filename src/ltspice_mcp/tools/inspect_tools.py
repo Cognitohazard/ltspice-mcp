@@ -190,7 +190,7 @@ from ltspice_mcp.lib.simulator_build import (
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
-from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
+from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -1241,16 +1241,17 @@ def _do_capabilities(
 # ---------------------------------------------------------------------------
 
 
-def _symbol_precedence(asc_dir: Path | None, state: SessionState) -> list[tuple[Path, str]]:
-    """The ordered (dir, tier) search precedence of the session's library
-    (``SymbolLibrary.precedence``), the order every lookup searches in.
+def _symbol_precedence(asc_path: Path | None, state: SessionState) -> list[tuple[Path, str]]:
+    """The ordered (dir, tier) search precedence of the session's library for
+    the sheet at ``asc_path`` (``SymbolResolver.precedence``), the order every
+    lookup searches in.
 
     A schematic-local dir (when a ``path`` is given) leads, then configured
     project libraries, then the LTspice build's own. Duplicates — including a
     symlink pointing at an already-listed directory — collapse to their
     highest-precedence occurrence (keyed by resolved real path).
     """
-    ordered = state.symbols.precedence(asc_dir)
+    ordered = state.symbols.for_sheet(asc_path).precedence
 
     seen: set[str] = set()
     deduped: list[tuple[Path, str]] = []
@@ -1292,11 +1293,8 @@ def _symbols_payload(
 
 
 async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict[str, Any]:
-    asc_dir: Path | None = None
-    if q.path is not None:
-        asc_dir = safe_path(q.path, state).parent
-
-    precedence = _symbol_precedence(asc_dir, state)
+    asc_path = safe_path(q.path, state) if q.path is not None else None
+    precedence = _symbol_precedence(asc_path, state)
     prec_report, names = await asyncio.to_thread(_symbols_payload, precedence, q.filter)
 
     # No sources: the rows are directory listings, not the content of named
@@ -1304,7 +1302,7 @@ async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict
     page = _paginate(
         names,
         "symbols",
-        {"path": str(asc_dir) if asc_dir else None, "filter": q.filter},
+        {"path": str(asc_path.parent) if asc_path else None, "filter": q.filter},
         q.cursor,
         (),
         view,
@@ -1333,10 +1331,12 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
     Returns ``None`` when the symbol does not resolve. Pure/immutable — safe to
     run off the event loop.
     """
-    asy = resolver.resolve(name)
-    if asy is None:
+    found = resolver.load(name)
+    if found is None:
         return None
-    sym_info = parse_asy_file(asy)
+    if found.problem:
+        raise ValueError(f"symbol '{found.name}' {found.problem}")
+    sym_info = symbol_info_of(found.name, found.file)
     pins_by_rotation: dict[str, list[dict[str, Any]]] = {}
     bbox_by_rotation: dict[str, dict[str, int]] = {}
     for rot in ROTATIONS:
@@ -1348,7 +1348,7 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
         "description": sym_info.description,
         "symbol_type": sym_info.symbol_type or None,
         "attributes": dict(sym_info.attributes),
-        "source_path": str(asy),
+        "source_path": str(found.path),
         "origin": {"x": 0, "y": 0},
         "bounding_box": sym_info.bbox.to_origin_size_dict(),
         "pins_by_rotation": pins_by_rotation,
@@ -1357,9 +1357,7 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
 
 
 async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
-    asc_path: Path | None = None
-    if q.path is not None:
-        asc_path = safe_path(q.path, state)
+    asc_path = safe_path(q.path, state) if q.path is not None else None
     resolver = state.symbols.for_sheet(asc_path)
     payload = await asyncio.to_thread(_symbol_geometry, resolver, q.name)
     if payload is None:

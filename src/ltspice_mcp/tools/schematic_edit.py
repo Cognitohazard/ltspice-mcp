@@ -91,6 +91,7 @@ from ltspice_mcp.lib.schematic_ops import (
     placed_geometry,
     require_asc,
     run_op_batch,
+    symbols_of,
     trace_nets,
     wiring_profile,
 )
@@ -1600,13 +1601,15 @@ async def _evaluate_edit_schematic(
             )
             committed_text = _render_editor_text(editor, data_flags)
             # The sheet's findings are read off its scene, as verify_circuit
-            # reads a file's, and off the loop: only text goes to the thread.
+            # reads a file's, and off the loop: only text and the symbols the
+            # edit found, which the loop does not touch meanwhile, go to the
+            # thread.
             found_before, found = await asyncio.to_thread(
                 _findings_before_and_after,
                 committed_text if sheet_kept else before_text,
                 committed_text,
                 target,
-                state.symbols.for_sheet(target),
+                symbols_of(editor),
             )
             refs, coords = touched_refs(args.ops), touched_coords(args.ops)
             findings_reported, findings_left_out = _split_findings(

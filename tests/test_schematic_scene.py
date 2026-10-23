@@ -7,12 +7,15 @@ requires a stock LTspice symbol library to be installed.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 from spicelib import AscEditor
 
+from ltspice_mcp.lib import symbol_library
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.schematic_ops import make_editor, symbol_info_for
 from ltspice_mcp.lib.schematic_scene import (
@@ -386,15 +389,15 @@ class TestSymbolResolution:
         assert SymbolResolver(local_dir=a, project_paths=[b]).resolve("box2") == a / "box2.asy"
         assert SymbolResolver(local_dir=b, project_paths=[a]).resolve("box2") == b / "box2.asy"
 
-    def test_cache_invalidates_on_rewrite(self, tmp_path: Path) -> None:
+    def test_a_rewritten_file_is_read_again_by_the_next_request(self, tmp_path: Path) -> None:
         asy = _write(tmp_path / "box2.asy", BOX2_ASY)
-        r = SymbolResolver(local_dir=tmp_path)
-        first = r.load("box2")
+        library = SymbolLibrary()
+        first = library.for_sheet(tmp_path / "s.asc").load("box2")
         assert first is not None and len(first.file.rects) == 1
         # Rewrite the same path with different content (and different size, so
         # the content stamp changes even on a coarse-mtime filesystem).
         _write(asy, BOX2_ALT_ASY)
-        second = r.load("box2")
+        second = library.for_sheet(tmp_path / "s.asc").load("box2")
         assert second is not None
         assert len(second.file.rects) == 0 and len(second.file.circles) == 1
 
@@ -407,16 +410,16 @@ class TestSymbolResolution:
         b = r1.load("box2")
         assert a is not None and a is b  # served from r1's cache
         r2 = SymbolResolver(local_dir=tmp_path, project_paths=[tmp_path / "extra"])
-        assert r1.active_set != r2.active_set
+        assert r1.roots != r2.roots
         c = r2.load("box2")
-        assert c is not None and c is not a  # r2 parsed independently
+        assert c is not None and c.file is not a.file  # r2 parsed independently
 
     def test_one_file_is_read_once_for_every_sheet_that_uses_it(self, tmp_path: Path) -> None:
         _write(tmp_path / "lib" / "box2.asy", BOX2_ASY)
         library = SymbolLibrary([tmp_path / "lib"])
         first = library.for_sheet(tmp_path / "a" / "s.asc").load("box2")
         second = library.for_sheet(tmp_path / "b" / "s.asc").load("box2")
-        assert first is not None and second is first
+        assert first is not None and second is not None and second.file is first.file
 
     def test_unresolved_returns_none(self, tmp_path: Path) -> None:
         r = SymbolResolver(local_dir=tmp_path)
@@ -776,7 +779,7 @@ class TestSessionSymbolLibrary:
 
     @staticmethod
     def library(libraries: Path) -> SymbolLibrary:
-        return SymbolLibrary([libraries / "configured"], [libraries / "build"], build="current")
+        return SymbolLibrary([libraries / "configured"], [libraries / "build"])
 
     @pytest.mark.parametrize(
         ("symbol", "found_in"),
@@ -812,11 +815,33 @@ class TestSessionSymbolLibrary:
             libraries / "configured",
             libraries / "build" / "sym",
         )
-        assert library.precedence(sheet.parent) == [
+        assert library.for_sheet(sheet).precedence == (
             (libraries / "sheet", "schematic-local"),
             (libraries / "configured", "configured"),
             (libraries / "build" / "sym", "stock"),
-        ]
+        )
+
+    def test_the_build_library_is_searched_once_per_session(
+        self, libraries: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The build's library is the LTspice install, which does not change while
+        the server runs; the sheet's folder and the configured ones are searched
+        again by each request."""
+        library = self.library(libraries)
+        sheet = libraries / "sheet" / "s.asc"
+        stock = libraries / "build" / "sym"
+        searched: Counter[bool] = Counter()
+        real_find = symbol_library.find_symbol
+
+        def counting(symbol: str, sheet_folder: Path | None, roots: Sequence[Path]):
+            searched[stock in roots] += 1
+            return real_find(symbol, sheet_folder, roots)
+
+        monkeypatch.setattr(symbol_library, "find_symbol", counting)
+        for _ in range(3):
+            assert library.for_sheet(sheet).resolve("stock") is not None
+            assert library.for_sheet(sheet).resolve("absent") is None
+        assert searched == {False: 6, True: 2}
 
     def test_an_editor_with_no_library_does_not_look_anywhere(self, libraries: Path) -> None:
         editor = make_editor(libraries / "sheet" / "s.asc")

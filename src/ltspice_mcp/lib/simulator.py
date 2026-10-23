@@ -486,9 +486,7 @@ def symbol_library_for(symbol_paths: Sequence[Path], ltspice: type | None) -> Sy
     is installed beside it, as its model libraries already are.
     """
     configured = [Path(path) for path in symbol_paths if Path(path).is_dir()]
-    return SymbolLibrary(
-        configured, simulator_library_roots(ltspice), build=generation_of(ltspice)
-    )
+    return SymbolLibrary(configured, simulator_library_roots(ltspice))
 
 
 def is_ltspice(simulator_class: type | None) -> bool:

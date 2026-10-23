@@ -23,7 +23,6 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster, wsl
@@ -103,14 +102,6 @@ def libfile(work_dir: Path) -> Path:
     p = work_dir / "parts.lib"
     p.write_text(".model MyNPN NPN(BF=100)\n.subckt myamp in out vcc\nR1 in out 1k\n.ends\n")
     return p
-
-
-@pytest.fixture
-def isolated_stock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep spicelib's own search to the fixture library too. The session's
-    library is already the suite's (the ``config`` fixture), so the enumerated
-    names and the precedence are the same whatever LTspice the host has."""
-    monkeypatch.setattr(AscEditor, "simulator_lib_paths", [], raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +282,7 @@ async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: S
 # ---------------------------------------------------------------------------
 
 
-async def test_symbols_happy(asc_state: SessionState, isolated_stock: None):
+async def test_symbols_happy(asc_state: SessionState):
     (res,) = await _run(asc_state, [{"kind": "symbols"}])
     assert res["ok"] is True
     data = res["data"]
@@ -300,7 +291,7 @@ async def test_symbols_happy(asc_state: SessionState, isolated_stock: None):
     assert data["total"] == len(data["symbols"])  # single fixture dir, under one page
 
 
-async def test_symbols_filter(asc_state: SessionState, isolated_stock: None):
+async def test_symbols_filter(asc_state: SessionState):
     (res,) = await _run(asc_state, [{"kind": "symbols", "filter": "re"}])
     names = res["data"]["symbols"]
     assert "res" in names
@@ -1155,9 +1146,7 @@ async def test_cross_query_cursor_rejected(
 # ---------------------------------------------------------------------------
 
 
-async def test_symbol_precedence_local_and_symlink_dedup(
-    work_dir: Path, asc_symbols: Path, isolated_stock: None
-):
+async def test_symbol_precedence_local_and_symlink_dedup(work_dir: Path, asc_symbols: Path):
     fixture_dir = asc_symbols
     # A symlink pointing at the same fixture directory must collapse to one entry.
     symlink_dir = work_dir / "linked_syms"
@@ -1183,8 +1172,8 @@ async def test_symbol_precedence_local_and_symlink_dedup(
     assert precedence[0]["tier"] == "schematic-local"
     assert _real(precedence[0]["dir"]) == _real(proj)
 
-    # fixture_dir, the symlink to it, and AscEditor.custom_lib_paths all resolve
-    # to one real directory — it must appear exactly once.
+    # fixture_dir and the symlink to it resolve to one real directory — it must
+    # appear exactly once.
     fixture_real = _real(fixture_dir)
     collapsed = [e for e in precedence if _real(e["dir"]) == fixture_real]
     assert len(collapsed) == 1

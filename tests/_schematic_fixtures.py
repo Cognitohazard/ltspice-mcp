@@ -38,9 +38,9 @@ SUITE_SHEETS = sorted(
 )
 SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"), key=suite_name)
 
-#: The suite's stand-in symbol library (``tests/fixtures/symbols``), the one
-#: the ``config`` fixture configures.
-SUITE_LIBRARY = SymbolLibrary([TESTS / "fixtures" / "symbols"])
+#: The suite's stand-in symbol library, the one the ``config`` fixture configures.
+SUITE_LIBRARY_DIR = TESTS / "fixtures" / "symbols"
+SUITE_LIBRARY = SymbolLibrary([SUITE_LIBRARY_DIR])
 
 
 def suite_resolver(sheet: Path) -> SymbolResolver:

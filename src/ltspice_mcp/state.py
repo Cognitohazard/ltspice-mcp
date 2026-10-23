@@ -294,9 +294,12 @@ class SessionState:
         on the session and logged at startup. ``named`` is the named
         executables ``detect_named_simulators`` bound. ``sandbox_pinned`` says
         the caller gave ``allowed_paths`` explicitly (see the field).
-        ``symbols`` is the session's symbol library; without one, it is the
-        configured folders and the detected LTspice's library
-        (``simulator.symbol_library_for``).
+        ``symbols`` is the session's symbol library. The server passes the one
+        ``engine.configure_asc_editor`` built, which falls back to the library
+        of an LTspice that was not detected. Without one, it is the configured
+        folders and only a detected LTspice's library
+        (``simulator.symbol_library_for``), so a session built here, as a test
+        builds one, reads no LTspice library the machine merely has installed.
         """
         from ltspice_mcp.lib.simulator import select_default_simulator, symbol_library_for
         from ltspice_mcp.lib.simulator_build import executable_path

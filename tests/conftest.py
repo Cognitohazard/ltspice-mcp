@@ -38,6 +38,7 @@ from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.state import SessionState
 from tests import schedule_jitter, sheet_edit_record
+from tests._schematic_fixtures import SUITE_LIBRARY_DIR
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
     _schedule_jitter,
     pytest_addoption,
@@ -54,7 +55,7 @@ def pytest_configure(config: pytest.Config) -> None:
 _T = typing.TypeVar("_T")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-_FIXTURE_SYMBOLS = FIXTURES_DIR / "symbols"
+_FIXTURE_SYMBOLS = SUITE_LIBRARY_DIR
 _FIXTURE_DRAFT = FIXTURES_DIR / "Draft1.asc"
 
 # Recorded real-LTspice fixture value shared across test modules: a single

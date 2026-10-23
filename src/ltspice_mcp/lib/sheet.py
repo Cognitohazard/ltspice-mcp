@@ -24,7 +24,7 @@ from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     compute_placed_geometry,
     place_box,
-    symbol_info_of,
+    usable_symbol_info,
 )
 from ltspice_mcp.lib.symbol_library import FoundSymbol, SymbolResolver
 
@@ -261,9 +261,9 @@ class Sheet:
 
 
 def _placed(record: Symbol, found: FoundSymbol | None) -> SheetPart:
-    if found is None or found.problem:
+    info = usable_symbol_info(found)
+    if found is None or info is None:
         return SheetPart(record, found)
-    info = symbol_info_of(found.name, found.file)
     geometry = compute_placed_geometry(info, record.x, record.y, record.rotation)
     pins = tuple(
         PlacedPin(pin["name"], pin["order"], pin["x"], pin["y"], pin["dir"])

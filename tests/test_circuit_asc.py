@@ -7,6 +7,7 @@ off disk, so a claim about geometry is checked against what was actually written
 """
 
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,6 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate, point_on_segment
 from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import OpWirePins, blank_sheet
-from ltspice_mcp.lib.symbol_file import SymbolFile
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import TraceNetInput, handle_trace_net
@@ -709,9 +709,7 @@ def ordinal_symbols(
     write_file(sym_dir / "lettered_block.asy", _LETTERED_BLOCK_ASY)
     write_file(sym_dir / "swapped_digits.asy", _SWAPPED_DIGITS_ASY)
     library = asc_state.symbols
-    asc_state.symbols = SymbolLibrary(
-        [*library.configured, sym_dir], library.build_roots, build=library.build
-    )
+    asc_state.symbols = SymbolLibrary([*library.configured, sym_dir], library.build_roots)
     monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
     return sym_dir
 
@@ -907,20 +905,30 @@ class TestSheetLocalSymbols:
     async def test_one_edit_looks_each_symbol_up_once(
         self, asc_state: SessionState, monkeypatch: pytest.MonkeyPatch
     ):
-        # Every geometry pass of every op re-reads each part's symbol, and a
-        # lookup now checks the sheet's folder on disk, on the event loop. One
-        # request resolves each distinct symbol once, however many parts use it.
-        from ltspice_mcp.lib import schematic_ops
+        # Every geometry pass of every op, and the sheet checks after them, ask
+        # for each part's symbol, and a lookup searches folders on disk, on the
+        # event loop. One request searches for each distinct symbol once,
+        # however many parts use it.
+        from ltspice_mcp.lib import symbol_library
+        from ltspice_mcp.tools import schematic_edit
+        from tests import sheet_edit_record
         from tests._asc_ops import build_sheet
 
         lookups: Counter[str] = Counter()
-        real_lookup = schematic_ops.symbol_info_of
+        real_find = symbol_library.find_symbol
 
-        def counting_lookup(name: str, symbol: SymbolFile):
-            lookups[name] += 1
-            return real_lookup(name, symbol)
+        def counting_find(symbol: str, sheet_folder: Path | None, libraries: Sequence[Path]):
+            lookups[symbol] += 1
+            return real_find(symbol, sheet_folder, libraries)
 
-        monkeypatch.setattr(schematic_ops, "symbol_info_of", counting_lookup)
+        monkeypatch.setattr(symbol_library, "find_symbol", counting_find)
+        # The suite's edit recorder looks the call's symbols up too, to key the
+        # call; set it aside so only the edit's own lookups count.
+        monkeypatch.setattr(
+            schematic_edit,
+            "_evaluate_edit_schematic",
+            sheet_edit_record._evaluate,  # pyright: ignore[reportPrivateUsage]
+        )
         ops = [
             {"op": "add_component", "reference": f"R{i}", "symbol": "res", "x": 128 * i, "y": 128}
             for i in range(1, 13)

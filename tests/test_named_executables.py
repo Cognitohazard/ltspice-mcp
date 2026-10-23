@@ -766,5 +766,4 @@ class TestLibraryRoots:
         library = configure_asc_editor(config, {"ltspice": xvii})
 
         assert AscEditor.simulator_lib_paths == [str(xvii_lib)]
-        assert library.build == "xvii"
         assert library.for_sheet(None).resolve("res") == xvii_lib / "sym" / "res.asy"

@@ -628,11 +628,6 @@ class Scene:
 
 
 # ---------------------------------------------------------------------------
-# Symbol libraries
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Placement: symbol-local geometry → absolute scene primitives
 # ---------------------------------------------------------------------------
 
@@ -763,15 +758,13 @@ def _attr_texts(
 # ---------------------------------------------------------------------------
 
 
-def build_scene(asc_path: Path, resolver: SymbolResolver | None = None) -> Scene:
+def build_scene(asc_path: Path, resolver: SymbolResolver) -> Scene:
     """Parse ``asc_path`` and build a fully-placed :class:`Scene`.
 
     Its symbols are found with ``resolver``, the session's for the sheet
-    (``SymbolLibrary.for_sheet``); without one, only beside the sheet.
+    (``SymbolLibrary.for_sheet``).
     """
     asc_path = Path(asc_path)
-    if resolver is None:
-        resolver = SymbolResolver(local_dir=asc_path.parent)
 
     # One read: the digest and the parse describe the same bytes, so a peer
     # that commits between them cannot make the reported provenance a hash of

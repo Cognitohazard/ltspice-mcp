@@ -12,6 +12,7 @@ from pathlib import Path
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_file import PinInfo, SymbolFile, read_symbol
+from ltspice_mcp.lib.symbol_library import FoundSymbol
 
 # Rotation transforms applied to (x, y) relative to symbol origin.
 # LTspice coordinate system: x increases right, y increases down.
@@ -128,7 +129,7 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
 
     Raises ``ValueError`` for a symbol with a pin line that does not read: a
     pin left out is a terminal no wire could be checked against, so the symbol
-    is refused whole (``_parse_or_none`` turns that into an unusable symbol).
+    is refused whole.
     """
     return symbol_info_of(asy_path.stem, read_symbol(read_spice_text(asy_path)))
 
@@ -149,6 +150,14 @@ def symbol_info_of(name: str, symbol: SymbolFile) -> SymbolInfo:
         symbol_type=symbol.symbol_type,
         attributes=symbol.attrs,
     )
+
+
+def usable_symbol_info(found: FoundSymbol | None) -> SymbolInfo | None:
+    """What the placement of a part needs of a symbol a resolver found; ``None``
+    for one not found, and for one that cannot be used (``FoundSymbol.problem``)."""
+    if found is None or found.problem:
+        return None
+    return symbol_info_of(found.name, found.file)
 
 
 def compute_placed_geometry(
