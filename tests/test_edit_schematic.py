@@ -1308,6 +1308,25 @@ async def test_the_sheets_findings_are_read_off_the_event_loop(asc_state, monkey
     assert read_on == [False]
 
 
+async def test_a_label_moved_away_and_back_owns_what_the_sheet_says_of_it(asc_state):
+    """A move names the labels and wires it moves, at their points as given
+    and as moved, so what the finished sheet says of them is the batch's, as
+    it is for any op that names a point."""
+    sheet = await _untidy_sheet(asc_state, "untidy-moved-back")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [
+            {"op": "move", "dx": 16, "dy": 0, "labels": [{"x": 900, "y": 900}]},
+            {"op": "move", "dx": -16, "dy": 0, "labels": [{"x": 916, "y": 900}]},
+        ],
+    )
+
+    assert _sheet_findings(data) == ["Dangling label 'orphan' at (900,900)"]
+    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
+
+
 async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-labels")
 

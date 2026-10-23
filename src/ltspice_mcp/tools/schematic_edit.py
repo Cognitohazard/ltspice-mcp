@@ -963,9 +963,10 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
     """Sheet coordinates this op batch named.
 
     An op's own ``x``/``y`` (a label, a directive anchor, a component origin,
-    a wire's incident point), both ends of an exact wire segment, and every
-    routing waypoint and ``{x, y}`` endpoint. A pin endpoint names a component,
-    not a coordinate; see ``touched_refs``.
+    a wire's incident point), both ends of an exact wire segment, every
+    routing waypoint and ``{x, y}`` endpoint, and the labels and wire ends a
+    ``move`` names, where they were and where they went. A pin endpoint names
+    a component, not a coordinate; see ``touched_refs``.
     """
     coords: set[tuple[int, int]] = set()
     for op in ops:
@@ -976,6 +977,11 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
         points = [*(getattr(op, "waypoints", None) or ())]
         points += [getattr(op, "from_pin", None), getattr(op, "to_pin", None)]
         coords.update((point.x, point.y) for point in points if isinstance(point, GridPoint))
+        if isinstance(op, OpMove):
+            moved = [(label.x, label.y) for label in op.labels]
+            moved += [end for w in op.wires for end in ((w.x1, w.y1), (w.x2, w.y2))]
+            coords.update(moved)
+            coords.update((x + op.dx, y + op.dy) for x, y in moved)
     return coords
 
 
