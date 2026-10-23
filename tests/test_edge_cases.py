@@ -23,6 +23,7 @@ from ltspice_mcp.lib.raw_parser import (
 )
 from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
+from tests.conftest import make_raw_mock
 
 # ---------------------------------------------------------------------------
 # generate_sweep_range crashes on log scale with step=1
@@ -608,49 +609,19 @@ class TestSimulatorSelectionCaseInsensitive:
         assert select_default_simulator({"ngspice": NG}, cfg) is NG
 
 
-class TestIsAcAnalysisWordBoundary:
-    def test_ac_matches(self):
-        from ltspice_mcp.lib.raw_parser import is_ac_analysis
-
-        assert is_ac_analysis("AC Analysis") is True
-        assert is_ac_analysis("ac analysis") is True
-
-    def test_substring_not_matched(self):
-        from ltspice_mcp.lib.raw_parser import is_ac_analysis
-
-        # Previously all these returned True because "AC" is a substring
-        assert is_ac_analysis("backup") is False
-        assert is_ac_analysis("BACK tracking") is False
-        assert is_ac_analysis("DC transfer characteristic") is False
-
-
 class TestBuildSimulationSummaryRange:
-    def _mk(self, plotname, axis):
-        raw = MagicMock()
-        raw.get_raw_property.return_value = plotname
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [0]
-        raw.get_axis.return_value = axis
-        raw.get_wave = lambda n, step=0: axis
-        return raw
-
     def test_dc_not_misclassified_as_ac(self):
         from ltspice_mcp.lib.raw_parser import build_simulation_summary
 
-        r = build_simulation_summary(
-            self._mk("DC transfer characteristic", np.array([0, 1, 2])), None
+        sweep = np.array([0.0, 1.0, 2.0])
+        raw = make_raw_mock(
+            ["V(in)", "V(out)"], sweep, {"V(out)": sweep}, "DC transfer characteristic"
         )
+        r = build_simulation_summary(raw, None)
         # Previously "characteristic" contained the substring "AC" so DC
         # ended up with freq_start/freq_end keys.
         assert "sweep_start" in r["range"]
         assert "freq_start" not in r["range"]
-
-    def test_empty_axis_does_not_crash(self):
-        from ltspice_mcp.lib.raw_parser import build_simulation_summary
-
-        r = build_simulation_summary(self._mk("Transient Analysis", np.array([])), None)
-        assert r["range"] == {}
-        assert r["point_count"] == 0
 
 
 class TestExtractOperatingPointCaseInsensitive:

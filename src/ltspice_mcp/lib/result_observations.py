@@ -65,7 +65,7 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
 
 if TYPE_CHECKING:
-    from ltspice_mcp.lib.decoded_raw import DecodedRaw
+    from ltspice_mcp.lib.decoded_raw import Analysis, DecodedRaw
 
 # Salience threshold for lifting a node value into view. The gmin/floating-node
 # artifact lands at ~1e30, so 1e8 has enormous headroom; a legitimate HV design
@@ -696,6 +696,7 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
 def surface_observations(
     summary: dict,
     *,
+    analysis: Analysis | None = None,
     requested: dict[str, list[str]] | None = None,
     value_traces: dict[str, np.ndarray] | None = None,
     source_amplitudes: dict[str, float] | None = None,
@@ -706,7 +707,8 @@ def surface_observations(
     that loaded them wants them scanned, and one that did not passes None.
 
     ``source_amplitudes`` (from ``parse_source_amplitudes``) arms the
-    source-relative ``extreme_value`` trigger for real-valued analyses.
+    source-relative ``extreme_value`` trigger for the selected plot's decoded
+    ``analysis`` when that is a transient or an operating point.
     """
     obs: list[Observation] = []
     obs.extend(relay_observations(summary))
@@ -717,13 +719,11 @@ def surface_observations(
             obs.append(abort)
     if value_traces is not None:
         source_reference: tuple[str, float] | None = None
-        if source_amplitudes:
-            # Only where "node voltage vs. drive level" is meaningful: transient
-            # and operating point. AC/noise traces are per-frequency small-signal
-            # gains, and a .dc sweep's source range comes from the .dc line, not
-            # the V-card this parser read.
-            sim_type = str(summary.get("sim_type", "")).strip().lower()
-            if sim_type.startswith("transient") or sim_type.startswith("operating"):
-                source_reference = max(source_amplitudes.items(), key=lambda kv: kv[1])
+        # Only where "node voltage vs. drive level" is meaningful: transient
+        # and operating point. AC/noise traces are per-frequency small-signal
+        # gains, and a .dc sweep's source range comes from the .dc line, not
+        # the V-card this parser read.
+        if source_amplitudes and analysis in ("transient", "op"):
+            source_reference = max(source_amplitudes.items(), key=lambda kv: kv[1])
         obs.extend(value_observations(value_traces, source_reference=source_reference))
     return obs

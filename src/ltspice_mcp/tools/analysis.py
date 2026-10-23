@@ -1476,7 +1476,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     if raw.descriptor.axis is None:
         raise ResultError("This plot has no sampled axis; use inspect results table instead.")
     # Refuse unsupported coordinates before building a plot.
-    guarded_axis(raw, 0, raw_path)
+    guarded_axis(raw, 0)
 
     analysis_type = raw.descriptor.analysis
     x_is_log = raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"

@@ -8,7 +8,6 @@ neither — with an empty or whitespace path counting as neither.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -18,26 +17,21 @@ from ltspice_mcp.lib.metrics import summary
 from ltspice_mcp.lib.recipes import SummaryRecipe
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import PlotWaveformInput, _direct_source
-from tests.conftest import inject_numeric_raw
+from tests.conftest import inject_numeric_raw, make_raw_mock
 from tests.test_analysis_tools import _source
 
 pytestmark = pytest.mark.usefixtures("numeric_raw_inputs")
 
 
-def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
+def _inject_raw(state: SessionState, path: Path, raw) -> None:
     inject_numeric_raw(state, path, raw)
 
 
-def _stepped_tran_raw() -> MagicMock:
+def _stepped_tran_raw():
     """A 2-step transient raw whose step 0 and step 1 have different time spans."""
-    raw = MagicMock()
-    raw.get_raw_property.return_value = "Transient Analysis"
-    raw.get_trace_names.return_value = ["time", "V(out)"]
-    raw.get_steps.return_value = [0, 1]
-    raw.get_axis.side_effect = lambda step=0: (
-        np.array([0.0, 1.0]) if step == 0 else np.array([0.0, 5.0])
+    return make_raw_mock(
+        ["time", "V(out)"], waves={}, step_axes=[np.array([0.0, 1.0]), np.array([0.0, 5.0])]
     )
-    return raw
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ import functools
 import importlib.abc
 import inspect
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -688,33 +689,103 @@ def make_raw_mock(
     plotname: str = "Transient Analysis",
     *,
     steps: list[int] | None = None,
+    step_axes: list[typing.Any] | None = None,
     dialect: str = "ltspice",
 ) -> typing.Any:
-    """A RawRead stand-in with controllable traces; no trace declares a type.
+    """A decoded raw of one plot built from analytic waves, read as the server
+    reads a parsed file: each trace typed as its simulator would type it.
 
     With nothing given it is a 100-point transient sine on ``V(out)``; the axis
-    defaults to the ``time`` wave.
+    defaults to the ``time`` wave. ``steps`` repeats the waves once a step;
+    ``step_axes`` gives each step its own axis instead, the other traces zero.
     """
-    from unittest.mock import MagicMock
-
     import numpy as np
+
+    from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, plot_analysis
+    from ltspice_mcp.lib.raw_header import RawPlotHeader, RawVariable
 
     if waves is None:
         t = np.linspace(0, 1, 100)
         waves = {"time": t, "V(out)": np.sin(2 * np.pi * t)}
-    raw = MagicMock()
-    raw.dialect = dialect
-    raw.get_raw_property.return_value = plotname
-    raw.get_trace_names.return_value = (
-        trace_names if trace_names is not None else ["time", "V(out)"]
+    names = list(trace_names if trace_names is not None else ["time", "V(out)"])
+    analysis = plot_analysis(plotname, "")
+    # A sampled plot's axis is its first variable; a caller may name only the
+    # traces and give the axis apart, as a reader asks for it apart.
+    axis_name = {"transient": "time", "ac": "frequency", "noise": "frequency"}.get(analysis)
+    if axis_name is not None and names[0].lower() != axis_name:
+        names.insert(0, axis_name)
+    if axis_name is not None or analysis == "dc":
+        if axis is not None:
+            waves = {**waves, names[0]: axis}
+        elif names[0] not in waves:
+            waves = {**waves, names[0]: waves.get("time", np.linspace(0, 1, 100))}
+    points = len(np.asarray(waves.get(names[0], next(iter(waves.values())))))
+    arrays = [np.asarray(waves.get(name, np.zeros(points))) for name in names]
+    complex_values = any(np.iscomplexobj(wave) for wave in arrays)
+    if complex_values:
+        arrays = [wave.astype(complex) for wave in arrays]
+
+    def declared(index: int, name: str) -> str:
+        if index == 0 and analysis == "transient":
+            return "time"
+        if index == 0 and analysis in ("ac", "noise", "fra"):
+            return "frequency"
+        if name.startswith("@"):
+            return "notype"  # ngspice's word for a device parameter it cannot type
+        if re.match(r"i[a-z]?\(", name, re.IGNORECASE):
+            return "device_current" if dialect == "ltspice" else "current"
+        return "voltage"
+
+    if step_axes is not None:
+        lengths = [len(step_axis) for step_axis in step_axes]
+        stacked = np.concatenate([np.asarray(step_axis) for step_axis in step_axes])
+        arrays = [stacked, *(np.zeros(len(stacked), dtype=wave.dtype) for wave in arrays[1:])]
+    else:
+        # More than one step repeats the waves once a step, each restarting its axis.
+        lengths = [points] * (len(steps) if steps else 1)
+        arrays = [np.tile(wave, len(lengths)) for wave in arrays]
+    count, total = len(lengths), sum(lengths)
+    flags = ("complex" if complex_values else "real", *(("stepped",) if count > 1 else ()))
+    header = RawPlotHeader(
+        index=0,
+        header_offset=0,
+        encoding="utf-8",
+        fields=(
+            ("Title", "analytic test input"),
+            ("Plotname", plotname),
+            ("Flags", " ".join(flags)),
+            ("No. Variables", str(len(names))),
+            ("No. Points", str(total)),
+            ("Offset", "0"),
+            ("Command", "LTspice 26" if dialect == "ltspice" else dialect),
+        ),
+        plot_name=plotname,
+        flags=flags,
+        variable_count=len(names),
+        point_count=total,
+        variables=tuple(
+            RawVariable(i, name, declared(i, name), ()) for i, name in enumerate(names)
+        ),
+        dialect=dialect,
+        dialect_evidence=("explicit",),
+        storage="binary",
+        storage_order="point-major",
+        value_bytes=(16 if complex_values else 8,) * len(names),
+        payload_offset=0,
+        payload_end=0,
+        payload_bytes=0,
+        numeric_bytes=total * len(names) * 8,
     )
-    raw.get_steps.return_value = steps if steps is not None else [0]
-    raw.get_axis.return_value = (
-        axis if axis is not None else waves.get("time", np.linspace(0, 1, 100))
+    if count == 1:
+        return DecodedRaw([DecodedPlot(header, arrays, snapshot_id="analytic-test-input")])
+    plot = DecodedPlot(
+        header,
+        arrays,
+        snapshot_id="analytic-test-input",
+        steps=[{"step": float(index)} for index in range(count)],
+        step_offsets=[sum(lengths[:index]) for index in range(count)],
     )
-    raw.get_trace.return_value.whattype = None
-    raw.get_wave = lambda name, step=0: waves[name]
-    return raw
+    return DecodedRaw([plot])
 
 
 def check_in(ready: typing.Any, start: typing.Any, entered: typing.Any, timeout_s: float) -> None:

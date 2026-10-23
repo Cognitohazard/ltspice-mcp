@@ -175,7 +175,8 @@ def plot_analysis(plot_name: str, first_type: str) -> Analysis:
     return _ANALYSIS_NAMES.get(label, "unknown")
 
 
-def _analysis(header: RawPlotHeader) -> Analysis:
+def header_analysis(header: RawPlotHeader) -> Analysis:
+    """The analysis a decoded header's plot holds (:func:`plot_analysis`)."""
     first = header.variables[0].declared_type if header.variables else ""
     return plot_analysis(header.plot_name, first)
 
@@ -289,7 +290,7 @@ def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | N
 
 def transient_time_offset(header: RawPlotHeader) -> float:
     """Validate the time offset using header facts before numeric allocation."""
-    analysis = _analysis(header)
+    analysis = header_analysis(header)
     if analysis != "transient" or _axis_kind(header, analysis) is None:
         return 0.0
     offset = float(next((value for key, value in header.fields if key.lower() == "offset"), "0"))
@@ -403,7 +404,7 @@ class DecodedPlot:
             if steps is not None:
                 raise ValueError("Step metadata cannot be associated without validated boundaries")
             descriptors = ()
-        analysis = _analysis(header)
+        analysis = header_analysis(header)
         kind = _axis_kind(header, analysis)
         arrays = list(waves)
         offset = transient_time_offset(header)

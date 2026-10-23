@@ -224,7 +224,7 @@ def _transient_offset(plotname: object, offset: object) -> float:
     start in the header's ``Offset:`` field. Other analyses' axes are not time,
     and an unwindowed run writes ``Offset: 0``, so both read as 0 here.
     """
-    if "transient" not in str(plotname or "").lower():
+    if plot_analysis(str(plotname or ""), "") != "transient":
         return 0.0
     try:
         return float(str(offset or 0).strip())
@@ -296,15 +296,6 @@ class OperatingPointOutput(_OperatingPointStepMeta):
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
 _FLOAT_TINY = np.finfo(float).tiny
 
-# Word-boundary simulation-type matchers. Substring matching would false-positive
-# on phrases like "DC transfer characteristic" (contains "AC") or "backup" (also
-# contains "AC"), so detection is anchored to whole words.
-_RE_TRANSIENT = re.compile(r"\bTRANSIENT\b", re.IGNORECASE)
-_RE_AC = re.compile(r"\bAC\b|\bFREQUENCY RESPONSE ANALYSIS\b", re.IGNORECASE)
-_RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
-_RE_NOISE = re.compile(r"\bNOISE\b", re.IGNORECASE)
-_RE_OP = re.compile(r"\bOPERATING\s+POINT\b", re.IGNORECASE)
-
 
 def safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
     """Convert complex waveform to magnitude in dB, clamping zeros to avoid -inf."""
@@ -328,21 +319,11 @@ def detect_sim_type(raw: RawData) -> str:
         Simulation type string (e.g., "Transient Analysis", "AC Analysis")
         or "Unknown" if detection fails
     """
-    if descriptor := _selected_descriptor(raw):
-        return descriptor.original_plot_name if descriptor.analysis != "unknown" else "Unknown"
-    try:
-        plot_name = raw.get_raw_property("Plotname")
-        if plot_name:
-            return str(plot_name)
-    except _RAW_ACCESS_ERRORS:
-        # A raw with no Plotname property is a real shape, not a fault: the
-        # caller gets the "Unknown" it documents.
-        pass
-    return "Unknown"
+    descriptor = _selected_descriptor(raw)
+    if descriptor is None or descriptor.analysis == "unknown":
+        return "Unknown"
+    return descriptor.original_plot_name
 
-
-#: A plot's subject: a raw, or the plot name ``detect_sim_type`` gave for one.
-PlotSubject = RawData | str
 
 _NOISE: frozenset[Analysis] = frozenset({"noise"})
 _OP: frozenset[Analysis] = frozenset({"op"})
@@ -350,43 +331,37 @@ _DC: frozenset[Analysis] = frozenset({"dc"})
 _TRANSIENT: frozenset[Analysis] = frozenset({"transient"})
 
 
-def _classified(
-    subject: PlotSubject, analyses: frozenset[Analysis], pattern: re.Pattern[str]
-) -> bool:
-    """Whether ``subject`` is one of ``analyses``. A decoded raw answers from
-    the analysis its decoder read off the plot; a plot name, or a reader that
-    is not decoded, by ``pattern``'s word-boundary match on the name."""
-    if not isinstance(subject, str):
-        if (descriptor := _selected_descriptor(subject)) is not None:
-            return descriptor.analysis in analyses
-        subject = detect_sim_type(subject)
-    return bool(pattern.search(subject))
+def _classified(raw: RawData, analyses: frozenset[Analysis]) -> bool:
+    """Whether ``raw``'s selected plot holds one of ``analyses``, as its
+    decoder read the plot (``decoded_raw.plot_analysis``)."""
+    descriptor = _selected_descriptor(raw)
+    return descriptor is not None and descriptor.analysis in analyses
 
 
-def is_ac_analysis(subject: PlotSubject) -> bool:
+def is_ac_analysis(raw: RawData) -> bool:
     """Whether the plot is AC-shaped: an AC analysis, or the results of a
     frequency response analysis, which LTspice writes in the same layout."""
-    return _classified(subject, AC_SHAPED, _RE_AC)
+    return _classified(raw, AC_SHAPED)
 
 
-def is_noise_analysis(subject: PlotSubject) -> bool:
+def is_noise_analysis(raw: RawData) -> bool:
     """Whether the plot is a noise run."""
-    return _classified(subject, _NOISE, _RE_NOISE)
+    return _classified(raw, _NOISE)
 
 
-def is_operating_point(subject: PlotSubject) -> bool:
+def is_operating_point(raw: RawData) -> bool:
     """Whether the plot is a bias-point solve (``.op``)."""
-    return _classified(subject, _OP, _RE_OP)
+    return _classified(raw, _OP)
 
 
-def is_dc_analysis(subject: PlotSubject) -> bool:
+def is_dc_analysis(raw: RawData) -> bool:
     """Whether the plot is a .DC sweep."""
-    return _classified(subject, _DC, _RE_DC)
+    return _classified(raw, _DC)
 
 
-def is_transient_analysis(subject: PlotSubject) -> bool:
+def is_transient_analysis(raw: RawData) -> bool:
     """Whether the plot is a transient run."""
-    return _classified(subject, _TRANSIENT, _RE_TRANSIENT)
+    return _classified(raw, _TRANSIENT)
 
 
 def get_step_count(raw: RawData) -> int:
@@ -396,15 +371,10 @@ def get_step_count(raw: RawData) -> int:
         raw: Selected decoded plot or structural reader
 
     Returns:
-        Number of validated step slices. Legacy lookup misses default to one;
-        decoded plots with unresolved boundaries refuse numeric selection.
+        Number of validated step slices; a decoded plot whose step
+        boundaries are unresolved refuses rather than guessing.
     """
-    if _selected_descriptor(raw) is not None:
-        return len(raw.get_steps())
-    try:
-        return len(raw.get_steps())
-    except _RAW_ACCESS_ERRORS:
-        return 1
+    return len(raw.get_steps())
 
 
 def real_axis(axis: np.ndarray) -> np.ndarray:
@@ -488,50 +458,32 @@ def declared_type(raw: RawData, name: str) -> str | None:
 
 
 def trace_unit(raw: RawData, name: str) -> str | None:
-    """Physical unit from the selected decoded descriptor, including unknown units.
-
-    Structural readers use declared ``whattype`` and then a ``V(``/``I(``
-    prefix. A decoded descriptor's absent unit never falls back to that guess:
-    native transfer, root and sensitivity quantities may be declared voltage.
-
-    Deliberately never guesses a unit from a device operating-point parameter name
-    (e.g. it won't claim ``@m1[gm]`` is siemens unless the simulator typed the
-    trace as ``admittance``) — that would be a vendor catalog, not a relay.
+    """Physical unit from the selected decoded descriptor, None where it
+    gives none. An absent unit is never guessed from the trace's name: native
+    transfer, root and sensitivity quantities may be declared voltage, and a
+    device parameter (``@m1[gm]``) has the unit the simulator typed it with or
+    none — a guess from the name would be a vendor catalog, not a relay.
     """
-    if descriptor := _selected_descriptor(raw):
-        for trace in descriptor.traces:
-            if trace.name.lower() == name.lower():
-                return trace.unit
+    descriptor = _selected_descriptor(raw)
+    if descriptor is None:
         return None
-    unit = whattype_unit(declared_type(raw, name))
-    if unit:
-        return unit
-    low = name.lstrip().lower()
-    if low.startswith("v("):
-        return "V"
-    if low.startswith("i") and "(" in low:
-        return "A"
+    for trace in descriptor.traces:
+        if trace.name.lower() == name.lower():
+            return trace.unit
     return None
 
 
 def dc_axis_name(raw: RawData) -> tuple[str | None, str | None]:
-    """``(name, SI unit)`` of a .dc sweep's swept-variable axis (trace 0).
-
-    Decoded plots use their sampled axis descriptor; a table has no axis even
-    when trace zero is declared voltage or frequency. Structural readers use
-    trace zero and its declared ``whattype``. Lets readers label a .dc sweep by its
-    swept variable (e.g. ``Vin`` / ``Vin_V``) instead of a generic ``t``/``sweep``
-    tag — the one place that introspection lives, shared by the text and CSV paths.
+    """``(name, SI unit)`` of the selected plot's sampled axis, ``(None, None)``
+    for a table (which has none even when trace zero is declared voltage or
+    frequency). Lets readers label a .dc sweep by its swept variable (e.g.
+    ``Vin`` / ``Vin_V``) instead of a generic ``t``/``sweep`` tag — the one
+    place that introspection lives, shared by the text and CSV paths.
     """
-    if descriptor := _selected_descriptor(raw):
-        return (descriptor.axis.name, descriptor.axis.unit) if descriptor.axis else (None, None)
-    # Legacy readers may not expose a trace zero for an axis-less plot.
-    with contextlib.suppress(*_RAW_ACCESS_ERRORS):
-        ax = raw.get_trace(0)
-        name = getattr(ax, "name", None)
-        if name:
-            return str(name), whattype_unit(getattr(ax, "whattype", None))
-    return None, None
+    descriptor = _selected_descriptor(raw)
+    if descriptor is None or descriptor.axis is None:
+        return None, None
+    return descriptor.axis.name, descriptor.axis.unit
 
 
 def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
@@ -1065,6 +1017,7 @@ def build_simulation_summary(
 
     summary["observations"] = surface_observations(
         summary,
+        analysis=descriptor.analysis if descriptor is not None else None,
         requested=requested,
         value_traces=value_traces,
         source_amplitudes=source_amplitudes,
@@ -1381,7 +1334,7 @@ def _progress_of_plot(
         return progress(*_ascii_last_point(handle, header.data_start, size, width, n_vars))
 
     writer = _raw_writer(fields, width, dialect)
-    complex_values = "complex" in flags or (plot or "").lower() == "ac analysis"
+    complex_values = "complex" in flags or plot_analysis(plot or "", "") == "ac"
     if complex_values:
         value_size = 16
     elif writer != "ltspice" or "double" in flags:

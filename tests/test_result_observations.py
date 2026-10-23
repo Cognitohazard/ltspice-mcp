@@ -421,37 +421,29 @@ class TestSurfaceObservations:
         wave = RUNAWAY_WAVE
         amps = {"V1": 0.1}
 
-        def run(sim_type):
+        def run(analysis):
             return surface_observations(
-                {"sim_type": sim_type},
-                value_traces={"V(n2)": wave},
-                source_amplitudes=amps,
+                {}, analysis=analysis, value_traces={"V(n2)": wave}, source_amplitudes=amps
             )
 
-        assert any(o["code"] == "extreme_value" for o in run("Transient Analysis"))
-        assert any(o["code"] == "extreme_value" for o in run("Operating Point"))
+        assert any(o["code"] == "extreme_value" for o in run("transient"))
+        assert any(o["code"] == "extreme_value" for o in run("op"))
         # AC/noise traces are per-frequency small-signal gains; a .dc sweep's
         # source range comes from the .dc line, not the V-card. All disarmed.
-        assert run("AC Analysis") == []
-        assert run("Noise Spectral Density") == []
-        assert run("DC transfer characteristic") == []
-        # An unparseable raw defaults sim_type to 'Unknown' — the allow-list
-        # gate (not an AC/noise exclusion list) must keep those disarmed too.
-        assert run("Unknown") == []
-        assert (
-            surface_observations(
-                {},  # no sim_type key at all
-                value_traces={"V(n2)": wave},
-                source_amplitudes=amps,
-            )
-            == []
-        )
+        assert run("ac") == []
+        assert run("noise") == []
+        assert run("dc") == []
+        # A plot the decoder could not classify, or no plot at all: the
+        # allow-list gate (not an AC/noise exclusion list) keeps those disarmed.
+        assert run("unknown") == []
+        assert run(None) == []
 
     def test_largest_source_is_the_reference(self):
         # The 12 V rail bounds the scale, not the 10 mV signal input — a
         # gain-of-100 amplifier output (1 V) stays quiet.
         obs = surface_observations(
-            {"sim_type": "Transient Analysis"},
+            {},
+            analysis="transient",
             value_traces={"V(out)": np.array([0.0, 1.0])},
             source_amplitudes={"Vsig": 0.01, "Vdd": 12.0},
         )

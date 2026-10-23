@@ -23,6 +23,7 @@ from typing import Any, BinaryIO
 import numpy as np
 from spicelib.raw.plot_data import PlotData
 
+from ltspice_mcp.lib.decoded_raw import Analysis, header_analysis
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
 from ltspice_mcp.lib.parser_capture import CapturedFile, CapturedInputs
 from ltspice_mcp.lib.raw_header import (
@@ -40,17 +41,13 @@ _INPUT_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.lo
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
 _STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.I)
 _STEP_PARAMETER = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
-_SAMPLED_LT_PLOTS = {
-    "transient analysis",
-    "ac analysis",
-    "dc transfer characteristic",
-    "noise spectral density - (v/hz½ or a/hz½)",
-}
-#: The LTspice plots that, stepped, may open with the stepped parameters and
+#: The LTspice analyses whose stepped plot is split where its axis restarts.
+_SAMPLED_LT_ANALYSES: frozenset[Analysis] = frozenset({"transient", "ac", "dc", "noise"})
+#: The LTspice analyses that, stepped, may open with the stepped parameters and
 #: then hold one point a step, with no step named in the log: a stepped .op
 #: always (``raw/step_op``), and a stepped .ac at one frequency, which then
 #: stores no frequency at all (``raw/step_ac_one_freq``). Both builds alike.
-_PARAMETERS_FIRST_LT_PLOTS = {"operating point", "ac analysis"}
+_PARAMETERS_FIRST_LT_ANALYSES: frozenset[Analysis] = frozenset({"op", "ac"})
 
 
 class RawDecodeError(ValueError):
@@ -308,7 +305,7 @@ def _prepared_plot(
 
 
 def _validated_step_starts(
-    header: RawPlotHeader, data: np.ndarray, row_limit: int
+    header: RawPlotHeader, analysis: Analysis, data: np.ndarray, row_limit: int
 ) -> list[int] | None:
     """Admit the native restart convention only for unambiguous ordered runs."""
     if not np.isfinite(data[0]):
@@ -320,8 +317,8 @@ def _validated_step_starts(
             raise RawLimitError("step_rows limit exceeded in RAW ranges")
         starts.extend(offset + int(index) for index in matches)
     ends = [*starts[1:], header.point_count]
-    direction = 0 if header.plot_name.lower() == "dc transfer characteristic" else 1
-    time_signs = header.plot_name.lower() == "transient analysis"
+    direction = 0 if analysis == "dc" else 1
+    time_signs = analysis == "transient"
     for start, end in zip(starts, ends, strict=True):
         # A singleton cannot distinguish a real step from a repeated start
         # coordinate. Refuse instead of assigning the plateau to a log row.
@@ -379,10 +376,10 @@ def _step_facts(
         return result
     result["step_status"] = "unresolved"
     result["step_ranges"] = None
-    plot_name = header.plot_name.lower()
+    analysis = header_analysis(header)
     parameters = leading_parameters(header)
-    if header.dialect == "ltspice" and plot_name in _PARAMETERS_FIRST_LT_PLOTS and parameters:
-        # See _PARAMETERS_FIRST_LT_PLOTS: the raw's own step values are the record.
+    if header.dialect == "ltspice" and analysis in _PARAMETERS_FIRST_LT_ANALYSES and parameters:
+        # See _PARAMETERS_FIRST_LT_ANALYSES: the raw's own step values are the record.
         result["step_status"] = "matched"
         result["step_ranges"] = [
             {"step_index": index, "offset": index, "length": 1, "log_row": None}
@@ -390,16 +387,16 @@ def _step_facts(
         ]
         result["step_parameters"] = parameters
         return result
-    if not has_axis or plot_name not in _SAMPLED_LT_PLOTS:
+    if not has_axis or analysis not in _SAMPLED_LT_ANALYSES:
         if header.point_count == 1 and log["status"] == "parsed" and len(log["rows"]) > 1:
             result["step_status"] = "mismatch"
         return result
     if header.dialect != "ltspice":
         return result
     first = header.variables[0]
-    if plot_name == "transient analysis":
+    if analysis == "transient":
         expected_axis = "time"
-    elif plot_name == "dc transfer characteristic":
+    elif analysis == "dc":
         expected_axis = None
     else:
         expected_axis = "frequency"
@@ -407,7 +404,7 @@ def _step_facts(
         first.name.lower() != expected_axis or first.declared_type.lower() != expected_axis
     ):
         return result
-    starts = _validated_step_starts(header, data, row_limit)
+    starts = _validated_step_starts(header, analysis, data, row_limit)
     if starts is None or log["status"] != "parsed" or not log["rows"] or plot_count != 1:
         return result
     for row in log["rows"]:

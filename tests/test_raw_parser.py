@@ -13,6 +13,7 @@ import pytest
 from spicelib import RawRead
 
 from ltspice_mcp.lib import log_parser, raw_parser, services
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -20,16 +21,14 @@ from ltspice_mcp.lib.raw_parser import (
     detect_sim_type,
     extract_operating_point,
     get_step_count,
-    is_ac_analysis,
-    is_dc_analysis,
     nearest_index,
     query_point_value,
     read_partial_raw_progress,
     sample_to_dict,
-    trace_unit,
     whattype_unit,
 )
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
 from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
@@ -153,8 +152,7 @@ def test_operating_point_classifies_device_op_points():
 
 class TestTraceUnit:
     """Units come from the simulator's declared ``whattype`` (relayed, not
-    invented); name-prefix is only a fallback, and a parameter name never gets a
-    guessed unit."""
+    invented); a trace's name never supplies one."""
 
     def test_whattype_unit_known_and_unknown(self):
         assert whattype_unit("voltage") == "V"
@@ -163,30 +161,6 @@ class TestTraceUnit:
         assert whattype_unit("admittance") == "S"
         assert whattype_unit("notype") is None
         assert whattype_unit(None) is None
-
-    def test_trace_unit_falls_back_to_name_prefix(self):
-        class _NoTraceRaw:
-            def get_trace(self, name):  # simulator gives no type info
-                raise KeyError(name)
-
-        raw = cast(RawRead, _NoTraceRaw())
-        assert trace_unit(raw, "V(out)") == "V"
-        assert trace_unit(raw, "Id(M1)") == "A"
-        assert trace_unit(raw, "I(R1)") == "A"
-        # A device-internal parameter name is NEVER assigned a guessed unit.
-        assert trace_unit(raw, "@m1[gm]") is None
-
-    def test_trace_unit_prefers_declared_whattype(self):
-        class _Trace:
-            whattype = "admittance"
-
-        class _TypedRaw:
-            def get_trace(self, name):
-                return _Trace()
-
-        # The simulator typed @m1[gm] as an admittance -> relay S, don't fall
-        # through to "no unit".
-        assert trace_unit(cast(RawRead, _TypedRaw()), "@m1[gm]") == "S"
 
 
 class TestOffsetAwareRawRead:
@@ -567,7 +541,7 @@ class TestBiasPointBucketing:
         It does not start with ``V(``, so the name test alone would drop it;
         what places it is the simulator having typed it ``impedance``.
         """
-        raw = RawRead(str(_ltspice_transfer_function_raw(tmp_path)))
+        raw = rec.decode_file(_ltspice_transfer_function_raw(tmp_path), tmp_path).raw
 
         assert raw_parser.declared_type(raw, "V1#input_impedance") == "impedance"
         assert raw_parser.trace_unit(raw, "V1#input_impedance") == "Ω"
@@ -936,43 +910,11 @@ class TestDetectSimType:
         ("fixture", "plotname"),
         [("ltspice_tran_rc", "Transient Analysis"), ("ltspice_ac_rc", "AC Analysis")],
     )
-    def test_reads_the_plotname_of_a_recorded_raw(self, fixture: str, plotname: str):
-        assert detect_sim_type(_recorded(fixture)) == plotname
-
-    def test_fallback_on_error(self):
-        # ValueError is what spicelib raises for a property the raw doesn't
-        # carry. The fallback is for that shape, not for an arbitrary fault:
-        # anything else propagates rather than being reported as "Unknown".
-        raw = MagicMock()
-        raw.get_raw_property.side_effect = ValueError("no property")
-        assert detect_sim_type(raw) == "Unknown"
-
-
-class TestIsAcAnalysis:
-    def test_ac_variants(self):
-        assert is_ac_analysis("AC Analysis") is True
-        assert is_ac_analysis("ac analysis") is True
-
-    def test_non_ac(self):
-        assert is_ac_analysis("Transient Analysis") is False
-        assert is_ac_analysis("DC sweep") is False
-
-
-class TestIsDcAnalysis:
-    def test_dc_analysis_variants(self):
-        assert is_dc_analysis("DC transfer characteristic") is True
-        assert is_dc_analysis("DC sweep") is True
-
-    def test_dc_analysis_non_dc(self):
-        assert is_dc_analysis("Transient Analysis") is False
-        assert is_dc_analysis("AC Analysis") is False
-        assert is_dc_analysis("Noise Spectral Density") is False
-
-    def test_dc_analysis_word_boundary(self):
-        # "dc" appearing only inside a word (substring present, no word
-        # boundary) must not match — these discriminate \bDC\b from `"dc" in s`.
-        assert is_dc_analysis("abcdc") is False
-        assert is_dc_analysis("adc") is False
+    def test_reads_the_plotname_of_a_recorded_raw(
+        self, fixture: str, plotname: str, tmp_path: Path
+    ):
+        raw = rec.decode_file(FIXTURES_DIR / f"{fixture}.raw", tmp_path).raw
+        assert detect_sim_type(raw) == plotname
 
 
 class TestGetStepCount:
@@ -982,13 +924,6 @@ class TestGetStepCount:
     def test_counts_the_steps_of_a_recorded_raw(self, fixture: str, steps: int):
         # ltspice_step_tran stepped r over 1, 22 and 680 (see its .log).
         assert get_step_count(_recorded(fixture)) == steps
-
-    def test_error_returns_1(self):
-        # A lookup miss inside the raw, not an arbitrary fault — see the note
-        # on detect_sim_type's fallback above.
-        raw = MagicMock()
-        raw.get_steps.side_effect = IndexError("no steps")
-        assert get_step_count(raw) == 1
 
 
 class TestSteppedTransientAxes:
@@ -1059,7 +994,7 @@ class TestQueryPointValue:
         axis = np.array([100.0, 1000.0, 10000.0])
         # Unity gain at all freqs, 0 phase
         wave = np.array([1.0 + 0j, 1.0 + 0j, 1.0 + 0j])
-        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], axis, {"V(out)": wave}, plotname="AC Analysis")
 
         result = query_point_value(raw, "V(out)", 1000.0)
         assert "magnitude_db" in result
@@ -1087,7 +1022,7 @@ class TestComputeAcBandwidthMetrics:
         freqs = np.logspace(0, 6, 1000)  # 1Hz to 1MHz
         fc = 1000  # 1kHz cutoff
         wave = 1 / (1 + 1j * freqs / fc)
-        raw = make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], freqs, {"V(out)": wave}, plotname="AC Analysis")
 
         metrics = compute_ac_bandwidth_metrics(raw, "V(out)")
         # Referenced to the 1 Hz sample (a 1e-6 power ratio below DC); at 166
@@ -1100,7 +1035,7 @@ class TestComputeAcBandwidthMetrics:
         fc = 1000
         gain = 100  # 40dB DC gain
         wave = gain / (1 + 1j * freqs / fc)
-        raw = make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
+        raw = make_raw_mock(["V(out)"], freqs, {"V(out)": wave}, plotname="AC Analysis")
 
         metrics = compute_ac_bandwidth_metrics(raw, "V(out)")
         # |H(f)| = 1 at f = fc * sqrt(gain^2 - 1); the response is a straight
@@ -1126,12 +1061,11 @@ class TestOpSteppingFailureRawGate:
         return build_simulation_summary(raw, captured_log_facts(tmp_path, log))
 
     @staticmethod
-    def _op_raw(trace: str) -> MagicMock:
-        # A real .op raw has no axis — get_axis raises "does not have an axis".
+    def _op_raw(trace: str) -> DecodedRaw:
+        # A real .op raw has no axis.
         raw = make_raw_mock(
             [trace], np.array([0.0]), {trace: np.array([1.0])}, plotname="Operating Point"
         )
-        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
         return raw
 
     def test_finite_data_demotes_to_warning(self, tmp_path: Path):
@@ -1239,12 +1173,12 @@ class TestBuildSimulationSummary:
             ["V(in)", "V(out)"],
             sweep,
             {"V(in)": sweep, "V(out)": wave},
-            plotname="DC sweep",
+            plotname="DC transfer characteristic",
         )
 
         summary = build_simulation_summary(raw, logs=None)
 
-        assert summary["sim_type"] == "DC sweep"
+        assert summary["sim_type"] == "DC transfer characteristic"
         assert summary["range"] == {"sweep_start": 0.0, "sweep_end": 5.0}
 
     def test_summary_with_duration(self):

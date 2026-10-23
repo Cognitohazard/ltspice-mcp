@@ -1779,7 +1779,7 @@ async def _waveform(
         point_limit = min(recipe.max_points, state.config.max_points_returned)
         for signal_input in recipe.signals:
             signal = services.resolve_signal(raw, signal_input)
-            axis = metrics.guarded_axis(raw, step, run.source.raw)
+            axis = metrics.guarded_axis(raw, step)
             wave = signal.wave(raw, step)
             if start is not None or end is not None:
                 lo, hi = metrics.window_indices(

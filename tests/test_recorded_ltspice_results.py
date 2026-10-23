@@ -69,7 +69,7 @@ from tests._asc_ops import inspect_one
 from tests._ltspice_recorded import declared_points, header_fields
 from tests.conftest import SyncApi, make_experiment_job
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
-from tests.test_decoded_raw import assert_classified_as_named
+from tests.test_decoded_raw import assert_every_plot_classified
 
 
 def complete_raws(build: str) -> list[str]:
@@ -104,11 +104,11 @@ def test_every_recorded_raw_decodes_to_the_traces_its_header_declares(
 ):
     """Binary and text, four-byte and eight-byte, real and complex, stepped,
     windowed, uncompressed, converted to Fast Access, with subcircuits; and
-    each is classified by its decoded analysis as its plot name is."""
+    each plot is read as an analysis the readers know."""
     parsed = rec.decode(build, case_id, tmp_path)
     assert parsed.raw.get_trace_names() == declared_names(build, case_id)
     assert parsed.raw.dialect == "ltspice"
-    assert_classified_as_named(parsed.raw)
+    assert_every_plot_classified(parsed.raw)
     if parsed.raw.descriptor.step_status == "unresolved":
         return  # a stepped operating point: see TestSteppedRuns
     points = declared_points(build, case_id)

@@ -51,16 +51,13 @@ def captured_log_facts(
 def _raw(*, operating=False, values=None, steps=None):
     values = np.array([1.0, 1.0, 1.0]) if values is None else np.array(values)
     axis = np.arange(len(values), dtype=float)
-    raw = make_raw_mock(
+    return make_raw_mock(
         ["V(out)"] if operating else ["time", "V(out)"],
         axis,
         {"time": axis, "V(out)": values},
         plotname="Operating Point" if operating else "Transient Analysis",
         steps=steps,
     )
-    if operating:
-        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
-    return raw
 
 
 def test_recorded_summary_uses_facts_after_all_files_removed(tmp_path, monkeypatch):

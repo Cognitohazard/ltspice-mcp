@@ -11,13 +11,13 @@ what the mocks cannot cover.
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import owner_path
 from ltspice_mcp.lib.metrics import (
     MetricValue,
@@ -25,9 +25,6 @@ from ltspice_mcp.lib.metrics import (
 )
 from ltspice_mcp.lib.metrics import (
     filter_operating_point as _filter_operating_point,
-)
-from ltspice_mcp.lib.metrics import (
-    guarded_axis as _guarded_axis,
 )
 from ltspice_mcp.lib.metrics import (
     noise_input_source_unit as _noise_input_source_unit,
@@ -88,7 +85,7 @@ async def _metric(
     )
 
 
-def _inject_raw_mock(state: SessionState, path: Path, raw: MagicMock) -> None:
+def _inject_raw_mock(state: SessionState, path: Path, raw: DecodedRaw) -> None:
     """Supply analytic waves to the recipe's result-loading seam."""
     inject_numeric_raw(state, path, raw)
 
@@ -819,7 +816,8 @@ class TestPulseResponse:
         wd = wn * np.sqrt(1 - zeta**2)
         phi = np.arctan2(np.sqrt(1 - zeta**2), zeta)
         y_post = 1 - np.exp(-zeta * wn * t_post) / np.sqrt(1 - zeta**2) * np.sin(wd * t_post + phi)
-        t = np.concatenate([t_pre, t_post])
+        # A run's time starts at zero: the step comes 1 ms in.
+        t = np.concatenate([t_pre, t_post]) + 1e-3
         y = np.concatenate([y_pre, y_post])
         raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
@@ -843,7 +841,7 @@ class TestPulseResponse:
         # at the first peak, t = pi/wd.
         expected_pct = 100 * np.exp(-np.pi * zeta / np.sqrt(1 - zeta**2))
         assert sc["overshoot_pct"] == pytest.approx(expected_pct, rel=1e-3)
-        assert sc["peak_time"] == pytest.approx(np.pi / wd, rel=1e-3)
+        assert sc["peak_time"] == pytest.approx(1e-3 + np.pi / wd, rel=1e-3)
         assert sc["initial_value"] == 0.0
         assert sc["steady_state_value"] == 1.0
 
@@ -872,7 +870,7 @@ class TestPulseResponse:
         wd = wn * np.sqrt(1 - zeta**2)
         phi = np.arctan2(np.sqrt(1 - zeta**2), zeta)
         y_post = 1 - np.exp(-zeta * wn * t_post) / np.sqrt(1 - zeta**2) * np.sin(wd * t_post + phi)
-        t = np.concatenate([t_pre, t_post])
+        t = np.concatenate([t_pre, t_post]) + 0.4e-3
         y = np.concatenate([np.zeros_like(t_pre), y_post])
         raw = make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
         _inject_raw_mock(state_no_sim, raw_file, raw)
@@ -1358,48 +1356,24 @@ class TestParseFreqUnitTolerance:
 # ---------------------------------------------------------------------------
 
 
-def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
+def _inject_raw(state: SessionState, path: Path, raw: DecodedRaw) -> None:
     inject_numeric_raw(state, path, raw)
 
 
-def _ac_raw_mock() -> MagicMock:
-    """An AC raw mock: real frequency axis + complex first-order-LPF response."""
-    raw = MagicMock()
-    raw.get_raw_property.return_value = "AC Analysis"
-    raw.get_trace_names.return_value = ["frequency", "V(out)"]
+def _ac_raw_mock():
+    """An AC raw: real frequency axis + complex first-order-LPF response."""
     freq = np.logspace(0, 5, 200)  # 1 Hz .. 100 kHz
     fc = 1591.5
     H = 1.0 / (1.0 + 1j * (freq / fc))
-    raw.get_axis.return_value = freq
-    raw.get_steps.return_value = [0]
-    raw.get_wave = lambda name, step=0: H
-    return raw
-
-
-def _stepped_ac_raw(fcs: list[float]) -> MagicMock:
-    """A stepped AC raw: one first-order-LPF response per cutoff in ``fcs``."""
-    raw = MagicMock()
-    raw.get_raw_property.return_value = "AC Analysis"
-    raw.get_trace_names.return_value = ["frequency", "V(out)"]
-    freq = np.logspace(0, 5, 200)
-    responses = [1.0 / (1.0 + 1j * (freq / fc)) for fc in fcs]
-    raw.get_axis.return_value = freq
-    raw.get_steps.return_value = [{"fc": fc} for fc in fcs]
-    raw.get_wave = lambda name, step=0: responses[step]
-    return raw
+    return make_raw_mock(["frequency", "V(out)"], freq, {"V(out)": H}, plotname="AC Analysis")
 
 
 @pytest.mark.asyncio
 class TestQueryValueMagnitudeLinear:
     async def test_ac_returns_magnitude_linear(self, state_no_sim: SessionState, work_dir: Path):
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "AC Analysis"
-        raw.get_trace_names.return_value = ["frequency", "V(out)"]
         freq = np.array([10.0, 100.0, 1000.0])
         volt = np.array([1 + 0j, 0.7 + 0.7j, 0.1 + 0j])
-        raw.get_axis.return_value = freq
-        raw.get_steps.return_value = [0]
-        raw.get_wave = lambda name, step=0: volt
+        raw = make_raw_mock(["frequency", "V(out)"], freq, {"V(out)": volt}, "AC Analysis")
         path = work_dir / "ac.raw"
         _inject_raw(state_no_sim, path, raw)
 
@@ -2015,10 +1989,10 @@ class TestNoiseIntegralHandler:
                 NoiseIntegralRecipe(key="noise_integral", metric="noise_integral"),
             )
 
-    def _inoise_raw_mock(self) -> MagicMock:
+    def _inoise_raw_mock(self) -> DecodedRaw:
         freq = np.logspace(1, 5, 20)
         return make_raw_mock(
-            plotname="Noise Spectral Density",
+            plotname="Noise Spectral Density - (V/Hz½ or A/Hz½)",
             trace_names=["frequency", "V(onoise)", "V(inoise)"],
             axis=freq,
             waves={
@@ -2031,8 +2005,8 @@ class TestNoiseIntegralHandler:
     async def test_inoise_unit_unverified_without_job(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        # No job_id -> no deck to check -> falls back to the (possibly wrong)
-        # trace-derived unit, but must say so rather than claim certainty.
+        # No job_id -> no deck to check: whether the .NOISE source is a voltage
+        # or a current is unknown, and the result says so rather than guess.
         raw_file = work_dir / "noise_bare.raw"
         _inject_raw_mock(state_no_sim, raw_file, self._inoise_raw_mock())
 
@@ -2043,8 +2017,8 @@ class TestNoiseIntegralHandler:
         )
         sc = res
         assert sc is not None
-        assert sc["unit"] == "V"
-        assert any("Could not verify" in w for w in sc["warnings"])
+        assert sc["unit"] == ""
+        assert any("Could not verify" in w and "unit is unknown" in w for w in sc["warnings"])
 
 
 class TestNoiseInputSourceUnit:
@@ -2142,7 +2116,7 @@ class TestThdHandler:
         assert res["unit"] == "V"
 
 
-def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock:
+def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> DecodedRaw:
     """An AC raw mock carrying one complex response under ``signal``."""
     return make_raw_mock(
         plotname="AC Analysis",
@@ -2153,7 +2127,7 @@ def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock
 
 
 async def _assert_relays_solve_failure(
-    state: SessionState, work_dir: Path, name: str, raw: MagicMock, run
+    state: SessionState, work_dir: Path, name: str, raw: DecodedRaw, run
 ) -> None:
     """Drive ``handler`` against a raw whose sibling .log reports a singular
     matrix, and assert the failure surfaces in the rendered result. Covers the
@@ -2446,28 +2420,3 @@ class TestQueryValueExactMatch:
             ValueRecipe(key="value", metric="value", expr="V(out)", at="2"),
         )
         assert exact["exact_match"] is True
-
-
-class TestGuardedAxisSteppedOpHint:
-    """A no-axis raw that is really a stepped .op (collapsed to step 0) should
-    point the caller at the .dc conversion where they hit the wall, not just
-    say 'no axis'."""
-
-    @staticmethod
-    def _no_axis_raw():
-        raw = MagicMock()
-        raw.get_axis.side_effect = Exception("no axis in this plot")
-        return raw
-
-    def test_plain_op_points_at_operating_point(self, work_dir: Path):
-
-        raw_path = work_dir / "op.raw"  # no sibling .log
-        with pytest.raises(ResultError, match="operating_point"):
-            _guarded_axis(self._no_axis_raw(), 0, raw_path)
-
-    def test_stepped_op_points_at_dc_conversion(self, work_dir: Path):
-
-        raw_path = work_dir / "stepped_op.raw"
-        raw_path.with_suffix(".log").write_text(".step temp=-40\n.step temp=25\n.step temp=85\n")
-        with pytest.raises(ResultError, match=r"\.dc temp"):
-            _guarded_axis(self._no_axis_raw(), 0, raw_path)

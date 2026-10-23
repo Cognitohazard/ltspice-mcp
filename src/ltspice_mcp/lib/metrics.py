@@ -61,7 +61,7 @@ from ltspice_mcp.lib.device_names import (
     writes_xvii_names,
 )
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -279,48 +279,17 @@ def _no_axis_error(raw: DecodedRaw | DecodedPlot, step: int) -> NoAxisError:
     )
 
 
-def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
-    """Real-valued sweep axis for ``step``, or a clean error for a no-axis raw.
-
-    spicelib's ``get_axis`` raises when a result has no axis (e.g. an Operating
-    Point run); convert that into a friendly ResultError pointing at
-    ``operating_point`` rather than letting it surface as a generic internal
-    error. AC frequency axes come back complex — strip to the real part.
-
-    When ``raw_path`` is given, a no-axis raw that is really a stepped ``.op``
-    read at its first step (the log shows >1 bias iteration) gets the same
-    ``.dc``-conversion pointer ``build_simulation_summary`` emits — so the
-    confused caller learns the fix where they hit the wall, not just that the
-    axis is missing.
-    """
-    if isinstance(raw, (DecodedRaw, DecodedPlot)):
-        if raw.descriptor.axis is None:
-            raise _no_axis_error(raw, step)
-        axis = np.asarray(raw.get_axis(step=step))
-        if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
-            raise ResultError(
-                "The selected plot has non-real coordinates; a real sampled axis is required."
-            )
-        return real_axis(axis)
-    try:
-        axis = np.asarray(raw.get_axis(step=step))
-    except Exception as e:
-        hint = "Use operating_point for a .op result."
-        if raw_path is not None:
-            log_path = services.AnalysisSource.for_raw(raw_path).log
-            if log_path is not None and log_path.exists():
-                log_steps, op_iters = scan_op_step_log(log_path)
-                if max(len(log_steps), op_iters) > 1:
-                    param = next(iter(log_steps[0].keys()), "param") if log_steps else "<param>"
-                    hint = (
-                        "This is a stepped .op, read here at its first step only. Convert "
-                        f"to '.dc {param} START STOP STEP' to get an axis over every bias "
-                        "point, or use operating_point for a single bias point."
-                    )
-        raise NoAxisError(f"This result has no data axis ({e}). {hint}") from e
-    if np.iscomplexobj(axis):
-        axis = np.real(axis)
-    return axis
+def guarded_axis(raw: DecodedRaw | DecodedPlot, step: int) -> np.ndarray:
+    """Real-valued sweep axis for ``step``, or a clean error for a plot with
+    no sampled axis (an operating point, a table) naming what reads it."""
+    if raw.descriptor.axis is None:
+        raise _no_axis_error(raw, step)
+    axis = np.asarray(raw.get_axis(step=step))
+    if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
+        raise ResultError(
+            "The selected plot has non-real coordinates; a real sampled axis is required."
+        )
+    return real_axis(axis)
 
 
 def window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
@@ -487,9 +456,11 @@ async def relay_solve_failures(
     return data
 
 
-async def _logs_for_raw(source: services.AnalysisSource, state: SessionState, raw) -> DecodedLog:
+async def _logs_for_raw(
+    source: services.AnalysisSource, state: SessionState, raw: DecodedRaw
+) -> DecodedLog:
     """Use companion facts from the same capture when they are already resident."""
-    if isinstance(raw, DecodedRaw) and raw.logs is not None:
+    if raw.logs is not None:
         return raw.logs
     return await services.load_logs(source, state)
 
@@ -505,7 +476,7 @@ async def load_real_signal(
     reject_non_transient(raw)
     resolved = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
     wave = resolved.wave(raw, step)
     if np.iscomplexobj(wave):
         raise ResultError(
@@ -567,7 +538,7 @@ async def load_ac_signal(
             show_hint=False,
         )
     services.validate_step(raw, step)
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
 
     ratio = split_ratio(signal)
     if ratio is not None:
@@ -876,7 +847,9 @@ def is_input_noise(trace: str) -> bool:
     return "inoise" in trace.lower()
 
 
-def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[str | None, bool]:
+def noise_trace_unit(
+    raw: DecodedRaw | DecodedPlot, trace: str, input_source_unit: str | None
+) -> tuple[str | None, bool]:
     """The unit a noise-run trace's density is referred to, and whether it was checked.
 
     The simulator's declared unit (``trace_unit``) stands for every trace but
@@ -886,7 +859,7 @@ def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[st
     when there is none. The unit is of the amplitude; the density is per √Hz.
     """
     unit = trace_unit(raw, trace)
-    if isinstance(raw, (DecodedRaw, DecodedPlot)) and unit is not None:
+    if unit is not None:
         # Descriptors label the stored density; this helper supplies the unit
         # of its integrated amplitude to both density and RMS consumers.
         unit = unit.removesuffix("/√Hz")
@@ -1133,9 +1106,9 @@ async def value(
         raw = await services.load_raw(source, state)
         services.validate_step(raw, step)
         try:
-            axis = guarded_axis(raw, step, source.raw)
+            axis = guarded_axis(raw, step)
         except NoAxisError:
-            if not isinstance(raw, (DecodedRaw, DecodedPlot)) or raw.descriptor.analysis == "op":
+            if raw.descriptor.analysis == "op":
                 return await _value_from_operating_point(source, recipe, raw, step, state)
             if not _ac_point_a_step(raw, step):
                 raise
@@ -1247,16 +1220,7 @@ async def point_value(
                 raw, sig.name, target_x, step, read_wave=lambda: sig.wave(raw, step)
             )
         except NoAxisError as e:
-            if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis != "op":
-                raise _no_axis_error(raw, step) from e
-            # Operating-point raws have no time/frequency axis. Give a precise,
-            # actionable message instead of the generic failure.
-            raise ResultError(
-                "This is an Operating Point result (no time/frequency axis to "
-                "query). Use operating_point to read node voltages and branch "
-                "currents.",
-                show_hint=False,
-            ) from e
+            raise _no_axis_error(raw, step) from e
         except Exception as e:
             raise ResultError(f"Failed to query value: {e}") from e
 
@@ -1313,14 +1277,14 @@ async def signal_stats(
     resolved = services.resolve_signal(raw, recipe.signal)
     signal = resolved.name
     services.validate_step(raw, step)
-    analysis = raw.descriptor.analysis if isinstance(raw, (DecodedRaw, DecodedPlot)) else None
-    if analysis is not None and raw.descriptor.axis is None:
+    analysis = raw.descriptor.analysis
+    if raw.descriptor.axis is None:
         # Nothing to take statistics along; the refusal names what reads it,
         # the value recipe for a point a step.
         guarded_axis(raw, step)
-    if analysis is not None and analysis not in _STATS_ANALYSES:
+    if analysis not in _STATS_ANALYSES:
         raise ResultError(
-            f"signal_stats does not define statistics for {raw.descriptor.analysis!r}. "
+            f"signal_stats does not define statistics for {analysis!r}. "
             "Read this plot's quantities through inspect(kind='results') or "
             "api.load_raw(...).trace(signal) and choose the appropriate calculation.",
             show_hint=False,
@@ -1373,7 +1337,7 @@ async def signal_stats(
             data["warnings"] = failures
         return data
 
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
     wave_real = np.asarray(wave)
 
     # Distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
@@ -1592,7 +1556,7 @@ async def transient_response(
         raw = await services.load_raw(source, state)
         reference = services.resolve_signal(raw, recipe.input)
         if t_start is None:
-            axis = guarded_axis(raw, step, source.raw)
+            axis = guarded_axis(raw, step)
             wave = reference.wave(raw, step)
             if np.iscomplexobj(wave) or len(wave) < 2:
                 raise ResultError(
@@ -1630,7 +1594,7 @@ async def timing(
     signal_b = services.resolve_signal(raw, recipe.to.signal)
     services.validate_step(raw, step)
 
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
     ya_full = signal_a.wave(raw, step)
     yb_full = signal_b.wave(raw, step)
     if np.iscomplexobj(ya_full) or np.iscomplexobj(yb_full):
@@ -2045,7 +2009,7 @@ async def noise_integral(
     services.validate_step(raw, step)
     density_signal = services.resolve_signal(raw, recipe.signal or "onoise")
     signal = density_signal.name
-    freqs = guarded_axis(raw, step, source.raw)
+    freqs = guarded_axis(raw, step)
     density = density_signal.wave(raw, step)
     data = await run_metric(
         source,
@@ -2141,7 +2105,7 @@ async def operating_point(
             at_value = parse_spice_value(at)
         except Exception as e:
             raise ResultError(f"Invalid 'at' value {at!r}: {e}", show_hint=False) from e
-        axis = guarded_axis(raw, step, source.raw)
+        axis = guarded_axis(raw, step)
         if axis.size > 1:
             point_index = nearest_index(axis, at_value)
             sweep_value = float(axis[point_index])
