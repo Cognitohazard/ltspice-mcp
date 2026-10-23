@@ -784,8 +784,57 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
         )
         for a, b in ix.wires
         for _index, part, box in ix.drawn
-        if _through(a, b, box) and not _way_out_from_own_pin(a, b, part, box)
+        if _through(a, b, box)
+        and _meets_drawing(part, a, b)
+        and not _way_out_from_own_pin(a, b, part, box)
     ]
+
+
+def _meet(a: Point, b: Point, c: Point, d: Point) -> bool:
+    """True if segments ``a``-``b`` and ``c``-``d`` share a point, crossing or
+    touching."""
+
+    def side(p: Point, q: Point, r: Point) -> int:
+        cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        return (cross > 0) - (cross < 0)
+
+    def spans(p: Point, q: Point, r: Point) -> bool:
+        return min(p[0], q[0]) <= r[0] <= max(p[0], q[0]) and min(p[1], q[1]) <= r[1] <= max(
+            p[1], q[1]
+        )
+
+    s1, s2, s3, s4 = side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b)
+    if s1 * s2 < 0 and s3 * s4 < 0:
+        return True
+    return (
+        (s1 == 0 and spans(a, b, c))
+        or (s2 == 0 and spans(a, b, d))
+        or (s3 == 0 and spans(c, d, a))
+        or (s4 == 0 and spans(c, d, b))
+    )
+
+
+def _meets_drawing(part: Part, a: Point, b: Point) -> bool:
+    """True if segment ``a``-``b`` meets what ``part`` draws: crosses or
+    touches one of its lines, or passes through one of its rectangles or
+    circles. A part drawn without those is met anywhere."""
+    if not (part.strokes or part.areas):
+        return True
+    return any(_meet(a, b, c, d) for c, d in part.strokes) or any(
+        _through(a, b, area) for area in part.areas
+    )
+
+
+def _encloses(part: Part, body: BBox, x: int, y: int) -> bool:
+    """True if ``(x, y)`` lies within what ``part`` draws: inside one of its
+    rectangles or circles, or closed in by what it draws to the left, right,
+    above and below, as a point inside an amplifier's triangle or on one of
+    its lines is and one in the empty corner of its body beside the triangle
+    is not. A part drawn without lines or areas encloses its whole body."""
+    if any(area.strictly_contains(x, y) for area in part.areas):
+        return True
+    beyond = ((body.x1 - 1, y), (body.x2 + 1, y), (x, body.y1 - 1), (x, body.y2 + 1))
+    return all(_meets_drawing(part, (x, y), edge) for edge in beyond)
 
 
 def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
@@ -902,7 +951,7 @@ def _texts_in_symbol_bodies(ix: _Index) -> list[Finding]:
         )
         for x, y, text, owner in anchors
         for index, part, box in ix.drawn
-        if owner != index and box.strictly_contains(x, y)
+        if owner != index and box.strictly_contains(x, y) and _encloses(part, box, x, y)
     ]
 
 
@@ -984,9 +1033,11 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``duplicate_wire``: two wires with the same two ends, in either order.
     - ``symbol_overlap``: two parts whose boxes share an area, each box with
       its pins: the box ``inspect`` and ``add_component`` report.
-    - ``wire_through_symbol``: a wire through what a part draws, without its
-      pins. A pin drawn apart from the body leaves room between them that an
-      ordinary wire to a nearer pin crosses.
+    - ``wire_through_symbol``: a wire through a part's body that meets what
+      the part draws: one of its lines, rectangles or circles, not an empty
+      corner such as the space beside an amplifier's triangle. The body is
+      without its pins: a pin drawn apart from the body leaves room between
+      them that an ordinary wire to a nearer pin crosses.
     - ``attribute_text_overlap``: a part's attribute text, laid out as
       LTspice lays it out with its extent estimated from LTspice's font,
       that a wire or a line another part draws passes through, or that shares
@@ -994,9 +1045,11 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       text, by more than the estimate's slack (:func:`_core`).
     - ``label_over_component``: a label strictly inside a part's box and on no
       pin. A label on a pin, any part's, is the ordinary flag.
-    - ``text_in_symbol_body``: text anchored inside what another part draws.
-      Only the anchor is tested, so the later lines of a directive that runs
-      down into a part are not reported.
+    - ``text_in_symbol_body``: text anchored inside what another part draws:
+      in one of its rectangles or circles, or closed in by its lines on every
+      side, not in an empty corner of its body. Only the anchor is tested, so
+      the later lines of a directive that runs down into a part are not
+      reported.
     - ``stacked_directive``: two or more directives or comments at exactly one
       anchor, with no guess at how far text reaches.
     - ``label_island``: a net joined only by labels of one name, with no wire

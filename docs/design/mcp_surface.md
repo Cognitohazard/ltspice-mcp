@@ -1271,7 +1271,11 @@ glyphs: `attribute_text_overlap` reports text that a wire or a line another
 part draws passes through, or that lies over a rectangle or circle another
 part draws or over other text, by more than the estimate's slack. Comments,
 directives and labels are checked only where attribute text crosses them, and
-the layout check says so in `observations`.
+the layout check says so in `observations`. No op moves a part's text apart
+from the part, so the remedy is to move the part or what its text crosses.
+`wire_through_symbol` and `text_in_symbol_body` likewise test what a part
+draws, not its box: a wire or a text anchor in the empty corner beside an
+amplifier's triangle is not in the part.
 
 A per-rule finding cap applies only to layout and quality issue rules and to
 `dropped_wire`; `dropped_wire` carries no truncation observation.

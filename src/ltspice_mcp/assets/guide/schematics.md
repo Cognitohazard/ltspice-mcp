@@ -217,7 +217,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   overlap, a wire through a part, a label or text inside one, a part's name or
   value drawn across a wire, another part or other text, a wire LTspice
   leaves out of the netlist), said as soon as the edit that caused them. A
-  part's text moves with the part, so move the part or what its text crosses.
+  part's text moves with the part and no op moves it alone, so the text stays
+  beside the part it names: move the part (`move_component`, or `move` for a
+  region) or what its text crosses.
 - **On an existing sheet, the reported findings are the edit's.** `warnings`
   and `wiring.label_only_pins` list only what your ops introduced or named;
   older ones are counted in `preexisting`, not listed. A batch that only sets

@@ -459,6 +459,16 @@ FRAMED = Part(
     pins=(("IN", 0, 48), ("OUT", 160, 48), ("REF", 112, 64)),
 )
 
+#: An amplifier drawn as a triangle pointing right, as LTspice's opamp is: its
+#: body box has empty corners above and below the slopes.
+TRIANGLE = Part(
+    "U2",
+    box=BBox(-32, -64, 96, 64),
+    body=BBox(-32, -64, 96, 64),
+    pins=(("In-", -32, -32), ("In+", -32, 32), ("OUT", 96, 0)),
+    strokes=(((-32, -64), (-32, 64)), ((-32, 64), (96, 0)), ((96, 0), (-32, -64))),
+)
+
 
 class TestHowTheSheetReads:
     def test_boxes_that_share_an_area_and_boxes_that_only_touch(self) -> None:
@@ -502,6 +512,19 @@ class TestHowTheSheetReads:
         view = SheetView(parts=(r1,), wires=((48, -16, 48, 112), (16, -16, 16, 112)))
         (found,) = only(view, "wire_through_symbol")
         assert found.points == ((16, -16), (16, 112))
+
+    def test_a_wire_through_an_empty_corner_of_a_body_is_not_through_the_part(self) -> None:
+        """Beside an amplifier's slope is inside its box, nowhere near a line
+        it draws; across the triangle is through it."""
+        view = SheetView(parts=(TRIANGLE,), wires=((48, -56, 128, -56), (16, -96, 16, 96)))
+        (found,) = only(view, "wire_through_symbol")
+        assert found.points == ((16, -96), (16, 96))
+
+    def test_a_wire_through_a_rectangle_a_part_draws_is_through_it(self) -> None:
+        plate = Part("C1", body=BBox(0, 0, 64, 96), areas=(BBox(0, 40, 64, 56),))
+        view = SheetView(parts=(plate,), wires=((32, -16, 32, 112), (48, 8, 80, 8)))
+        (found,) = only(view, "wire_through_symbol")
+        assert found.points == ((32, -16), (32, 112))
 
     def test_a_view_that_knows_no_body_uses_the_box(self) -> None:
         assert Part("R1", box=BBox(0, 0, 64, 96)).drawn == BBox(0, 0, 64, 96)
@@ -563,6 +586,18 @@ class TestHowTheSheetReads:
         assert [(one.refs, one.facts, one.detail) for one in found] == [
             (("R1",), {"text": "1k"}, "Text '1k' at (16,48) is anchored inside R1's body"),
             (("R2",), {"text": ".op"}, "Text '.op' at (110,48) is anchored inside R2's body"),
+        ]
+
+    def test_text_in_an_empty_corner_of_a_body_is_not_in_the_part(self) -> None:
+        """Beside an amplifier's slope is inside its box but outside what it
+        draws; inside the triangle, or on one of its lines, is in it."""
+        view = SheetView(
+            parts=(TRIANGLE,),
+            texts=((64, -48, "corner"), (0, 0, "inside"), (32, -32, "on the slope")),
+        )
+        assert [one.facts["text"] for one in only(view, "text_in_symbol_body")] == [
+            "inside",
+            "on the slope",
         ]
 
     def test_attribute_text_across_a_wire_names_the_wire(self) -> None:
