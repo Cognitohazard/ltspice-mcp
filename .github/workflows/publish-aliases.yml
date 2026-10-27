@@ -127,7 +127,7 @@ jobs:
       # Pinned to the v1.14.2 commit SHA (privileged OIDC step — must not follow
       # a mutable ref). Matches publish.yml; Dependabot bumps both together.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
         with:
           packages-dir: packaging/aliases/${{ matrix.alias }}/dist
           skip-existing: true
