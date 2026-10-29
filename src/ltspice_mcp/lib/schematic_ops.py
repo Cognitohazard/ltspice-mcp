@@ -2254,11 +2254,11 @@ KEEPS_WIRING = frozenset(
 # the segments a route found already drawn, the junctions it made, how much a
 # removal took. A value or attribute change reports what it changed. The rest
 # of a result restates the op or carries geometry a surface reports through
-# views of its own. A route's
-# ``wire_count`` is not one: ``already_present`` names the segments it did not
-# draw, and relaying the count would put a line per route on every build. Nor
-# is ``remove_directive``'s ``removed``, which names a kind, not an amount. An
-# op missing here reports nothing beyond its arguments.
+# views of its own. A route's ``wire_count`` is not one: ``already_present``
+# names the segments it did not draw, and relaying the count would put a line
+# per route on every build. Nor is ``remove_directive``'s ``removed``, which
+# names a kind, not an amount. An op missing here reports nothing beyond its
+# arguments.
 OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "set_component_value": ("changed",),
     "set_component_attribute": ("changed",),

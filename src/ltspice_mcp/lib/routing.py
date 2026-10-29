@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Container, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
 
 from ltspice_mcp.lib.connectivity import (
     NetPartition,
@@ -44,34 +43,28 @@ class RouteRule:
     route is not drawn."""
 
     rule_id: str
-    family: Literal["electrical", "drawing"]
     summary: str
 
 
 _RULES = (
     RouteRule(
         "route_diagonal",
-        "drawing",
         "A segment of the route that is neither horizontal nor vertical.",
     ),
     RouteRule(
         "route_through_pin",
-        "electrical",
         "The route passes over a pin that is not on its net, and would connect it.",
     ),
     RouteRule(
         "route_over_wire",
-        "electrical",
         "The route runs along an existing wire, and would join it along that stretch.",
     ),
     RouteRule(
         "route_along_its_end",
-        "electrical",
         "An end on a wire's interior whose leg runs along that wire.",
     ),
     RouteRule(
         "route_touches_net",
-        "electrical",
         "The route touches wiring or a label of a net it does not end on, and would merge it.",
     ),
 )

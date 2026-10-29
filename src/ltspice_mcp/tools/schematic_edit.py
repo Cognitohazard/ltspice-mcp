@@ -947,11 +947,16 @@ def touched_refs(ops: Sequence[ConsolidatedOp]) -> set[str]:
     return refs
 
 
+def rewiring_ops(ops: Sequence[ConsolidatedOp]) -> list[ConsolidatedOp]:
+    """The ops that may rewire what they name: all but ``KEEPS_WIRING``'s, after
+    which every pin is where it was and joined as it was."""
+    return [op for op in ops if op.op not in KEEPS_WIRING]
+
+
 def rewired_refs(ops: Sequence[ConsolidatedOp]) -> set[str]:
-    """The references of ``touched_refs`` that an op which may rewire them
-    names: a part whose value or attributes alone changed (``KEEPS_WIRING``)
-    has its pins where they were and joined as they were."""
-    return touched_refs([op for op in ops if op.op not in KEEPS_WIRING])
+    """The references of ``touched_refs`` that a rewiring op names: a part whose
+    value or attributes alone changed is joined as it was."""
+    return touched_refs(rewiring_ops(ops))
 
 
 def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
@@ -1550,7 +1555,7 @@ async def _evaluate_edit_schematic(
             if not use_template and not sheet_kept:
                 with contextlib.suppress(NetlistError):
                     before_text = _render_editor_text(editor, data_flags)
-                if any(op.op not in KEEPS_WIRING for op in args.ops):
+                if rewiring_ops(args.ops):
                     before_pins = _pin_tables(editor, include_legend=False)[1]
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run, plot)
 
