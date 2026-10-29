@@ -3112,3 +3112,86 @@ def test_a_resistor_named_x_is_not_a_subcircuit(tmp_path):
 `tests/test_circuit_asc.py::TestInstancePrefix::test_the_level_label_check_reads_the_parts_element_letter`
 pins the workaround: a resistor named `X9` given `Level.2` is not warned of,
 and the same part with its own `Prefix X` is.
+
+---
+
+## Bug 31 — `AscEditor` reads the sheet beside a block symbol that gives a `Prefix` as its subcircuit
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-29
+in recordings of LTspice 26 and LTspice XVII.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor._get_subcircuit`).
+**Our workaround:** `_AscEditor._get_subcircuit` in `lib/schematic_ops.py`
+returns no subcircuit for a block symbol that gives a `Prefix`, as it does for
+one with no sheet.
+
+### Summary
+
+For a `BLOCK` symbol with no library, `_get_subcircuit` opens the sheet of the
+symbol's name, beside it or searched for, as the instance's subcircuit.
+LTspice does that only for a block symbol that gives no `Prefix`, as the ones
+LTspice draws for a sheet do. A block symbol that gives `Prefix X` is a call to
+the subcircuit its `Value` names: LTspice exports no `.subckt` from the sheet
+beside it, and a run stops on the undefined call (recorded:
+`export/hier_top`, `export/hier_top_run`; the same block without the `Prefix`,
+`export/hier_plain_top`, exports `.subckt hier_plain` from its sheet on both
+builds).
+
+### Affected code
+
+```python
+lib = symbol.get_library()
+if lib is None and symbol.symbol_type == "BLOCK":
+    asc_filename = symbol.get_schematic_file()
+    ...
+    answer = AscEditor(asc_path)
+```
+
+### Reproduction
+
+`amp.asy` beside `top.asc`, and `amp.asc`, a sheet with ports `IN` and `OUT`:
+
+```
+Version 4
+SymbolType BLOCK
+RECTANGLE Normal -48 -32 48 32
+SYMATTR Prefix X
+PIN -48 0 LEFT 8
+PINATTR PinName IN
+PINATTR SpiceOrder 1
+PIN 48 0 RIGHT 8
+PINATTR PinName OUT
+PINATTR SpiceOrder 2
+```
+
+```python
+editor = AscEditor("top.asc")  # top.asc places amp as X1
+editor.get_subcircuit("X1")    # an AscEditor of amp.asc; LTspice reads no sheet
+```
+
+### Impact
+
+A component inside the sheet (`X1:R1`) can be read and edited through the
+parent although LTspice does not netlist that sheet for the instance, so an
+edit there changes nothing the simulator runs.
+
+### Proposed fix
+
+Open the sheet only for a `BLOCK` symbol whose attributes give no `Prefix`,
+and return no subcircuit for one that gives one, as for a `CELL` symbol with
+no library.
+
+### Suggested upstream test
+
+```python
+def test_a_block_symbol_that_gives_a_prefix_has_no_sheet(tmp_path):
+    (tmp_path / "amp.asy").write_text(AMP_ASY_WITH_PREFIX)
+    (tmp_path / "amp.asc").write_text(AMP_SHEET)
+    (tmp_path / "top.asc").write_text(TOP_PLACING_AMP_AS_X1)
+    assert AscEditor(tmp_path / "top.asc").get_subcircuit("X1") is None
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::test_the_editor_opens_a_blocks_sheet_where_ltspice_reads_it`
+pins the workaround against both recordings.

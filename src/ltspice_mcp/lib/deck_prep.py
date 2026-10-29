@@ -252,8 +252,9 @@ async def resolve_runnable_netlist(
 
 #: What a sheet's folder holds that LTspice reads when it exports the sheet: the
 #: symbols it finds beside the sheet, in its folder or in a folder within it
-#: that the symbol's name says (the ``symbol-beside-sheet`` recordings), and
-#: the model files they name.
+#: that the symbol's name says (the ``symbol-beside-sheet`` recordings), the
+#: model files they name, and a hierarchical block's own sheet, the ``.asc``
+#: beside the symbol of its name (``export-hierarchical-block``).
 _STAGED_SUFFIXES = frozenset({".asy", ".lib", ".sub", ".inc", ".mod"})
 #: The most of those files staged for one export.
 _STAGE_FILE_CAP = 200
@@ -267,7 +268,9 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
     own folder finds its symbols only when they are staged beside it, since
     LTspice looks for a symbol beside the sheet before its libraries, so what
     the sheet's folder holds for its export is copied too: the folders within
-    it keep their places, and dot-folders are passed over. Returns the copy
+    it keep their places, and dot-folders are passed over. A block's own sheet
+    goes with its symbol; the sheet itself is only ever the copy made here.
+    Returns the copy
     and, when :data:`_STAGE_FILE_CAP` left files out, a note saying so.
     Blocking; the caller takes any lock the sheet needs.
     """
@@ -283,13 +286,19 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
         atomic_write_bytes(staged, data, durable=False)
     origin = asc_path.parent
     found: list[Path] = []
+    sheets: list[Path] = []
     for folder, folders, files in os.walk(origin):
         folders[:] = [name for name in folders if not name.startswith(".")]
-        found += (
-            Path(folder, name)
-            for name in files
-            if not name.startswith(".") and Path(name).suffix.lower() in _STAGED_SUFFIXES
-        )
+        for name in (name for name in files if not name.startswith(".")):
+            path, suffix = Path(folder, name), Path(name).suffix.lower()
+            if suffix in _STAGED_SUFFIXES:
+                found.append(path)
+            elif suffix == ".asc" and path != origin / asc_path.name:
+                sheets.append(path)
+    blocks = {
+        (path.parent, path.stem.casefold()) for path in found if path.suffix.lower() == ".asy"
+    }
+    found += (path for path in sheets if (path.parent, path.stem.casefold()) in blocks)
     found = sorted(path for path in found if path.is_file())
     for src in found[:_STAGE_FILE_CAP]:
         target = dest / src.relative_to(origin)

@@ -872,6 +872,28 @@ class TestMeasurements:
         assert value["g_im"] == pytest.approx(-0.5, rel=1e-5)
         assert value["g_mag"] == pytest.approx(1 / math.sqrt(2), rel=1e-5)
 
+    @pytest.mark.parametrize("form", ["polar", "cartesian"])
+    def test_meascplxfmt_changes_the_print_and_not_the_numbers(self, build: str, form: str):
+        """Polar prints (magnitude,angle°) in plain units and cartesian prints
+        (real,imaginary), where the default prints dB: V(out) of the low-pass
+        at its 1 kHz corner reads as its magnitude, and a real result as its
+        signed value, in either."""
+        data = self.measured(build, f"log/meas_cplxfmt_{form}")
+        assert data["failed_measurements"] == []
+        value = {name: entry["values"][0] for name, entry in data["measurements"].items()}
+        assert value == pytest.approx(
+            {
+                "g": 1 / math.sqrt(2),
+                "g_mag": 1 / math.sqrt(2),
+                "g_neg": -1 / math.sqrt(2),
+                "g_ph": -45.0,
+                "g_re": 0.5,
+            },
+            rel=1e-5,
+        )
+        printed = rec.recorded(build, f"log/meas_cplxfmt_{form}.log").read_bytes()
+        assert b"dB" not in printed.replace(b"\x00", b"")
+
     def test_stepped_tables_are_read_per_step(self, build: str):
         data = self.measured(build, "log/meas_step")
         entries = data["measurements"]

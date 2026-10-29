@@ -128,9 +128,11 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
   crossing is found either way.
 - On LTspice, the log prints every AC `.meas` result as dB and angle, a real
   one included: `db(mag(V(out)))` of −3.01 prints as `(9.5722dB,180°)`, the
-  dB of its absolute value with its sign as the angle. Read results through
-  the `measurements` recipe or `api.measurements`, which decode them, not
-  from the log text.
+  dB of its absolute value with its sign as the angle. `.options
+  meascplxfmt=polar` prints magnitude and angle instead, and `=cartesian`
+  real and imaginary parts. Read results through the `measurements` recipe
+  or `api.measurements`, which decode all three: a complex result as its
+  magnitude, a real one with its sign.
 - `MAX` returns the largest signed value. On a trace that stays negative, such
   as a PMOS drain current from −3 mA to −1 mA, `.meas TRAN imax MAX I(V1)`
   returns −1 mA. For the peak magnitude, measure `MAX abs(I(V1))`.

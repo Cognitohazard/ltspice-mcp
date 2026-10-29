@@ -13,8 +13,14 @@ tool-surface changes.
 - `run_experiments` exported a schematic with LTspice where it stands, which
   writes `<name>.net` beside it: a netlist the author kept under that name
   was replaced, and the reply said nothing of it. A run now exports a copy
-  of the sheet, with the symbol and model files of its folder, in the
-  server's store, and writes nothing beside the caller's files.
+  of the sheet, with the symbol and model files of its folder and the own
+  sheet of each hierarchical block beside its symbol, in the server's store,
+  and writes nothing beside the caller's files.
+- `edit_schematic` and the other sheet readers opened the sheet beside a
+  block symbol that gives a `Prefix` as the block's contents. LTspice reads
+  such a block as a call to the subcircuit its `Value` names and reads no
+  sheet for it, so neither does the server now; a block symbol with no
+  `Prefix`, as LTspice draws one, is read from its own sheet as before.
 - Several stepped LTspice results refused every read with "Step boundaries
   are unresolved": a stepped `.tf`, a stepped `.noise` at one frequency, a
   `.op` stepped over temperature, and the results file of a stepped `.fra`.
@@ -107,8 +113,9 @@ tool-surface changes.
   - the `variations` description and guide section 'variations' give the
     one-value `assign` list that holds a target fixed in every case;
   - guide section 'fundamentals' says LTspice prints every AC `.meas`
-    result in its log as dB and angle, a real one included, and that
-    `measurements` decodes them.
+    result in its log as dB and angle, a real one included, or under
+    `.options meascplxfmt` as magnitude and angle or real and imaginary
+    parts, and that `measurements` decodes all three;
   - a read of one step of an LTspice 26 `.op.raw` from a stepped `.tran`
     or `.ac`, which holds one point and does not say whose step it is, is
     refused with that cause and the remedy (run `.op` under the same

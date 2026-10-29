@@ -971,7 +971,9 @@ class _AscEditor(AscEditor):
     the parent without it (``docs/spicelib_bugs.md``, Bug 22). Here such an
     instance loads with no resolved subcircuit, as spicelib already loads a
     cell symbol with no library, and a sheet that is there opens as one of
-    these, so a block nested further down is read the same way.
+    these, so a block nested further down is read the same way. A block symbol
+    that gives a Prefix is the element it names, as a cell is, and LTspice
+    reads no sheet for it even beside it (``export-hierarchical-block``).
     """
 
     def __init__(
@@ -990,6 +992,8 @@ class _AscEditor(AscEditor):
     def _get_subcircuit(self, symbol: Any) -> Any:
         if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
             return super()._get_subcircuit(symbol)
+        if "Prefix" in symbol.attributes:
+            return None
         sheet = symbol.get_schematic_file()
         if not sheet.exists():
             folder = str(self.asc_file_path.parent)

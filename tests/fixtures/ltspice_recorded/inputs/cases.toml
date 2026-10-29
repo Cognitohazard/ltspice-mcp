@@ -194,7 +194,7 @@ extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
 [behaviour.export-hierarchical-block]
 summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it, the symbol drawn as LTspice draws one or given a Prefix of X: the netlist each build exports for it, and what a build writes when it runs the sheet."
-model = ["lib/deck_staging.py", "lib/schematic_ops.py"]
+model = ["lib/deck_prep.py", "lib/schematic_ops.py"]
 # hier_plain.asy is a block symbol with pins IN and OUT and no attribute, as
 # LTspice makes one for a sheet; hier_amp.asy is the same block with
 # SYMATTR Prefix X. Each block's own sheet (hier_plain.asc, hier_amp.asc) is
@@ -472,7 +472,7 @@ keep = ["log"]
 
 [behaviour.log-meas-complex-format]
 summary = "How .options meascplxfmt=polar and =cartesian change the way the log prints an AC .meas result: a complex one, a magnitude, a negative real, a phase and a real part."
-model = ["lib/log_parser.py"]
+model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
 inputs = ["log/meas_cplxfmt_polar.cir", "log/meas_cplxfmt_cartesian.cir"]
 keep = ["log"]
 
