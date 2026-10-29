@@ -81,18 +81,19 @@ def scan_text(text: str) -> set[Finding]:
     return findings
 
 
+def _decodings(data: bytes) -> list[str]:
+    # Replace undecodable bytes rather than drop them: dropping them joins the
+    # text on either side, so binary data can read as an address.
+    return [data.decode(encoding, errors="replace") for encoding in ENCODINGS]
+
+
 def scan_bytes(data: bytes) -> set[Finding]:
-    return {
-        finding
-        for encoding in ENCODINGS
-        for finding in scan_text(data.decode(encoding, errors="ignore"))
-    }
+    return {finding for text in _decodings(data) for finding in scan_text(text)}
 
 
 def scan_message(data: bytes) -> set[Finding]:
     findings = set()
-    for encoding in ENCODINGS:
-        text = data.decode(encoding, errors="ignore")
+    for text in _decodings(data):
         lines = text.rstrip("\r\n").splitlines()
         footer_start = len(lines)
         while footer_start and TRAILER.fullmatch(lines[footer_start - 1]):
