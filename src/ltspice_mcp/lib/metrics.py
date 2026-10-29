@@ -794,6 +794,34 @@ def aggregate_log_measurements(
     return flat_values, axis_map, steps_label, at_map
 
 
+def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> MeasurementsOutput:
+    """One step's row of a log's measurement tables.
+
+    Each measurement keeps its value at ``step``, and its ``FROM``, ``TO`` or
+    ``AT`` at that step where they vary by step. Row ``n`` of a stepped table
+    is the step the log's ``n``-th ``.step`` line names, on both LTspice
+    builds (recorded: ``log/meas_step``, ``log/step_two_params``,
+    ``log/step_temp``).
+    """
+    count = max(meas_data.get("step_count") or 0, 1)
+    if not 0 <= step < count:
+        raise ResultError(
+            f"Step {step} is out of range: the log's measurement tables hold {count} step(s)."
+        )
+
+    def at_step(field: Any) -> Any:
+        if not isinstance(field, list):
+            return field
+        return field[step] if step < len(field) else None
+
+    one: dict[str, Any] = {}
+    for name, entry in meas_data.get("measurements", {}).items():
+        row = {key: at_step(field) for key, field in entry.items()}
+        row["values"] = [row["values"]]
+        one[name] = row
+    return {**meas_data, "measurements": one, "step_count": 1}
+
+
 _RE_NOISE_HEAD = re.compile(r"^[ \t]*\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
 
 
@@ -998,11 +1026,13 @@ async def measurements(
     *,
     measurement: str | None = None,
 ) -> MetricValue:
-    """Aggregated .MEAS results from the run's log, keyed by measurement name."""
+    """Aggregated .MEAS results from the run's log, keyed by measurement name:
+    over every step, or with ``step`` over that step's row alone."""
     logs = await services.load_logs(source, state)
-    parsed = logs.value("measurements")
-    if parsed is None or source.log is None:
+    whole = logs.value("measurements")
+    if whole is None or source.log is None:
         raise ResultError("source has no log artifact for .MEAS results")
+    parsed = whole if step is None else measurements_at_step(whole, step)
     flat_values, axis_map, _steps_label, at_map = await services.bounded_parse(
         source.log,
         lambda: aggregate_log_measurements(parsed, source.netlist),
@@ -1029,14 +1059,17 @@ async def measurements(
     if recipe.names is not None:
         stats = {name: entry for name, entry in stats.items() if name in recipe.names}
     data: MetricValue = {"stats": stats}
-    observations = await _zeros_a_failed_step_prints(source, parsed, set(stats))
+    observations = await _zeros_a_failed_step_prints(source, whole, set(stats), step)
     if observations:
         data["observations"] = observations
     return data
 
 
 async def _zeros_a_failed_step_prints(
-    source: services.AnalysisSource, parsed: MeasurementsOutput, names: set[str]
+    source: services.AnalysisSource,
+    parsed: MeasurementsOutput,
+    names: set[str],
+    step: int | None = None,
 ) -> list[dict[str, Any]]:
     """Name the steps that read exactly 0 on a build that prints 0 for a failure.
 
@@ -1046,13 +1079,18 @@ async def _zeros_a_failed_step_prints(
     build is the one the run named in its own output: as the job's case
     recorded it, or for a bare path, read from the head of its log or raw.
     Every exact zero is named, as a fact for the caller to weigh: a true zero
-    and a failure read the same here.
+    and a failure read the same here. With ``step``, only that step is read.
     """
     measurements = parsed.get("measurements") or {}
     if (parsed.get("step_count") or 0) < 2 or not measurements:
         return []
+
+    def zero_steps(values: list[float | None]) -> list[int]:
+        read = range(len(values)) if step is None else range(step, min(step + 1, len(values)))
+        return [index for index in read if values[index] == 0]
+
     zeros = {
-        name: [index for index, value in enumerate(entry.get("values") or []) if value == 0]
+        name: zero_steps(entry.get("values") or [])
         for name, entry in measurements.items()
         if name in names
     }

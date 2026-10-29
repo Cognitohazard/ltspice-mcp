@@ -165,8 +165,9 @@ The `measurements` inspect view returns each measurement's values with its
 entries and `Index frequency` table rows. Both return plain dicts and lists
 for your code to arrange or export. A unit the log does not print is `None`,
 and rows are not assigned to a plot or step. Omit `plot_index` on log views.
-The `measurements` recipe reads the whole log and rejects `step` and
-`all_steps`. A `log_path` source does not look for a RAW beside the log, and
+The `measurements` recipe reads the whole log. It gives statistics over every
+step, or with `step` or `all_steps` each step's row with its `step_values`
+(guide section 'tools'). A `log_path` source does not look for a RAW beside the log, and
 in a request that also has RAW recipes, a malformed RAW fails only those
 recipes. Guide section 'tools' covers when a page cursor stops working because
 a file changed, and a timeout while `analyze_results` first reads its sources.

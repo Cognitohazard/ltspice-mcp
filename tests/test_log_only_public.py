@@ -117,16 +117,28 @@ def test_malformed_raw_does_not_suppress_measurements(state_no_sim, work_dir):
     assert any(failure["stage"] == "analyze" for failure in reply["failures"])
 
 
-@pytest.mark.parametrize("selector", [{"all_steps": True}, {"step": {"axis": "R", "value": 1}}])
-def test_whole_log_measurements_refuse_raw_step_selection(state_no_sim, work_dir, selector):
+def test_an_unstepped_logs_measurements_are_its_one_step(state_no_sim, work_dir):
     log = recorded_log(work_dir)
     reply = SyncApi(state_no_sim).analyze_results(
         sources=[{"log_path": str(log), "label": "log"}],
         recipes=[{"metric": "measurements", "key": "meas"}],
-        **selector,
+        all_steps=True,
+        include={"per_run": True},
+    )
+    (row,) = reply["results"]["meas"]["per_run"]["items"]
+    assert row["step_index"] == 0
+    assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
+
+
+def test_a_step_an_unstepped_log_does_not_have_is_refused(state_no_sim, work_dir):
+    log = recorded_log(work_dir)
+    reply = SyncApi(state_no_sim).analyze_results(
+        sources=[{"log_path": str(log), "label": "log"}],
+        recipes=[{"metric": "measurements", "key": "meas"}],
+        step={"axis": "R", "value": 1},
     )
     assert reply["outcome"] == "failed"
-    assert "whole-log" in reply["failures"][0]["message"]
+    assert "step axis 'R' is not present" in reply["failures"][0]["message"]
 
 
 def test_optional_selection_and_attached_serializer():

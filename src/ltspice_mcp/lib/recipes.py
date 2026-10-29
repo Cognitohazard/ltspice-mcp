@@ -255,14 +255,15 @@ class StepSelectionFields(StrictModel):
         description=(
             "For a deck carrying a .step directive: read the one step whose "
             "axis value this names, e.g. {axis:'temp', value:27}. Applies to "
-            "every recipe in the request. Default is the first step."
+            "every recipe in the request. Default: the first step "
+            "(measurements: statistics over all)."
         ),
     )
     all_steps: bool = Field(
         default=False,
         description=(
-            "For a deck carrying a .step directive: evaluate every recipe at "
-            "every step instead of only the first. Not combinable with 'step'."
+            "Evaluate every recipe at every step of a .step deck, one row "
+            "each. Not combinable with 'step'."
         ),
     )
 

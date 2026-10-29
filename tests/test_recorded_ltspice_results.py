@@ -28,7 +28,11 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     table_device_path,
 )
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    encode_spice_text,
+    read_spice_text,
+)
 from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -1031,6 +1035,121 @@ class TestMeasurements:
         result = await metrics.measurements(recorded, recipe, None, state_no_sim)
         (observation,) = result["observations"]
         assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+
+    def read_steps(
+        self, build: str, case_id: str, state: SessionState, work_dir: Path, **selection: Any
+    ) -> dict[str, Any]:
+        """The measurements recipe's reply over a recorded log, steps chosen."""
+        log = work_dir / Path(case_id).with_suffix(".log").name
+        log.write_bytes(rec.recorded(build, f"{case_id}.log").read_bytes())
+        return SyncApi(state).analyze_results(
+            sources=[{"log_path": str(log), "label": "log"}],
+            recipes=[{"metric": "measurements", "key": "meas"}],
+            include={"per_run": True},
+            **selection,
+        )
+
+    def test_each_steps_row_is_read_with_its_step_values(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Row n of every table is the step the n-th ``.step`` line names, so
+        each step's row comes back with that line's values."""
+        reply = self.read_steps(build, "log/meas_step", state_no_sim, work_dir, all_steps=True)
+        rows = reply["results"]["meas"]["per_run"]["items"]
+        table = self.measured(build, "log/meas_step")["measurements"]
+        assert [row["step_index"] for row in rows] == [0, 1, 2]
+        assert [row["step_values"] for row in rows] == [{"r": 1e3}, {"r": 2e3}, {"r": 2e4}]
+        for index, row in enumerate(rows):
+            assert row["value"]["measured"]["s_max"] == table["s_max"]["values"][index]
+            assert row["value"]["measured"]["s_rise"] == table["s_rise"]["values"][index]
+        failed = rows[2]["value"]
+        if rec.generation(build) == "xvii":
+            # XVII prints 0 for the crossing it never found; the row names it.
+            assert failed["measured"]["s_when"] == 0
+            assert "failed_measurements" not in failed
+        else:
+            assert failed["measured"]["s_when"] is None
+            assert failed["failed_measurements"] == ["s_when"]
+
+    async def test_xviis_zero_is_named_on_its_steps_row(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        if rec.generation(build) != "xvii":
+            pytest.skip("only XVII prints 0 for a failed step")
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        source = replace(
+            services.resolve_analysis_source(state_no_sim, log_file=str(log)),
+            simulator_version=rec.manifest(build)["reported_build"],
+        )
+        recipe = MeasurementsRecipe(key="meas", metric="measurements")
+        first = await metrics.measurements(source, recipe, 0, state_no_sim)
+        assert "observations" not in first
+        last = await metrics.measurements(source, recipe, 2, state_no_sim)
+        (observation,) = last["observations"]
+        assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+
+    def test_one_step_is_chosen_by_its_value(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        reply = self.read_steps(
+            build, "log/step_temp", state_no_sim, work_dir, step={"axis": "temp", "value": 27}
+        )
+        (row,) = reply["results"]["meas"]["per_run"]["items"]
+        assert (row["step_index"], row["step_values"]) == (1, {"temp": 27.0})
+        # 1 V across 1 kohm at the nominal temperature.
+        assert row["value"]["measured"]["ir"] == pytest.approx(1e-3, rel=1e-6)
+
+    def test_two_stepped_parameters_pair_each_row(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The second .step line steps r first, under each c."""
+        reply = self.read_steps(
+            build, "log/step_two_params", state_no_sim, work_dir, all_steps=True
+        )
+        rows = reply["results"]["meas"]["per_run"]["items"]
+        assert [row["step_values"] for row in rows] == [
+            {"r": 1e3, "c": 1e-7},
+            {"r": 2e3, "c": 1e-7},
+            {"r": 1e3, "c": 2e-7},
+            {"r": 2e3, "c": 2e-7},
+        ]
+        vend = [row["value"]["measured"]["vend"] for row in rows]
+        # One time constant: r*c is the same for the middle two.
+        assert vend[1] == pytest.approx(vend[2], rel=2e-4)
+        assert vend[0] > vend[1] > vend[3]
+        grouped = self.read_steps(
+            build, "log/step_two_params", state_no_sim, work_dir, all_steps=True, group_by=["c"]
+        )
+        groups = grouped["results"]["meas"]["groups"]
+        assert [(group["by"], group["count"]) for group in groups] == [
+            ({"c": 1e-7}, 2),
+            ({"c": 2e-7}, 2),
+        ]
+
+    def test_rows_the_step_lines_do_not_number_are_refused(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Without one ``.step`` line per row, a row's step is unknown."""
+        log = work_dir / "meas_step.log"
+        text, codec = decode_spice_bytes_with_encoding(
+            rec.recorded(build, "log/meas_step.log").read_bytes()
+        )
+        kept = (line for line in text.splitlines(keepends=True) if not line.startswith(".step"))
+        log.write_bytes(encode_spice_text("".join(kept), codec))
+        reply = SyncApi(state_no_sim).analyze_results(
+            sources=[{"log_path": str(log), "label": "log"}],
+            recipes=[{"metric": "measurements", "key": "meas"}],
+            all_steps=True,
+        )
+        (failure,) = reply["failures"]
+        assert "hold 3 steps and its .step lines name 0" in failure["message"]
+        whole = SyncApi(state_no_sim).analyze_results(
+            sources=[{"log_path": str(log), "label": "log"}],
+            recipes=[{"metric": "measurements", "key": "meas", "names": ["s_max"]}],
+            include={"fields": ["value"]},
+        )
+        assert whole["outcome"] == "complete"
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports

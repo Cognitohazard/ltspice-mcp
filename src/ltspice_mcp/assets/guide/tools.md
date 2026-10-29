@@ -214,14 +214,18 @@ To read a log that has no RAW, use the `measurements` recipe:
  "recipes": [{"metric": "measurements", "key": "meas"}]}
 ```
 
-The recipe reads every measurement in the log in one pass, so its rows name no
-plot or step. It refuses `step` and `all_steps`, because a measurement lists
-one value per `.step` iteration in the order the log prints them, and that
-position is not a RAW step index. In a request that also has RAW recipes, a
-missing or malformed RAW fails only those recipes, and the `measurements`
-recipe still returns its values. A `log_path` source does not look for a RAW
-beside the log. A `raw_path` source reads the RAW and the `.log` of the same
-name, so use it to read both from imported files.
+The recipe reads every measurement in the log in one pass. Without `step` or
+`all_steps`, a source's one row gives each measurement's statistics over every
+step and names no plot or step. With `all_steps` the recipe returns one row
+per step, and with `step` the row of the step whose value is nearest, each
+with that step's `step_values`. Row n of a stepped `.meas` table belongs to
+the step on the log's n-th `.step` line, and a log whose `.step` lines do not
+number its rows (LTspice writes none for a stepped `.op`) is refused. In a
+request that also has RAW recipes, a missing or malformed RAW fails only those
+recipes, and the `measurements` recipe still returns its values. A `log_path`
+source does not look for a RAW beside the log. A `raw_path` source reads the
+RAW and the `.log` of the same name, so use it to read both from imported
+files.
 
 For pages of log values as printed, use
 `inspect(queries=[{"kind": "results", "path": "result.log", "view": "measurements"}])`

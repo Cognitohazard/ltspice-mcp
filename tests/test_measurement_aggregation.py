@@ -108,7 +108,7 @@ class TestSteppedLogWhenAxis:
                 trusted_job_artifact=False,
             ),
             MeasurementsRecipe(key="m", metric="measurements"),
-            0,
+            None,
             state_no_sim,
         )
         tcross = data["stats"]["tcross"]

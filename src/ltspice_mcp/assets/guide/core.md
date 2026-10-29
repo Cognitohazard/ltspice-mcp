@@ -96,7 +96,8 @@ Guide section 'python' covers the rest of the API.
 - Write micro as `u`. LTspice 24 writes µ in UTF-8 and reads it back; LTspice
   XVII misreads that µ and drops the scale, so `23µ` runs as 23.
 - A deck with `.step` writes all its steps to one raw; `analyze_results`
-  reads the first step unless you name `step` or `all_steps`.
+  reads the first step unless you name `step` or `all_steps`. The
+  `measurements` recipe gives statistics over every step unless you name them.
 - ngspice has no `.step`, so sweep with `run_experiments` variations. Once a
   deck has a `.save` line, ngspice keeps only what `.save` names. Under this
   server, ngspice skips a top-level `.meas`, so the deck runs but the value is

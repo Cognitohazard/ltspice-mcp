@@ -847,9 +847,14 @@ log is read for them.
 
 The `measurements` recipe reads the `.meas` results in each source's log once,
 including a `log_path` source and a finished job case with no RAW. Its rows
-have null `plot_index` and step fields (the default row omits them), and the
-recipe refuses `step` and `all_steps`, because it does not map log values to
-`.step` iterations. Tables the simulator prints in its log are read through
+have null `plot_index`. With neither `step` nor `all_steps`, a row holds each
+measurement's statistics over every step and null step fields (the default row
+omits them). With `all_steps` the recipe returns one row per step, and with
+`step` the row of the step the selector picks, each with its `step_index` and
+the `step_values` of the log's `.step` line for that step: row n of a stepped
+`.meas` table is the step of the n-th `.step` line on both LTspice builds. A
+log whose `.step` lines do not number its tables' rows is refused for `step`
+and `all_steps`; LTspice writes no `.step` line for a stepped `.op`. Tables the simulator prints in its log are read through
 `inspect(kind="results", view="native_tables")`, not through a recipe. In a
 mixed request, a RAW recipe fails on its own when the RAW is missing or
 malformed, and valid log measurements are still returned. A source's

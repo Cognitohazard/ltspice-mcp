@@ -1618,6 +1618,44 @@ async def _build_step_plan(
     return _RawStepPlan(plan, raw.descriptor)
 
 
+async def _measurement_step_plan(
+    steps: StepSelection,
+    source: services.AnalysisSource,
+    state: SessionState,
+) -> list[tuple[int | None, dict[str, Any]]]:
+    """The steps the measurements recipe reads of one source's log.
+
+    With no step chosen it reads them all at once, as statistics over every
+    step. A chosen step, or each step, is read as its row of the log's tables,
+    with the stepped values the log's ``.step`` line for it gives: row ``n``
+    is the step of the ``n``-th line on both LTspice builds
+    (``metrics.measurements_at_step``). A stepped table whose rows the
+    ``.step`` lines do not number is refused.
+    """
+    if steps.step is None and not steps.all_steps:
+        return [(None, {})]
+    logs = await services.load_logs(source, state)
+    parsed = logs.value("measurements")
+    if not parsed or not parsed["measurements"]:
+        # The metric reads the log again and says why it holds no results.
+        return [(0, {})]
+    count = max(parsed["step_count"], 1)
+    named: list[dict[str, Any]] = logs.value("steps") or []
+    if len(named) not in (0, count) or (not named and count > 1):
+        raise ResultError(
+            f"The log's measurement tables hold {count} steps and its .step lines "
+            f"name {len(named)}, so a row cannot be paired with its step. Leave out "
+            "'step' and 'all_steps' to read statistics over every row, or read the "
+            "rows in order with api.measurements."
+        )
+    step_values = named or [{}]
+    if steps.all_steps:
+        return [(index, step_values[index]) for index in range(count)]
+    assert steps.step is not None
+    index = steps.step.pick(step_values)
+    return [(index, step_values[index])]
+
+
 async def _adapter_value(
     recipe: Recipe,
     source: services.AnalysisSource,
@@ -2341,10 +2379,6 @@ async def _evaluate_item(
         try:
             with services.analysis_deadline(item_deadline):
                 if isinstance(recipe, MeasurementsRecipe):
-                    if steps.step is not None or steps.all_steps:
-                        raise ResultError(
-                            "RAW step selectors do not apply to whole-log measurements"
-                        )
                     if (
                         run.source.raw is None
                         and (run.source.identity or {}).get("requested_plot_index") is not None
@@ -2356,9 +2390,6 @@ async def _evaluate_item(
                             run.source, state, captures, require_raw=False
                         ),
                     )
-                    value = _promote_headlines(
-                        recipe.metric, await _adapter_value(recipe, run.source, None, state)
-                    )
                     log_source = replace(
                         run.source,
                         identity={
@@ -2366,14 +2397,20 @@ async def _evaluate_item(
                             "dialect": run.source.dialect,
                         },
                     )
-                    records.append(
-                        Record(
-                            manifest_id=run.manifest_id,
-                            source=run.label,
-                            identity=_identity(log_source, None, {}, plot_index=None),
-                            value=value,
+                    for step, step_values in await _measurement_step_plan(
+                        steps, run.source, state
+                    ):
+                        value = _promote_headlines(
+                            recipe.metric, await _adapter_value(recipe, run.source, step, state)
                         )
-                    )
+                        records.append(
+                            Record(
+                                manifest_id=run.manifest_id,
+                                source=run.label,
+                                identity=_identity(log_source, step, step_values, plot_index=None),
+                                value=value,
+                            )
+                        )
                     continue
                 run = replace(
                     run,
