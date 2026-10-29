@@ -4023,6 +4023,75 @@
         ".net"
       ]
     },
+    "export/hier_plain_top": {
+      "behaviour": "export-hierarchical-block",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/hier_plain_top.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/hier_amp.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_amp.asy": "237b42203009a88f012b8e734baa10bd41472abdd010c7e333dae10c7e244a83",
+        "export/hier_plain.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_plain.asy": "5843ec7471ce02ff200968a8194711ca4043f176fb19b718314ddf6b5b7ce353",
+        "export/hier_plain_top.asc": "353a46b443ce7bd3680ae990cd2365beb150db8c75752ef4264d5cf3af78cf6b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/hier_plain_top.net": {
+          "bytes": 213,
+          "sha256": "ec1254760718781801e385b3e5dd6543ffeafd1b85fc9cf9a5151072c2549b62"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/hier_plain_top_run": {
+      "behaviour": "export-hierarchical-block",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/hier_plain_top_run.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/hier_plain.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_plain.asy": "5843ec7471ce02ff200968a8194711ca4043f176fb19b718314ddf6b5b7ce353",
+        "export/hier_plain_top.asc": "353a46b443ce7bd3680ae990cd2365beb150db8c75752ef4264d5cf3af78cf6b"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/hier_plain_top_run.log": {
+          "bytes": 381,
+          "sha256": "c648a30a92bfb8e8085d186dfde387dff67705363681dad45db709d30881ef38"
+        },
+        "export/hier_plain_top_run.net": {
+          "bytes": 203,
+          "sha256": "b025cf70ce4ccae0fb7cbde85a4e03696dff39e692c974ce71cbef690e80b42c"
+        },
+        "export/hier_plain_top_run.raw": {
+          "bytes": 886,
+          "sha256": "bd052713d036b94efc82851899b646ac1f6638892b27d08bfc4cd8c40648f47f"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
     "export/hier_top": {
       "behaviour": "export-hierarchical-block",
       "command": [
@@ -5151,6 +5220,62 @@
       "written": [
         ".log",
         ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_cplxfmt_cartesian": {
+      "behaviour": "log-meas-complex-format",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_cplxfmt_cartesian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_cplxfmt_cartesian.cir": "4ee6510ac3adb132c4ca99b689444ad69168a975add2b7a35f7929d0db11cfae"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_cplxfmt_cartesian.log": {
+          "bytes": 475,
+          "sha256": "2c6c992cae9dd664a2352b4d6dd4ed6620ad7749b7fa01154f07150e4bc4de81"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_cplxfmt_polar": {
+      "behaviour": "log-meas-complex-format",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_cplxfmt_polar.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_cplxfmt_polar.cir": "bf98c230e06cba3b74aa1b4b0eaaed55108f0424edce684101b95ddb5dd21da2"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_cplxfmt_polar.log": {
+          "bytes": 482,
+          "sha256": "63cf1ad27ebe8d2419810665ccd0dcc7bc9c439a15e227162f9aa8c931098687"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
         ".raw"
       ]
     },

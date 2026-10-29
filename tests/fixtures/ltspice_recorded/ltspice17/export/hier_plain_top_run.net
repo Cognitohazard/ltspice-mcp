@@ -1,0 +1,14 @@
+* C:\recording\hier_plain_top_run.asc
+V1 N001 0 1
+XX1 N001 out hier_plain
+R3 out 0 10k
+
+* block symbol definitions
+.subckt hier_plain IN OUT
+R1 IN OUT 1k
+R2 OUT 0 1k
+.ends hier_plain
+
+.op
+.backanno
+.end

@@ -4012,6 +4012,75 @@
         ".net"
       ]
     },
+    "export/hier_plain_top": {
+      "behaviour": "export-hierarchical-block",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/hier_plain_top.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/hier_amp.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_amp.asy": "237b42203009a88f012b8e734baa10bd41472abdd010c7e333dae10c7e244a83",
+        "export/hier_plain.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_plain.asy": "5843ec7471ce02ff200968a8194711ca4043f176fb19b718314ddf6b5b7ce353",
+        "export/hier_plain_top.asc": "353a46b443ce7bd3680ae990cd2365beb150db8c75752ef4264d5cf3af78cf6b"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "export/hier_plain_top.net": {
+          "bytes": 244,
+          "sha256": "2381811d79390f70ff3409f949f90d67c6e7d59c34d4f2a56f299c362df8674f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "export/hier_plain_top_run": {
+      "behaviour": "export-hierarchical-block",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/hier_plain_top_run.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "export/hier_plain.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_plain.asy": "5843ec7471ce02ff200968a8194711ca4043f176fb19b718314ddf6b5b7ce353",
+        "export/hier_plain_top.asc": "353a46b443ce7bd3680ae990cd2365beb150db8c75752ef4264d5cf3af78cf6b"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/hier_plain_top_run.log": {
+          "bytes": 352,
+          "sha256": "b1fb5144aa0936e5c4bd2758e5c92461d7872409d1096eabdbdea6471a5a75fd"
+        },
+        "export/hier_plain_top_run.net": {
+          "bytes": 248,
+          "sha256": "4ccccd209643b242b876b6f0b8b37d8fec0c600e31def6b45879ff47823bdb80"
+        },
+        "export/hier_plain_top_run.raw": {
+          "bytes": 872,
+          "sha256": "93c874d001708ce25368dd7675a05a3241c7208988e6b8c6f6b276ed49ce6a5a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
     "export/hier_top": {
       "behaviour": "export-hierarchical-block",
       "command": [
@@ -5162,6 +5231,66 @@
       "stopped": false,
       "written": [
         ".log"
+      ]
+    },
+    "log/meas_cplxfmt_cartesian": {
+      "behaviour": "log-meas-complex-format",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_cplxfmt_cartesian.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_cplxfmt_cartesian.cir": "4ee6510ac3adb132c4ca99b689444ad69168a975add2b7a35f7929d0db11cfae"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_cplxfmt_cartesian.log": {
+          "bytes": 617,
+          "sha256": "826e0242b8450f70fa0eb503cf0c9c74c78de91b256978b0a1ec1bb934654e46"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_cplxfmt_polar": {
+      "behaviour": "log-meas-complex-format",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_cplxfmt_polar.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_cplxfmt_polar.cir": "bf98c230e06cba3b74aa1b4b0eaaed55108f0424edce684101b95ddb5dd21da2"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_cplxfmt_polar.log": {
+          "bytes": 627,
+          "sha256": "5e3d559dfe55d412129d7a7e65c4ee90414f21fe9a7681c13bf480a256ad619f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
       ]
     },
     "log/meas_db": {
