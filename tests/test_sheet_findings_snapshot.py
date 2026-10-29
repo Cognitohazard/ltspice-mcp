@@ -28,13 +28,10 @@ from typing import Any
 import pytest
 from spicelib import AscEditor
 
-from ltspice_mcp.lib import symbol_geometry
-from ltspice_mcp.lib.schematic_ops import make_editor, wiring_profile
+from ltspice_mcp.lib.schematic_ops import wiring_profile
 from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
 from ltspice_mcp.lib.sheet_findings import Finding, findings
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import _base as tools_base
-from ltspice_mcp.tools._base import symbol_resolver_for
 from ltspice_mcp.tools.schematic_edit import finding_row
 from ltspice_mcp.tools.verify import (
     VerifyCircuitInput,
@@ -42,7 +39,7 @@ from ltspice_mcp.tools.verify import (
     evaluate_verify_circuit,
 )
 from tests._asc_ops import sheet_findings
-from tests._schematic_fixtures import SUITE_SHEETS, TESTS
+from tests._schematic_fixtures import SUITE_SHEETS, TESTS, open_editor
 from tests._schematic_fixtures import suite_name as _name
 
 _RECORD = TESTS / "fixtures" / "sheet_findings.json"
@@ -70,24 +67,23 @@ def _without_folder(finding: dict[str, Any]) -> dict[str, Any]:
 
 def _staged_afresh(sheet: Path, state: SessionState) -> Path:
     """``sheet`` copied into the sandbox, with nothing remembered of the sheet before it."""
-    # Both symbol caches are keyed by name for the whole process, spicelib's
-    # by file name alone: without this a sheet is read with whatever symbol
-    # of that name the sheet before it left behind.
+    # spicelib's symbol cache is keyed by file name alone for the whole process:
+    # without this a sheet is read with whatever symbol of that name the sheet
+    # before it left behind.
     AscEditor.symbol_cache = {}
-    symbol_geometry._symbol_cache.clear()  # pyright: ignore[reportPrivateUsage]
     return _stage(sheet, Path(state.working_dir))
 
 
 def _from_the_file(staged: Path, state: SessionState) -> list[Finding]:
     """What the sheet rules find of the file, read as ``verify_circuit`` reads it."""
-    return findings(sheet_view(build_scene(staged, resolver=symbol_resolver_for(staged, state))))
+    return findings(sheet_view(build_scene(staged, resolver=state.symbols.for_sheet(staged))))
 
 
 async def findings_of(sheet: Path, state: SessionState) -> dict[str, Any]:
     """Everything both tools say of ``sheet``, in the order they say it."""
     staged = _staged_afresh(sheet, state)
     try:
-        editor = make_editor(staged)
+        editor = open_editor(staged, state.symbols.for_sheet(staged))
         edit: dict[str, Any] = {
             "warnings": [finding_row(found) for found in sheet_findings(editor)],
             "wiring": wiring_profile(editor),  # type: ignore[arg-type]
@@ -112,15 +108,14 @@ def _only_the_suites_own_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
     """A symbol is found beside its sheet or in the suite's stand-in library,
     and nowhere else.
 
-    An LTspice installed on the machine is otherwise searched after them, by
-    spicelib (its library paths are a class attribute read at import) and by
-    the checker's resolver (the stock paths), and a sheet that places a stock
-    symbol the suite does not hold would then be recorded with its pins on a
-    machine that has LTspice and as not found on one that has not. spicelib's
-    symbol cache, which ``findings_of`` empties, is put back afterwards.
+    The session's library is the suite's (the ``config`` fixture). An LTspice
+    installed on the machine would otherwise be searched by spicelib, whose
+    library paths are a class attribute read at import, and a sheet that
+    places a stock symbol the suite does not hold would then open on a machine
+    that has LTspice and not on one that has not. spicelib's symbol cache,
+    which ``findings_of`` empties, is put back afterwards.
     """
     monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
-    monkeypatch.setattr(tools_base, "default_stock_paths", list)
     monkeypatch.setattr(AscEditor, "symbol_cache", dict(AscEditor.symbol_cache))
 
 
@@ -181,7 +176,7 @@ def test_an_edit_and_a_check_find_the_same_of_a_sheet(sheet: Path, asc_state: Se
     """
     staged = _staged_afresh(sheet, asc_state)
     try:
-        editor = make_editor(staged)
+        editor = open_editor(staged, asc_state.symbols.for_sheet(staged))
     except Exception:
         pytest.skip("the editor cannot open this sheet")
     from_the_edit = sorted(found.identity for found in sheet_findings(editor))

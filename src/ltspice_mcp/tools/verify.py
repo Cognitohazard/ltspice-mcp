@@ -151,7 +151,6 @@ from ltspice_mcp.tools._base import (
     resolve_reference,
     safe_path,
     shown_in_window,
-    symbol_resolver_for,
     window_difference,
 )
 
@@ -913,7 +912,7 @@ def _analyze_scene(
     Only the rules a requested check reports are run, so a pure render does not
     pay for any.
     """
-    scene = build_scene(asc_path, resolver=symbol_resolver_for(asc_path, state))
+    scene = build_scene(asc_path, resolver=state.symbols.for_sheet(asc_path))
     wanted = {rule for check in checks for rule in _RULES_OF_CHECK.get(check, ())}
     return scene, (sheet_findings(sheet_view(scene), wanted) if wanted else [])
 

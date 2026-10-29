@@ -8,8 +8,42 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `edit_schematic` read each library symbol once per session. A symbol
+  redrawn in a library while the server ran kept its old pins in every later
+  edit, and a symbol not found stayed not found after it was added, until the
+  server restarted. Every tool now reads a symbol again after its file
+  changes, and looks again beside the sheet and in the configured folders for
+  one it did not find. LTspice's own library, which does not change while the
+  server runs, is searched once per name.
+- With LTspice XVII and a later LTspice both installed, a server running XVII
+  read the later build's symbols when it edited and checked sheets: ahead of
+  XVII's own on Windows and under Wine, and in place of them on WSL. On WSL,
+  with XVII the only build installed, it found no symbols at all. It now
+  reads the symbols of the build it runs, as it already did for model
+  libraries.
+- A Monte Carlo mismatch or a subcircuit mismatch plan sized by a MOSFET
+  card that gives `W` or `L` twice with different values (`w=1u W=2u`)
+  read one copy without a word; which one the simulator uses is not known.
+  Such a card is now refused, naming the copies; copies that agree read as
+  their value.
+- The compressed-transient observation (`coarse_compressed_waveform`) reported
+  a run whose deck asked for a maximum time step wider than a twentieth of the
+  run, though a gap no wider than that step is what the deck asked for. A
+  job's deck's maximum step now raises the bar.
+- A wrapped device parameter of a device inside a subcircuit, such as
+  `v(@xa:xin:mtail[gm])`, was not matched to LTspice's warning that it is
+  unknown, so its zero trace read as a value. Every reader of
+  `@device[param]` names now takes them apart one way.
+- A stopped case's progress named the stepped parameter of a stepped `.ac` at
+  one frequency as the axis it reached (`r = 2000`). It now reads the plot as a
+  full read does: such a plot has no axis, and the progress gives its points.
+
 ### Changed
 
+- `inspect(kind="symbols")` lists the LTspice build's `sym` folder as the
+  `stock` library, where it listed the `lib` folder above it.
 - `inspect` reports a failed query by its failure's own error code, as every
   other tool does, where every one read `error`: `netlist_invalid` for a
   netlist or sheet it cannot read, `symbol_unresolved`, `library_error`,
@@ -35,25 +69,6 @@ tool-surface changes.
   is in its `results` entry under `junctions`, as it already was.
 - A finding about a label or wire a `move` op names counts as the batch's,
   as a finding about any point an op names does.
-
-### Fixed
-
-- A Monte Carlo mismatch or a subcircuit mismatch plan sized by a MOSFET
-  card that gives `W` or `L` twice with different values (`w=1u W=2u`)
-  read one copy without a word; which one the simulator uses is not known.
-  Such a card is now refused, naming the copies; copies that agree read as
-  their value.
-- The compressed-transient observation (`coarse_compressed_waveform`) reported
-  a run whose deck asked for a maximum time step wider than a twentieth of the
-  run, though a gap no wider than that step is what the deck asked for. A
-  job's deck's maximum step now raises the bar.
-- A wrapped device parameter of a device inside a subcircuit, such as
-  `v(@xa:xin:mtail[gm])`, was not matched to LTspice's warning that it is
-  unknown, so its zero trace read as a value. Every reader of
-  `@device[param]` names now takes them apart one way.
-- A stopped case's progress named the stepped parameter of a stepped `.ac` at
-  one frequency as the axis it reached (`r = 2000`). It now reads the plot as a
-  full read does: such a plot has no axis, and the progress gives its points.
 
 ### Added
 

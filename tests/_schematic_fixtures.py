@@ -15,7 +15,10 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+from spicelib import AscEditor
+
 from ltspice_mcp.lib.asc_document import AscDocument
+from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver
 
 TESTS = Path(__file__).parent
 
@@ -34,6 +37,28 @@ SUITE_SHEETS = sorted(
     key=suite_name,
 )
 SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"), key=suite_name)
+
+#: The suite's stand-in symbol library, the one the ``config`` fixture configures.
+SUITE_LIBRARY_DIR = TESTS / "fixtures" / "symbols"
+SUITE_LIBRARY = SymbolLibrary([SUITE_LIBRARY_DIR])
+
+
+def suite_resolver(sheet: Path) -> SymbolResolver:
+    """The symbols of ``sheet`` as a session configured with the suite's library
+    finds them: beside the sheet, then the suite's library, and no LTspice
+    library the machine has."""
+    return SUITE_LIBRARY.for_sheet(sheet)
+
+
+def open_editor(sheet: Path, resolver: SymbolResolver | None = None) -> AscEditor:
+    """spicelib's editor of ``sheet``, its pin geometry finding symbols with
+    ``resolver`` (the suite's, ``suite_resolver``, unless another is given), as
+    ``edit_schematic`` opens one with the session's."""
+    from ltspice_mcp.lib.schematic_ops import attach_symbols, make_editor
+
+    editor = make_editor(sheet)
+    assert isinstance(editor, AscEditor)
+    return attach_symbols(editor, resolver if resolver is not None else suite_resolver(sheet))
 
 
 def formatted(doc: AscDocument) -> AscDocument:

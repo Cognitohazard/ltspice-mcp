@@ -7,6 +7,7 @@ off disk, so a claim about geometry is checked against what was actually written
 """
 
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate, point_on_segment
 from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import OpWirePins, blank_sheet
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import TraceNetInput, handle_trace_net
 from tests._asc_ops import (
@@ -33,7 +35,7 @@ from tests._asc_ops import (
     structured_warnings,
     wire_pins,
 )
-from tests._schematic_fixtures import write_file
+from tests._schematic_fixtures import open_editor, write_file
 from tests.conftest import FIXTURES_DIR
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -695,17 +697,19 @@ _SWAPPED_DIGITS_ASY = _block_asy("Pin 1 is SpiceOrder 2", ("2", 1, 0, -48), ("1"
 
 @pytest.fixture
 def ordinal_symbols(
-    asc_symbols: Path,
+    asc_state: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     isolated_spicelib_symbol_cache: None,
 ) -> Path:
-    """Put the two symbols above on the library path beside the fixture library."""
+    """Put the two symbols above in the session's library, beside the fixture library."""
     from spicelib import AscEditor
 
     sym_dir = work_dir / "ordinal_syms"
     write_file(sym_dir / "lettered_block.asy", _LETTERED_BLOCK_ASY)
     write_file(sym_dir / "swapped_digits.asy", _SWAPPED_DIGITS_ASY)
+    library = asc_state.symbols
+    asc_state.symbols = SymbolLibrary([*library.configured, sym_dir], library.build_roots)
     monkeypatch.setattr(AscEditor, "custom_lib_paths", [*AscEditor.custom_lib_paths, str(sym_dir)])
     return sym_dir
 
@@ -901,20 +905,30 @@ class TestSheetLocalSymbols:
     async def test_one_edit_looks_each_symbol_up_once(
         self, asc_state: SessionState, monkeypatch: pytest.MonkeyPatch
     ):
-        # Every geometry pass of every op re-reads each part's symbol, and a
-        # lookup now checks the sheet's folder on disk, on the event loop. One
-        # request resolves each distinct symbol once, however many parts use it.
-        from ltspice_mcp.lib import schematic_ops
+        # Every geometry pass of every op, and the sheet checks after them, ask
+        # for each part's symbol, and a lookup searches folders on disk, on the
+        # event loop. One request searches for each distinct symbol once,
+        # however many parts use it.
+        from ltspice_mcp.lib import symbol_library
+        from ltspice_mcp.tools import schematic_edit
+        from tests import sheet_edit_record
         from tests._asc_ops import build_sheet
 
         lookups: Counter[str] = Counter()
-        real_lookup = schematic_ops.get_symbol_info
+        real_find = symbol_library.find_symbol
 
-        def counting_lookup(symbol: str, asc_path: Path | None):
+        def counting_find(symbol: str, sheet_folder: Path | None, libraries: Sequence[Path]):
             lookups[symbol] += 1
-            return real_lookup(symbol, asc_path)
+            return real_find(symbol, sheet_folder, libraries)
 
-        monkeypatch.setattr(schematic_ops, "get_symbol_info", counting_lookup)
+        monkeypatch.setattr(symbol_library, "find_symbol", counting_find)
+        # The suite's edit recorder looks the call's symbols up too, to key the
+        # call; set it aside so only the edit's own lookups count.
+        monkeypatch.setattr(
+            schematic_edit,
+            "_evaluate_edit_schematic",
+            sheet_edit_record._evaluate,  # pyright: ignore[reportPrivateUsage]
+        )
         ops = [
             {"op": "add_component", "reference": f"R{i}", "symbol": "res", "x": 128 * i, "y": 128}
             for i in range(1, 13)
@@ -1599,8 +1613,6 @@ class TestInstancePrefix:
     async def test_a_prefix_is_written_upper_case_and_names_the_element(
         self, asc_state: SessionState, asc_file: Path
     ):
-        from spicelib import AscEditor
-
         from ltspice_mcp.lib.schematic_ops import element_class
 
         result = apply_one(
@@ -1615,21 +1627,19 @@ class TestInstancePrefix:
         )
         assert result["changed"] == {"Prefix": {"was": None, "now": "X"}}
         assert b"SYMATTR Prefix X" in asc_file.read_bytes()  # noqa: ASYNC240
-        editor = AscEditor(str(asc_file))
+        editor = open_editor(asc_file, asc_state.symbols.for_sheet(asc_file))
         assert editor.get_component("R1").attributes["Prefix"] == "X"
         assert element_class(editor, "R1") == "X"
 
     async def test_clearing_a_prefix_gives_the_part_its_symbols_letter_back(
         self, asc_state: SessionState, asc_file: Path
     ):
-        from spicelib import AscEditor
-
         from ltspice_mcp.lib.schematic_ops import element_class
 
         op = {"op": "set_component_attribute", "reference": "R1", "attribute": "Prefix"}
         apply_one(asc_state, asc_file, {**op, "value": "C"})
         apply_one(asc_state, asc_file, {**op, "value": ""})
-        editor = AscEditor(str(asc_file))
+        editor = open_editor(asc_file, asc_state.symbols.for_sheet(asc_file))
         assert "Prefix" not in editor.get_component("R1").attributes
         assert element_class(editor, "R1") == "R"
 
@@ -1653,8 +1663,6 @@ class TestInstancePrefix:
     async def test_a_part_placed_with_a_prefix_netlists_as_that_element(
         self, asc_state: SessionState, asc_file: Path
     ):
-        from spicelib import AscEditor
-
         from ltspice_mcp.lib.schematic_ops import element_class
 
         add_component(
@@ -1667,7 +1675,7 @@ class TestInstancePrefix:
             value="mysub",
             attributes={"Prefix": "X"},
         )
-        editor = AscEditor(str(asc_file))
+        editor = open_editor(asc_file, asc_state.symbols.for_sheet(asc_file))
         assert element_class(editor, "R9") == "X"
 
     @pytest.mark.parametrize(("prefix", "warned"), [(None, False), ("X", True)])
@@ -3220,21 +3228,17 @@ class TestAddComponentRealSymbols:
     def real_state(self, state_no_sim: SessionState, work_dir: Path):
         from spicelib import AscEditor
 
-        from ltspice_mcp.lib import symbol_geometry
-
         saved_paths = AscEditor.custom_lib_paths
         saved_cache = AscEditor.symbol_cache
-        saved_geo = dict(symbol_geometry._symbol_cache)
         AscEditor.custom_lib_paths = [_REAL_SYM]  # type: ignore[list-item]
         AscEditor.symbol_cache = {}
-        symbol_geometry._symbol_cache.clear()
+        assert _REAL_SYM is not None  # the class skips without a real library
+        state_no_sim.symbols = SymbolLibrary([Path(_REAL_SYM)])
         try:
             yield state_no_sim
         finally:
             AscEditor.custom_lib_paths = saved_paths
             AscEditor.symbol_cache = saved_cache
-            symbol_geometry._symbol_cache.clear()
-            symbol_geometry._symbol_cache.update(saved_geo)
 
     async def test_add_real_symbols_round_trip(self, real_state: SessionState):
         blank_sheet_file(real_state, "real")

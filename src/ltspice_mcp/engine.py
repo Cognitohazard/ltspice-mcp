@@ -11,7 +11,12 @@ from pathlib import Path
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import result_store
-from ltspice_mcp.lib.simulator import detect_named_simulators, detect_simulators
+from ltspice_mcp.lib.simulator import (
+    detect_named_simulators,
+    detect_simulators,
+    symbol_library_for,
+)
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
 
 ConfigLoadedHook = Callable[[ServerConfig], None]
@@ -117,68 +122,69 @@ def _library_config(
     )
 
 
+def session_symbol_library(config: ServerConfig, available: Mapping[str, type]) -> SymbolLibrary:
+    """The symbol library a session with ``config`` and these simulators reads.
+
+    Schematic editing needs the ``.asy`` symbol library, not a working
+    simulator, so the library is found whether or not a simulator was:
+
+    1. the folders ``[schematic] symbol_paths`` (``LTSPICE_MCP_SYMBOL_PATHS``)
+       names that exist;
+    2. then the ``lib/sym`` folder of the LTspice the session runs, or of
+       an installed LTspice detection did not pick (spicelib's ``LTspice``,
+       every build), as spicelib finds it, and through ``%LOCALAPPDATA%`` on
+       WSL.
+    """
+    from spicelib.simulators.ltspice_simulator import LTspice
+
+    return symbol_library_for(config.symbol_paths, available.get("ltspice") or LTspice)
+
+
+def local_symbol_library() -> SymbolLibrary:
+    """The symbol library a session started here would read, for a tool that runs
+    without one (the render command, the benchmark script): the configuration
+    in the working directory and the environment, and the LTspice detection
+    finds."""
+    config = ServerConfig.load()
+    return session_symbol_library(config, detect_simulators(config, []))
+
+
 def configure_asc_editor(
     config: ServerConfig,
     available: dict,
     *,
     target_logger: logging.Logger | None = None,
-) -> None:
-    """Configure AscEditor library paths for .asc schematic support.
+) -> SymbolLibrary:
+    """The session's symbol library (``session_symbol_library``), also given to
+    spicelib's schematic editor.
 
-    Schematic editing only needs the ``.asy`` symbol library, not a working
-    simulator binary, so symbol resolution is independent of simulator
-    detection.
-
-    Resolution order:
-    1. Explicit config.symbol_paths / LTSPICE_MCP_SYMBOL_PATHS override
-    2. WSL paths resolved through Windows ``%LOCALAPPDATA%``
-    3. spicelib preparation for a detected LTspice class
-    4. No schematic symbol support
+    spicelib's editor still opens sheets, and keeps its search paths as class
+    attributes; this is the one place that sets them, from the library, so it
+    searches what every reader here searches.
     """
     from spicelib.editor.asc_editor import AscEditor
 
     log = target_logger or logger
 
-    if config.symbol_paths:
-        valid = [str(path) for path in config.symbol_paths if path.is_dir()]
-        if valid:
-            AscEditor.custom_lib_paths = valid
-            log.info(f"AscEditor symbol paths from config: {valid}")
-            return
-        log.warning(f"Configured symbol_paths do not exist: {config.symbol_paths}")
+    missing = [path for path in config.symbol_paths if not path.is_dir()]
+    if missing:
+        log.warning(f"Configured symbol_paths do not exist: {missing}")
+    library = session_symbol_library(config, available)
 
-    from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
-
-    if is_wsl():
-        lib_paths = get_ltspice_lib_paths()
-        if lib_paths:
-            AscEditor.custom_lib_paths = lib_paths
-            log.info(f"AscEditor WSL library paths: {lib_paths}")
-            return
-        log.info(
-            ".asc schematic graphics editing unavailable on WSL (no LTspice symbol "
-            "library found); SPICE simulation and netlist editing are unaffected. "
-            "To enable it, set [schematic] symbol_paths in ltspice-mcp.toml or "
-            "LTSPICE_MCP_SYMBOL_PATHS env var."
-        )
-        return
-
-    ltspice_cls = available.get("ltspice")
-    if ltspice_cls is None:
+    # spicelib appends ``sym`` (symbols) and ``sub`` (sub-sheets and models) to
+    # each of its simulator paths and takes custom paths as given.
+    AscEditor.custom_lib_paths = [str(path) for path in library.configured]
+    AscEditor.simulator_lib_paths = [str(path) for path in library.build_roots]
+    if library.roots:
+        log.info(f"Schematic symbol libraries: {[str(root) for root in library.roots]}")
+    else:
         log.info(
             ".asc schematic graphics editing unavailable (no LTspice symbol library "
-            "found); SPICE simulation and netlist editing are unaffected"
+            "found); SPICE simulation and netlist editing are unaffected. To enable "
+            "it, set [schematic] symbol_paths in ltspice-mcp.toml or the "
+            "LTSPICE_MCP_SYMBOL_PATHS env var."
         )
-        return
-
-    try:
-        AscEditor.prepare_for_simulator(ltspice_cls)
-        if AscEditor.simulator_lib_paths or AscEditor.custom_lib_paths:
-            log.info("AscEditor configured via prepare_for_simulator()")
-            return
-        log.warning("prepare_for_simulator() found no library paths")
-    except Exception as exc:
-        log.warning(f"AscEditor prepare_for_simulator failed: {exc}")
+    return library
 
 
 async def _bootstrap(
@@ -191,10 +197,15 @@ async def _bootstrap(
     diagnostics: list[str] = []
     available = detect_simulators(config, diagnostics)
     named = detect_named_simulators(config, diagnostics)
+    symbols = configure_asc_editor(config, available, target_logger=target_logger)
     state = SessionState.create(
-        config, available, diagnostics, named=named, sandbox_pinned=sandbox_pinned
+        config,
+        available,
+        diagnostics,
+        named=named,
+        sandbox_pinned=sandbox_pinned,
+        symbols=symbols,
     )
-    configure_asc_editor(config, available, target_logger=target_logger)
     await asyncio.to_thread(result_store.cleanup, state.working_dir)
 
     preloaded = 0

@@ -53,7 +53,6 @@ from ltspice_mcp.lib.schematic_ops import (
     resolve_pin,
     wire_segments_of,
 )
-from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from tests._proposal_record import (
     Asked,
     entry_of,
@@ -64,7 +63,7 @@ from tests._proposal_record import (
     without_particulars,
     write_record,
 )
-from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
+from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name, suite_resolver
 
 _RECORD = TESTS / "fixtures" / "label_and_move_record.json"
 _RECORDING = os.environ.get("LTSPICE_MCP_RECORD_LABELS_AND_MOVES") == "1"
@@ -153,7 +152,7 @@ def _move_proposals(editor: AscEditor) -> list[dict[str, Any]]:
 
 def _labels_asked(editor: AscEditor) -> list[Asked]:
     sheet = Path(editor.asc_file_path)
-    resolver = editor_symbol_resolver(sheet)
+    resolver = suite_resolver(sheet)
     there = what_is_there(editor)
     asked: list[Asked] = []
     for proposal in _label_proposals(editor):
@@ -186,7 +185,7 @@ def _labels_asked(editor: AscEditor) -> list[Asked]:
 
 def _moves_asked(editor: AscEditor) -> list[Asked]:
     sheet = Path(editor.asc_file_path)
-    resolver = editor_symbol_resolver(sheet)
+    resolver = suite_resolver(sheet)
     asked: list[Asked] = []
     for proposal in _move_proposals(editor):
         at, rotation = editor.get_component_position(proposal["reference"])

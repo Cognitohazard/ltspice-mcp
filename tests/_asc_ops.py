@@ -137,12 +137,15 @@ def sheet_findings(editor: Any) -> list[Finding]:
     Read as the tool reads them: off the scene of the editor's own rendering,
     with symbols found where the editor's pin geometry finds them.
     """
+    from ltspice_mcp.lib.schematic_ops import symbols_of
     from ltspice_mcp.tools.schematic_edit import (
         _render_editor_text,  # pyright: ignore[reportPrivateUsage]
         sheet_findings_of,
     )
 
-    return sheet_findings_of(_render_editor_text(editor), Path(editor.asc_file_path))
+    return sheet_findings_of(
+        _render_editor_text(editor), Path(editor.asc_file_path), symbols_of(editor)
+    )
 
 
 def structured_warnings(editor: Any) -> list[dict[str, Any]]:

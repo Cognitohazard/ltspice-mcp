@@ -16,13 +16,12 @@ from pathlib import Path
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import crossing_points
-from ltspice_mcp.lib.schematic_ops import OpAddNetLabel, apply_op_inplace, make_editor
-from ltspice_mcp.lib.sheet import editor_symbol_resolver
+from ltspice_mcp.lib.schematic_ops import OpAddNetLabel, apply_op_inplace
 from tests._proposal_record import sheet_says, what_is_there
+from tests._schematic_fixtures import open_editor, suite_resolver
 
 Wire = tuple[int, int, int, int]
 
@@ -63,10 +62,9 @@ def test_a_label_where_nets_cross_is_refused_or_said(
     with tempfile.TemporaryDirectory() as folder:
         target = Path(folder) / "made.asc"
         target.write_text(text, encoding="utf-8")
-        editor = make_editor(target)
-        assert isinstance(editor, AscEditor)
+        resolver = suite_resolver(target)
+        editor = open_editor(target, resolver)
         there = what_is_there(editor)
-        resolver = editor_symbol_resolver(target)
         for x, y in crossing_points(((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wires):
             _said, met, _named = there(name, (x, y))
             if met < 2:

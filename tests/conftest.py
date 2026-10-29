@@ -39,6 +39,7 @@ from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.state import SessionState
 from tests import schedule_jitter, sheet_edit_record
+from tests._schematic_fixtures import SUITE_LIBRARY_DIR
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
     _schedule_jitter,
     pytest_addoption,
@@ -55,7 +56,7 @@ def pytest_configure(config: pytest.Config) -> None:
 _T = typing.TypeVar("_T")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-_FIXTURE_SYMBOLS = FIXTURES_DIR / "symbols"
+_FIXTURE_SYMBOLS = SUITE_LIBRARY_DIR
 _FIXTURE_DRAFT = FIXTURES_DIR / "Draft1.asc"
 
 # Recorded real-LTspice fixture value shared across test modules: a single
@@ -1300,7 +1301,9 @@ def config(work_dir: Path) -> ServerConfig:
     Its config file is one nothing writes (``write_config`` off, and outside
     the working directory, whose contents tests inspect): a session re-reads
     its sandbox from that file whenever the file changes, so the sandbox stays
-    the one given here.
+    the one given here. Its symbol library is the suite's own, configured as a
+    user configures one (``symbol_paths``), so a session built from it finds
+    the same symbols on every machine.
     """
     return ServerConfig(
         working_dir=work_dir,
@@ -1308,6 +1311,7 @@ def config(work_dir: Path) -> ServerConfig:
         log_level="DEBUG",
         config_path=work_dir.parent / f"{work_dir.name}.ltspice-mcp.toml",
         write_config=False,
+        symbol_paths=[_FIXTURE_SYMBOLS],
     )
 
 
@@ -1341,44 +1345,38 @@ def _asc_symbol_cache() -> Iterator[Path]:
 
 @pytest.fixture
 def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
-    """Point symbol resolution at the .asy fixture library for this test.
+    """Point spicelib's schematic editor at the .asy fixture library for this test.
 
+    The server's own lookups read the session's library, which the ``config``
+    fixture already makes the suite's. spicelib's editor, which still opens
+    sheets, keeps its search paths as class attributes, so they are set here.
     Re-asserted per test rather than once per session: booting the engine (any
-    Api or server test) sets ``AscEditor.custom_lib_paths`` process-wide to the
-    host's real LTspice symbol library and never puts it back, so a
-    session-scoped assignment silently loses to whichever test ran first in the
-    worker — a real symbol then resolves in place of the fixture one. The
-    geometry cache is keyed by symbol name, so it is dropped alongside the paths
-    or a name parsed from the real library would survive the switch.
+    Api or server test) sets them process-wide to the host's real LTspice
+    symbol library and never puts them back, so a session-scoped assignment
+    would lose to whichever test ran first in the worker.
     """
-    from ltspice_mcp.lib import symbol_geometry
-
     previous_paths = AscEditor.custom_lib_paths
-    previous_geometry = dict(symbol_geometry._symbol_cache)
     AscEditor.set_custom_library_paths(str(_FIXTURE_SYMBOLS))
-    symbol_geometry._symbol_cache.clear()
     try:
         yield _FIXTURE_SYMBOLS
     finally:
         AscEditor.custom_lib_paths = previous_paths
-        symbol_geometry._symbol_cache.clear()
-        symbol_geometry._symbol_cache.update(previous_geometry)
 
 
 @pytest.fixture
 def suite_symbols_only(asc_symbols: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Symbols are found beside a sheet and in the suite's stand-in library only.
+    """spicelib's editor finds symbols beside a sheet and in the suite's stand-in
+    library only, and its process-wide symbol cache starts empty and is put
+    back afterwards.
 
-    No LTspice library the machine has is searched, and both process-wide
-    symbol caches start empty and are put back afterwards. A test that records
-    what the server says of the suite's sheets uses this, so that its record is
-    the same on every machine.
+    The server's lookups need nothing here: a session or a resolver built from
+    the suite's library (``config``, ``_schematic_fixtures.suite_resolver``)
+    already searches no LTspice library the machine has. A test that records
+    what the server says of the suite's sheets uses this so spicelib, which
+    still opens the sheets, agrees, and its record is the same on every machine.
     """
-    from ltspice_mcp.lib import symbol_geometry
-
     monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
     monkeypatch.setattr(AscEditor, "symbol_cache", {})
-    monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
     return asc_symbols
 
 

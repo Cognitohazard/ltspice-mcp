@@ -27,11 +27,10 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib.schematic_scene import build_scene
-from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests._proposal_record import every_nth, stage_afresh, write_record
-from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
+from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name, suite_resolver
 
 _RECORD = TESTS / "fixtures" / "inspect_sheet_record.json"
 _RECORDING = os.environ.get("LTSPICE_MCP_RECORD_INSPECT_SHEETS") == "1"
@@ -52,7 +51,7 @@ pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 def _starts(sheet: Path) -> list[str | list[int]]:
     """Where to start a net trace: each pin, each label name, a point on each wire."""
-    scene = build_scene(sheet, editor_symbol_resolver(sheet))
+    scene = build_scene(sheet, suite_resolver(sheet))
     starts: list[str | list[int]] = []
     for part in scene.symbols:
         if part.reference and not part.missing:
