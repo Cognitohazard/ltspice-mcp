@@ -1,0 +1,8 @@
+* rc low-pass frequency response under numdgt=15
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.options numdgt=15
+.ac dec 5 10 100k
+.meas ac gain1k FIND V(out) AT 1k
+.end

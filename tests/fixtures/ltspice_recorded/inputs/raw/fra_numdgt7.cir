@@ -1,0 +1,9 @@
+* frequency response analysis of one loop under numdgt=7
+V1 ref 0 1
+E1 a 0 ref c 100
+@1 a b fstart=4k fend=32k oct=1 tsettle=50u
+R1 b c 1k
+C1 c 0 1u
+.options numdgt=7
+.fra
+.end

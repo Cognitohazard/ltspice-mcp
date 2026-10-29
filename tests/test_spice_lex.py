@@ -9,10 +9,14 @@ Three layers of coverage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
     SpiceLexError,
     SpiceLexErrorCategory,
     Token,
@@ -598,6 +602,49 @@ class TestCanonicalThenSpanEdits:
         v2.set_value("12.0")
         out = emit(cards)
         assert "Vdd=12.0" in out
+
+
+class TestARewriteThatWouldDropLines:
+    """A comment at the end of a line runs, as the lexer reads it, to the end
+    of the card, so the card's later ``+`` lines are not in its body. Rendered
+    again from its body, the card would lose them, so the rewrite is refused
+    and the card is left as it was."""
+
+    @pytest.mark.parametrize(
+        ("text", "edit"),
+        [
+            (
+                "M1 d g s b nmos W=1u ; width\n+ L=1u\n",
+                lambda card: InstanceLine.from_card(card).set_param("AD", "1p"),
+            ),
+            (
+                "V1 in 0 PULSE(0 1 0 1n 1n 5u 10u) ; drive\n+ AC 1\n",
+                lambda card: apply_value_to_instance(card, "SINE(0 1 1k)"),
+            ),
+            (
+                ".subckt amp in out ; pins\n+ params: gain=2\n",
+                lambda card: SubcktCard.from_card(card).set_param_default("gain", "3"),
+            ),
+            (
+                ".meas tran vmax max V(out) ; peak\n+ from=1m\n",
+                lambda card: MeasCard.from_card(card).set_label("vpeak"),
+            ),
+        ],
+        ids=["instance", "source_value", "subckt", "meas"],
+    )
+    def test_is_refused_and_leaves_the_card_as_it_was(
+        self, text: str, edit: Callable[[SpiceCard], object]
+    ) -> None:
+        cards = lex(text).cards
+        with pytest.raises(NetlistError, match="goes on past a comment"):
+            edit(cards[0])
+        assert emit(cards) == text
+
+    def test_a_comment_on_a_line_of_its_own_does_not_stop_a_rewrite(self) -> None:
+        """The ``+`` line after it is in the body, so a rewrite keeps it."""
+        cards = lex("M1 d g s b nmos W=1u\n* width\n+ L=1u\n").cards
+        InstanceLine.from_card(cards[0]).set_param("AD", "1p")
+        assert emit(cards) == "M1 d g s b nmos W=1u L=1u AD=1p\n"
 
 
 class TestStructuredErrors:

@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeVar
 
+from ltspice_mcp.errors import NetlistError
+
 #: Directive heads whose first argument is a file path.
 INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
 
@@ -567,6 +569,12 @@ class SpiceCard:
         self.body_layout = _shift_segments_after(self.body_layout, seg, body_end, delta)
         self.dirty = True
 
+    def goes_on_past_its_body(self) -> bool:
+        """Whether a ``+`` line follows the line the body ends on: that line
+        ends in a comment, which the lexer reads to the end of the card."""
+        last = self.body_layout[-1].raw_line_idx if self.body_layout else 0
+        return any(line.lstrip().startswith("+") for line in self.raw_lines[last + 1 :])
+
     def replace_body(self, new_body: str) -> None:
         """Canonical-form rerender. Collapses to a single line.
 
@@ -574,7 +582,17 @@ class SpiceCard:
         replacement — typically when appending or inserting new tokens.
         Preserves the trailing line ending of the original last raw
         line. After this call, ``body_layout`` holds a single segment.
+
+        Raises ``NetlistError`` for a card that goes on past its body
+        (``goes_on_past_its_body``), which this would cut short.
         """
+        if self.goes_on_past_its_body():
+            raise NetlistError(
+                f"The card at line {self.line_start} ({self.body.split(maxsplit=1)[0]}) "
+                "cannot be rewritten: it goes on past a comment at the end of a line, "
+                "and a rewrite would drop what follows the comment. How LTspice reads "
+                "such a card is not recorded. Edit it by hand."
+            )
         eol = _trailing_newline_str(self.raw_lines)
         self.body = new_body
         self.raw_lines = [new_body + eol]

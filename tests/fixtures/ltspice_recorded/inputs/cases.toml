@@ -291,11 +291,13 @@ inputs = [
 ]
 
 [behaviour.deck-structure]
-summary = "How a deck's lines are read: the title line, ; and $ comments, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
+summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
 model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py"]
 inputs = [
     "deck/comment_semicolon.cir",
     "deck/comment_dollar.cir",
+    "deck/dollar_inside_a_name.cir",
+    "deck/dollar_leading_a_name.cir",
     "deck/after_end.cir",
     "deck/title_card.cir",
     "deck/title_directive.cir",
@@ -375,9 +377,9 @@ model = ["lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/tran_window.cir"]
 
 [behaviour.raw-ac]
-summary = "An AC raw: complex samples, a frequency axis stored complex."
+summary = "An AC raw: complex samples, a frequency axis stored complex; and the same sweep, and a stepped one at one frequency, under .options numdgt above 6, which writes the double flag."
 model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_parser.py", "lib/ac_analysis.py"]
-inputs = ["raw/ac.cir"]
+inputs = ["raw/ac.cir", "raw/ac_numdgt7.cir", "raw/ac_numdgt15.cir", "raw/step_ac_one_freq_numdgt7.cir"]
 
 [behaviour.raw-dc]
 summary = "A DC sweep raw: the swept source as the axis."
@@ -395,9 +397,9 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.raw-stepped]
-summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op and a stepped .dc store, and a stepped .ac at one frequency, which stores no frequency and one point a step."
+summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, and a stepped .ac at one frequency, which stores no frequency and one point a step."
 model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
-inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_ac_one_freq.cir"]
+inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
@@ -405,7 +407,7 @@ model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
-summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout."
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7."
 model = ["lib/raw_header.py", "lib/raw_parser.py"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
@@ -638,6 +640,21 @@ behaviour = "raw-op"
 source = "raw/tran.cir"
 keep = ["op.raw"]
 note = "The operating-point raw LTspice writes beside a transient's raw."
+
+# What a stepped run leaves in the operating-point raw beside its own: one
+# point a step, or one point. Their logs are those of raw/step_tran and
+# raw/step_ac, which run the same decks.
+[[case]]
+id = "raw/step_tran_op_raw"
+behaviour = "raw-stepped"
+source = "raw/step_tran.cir"
+keep = ["op.raw"]
+
+[[case]]
+id = "raw/step_ac_op_raw"
+behaviour = "raw-stepped"
+source = "raw/step_ac.cir"
+keep = ["op.raw"]
 
 # A build ignores -ascii when it is also given a settings file, so these two
 # run on the recording user's own settings. What they pin is the file's form,
@@ -1058,5 +1075,15 @@ keep = ["net", "log", "raw"]
 id = "raw/fra_step"
 behaviour = "raw-fra"
 source = "raw/fra_step.cir"
+keep = ["log", "raw", "fra_1.raw"]
+builds = ["current"]
+
+# The same loop under .options numdgt=7: whether the results file, a complex
+# plot, carries the double flag and what it changes. Only the current build
+# runs the analyzer.
+[[case]]
+id = "raw/fra_numdgt7"
+behaviour = "raw-fra"
+source = "raw/fra_numdgt7.cir"
 keep = ["log", "raw", "fra_1.raw"]
 builds = ["current"]

@@ -52,6 +52,11 @@ tool-surface changes.
   parentheses, and a variant's new name replaces the name alone. A card
   that goes on past a comment is refused by name, as how LTspice reads one
   is not yet recorded.
+- Every other netlist edit that writes a whole card again (a new instance
+  parameter, a source's value, a subcircuit default, a `.meas` label) lost
+  the same lines: those of a card that goes on past a `;` or `$` comment at
+  the end of a line. Such an edit is now refused, naming the card and its
+  line, and the card is left as it was.
 - The compressed-transient observation (`coarse_compressed_waveform`) reported
   a run whose deck asked for a maximum time step wider than a twentieth of the
   run, though a gap no wider than that step is what the deck asked for. A

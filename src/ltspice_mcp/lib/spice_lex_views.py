@@ -147,14 +147,6 @@ class _Params:
 # ---------------------------------------------------------------------------
 
 
-def _goes_on_past_its_body(card: SpiceCard) -> bool:
-    """Whether the card has a ``+`` line past the end of its body: the line the
-    body ends on ends in a comment, which the lexer reads to the end of the
-    card. Rendering the card again would drop those lines."""
-    last = card.body_layout[-1].raw_line_idx if card.body_layout else 0
-    return any(line.lstrip().startswith("+") for line in card.raw_lines[last + 1 :])
-
-
 @dataclass
 class ModelCard:
     """Typed view over a ``.MODEL NAME TYPE(...)`` card.
@@ -199,7 +191,7 @@ class ModelCard:
         in_parens = None
         would_drop = (
             "its line ends in a comment, and the card goes on past it"
-            if _goes_on_past_its_body(card)
+            if card.goes_on_past_its_body()
             else None
         )
         in_place = would_drop is None
