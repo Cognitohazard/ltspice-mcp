@@ -31,7 +31,7 @@ def _schematic(folder: Path, name: str = "amp.asc") -> Path:
 async def test_the_ngspice_deck_goes_straight_into_the_store(
     state_no_sim: SessionState, project_dir: Path
 ):
-    """No ``<name>.ngspice.net`` beside the schematic, and the scrub still happens."""
+    """Nothing beside the schematic, and the scrub still happens."""
     install_fixed_exporter(state_no_sim, _EXPORT)
     sheet = _schematic(project_dir)
 
@@ -43,7 +43,7 @@ async def test_the_ngspice_deck_goes_straight_into_the_store(
     assert ".backanno" not in text
     # A value's micro sign is staging's to spell 'u', for every simulator.
     assert "R1 in 0 4.7µ\n" in text
-    assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
+    assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc"]  # noqa: ASYNC240
 
 
 @pytest.mark.asyncio

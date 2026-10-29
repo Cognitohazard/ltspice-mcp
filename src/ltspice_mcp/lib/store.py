@@ -31,6 +31,7 @@ The layout, rooted at the working directory::
     |   `-- {digest}.log                    that owner's stdout and stderr
     |-- verify/                             verify_circuit exports
     |-- edit-exports/{build_id}/            edit_schematic exports
+    |-- run-exports/{name}/                 a sheet staged for a run's export, removed after
     |-- exports/{name}.run-{hash}.net       schematic exports experiments ran
     |-- plots/                              plot_waveform charts with no out_dir
     |-- parsing/{parse_id}/                 temporary captured inputs and decoded arrays
@@ -770,6 +771,11 @@ class Store:
     def edit_export(self, build_id: str) -> Path:
         """One ``edit_schematic`` export directory."""
         return self.root / "edit-exports" / _validate_name(build_id, "build id")
+
+    def run_export(self, name: str) -> Path:
+        """Where a sheet a run is about to read is staged and exported, so that
+        nothing is written beside the caller's sheet. Removed after the export."""
+        return self.root / "run-exports" / _validate_name(name, "run export name")
 
     @property
     def exports_dir(self) -> Path:

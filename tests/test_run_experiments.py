@@ -1495,7 +1495,7 @@ class TestReplayRejectsChangedSources:
         """The .asc is the file the author edits, and nothing else moves with it.
 
         A schematic runs through an exported netlist, and a replay skips the
-        export — so the netlist the manifest recorded is still on disk, still
+        export — so the snapshot the manifest recorded is still on disk, still
         byte-identical, and still describes the circuit as it was. Checking only
         that export is checking the one file an edit cannot reach.
         """
@@ -1505,7 +1505,12 @@ class TestReplayRejectsChangedSources:
         _asc_exporter(state_with_sim)
         args = _args(schematic, "edited-schematic", provenance=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        exported = work_dir / "amp.net"
+        exports = Store(work_dir).exports_dir
+        (exported,) = [
+            Path(entry["path"])
+            for entry in first["source"][0]["manifest"]
+            if Path(entry["path"]).parent == exports
+        ]
         exported_bytes = exported.read_bytes()
         _schematic(schematic, "2k")
 
@@ -1646,21 +1651,24 @@ def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Pat
 class TestSchematicExportsLiveInTheStore:
     """The netlist a schematic runs as is kept in the store, not in the author's folder.
 
-    LTspice writes ``<name>.net`` beside the schematic; that one is its choice.
-    What the server kept besides — a ``.ltspice-mcp/exports/`` snapshot, or a
-    ``<name>.run-<hash>.net`` sibling whenever the export had a relative
-    include — is bookkeeping, and lives beside the job records that name it.
+    LTspice writes ``<name>.net`` beside the sheet it exports, so a run exports
+    a copy of the sheet staged in the store, and the snapshot it runs lives
+    beside the job records that name it. Nothing is written beside the sheet.
     """
 
-    async def test_a_schematic_run_leaves_only_ltspices_own_export_beside_it(
+    async def test_a_schematic_run_writes_nothing_beside_it(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        """A hand-written netlist of the sheet's name beside it keeps its bytes."""
         fake_simulator(monkeypatch)
         schematic = _schematic(project_dir / "amp.asc", "1k")
+        hand_written = project_dir / "amp.net"
+        by_hand = b"* written by hand\nV1 in 0 1\nR1 in 0 5k\n.op\n.end\n"
+        hand_written.write_bytes(by_hand)
         _asc_exporter(state_with_sim)
 
         data = _assert_schema(
@@ -1671,6 +1679,7 @@ class TestSchematicExportsLiveInTheStore:
 
         assert data["outcome"] == "complete"
         assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
+        assert hand_written.read_bytes() == by_hand
         exports = Store(work_dir).exports_dir
         snapshots = [
             Path(entry["path"])
@@ -1703,7 +1712,6 @@ class TestSchematicExportsLiveInTheStore:
         assert data["outcome"] == "complete", data
         assert sorted(p.name for p in project_dir.iterdir()) == [  # noqa: ASYNC240
             "amp.asc",
-            "amp.net",
             "models.inc",
         ]
         (entry,) = [e for e in data["source"][0]["manifest"] if e["path"] == str(models)]

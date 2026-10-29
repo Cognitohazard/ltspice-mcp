@@ -10,6 +10,11 @@ tool-surface changes.
 
 ### Fixed
 
+- `run_experiments` exported a schematic with LTspice where it stands, which
+  writes `<name>.net` beside it: a netlist the author kept under that name
+  was replaced, and the reply said nothing of it. A run now exports a copy
+  of the sheet, with the symbol and model files of its folder, in the
+  server's store, and writes nothing beside the caller's files.
 - Several stepped LTspice results refused every read with "Step boundaries
   are unresolved": a stepped `.tf`, a stepped `.noise` at one frequency, a
   `.op` stepped over temperature, and the results file of a stepped `.fra`.

@@ -1196,9 +1196,10 @@ results stand. `in_ltspice` never fails the call.
 
 `sidecar`, the default `export_to`, overwrites the schematic's `<name>.net`
 under lock and returns `{path, sha256, diff_vs_prior?}`. LTspice writes the
-same file beside a schematic it runs, and `run_experiments` exports through
-it, so the default export writes nothing a run would not; it does make the
-call destructive, as the annotation table shows. `managed` leaves the
+same file beside a schematic it runs from its own window, so the default
+export writes nothing such a run would not; it does make the call
+destructive, as the annotation table shows. `run_experiments` exports a
+schematic the managed way and writes nothing beside it. `managed` leaves the
 caller's files alone: it copies the schematic and the project-local
 `.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under its folder into a scratch
 directory in the store, exports there, and writes nothing beside the caller's

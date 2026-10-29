@@ -6,8 +6,8 @@ does it write" — the questions that sit between a caller's path argument and
 
 * ``resolve_runnable_netlist`` — export an ``.asc`` schematic, at a path the
   caller already resolved, to a runnable ``.net`` when that is what was
-  handed in (serialized per schematic by ``asc_export_lock``, sanitized for
-  ngspice when that is the target simulator).
+  handed in (from a copy staged in the store, so nothing is written beside
+  the sheet; sanitized for ngspice when that is the target simulator).
 * ``_stage_deck_snapshot`` — a content-addressed copy of the exported deck in
   the store, so a parallel session re-exporting the same schematic cannot swap
   the bytes out from under a run that already claimed them.
@@ -28,6 +28,7 @@ import hashlib
 import logging
 import os
 import shutil
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -112,30 +113,15 @@ def _read_export(net_path: Path, *, for_ngspice: bool) -> tuple[str, bytes]:
     return f"{net_path.stem}.ngspice", encode_spice_text(emit(cards), rewrite_codec(encoding))
 
 
-async def _export_schematic(
-    asc_path: Path, state: SessionState, simulator: type | None
-) -> tuple[str, bytes]:
-    """Export ``asc_path`` with LTspice and read the deck back inside the export lock.
+def _exporter(asc_path: Path, state: SessionState, simulator: type | None) -> type:
+    """The LTspice that exports ``asc_path`` for a run on ``simulator``.
 
-    Returns the stem the deck is named by and its bytes. They are read before
-    the lock is released because ``create_netlist`` writes a shared
-    ``<stem>.net``: a parallel session re-exporting this schematic overwrites
-    it the moment the lock is free.
-
-    ``simulator`` is the class the run will execute on (defaults to the
-    session default): when it is ngspice, the LTspice export is sanitized
-    for it (see ``_read_export``) — without that, every schematic run on
-    ngspice dies on the exporter's ``.backanno``. When it is an LTspice, that
-    build exports the schematic: a named executable (LTspice XVII beside a
-    later default) netlists the sheet against its own symbols and model
-    library, as running the sheet in it would.
-
-    The export launches the LTspice binary and blocks until it exits — heavy
-    work that would stall the shared event loop, so it is offloaded via
-    ``asyncio.to_thread``. It touches no cached editors, so the offload is safe
-    under the concurrency contract.
+    When ``simulator`` is an LTspice, that build exports the schematic: a named
+    executable (LTspice XVII beside a later default) netlists the sheet against
+    its own symbols and model library, as running the sheet in it would.
+    Otherwise the session's LTspice does, and a session without one is refused.
     """
-    from ltspice_mcp.lib.simulator import is_ltspice, is_ngspice
+    from ltspice_mcp.lib.simulator import is_ltspice
 
     ltspice_cls = simulator if is_ltspice(simulator) else state.available_simulators.get("ltspice")
     if ltspice_cls is None:
@@ -151,6 +137,33 @@ async def _export_schematic(
             "embedded .model/.lib/analysis directives can be reused in a .cir.)",
             show_hint=False,
         )
+    return ltspice_cls
+
+
+async def _export_where_it_stands(
+    asc_path: Path, state: SessionState, simulator: type | None
+) -> tuple[str, bytes]:
+    """Export ``asc_path`` with LTspice and read the deck back inside the export lock.
+
+    LTspice writes the deck to ``<stem>.net`` beside the sheet, so this is for
+    a sheet in the server's own store. Returns the stem the deck is named by
+    and its bytes, read before the lock is released: an export of the same
+    sheet that follows overwrites that file the moment the lock is free.
+
+    ``simulator`` is the class the run will execute on (defaults to the
+    session default): when it is ngspice, the LTspice export is sanitized
+    for it (see ``_read_export``) — without that, every schematic run on
+    ngspice dies on the exporter's ``.backanno``. ``_exporter`` says which
+    LTspice exports it.
+
+    The export launches the LTspice binary and blocks until it exits — heavy
+    work that would stall the shared event loop, so it is offloaded via
+    ``asyncio.to_thread``. It touches no cached editors, so the offload is safe
+    under the concurrency contract.
+    """
+    from ltspice_mcp.lib.simulator import is_ngspice
+
+    ltspice_cls = _exporter(asc_path, state, simulator)
     for_ngspice = is_ngspice(simulator or state.default_simulator)
     async with asc_export_lock(asc_path):
         try:
@@ -173,6 +186,32 @@ async def _export_schematic(
             return await asyncio.to_thread(_read_export, net_path, for_ngspice=for_ngspice)
         except FileNotFoundError as e:
             raise SimulationError(f"Auto-export of {asc_path.name} produced no .net file") from e
+
+
+async def _export_schematic(
+    asc_path: Path, state: SessionState, simulator: type | None
+) -> tuple[str, bytes]:
+    """Export the caller's sheet at ``asc_path`` from a copy staged in the store.
+
+    A run writes nothing beside the caller's files: LTspice writes the deck it
+    exports to ``<stem>.net`` beside the sheet, where it would replace a
+    netlist the author keeps under that name. The copy carries the files of
+    the sheet's folder its export reads (``stage_sheet``), and is taken under
+    the sheet's circuit lock, so an edit in progress is either all in it or
+    not at all. The staging folder is this call's alone and is removed after.
+    """
+    _exporter(asc_path, state, simulator)
+    staging = state.store.run_export(
+        f"{sanitize_stem(asc_path.stem) or 'sheet'}.{uuid.uuid4().hex[:12]}"
+    )
+    try:
+        async with circuit_file_lock(asc_path):
+            staged, note = await asyncio.to_thread(stage_sheet, asc_path, staging)
+        if note:
+            logger.warning(note)
+        return await _export_where_it_stands(staged, state, simulator)
+    finally:
+        await asyncio.to_thread(shutil.rmtree, staging, True)
 
 
 async def resolve_runnable_netlist(
@@ -271,7 +310,7 @@ async def export_netlist_text(asc_path: Path, state: SessionState) -> str:
     admitted, so no sandbox check runs (the store need not sit inside
     ``allowed_paths``), and no snapshot is kept, because nothing will name it.
     """
-    _stem, data = await _export_schematic(asc_path, state, None)
+    _stem, data = await _export_where_it_stands(asc_path, state, None)
     return decode_spice_bytes(data)
 
 
