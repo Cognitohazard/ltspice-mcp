@@ -1643,6 +1643,62 @@
         ".net"
       ]
     },
+    "connectivity/shared_reference": {
+      "behaviour": "shared-reference",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/shared_reference.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nNetlist error: Duplicated Instance Name, \"R1\" in C:\\recording\\shared_reference.asc",
+      "exit_code": null,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/shared_reference.asc": "93061a8f4a577e0d461b6ddbf90f21e1653b396b2f2f5cf0425c8a17f3ab5184"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/shared_reference.net": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/shared_reference_case": {
+      "behaviour": "shared-reference",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/shared_reference_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nNetlist error: Duplicated Instance Name, \"r1\" in C:\\recording\\shared_reference_case.asc",
+      "exit_code": null,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/shared_reference_case.asc": "101fa37846440f36533735aac6e9bdb1aabc2d51c604b865c911c9a0fa031f53"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/shared_reference_case.net": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/two_instance_wire": {
       "behaviour": "wire-connectivity",
       "command": [

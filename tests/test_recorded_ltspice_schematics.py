@@ -59,6 +59,7 @@ ORIENTATION = rec.cases_of("symbol-orientation") + rec.cases_of("stock-symbol-or
 CONNECTIVITY = rec.cases_of("wire-connectivity") + rec.cases_of("net-naming")
 SAME_INSTANCE = rec.cases_of("same-instance-wire")
 SHARED_POINT = rec.cases_of("pins-of-one-part-on-one-point")
+SHARED_REFERENCE = rec.cases_of("shared-reference")
 PLACEMENTS = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
 
 
@@ -436,6 +437,28 @@ def test_the_signature_is_the_circuit_ltspice_netlists(build: str, case_id: str,
     one part that share a point."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     assert netlisted_groups(sheet) == exported_groups(build, case_id)
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SHARED_REFERENCE)))
+def test_neither_build_netlists_a_sheet_on_which_two_parts_share_a_reference(
+    build: str, case_id: str
+):
+    """Spelled the same (``R1``, ``R1``) or in another case (``R1``, ``r1``):
+    references are compared without case. XVII puts up a message box naming
+    the second part's spelling and leaves the netlist empty; LTspice 26 exits
+    as if it had succeeded, having written nothing."""
+    entry = rec.entry(build, case_id)
+    if rec.generation(build) == "xvii":
+        second = "r1" if case_id.endswith("_case") else "R1"
+        assert entry["stopped"]
+        assert entry["dialog"].startswith(
+            f'LTspice XVII\nNetlist error: Duplicated Instance Name, "{second}" in '
+        )
+        assert entry["outputs"][f"{case_id}.net"]["bytes"] == 0
+    else:
+        assert (entry["exit_code"], entry["stopped"]) == (0, False)
+        assert (entry["outputs"], entry["written"]) == ({}, [])
+        assert "dialog" not in entry
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
