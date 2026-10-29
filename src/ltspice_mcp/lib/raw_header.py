@@ -346,13 +346,18 @@ def _layout(
         )
     if "log" in flags and "linear" in flags:
         raise scanner.error(RawHeaderError, "invalid Flags: log and linear conflict")
-    if "double" in flags and (dialect != "ltspice" or "complex" in flags):
+    plot = fields["plotname"].lower()
+    # Under .options numdgt above 6 LTspice also marks an AC plot double, and
+    # stores it as it stores any complex plot, 16 bytes a value (recorded as
+    # raw/ac_numdgt7 and raw/step_ac_one_freq_numdgt7). No other complex plot
+    # has been recorded with the flag.
+    double_ac = plot == "ac analysis" and "fastaccess" not in flags
+    if "double" in flags and (dialect != "ltspice" or ("complex" in flags and not double_ac)):
         raise scanner.error(RawLayoutError, "unsupported double flag for this layout")
     if "fastaccess" in flags and (dialect != "ltspice" or storage != "binary"):
         raise scanner.error(RawLayoutError, "unsupported fastaccess flag for this layout")
     if "stepped" in flags and dialect != "ltspice":
         raise scanner.error(RawLayoutError, "unsupported stepped flag for this layout")
-    plot = fields["plotname"].lower()
     if plot == "ac analysis" and "complex" not in flags:
         raise scanner.error(RawLayoutError, "AC Analysis requires a complex layout")
     if dialect == "ltspice" and storage == "binary":

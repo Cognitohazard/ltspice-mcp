@@ -188,6 +188,31 @@ class TestRawLayouts:
             -45, abs=1e-3
         )
 
+    @pytest.mark.parametrize(
+        ("case_id", "plain", "steps"),
+        [
+            ("raw/ac_numdgt7", "raw/ac", 1),
+            ("raw/ac_numdgt15", "raw/ac", 1),
+            ("raw/step_ac_one_freq_numdgt7", "raw/step_ac_one_freq", 3),
+        ],
+    )
+    def test_an_ac_raw_marked_double_reads_as_the_same_run_without_it(
+        self, build: str, case_id: str, plain: str, steps: int, tmp_path: Path
+    ):
+        """Under ``.options numdgt`` above 6 both builds mark an AC plot
+        ``double``, and store it as they store any complex plot, 16 bytes a
+        value: the samples are those of the run without the option."""
+        assert "double" in header_fields(build, case_id)["Flags"][0].split()
+        assert "double" not in header_fields(build, plain)["Flags"][0].split()
+        marked = rec.decode(build, case_id, tmp_path)
+        unmarked = rec.decode(build, plain, tmp_path)
+        assert marked.raw.get_trace_names() == unmarked.raw.get_trace_names()
+        for step in range(steps):
+            for name in ("V(in)", "V(out)"):
+                assert self.wave(marked, name, step) == pytest.approx(
+                    self.wave(unmarked, name, step), rel=1e-12
+                )
+
     def test_a_dc_sweep_has_the_swept_source_for_its_axis(self, build: str, tmp_path: Path):
         parsed = rec.decode(build, "raw/dc", tmp_path)
         sweep = np.asarray(parsed.raw.get_axis(0))

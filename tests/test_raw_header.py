@@ -353,6 +353,7 @@ def test_legacy_inference_has_specific_evidence(tmp_path: Path):
     [
         ("LTspice", "real", (8, 4)),
         ("LTspice", "real double", (8, 8)),
+        ("LTspice", "complex double", (16, 16)),
         ("LTspice", "real fastaccess", (8, 4)),
         ("LTspice", "complex fastaccess", (16, 16)),
         ("ngspice", "complex", (16, 16)),
@@ -383,7 +384,8 @@ def test_source_defined_allowlisted_layouts(
         ("LTspice", "real compressed", "Transient Analysis"),
         ("ngspice", "real unpadded", "Transient Analysis"),
         ("ngspice", "real fastaccess", "Transient Analysis"),
-        ("LTspice", "complex double", "AC Analysis"),
+        ("LTspice", "complex double", "Frequency Response Analysis"),
+        ("LTspice", "complex double fastaccess", "AC Analysis"),
         ("LTspice", "real", "AC Analysis"),
         ("LTspice", "real", "Unknown analysis"),
     ],

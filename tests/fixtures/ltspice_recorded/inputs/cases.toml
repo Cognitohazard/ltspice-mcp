@@ -377,7 +377,7 @@ model = ["lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/tran_window.cir"]
 
 [behaviour.raw-ac]
-summary = "An AC raw: complex samples, a frequency axis stored complex; and the same sweep, and a stepped one at one frequency, under .options numdgt above 6, which writes the double flag."
+summary = "An AC raw: complex samples, a frequency axis stored complex; and the same sweep, and a stepped one at one frequency, under .options numdgt above 6, which writes the double flag and changes no width."
 model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_parser.py", "lib/ac_analysis.py"]
 inputs = ["raw/ac.cir", "raw/ac_numdgt7.cir", "raw/ac_numdgt15.cir", "raw/step_ac_one_freq_numdgt7.cir"]
 

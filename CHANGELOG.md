@@ -10,6 +10,10 @@ tool-surface changes.
 
 ### Fixed
 
+- An AC results file from a deck with `.options numdgt` above 6 was refused
+  ("unsupported double flag for this layout"). Under that option both
+  LTspice builds mark an AC plot `double`, but store it as any AC plot, so
+  it now reads as the same run without the option.
 - An AC pane written by `set_plot_panes`, or by `plot_waveform` with
   `in_ltspice`, lacked the two lines that switch its magnitude and phase
   curves on (`PltMag: 1`, `PltPhi: 1 0`), which both builds write for an AC
