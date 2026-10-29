@@ -24,8 +24,9 @@ read a quantity the simulator did not write as a trace of its own:
 
 `value` reads the sample nearest `at` on the run's axis, without
 interpolation, and needs `at` whenever that axis has more than one sample. A
-stepped `.ac` at one frequency stores no frequency, one point a step: leave
-`at` out and pick the step.
+stepped `.ac` or `.noise` at one frequency stores no frequency, and a stepped
+`.op` or `.tf` has no axis; each holds one point a step: leave `at` out and
+pick the step.
 
 ## Trace math in Python
 

@@ -41,13 +41,16 @@ _INPUT_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.lo
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
 _STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.I)
 _STEP_PARAMETER = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
-#: The LTspice analyses whose stepped plot is split where its axis restarts.
-_SAMPLED_LT_ANALYSES: frozenset[Analysis] = frozenset({"transient", "ac", "dc", "noise"})
+#: The LTspice analyses whose stepped plot is split where its axis restarts,
+#: a frequency response analysis's results file among them (``raw/fra_step``).
+_SAMPLED_LT_ANALYSES: frozenset[Analysis] = frozenset({"transient", "ac", "dc", "noise", "fra"})
 #: The LTspice analyses that, stepped, may open with the stepped parameters and
 #: then hold one point a step, with no step named in the log: a stepped .op
-#: always (``raw/step_op``), and a stepped .ac at one frequency, which then
-#: stores no frequency at all (``raw/step_ac_one_freq``). Both builds alike.
-_PARAMETERS_FIRST_LT_ANALYSES: frozenset[Analysis] = frozenset({"op", "ac"})
+#: always (``raw/step_op``, and ``raw/step_temp_op`` over temperature), a
+#: stepped .tf (``raw/tf_step``), and a stepped .ac or .noise at one frequency,
+#: which then stores no frequency at all (``raw/step_ac_one_freq``,
+#: ``raw/step_noise_one_freq``). Both builds alike.
+_PARAMETERS_FIRST_LT_ANALYSES: frozenset[Analysis] = frozenset({"op", "ac", "tf", "noise"})
 
 
 class RawDecodeError(ValueError):

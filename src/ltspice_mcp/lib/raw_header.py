@@ -105,10 +105,10 @@ class RawPlotHeader:
 
 def leading_parameters(plot: RawPlotHeader) -> list[int]:
     """The variables a stepped plot opens with that hold the stepped parameters
-    (LTspice declares them ``param``)."""
+    (LTspice declares them ``param``, and a stepped temperature ``temperature``)."""
     leading: list[int] = []
     for variable in plot.variables:
-        if variable.declared_type.casefold() != "param":
+        if variable.declared_type.casefold() not in ("param", "temperature"):
             break
         leading.append(variable.index)
     return leading
