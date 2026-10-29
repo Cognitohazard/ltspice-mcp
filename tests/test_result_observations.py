@@ -18,6 +18,7 @@ from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
 from ltspice_mcp.lib.recipes import SummaryRecipe
 from ltspice_mcp.lib.result_observations import (
+    one_ac_frequency,
     parse_requested_outputs,
     parse_source_amplitudes,
     reconciliation_observations,
@@ -88,6 +89,25 @@ class TestTranMaxStep:
     )
     def test_the_fourth_number_of_the_first_tran(self, deck: str, step: float | None):
         assert tran_max_step(deck) == (None if step is None else pytest.approx(step))
+
+
+class TestOneAcFrequency:
+    """A one-frequency .ac's frequency is read only from the recorded form."""
+
+    @pytest.mark.parametrize(
+        ("deck", "frequency"),
+        [
+            (".ac list 100k\n", 100e3),
+            (".AC LIST 1meg\n", 1e6),
+            (".ac list 1k 2k\n", None),
+            (".ac dec 10 1 1k\n", None),
+            (".ac lin 1 1k 1k\n", None),
+            (".ac list {f0}\n", None),
+            ("* .ac list 1k\nR1 a 0 1k\n", None),
+        ],
+    )
+    def test_the_one_value_of_an_ac_list(self, deck: str, frequency: float | None):
+        assert one_ac_frequency(deck) == (None if frequency is None else pytest.approx(frequency))
 
 
 class TestRelayObservations:

@@ -26,7 +26,10 @@ read a quantity the simulator did not write as a trace of its own:
 interpolation, and needs `at` whenever that axis has more than one sample. A
 stepped `.ac` or `.noise` at one frequency stores no frequency, and a stepped
 `.op` or `.tf` has no axis; each holds one point a step: leave `at` out and
-pick the step.
+pick the step. Its stepped values are in each row's `step_values`, not among
+the signals. For a stepped `.ac` read from its job, `value` gives the
+frequency the deck names (`.ac list 100k`) as `actual_x`, with
+`actual_x_source: "deck"`, since the raw does not hold it.
 
 ## Trace math in Python
 

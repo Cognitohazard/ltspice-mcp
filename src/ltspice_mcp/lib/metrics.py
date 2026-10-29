@@ -114,6 +114,7 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, STEPPED_AC_ONE_FREQUENCY
 from ltspice_mcp.lib.result_observations import (
     deck_observation_inputs,
+    deck_one_ac_frequency,
     relay_observations,
 )
 from ltspice_mcp.lib.signal_analysis import (
@@ -1095,7 +1096,9 @@ async def value(
     sample. An operating point, which has no axis, falls back to its bias point,
     where the expression is addressed by the name the operating point carries.
     An AC plot with no axis answers from the one point it holds at the step, as
-    a stepped ``.ac`` at one frequency does.
+    a stepped ``.ac`` at one frequency does; the raw stores no frequency, so
+    the deck's is given as ``actual_x`` with ``actual_x_source: "deck"`` when
+    the run's deck names it.
     """
     at = recipe.at
     if at is None:
@@ -1108,7 +1111,16 @@ async def value(
                 return await _value_from_operating_point(source, recipe, raw, step, state)
             if not _one_frequency_ac(raw):
                 raise
-            return await point_value(source, recipe.expr, None, step, state)
+            data = await point_value(source, recipe.expr, None, step, state)
+            frequency = (
+                None
+                if source.netlist is None
+                else await asyncio.to_thread(deck_one_ac_frequency, source.netlist)
+            )
+            if frequency is not None:
+                data["actual_x"] = frequency
+                data["actual_x_source"] = "deck"
+            return data
         if len(axis) != 1:
             raise ResultError(
                 "value.at is required when the selected run has more than one "

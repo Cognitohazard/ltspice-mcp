@@ -623,6 +623,46 @@ async def test_a_job_whose_deck_asked_for_wide_steps_is_not_reported_coarse(
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped .ac at one frequency stores none; its deck's .ac list 100k is
+    the frequency, given with that source when the run's deck is known. The
+    RC low-pass (C = 1n) over r = 1k, 2k, 4k agrees with it at every step.
+    Read by path, with no deck, no frequency is given."""
+    case_id = "raw/step_ac_one_freq"
+    raw = rec.stage_run(build, case_id, work_dir / "run")
+    job = make_experiment_job(state_no_sim, job_id="exp_one_freq", raw=raw)
+    deck = job.cases[0].staged_deck
+    assert deck is not None
+    deck.write_bytes((INPUTS / f"{case_id}.cir").read_bytes())
+
+    async def values(source: dict[str, str]) -> list[dict[str, Any]]:
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [source],
+                "all_steps": True,
+                "recipes": [{"key": "v", "metric": "value", "expr": "V(out)"}],
+                "include": {"per_run": True},
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None and data["failures"] == []
+        return data["results"]["v"]["per_run"]["items"]
+
+    rows = await values({"job_id": job.job_id})
+    assert [row["step_values"]["r"] for row in rows] == [1000.0, 2000.0, 4000.0]
+    for row in rows:
+        value = row["value"]
+        assert (value["actual_x"], value["actual_x_source"]) == (100e3, "deck")
+        resistance = row["step_values"]["r"]
+        gain = 1 / math.sqrt(1 + (2 * math.pi * value["actual_x"] * resistance * 1e-9) ** 2)
+        assert value["magnitude_linear"] == pytest.approx(gain, rel=1e-5)
+    by_path = await values({"raw_path": str(raw)})
+    assert all("actual_x" not in row["value"] for row in by_path)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 async def test_a_measurements_only_call_reports_a_transient_compression_left_coarse(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):

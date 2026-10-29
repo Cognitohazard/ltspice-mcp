@@ -170,6 +170,10 @@ tool-surface changes.
 
 ### Added
 
+- The `value` recipe on a stepped `.ac` at one frequency, read from its job,
+  gives the frequency the deck names (`.ac list <f>`) as `actual_x`, with
+  `actual_x_source: "deck"`: the raw stores no frequency, and nothing said
+  at what frequency each step's value was.
 - `inspect(kind="results")`'s plots view, and the Python API's
   `RawResult.descriptor` and `plots`, say which kind of stepped result an
   LTspice plot is (`stepped_kind`): each step's sweep in turn, one point a

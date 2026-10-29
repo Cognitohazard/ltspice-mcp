@@ -336,6 +336,31 @@ def tran_max_step(netlist_text: str) -> float | None:
     return None
 
 
+def one_ac_frequency(netlist_text: str) -> float | None:
+    """The one frequency a deck's first ``.ac`` names as ``.ac list <f>``: the
+    frequency of a stepped ``.ac`` at one frequency, which its raw does not
+    store (``result_kinds.STEPPED_AC_ONE_FREQUENCY``, recorded as
+    ``raw/step_ac_one_freq``). None for any other form, or a value that is not
+    a number."""
+    for card in lex(netlist_text).cards:
+        tokens = card.body.split() if card.kind == "directive" else []
+        if not tokens or tokens[0].casefold() != ".ac":
+            continue
+        if len(tokens) != 3 or tokens[1].casefold() != "list":
+            return None
+        numbers = leading_numeric_tokens(tokens[2:])
+        return numbers[0] if numbers and numbers[0] > 0 else None
+    return None
+
+
+def deck_one_ac_frequency(netlist: Path) -> float | None:
+    """``one_ac_frequency`` of the deck at ``netlist``; None when it cannot be read."""
+    try:
+        return one_ac_frequency(read_spice_text(netlist))
+    except OSError:
+        return None
+
+
 def deck_tran_max_step(netlist: Path) -> float | None:
     """``tran_max_step`` of the deck at ``netlist``; None when it cannot be read."""
     try:
