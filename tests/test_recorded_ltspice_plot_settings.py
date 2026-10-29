@@ -239,11 +239,28 @@ def test_no_build_stops_on_a_file_the_server_wrote(build: str, case_id: str):
     ),
 )
 def test_a_build_shows_the_panes_traces_and_scales_written(build: str, case_id: str):
+    """What a build saves straight back is what it read: the panes, their
+    traces and scales. It is a proxy for what the window draws, not the
+    drawing: a trace listed in a pane is not a curve drawn (see the AC test
+    below), and whether each curve draws is checked by eye when recording,
+    until the recorder can capture the pane."""
     written = read_plot_settings(handed(case_id))
     shown = read_plot_settings(saved(build, case_id))
     assert [s.name for s in shown.sections] == [s.name for s in written.sections]
     for section in written.sections:
         assert panes(saved(build, case_id), section.name) == section.panes
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", ["plot/read_ac", "plot/read_ac_grid"])
+def test_a_build_keeps_an_ac_panes_curves_switched_on(build: str, case_id: str):
+    """An AC pane written here switches its magnitude and phase curves on, as
+    a build's own pane does (plot/ac), and the build saves the switches back.
+    Read without them, XVII opened the pane with both curves off: a pane that
+    listed its trace and drew nothing. The saved switches are still a proxy;
+    that each curve draws is checked by eye when recording."""
+    (section,) = [s for s in read_plot_settings(saved(build, case_id)).sections if s.name == AC]
+    assert "PltMag: 1" in section.body and "PltPhi: 1 0" in section.body
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
