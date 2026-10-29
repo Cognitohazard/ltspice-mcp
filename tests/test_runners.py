@@ -468,6 +468,21 @@ class TestParamPerturbation:
         assert parse_param_nominal(text, "kp_n") == pytest.approx(100e-6)
         assert parse_param_nominal(text, "missing") is None
 
+    @pytest.mark.parametrize(
+        "card",
+        [
+            ".model dx d is=1e-14 ; saturation current\n+ n=2\n",
+            ".model dx d(is=1e-14 ; saturation current\n+ n=2)\n",
+        ],
+        ids=["at_the_end_of_a_line", "inside_the_parentheses"],
+    )
+    def test_model_nominals_go_on_past_a_comment(self, card: str):
+        """A comment ends at the end of its line, and the card goes on over the
+        next ``+`` line (recorded: deck/comment_*), so ``n`` is a nominal too."""
+        from ltspice_mcp.lib.montecarlo import parse_model_params
+
+        assert parse_model_params(card) == {"IS": pytest.approx(1e-14), "N": 2.0}
+
 
 class TestMismatchRuleMatching:
     def test_finds_first_matching_prefix(self):

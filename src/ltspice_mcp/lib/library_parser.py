@@ -1,12 +1,10 @@
 """Component library parsing utilities."""
 
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from ltspice_mcp.lib.encoding import read_spice_text as _read_library_text
-from ltspice_mcp.lib.spice_lex import line_comment_start
 
 logger = logging.getLogger(__name__)
 
@@ -69,75 +67,6 @@ class LibraryIndex:
 
     path: Path
     models: list[ModelEntry]
-
-
-def _merge_continuation_lines(lines: list[str]) -> list[str]:
-    """Merge SPICE continuation lines (lines starting with '+').
-
-    Args:
-        lines: Raw lines from library file
-
-    Returns:
-        Merged lines with continuations resolved
-    """
-    merged = []
-    current = None
-
-    for line in lines:
-        stripped = line.strip()
-
-        # Skip pure comment lines (starting with '*')
-        if stripped.startswith("*"):
-            continue
-
-        # Skip blank lines without flushing ``current`` — a blank line
-        # between a definition and its continuation (``+ ...``) must not
-        # break the continuation, otherwise the merged output contains a
-        # garbage fragment like " BF=200" and the real definition loses
-        # its parameters.
-        if not stripped:
-            continue
-
-        comment = line_comment_start(stripped)
-        if comment is not None:
-            stripped = stripped[:comment].rstrip()
-
-        if stripped.startswith("+"):
-            if current is not None:
-                current += " " + stripped[1:].strip()
-        else:
-            if current is not None:
-                merged.append(current)
-            current = stripped
-
-    if current is not None:
-        merged.append(current)
-
-    return merged
-
-
-def _extract_parameters(param_text: str, limit: int = 5) -> dict[str, str]:
-    """Extract key-value parameters from SPICE parameter text.
-
-    Args:
-        param_text: Text inside parentheses for .MODEL, e.g., "BF=200 IS=1e-14 VAF=100"
-        limit: Maximum number of parameters to extract
-
-    Returns:
-        Dictionary of parameter names to values (up to limit entries)
-    """
-    params = {}
-    # Match KEY=VALUE patterns (values can include scientific notation, units, etc.)
-    pattern = re.compile(r"(\w+)\s*=\s*([^\s)]+)")
-
-    for match in pattern.finditer(param_text):
-        if len(params) >= limit:
-            break
-        key = match.group(1).upper()  # SPICE parameters are case-insensitive
-        value = match.group(2)
-        params[key] = value
-
-    return params
 
 
 def _encrypted_stub(path: Path) -> ModelEntry:

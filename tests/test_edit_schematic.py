@@ -50,6 +50,7 @@ from tests._asc_ops import apply_ops, file_at, sheet_findings
 from tests._schematic_fixtures import BOX2_ASY, write_file
 from tests.ltspice_recorder import INPUTS
 from tests.test_api_reference import _op_kinds
+from tests.test_verify_circuit import ACROSS_WIRE_SHEET
 from tests.test_verify_circuit import _run as run_verify_circuit
 
 # Validates a raw op dict into the tool's own op union, so the control path
@@ -910,29 +911,36 @@ async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state)
     assert len(whole) == len(data["warnings"]) + data["preexisting"]["findings"]
 
 
-async def test_a_finding_on_a_reference_the_batch_named_is_still_the_sheets(asc_state):
-    """R1's floating pins predate the edit and a new value leaves them as they
-    were: the edit names R1, but it made neither."""
-    sheet = await _untidy_sheet(asc_state, "untidy-touch")
+@pytest.mark.parametrize(
+    "ops",
+    [
+        pytest.param(
+            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
+            id="a_new_value_on_the_part_with_floating_pins",
+        ),
+        pytest.param(
+            [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
+            id="a_directive_on_the_dangling_labels_point",
+        ),
+        pytest.param(
+            [
+                {"op": "move", "dx": 16, "dy": 0, "labels": [{"x": 900, "y": 900}]},
+                {"op": "move", "dx": -16, "dy": 0, "labels": [{"x": 916, "y": 900}]},
+            ],
+            id="the_dangling_label_moved_away_and_back",
+        ),
+    ],
+)
+async def test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets(
+    asc_state, ops: list[dict]
+):
+    """R1's floating pins and the orphan label at (900,900) predate the edit.
+    A batch that gives R1 a new value, puts a directive on the label's point,
+    or moves the label away and back names them but leaves each as it was: the
+    finding is the sheet's, counted with the sheet's."""
+    sheet = await _untidy_sheet(asc_state, "untidy-named")
 
-    data = await apply_ops(
-        asc_state, sheet, [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
-    )
-
-    assert data["warnings"] == []
-    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS
-
-
-async def test_a_finding_at_a_coordinate_the_batch_named_is_still_the_sheets(asc_state):
-    """The orphan label predates the edit; a directive placed on its point
-    leaves it dangling as it was."""
-    sheet = await _untidy_sheet(asc_state, "untidy-coord")
-
-    data = await apply_ops(
-        asc_state,
-        sheet,
-        [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
-    )
+    data = await apply_ops(asc_state, sheet, ops)
 
     assert data["warnings"] == []
     assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS
@@ -1217,19 +1225,12 @@ async def test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs(asc_state)
     assert about_r3["warnings"] == []
 
 
-#: A resistor placed R180, its value drawn leftward across the wire beside it
-#: (as test_verify_circuit's layout test has it), its two pins on nothing.
-_ACROSS_SHEET = (
-    "Version 4\nSHEET 1 880 680\n"
-    "SYMBOL res 200 200 R180\nSYMATTR InstName R1\nSYMATTR Value {value}\n"
-    "WIRE 100 120 100 220\n"
-)
 _ACROSS = "is drawn across wire (100,120)->(100,220)"
 
 
 def _across_sheet(state: SessionState, name: str, value: str) -> Path:
     sheet = Path(state.working_dir) / f"{name}.asc"
-    write_file(sheet, _ACROSS_SHEET.replace("{value}", value))
+    write_file(sheet, ACROSS_WIRE_SHEET.replace("{value}", value))
     return sheet
 
 
@@ -1365,24 +1366,6 @@ async def test_the_sheets_findings_are_read_off_the_event_loop(asc_state, monkey
 
     assert data["commit_state"] == "committed"
     assert read_on == [False]
-
-
-async def test_a_label_moved_away_and_back_leaves_its_finding_the_sheets(asc_state):
-    """The label ends where it began, dangling as it was: the batch moved it,
-    but the finding is the one the sheet had, and counted with the sheet's."""
-    sheet = await _untidy_sheet(asc_state, "untidy-moved-back")
-
-    data = await apply_ops(
-        asc_state,
-        sheet,
-        [
-            {"op": "move", "dx": 16, "dy": 0, "labels": [{"x": 900, "y": 900}]},
-            {"op": "move", "dx": -16, "dy": 0, "labels": [{"x": 916, "y": 900}]},
-        ],
-    )
-
-    assert data["warnings"] == []
-    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS
 
 
 async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(asc_state):

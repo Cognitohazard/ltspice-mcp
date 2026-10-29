@@ -628,12 +628,12 @@ class TestACardThatGoesOnPastAComment:
                 ".SUBCKT amp in out PARAMS: gain=3\n",
             ),
             (
-                ".meas tran vmax max V(out) ; peak\n+ from=1m\n",
-                lambda card: MeasCard.from_card(card).set_label("vpeak"),
-                ".meas TRAN vpeak max V(out) from=1m\n",
+                "M1 d g s b nmos W=1u\n* width\n+ L=1u\n",
+                lambda card: InstanceLine.from_card(card).set_param("AD", "1p"),
+                "M1 d g s b nmos W=1u L=1u AD=1p\n",
             ),
         ],
-        ids=["in_place", "written_again", "subckt", "meas"],
+        ids=["in_place", "written_again", "subckt", "comment_on_a_line_of_its_own"],
     )
     def test_an_edit_keeps_the_lines_past_the_comment(
         self, text: str, edit: Callable[[SpiceCard], object], written: str
@@ -641,12 +641,6 @@ class TestACardThatGoesOnPastAComment:
         cards = lex(text).cards
         edit(cards[0])
         assert emit(cards) == written
-
-    def test_a_comment_on_a_line_of_its_own_does_not_stop_a_rewrite(self) -> None:
-        """The ``+`` line after it is in the body, so a rewrite keeps it."""
-        cards = lex("M1 d g s b nmos W=1u\n* width\n+ L=1u\n").cards
-        InstanceLine.from_card(cards[0]).set_param("AD", "1p")
-        assert emit(cards) == "M1 d g s b nmos W=1u L=1u AD=1p\n"
 
     def test_a_continuation_that_is_only_a_comment_gives_nothing(self) -> None:
         cards = lex("R1 a 0 1k\n+ ; only a comment\n").cards
@@ -1291,9 +1285,7 @@ class TestInstanceLineRepeatedParameter:
         """Which copy a simulator reads is not recorded here, so a reader
         such as a Monte Carlo mismatch, which sizes a shift by W, is told."""
         view = InstanceLine.from_card(lex(deck).cards[0])
-        with pytest.raises(
-            NetlistError, match=r"M1 gives W 2 times.*w=1u.*w=2u|M1 gives W 2 times.*w=1u.*W=2u"
-        ):
+        with pytest.raises(NetlistError, match=r"M1 gives W 2 times.*w=1u.*[wW]=2u"):
             view.get_param("W")
 
     def test_removing_a_parameter_removes_every_copy(self) -> None:
@@ -1742,19 +1734,6 @@ class TestMeasCard:
     def test_a_call_inside_an_expression_is_named(self, directive: str, names: list[str]) -> None:
         view = MeasCard.from_card(lex(directive + "\n").cards[0])
         assert [fc.name for fc in view.function_calls] == names
-
-    def test_set_label_rerenders(self) -> None:
-        cards = lex(".MEAS TRAN vmax MAX V(out)\n").cards
-        view = MeasCard.from_card(cards[0])
-        view.set_label("peak_v")
-        assert emit(cards) == ".MEAS TRAN peak_v MAX V(out)\n"
-
-    def test_set_analysis_rerenders(self) -> None:
-        cards = lex(".MEAS gain MAX V(out)\n").cards
-        view = MeasCard.from_card(cards[0])
-        view.set_analysis("tran")
-        out = emit(cards)
-        assert "TRAN" in out
 
 
 # ---------------------------------------------------------------------------

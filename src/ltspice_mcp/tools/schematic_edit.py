@@ -34,10 +34,10 @@ import shutil
 import stat
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
+from typing import Annotated, Any, Literal, NamedTuple, TypeVar, cast, get_args
 
 from mcp import types
 from pydantic import Field
@@ -658,10 +658,10 @@ def _commit_asc(
 async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
     """Export a committed-sheet COPY to a netlist and return its text (seam).
 
-    Uses ``export_netlist_text`` — which takes its own asc_export_lock on the
-    copy's path, so there is no reentrancy with the guard-held target lock, and
-    keeps no snapshot: the copy and its export are removed with the build's
-    export directory. Isolated as its own function so tests can substitute a
+    Uses ``export_netlist_text``, which takes no lock (the copy is in the
+    build's own folder, so there is no reentrancy with the guard-held target
+    lock) and keeps no snapshot: the copy and its export are removed with the
+    build's export directory. Isolated as its own function so tests can substitute a
     netlist without a real LTspice binary.
     """
     return await export_netlist_text(asc_copy, state)
@@ -786,27 +786,30 @@ def finding_row(finding: Finding) -> dict[str, Any]:
     return row
 
 
-def _split_findings(
-    after: Sequence[Finding], before: Sequence[Finding]
-) -> tuple[list[Finding], list[Finding]]:
-    """``(reported, preexisting)``: the findings of ``after`` this batch made or
-    changed, and the ones it left as they were.
+_Item = TypeVar("_Item")
 
-    The same finding before and after is the same ``Finding.identity``, which a
-    part moved or given a new value keeps where the rule says what it is about
-    apart from where. It is counted, so a second finding like one that was
-    there once is new. A finding the batch left as it was is the sheet's,
-    whichever part or point the batch named.
+
+def _split(
+    after: Sequence[_Item],
+    before: Sequence[_Item],
+    key: Callable[[_Item], Hashable],
+    named: Callable[[_Item], bool] = lambda _item: False,
+) -> tuple[list[_Item], list[_Item]]:
+    """``(reported, preexisting)``: the items of ``after`` this batch accounts for, and the rest.
+
+    An item is reported when ``before`` had none of its ``key`` left to match,
+    or when ``named`` says the batch named it. Keys are counted, not merely
+    matched, so a second copy of an item that was there once is new.
     """
-    remaining = Counter(found.identity for found in before)
-    reported: list[Finding] = []
-    preexisting: list[Finding] = []
-    for found in after:
-        if remaining[found.identity] > 0:
-            remaining[found.identity] -= 1
-            preexisting.append(found)
-        else:
-            reported.append(found)
+    remaining = Counter(map(key, before))
+    reported: list[_Item] = []
+    preexisting: list[_Item] = []
+    for item in after:
+        found = key(item)
+        was_there = remaining[found] > 0
+        if was_there:
+            remaining[found] -= 1
+        (preexisting if was_there and not named(item) else reported).append(item)
     return reported, preexisting
 
 
@@ -828,41 +831,13 @@ def _row_coords(row: dict[str, Any]) -> list[tuple[int, int]]:
     return coords
 
 
-def _split_by_edit(
-    after: Sequence[dict[str, Any]],
-    before: Sequence[dict[str, Any]],
-    refs: set[str],
-    coords: set[tuple[int, int]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """``(reported, preexisting)``: the rows of ``after`` this batch accounts for, and the rest.
-
-    A row is reported when the sheet did not have it before the batch — any
-    change to it counts, since its identity is every field — or when it names a
-    reference in ``refs`` (casefolded) or a coordinate in ``coords``. Every
-    other row was already there and involves nothing the batch named. Identity
-    is counted, not merely matched, so a second copy of a row that was there
-    once is new.
-    """
-    remaining = Counter(map(canonical_json, before))
-    reported: list[dict[str, Any]] = []
-    preexisting: list[dict[str, Any]] = []
-    for row in after:
-        key = canonical_json(row)
-        was_there = remaining[key] > 0
-        if was_there:
-            remaining[key] -= 1
-        named = _names_ref(row, refs) or any(coord in coords for coord in _row_coords(row))
-        (preexisting if was_there and not named else reported).append(row)
-    return reported, preexisting
-
-
 @dataclass(frozen=True)
 class EditSchematicViews:
     """Complete pin/net views tied to the bytes produced by one transaction.
 
     ``label_only_pins`` holds the label-only pins this batch introduced or
     named; ``preexisting`` holds the sheet findings and label-only pins it left
-    out (see ``_split_by_edit``), each row tagged with its ``kind``.
+    out (see ``_split``), each row tagged with its ``kind``.
 
     Drawing the sheet is not among them: ``verify_circuit`` owns rendering, and
     its policy is the more capable one (a pixel cap, inline delivery, and
@@ -936,7 +911,7 @@ def _preexisting_hint(block: dict[str, Any], *, listed: bool) -> str | None:
     )
     return (
         f"{block['findings']} sheet finding(s) and {block['label_only_pins']} label-only "
-        f"pin(s) predate this batch and involve nothing it named, so they are {where}."
+        f"pin(s) predate this batch, which left them as they were, so they are {where}."
     )
 
 
@@ -1091,9 +1066,9 @@ async def _run_reference_stage(
 ) -> dict:
     """Export a copy of the committed sheet and compare it to ``ref`` (a path or netlist text).
 
-    Runs entirely on a COPY under a managed temp dir, so the exporter's own
-    asc_export_lock keys on the copy's path (no reentrancy with the guard-held
-    target lock). Each copy is staged with the symbols and model files of its
+    Runs entirely on a COPY under the build's own export directory, so the
+    export takes no lock (no reentrancy with the guard-held target lock). Each
+    copy is staged with the symbols and model files of its
     original's folder, so it exports as the file would where it stands. The
     reference path is already resolved — the handler validates it in
     pre-flight, so no path rejection can land here, after the commit. An
@@ -1625,14 +1600,25 @@ async def _evaluate_edit_schematic(
                 target,
                 symbols_of(editor),
             )
-            findings_reported, findings_left_out = _split_findings(found, found_before)
-            # A pin is listed for the parts the batch rewired; one whose value
-            # alone changed is joined as it was, and is counted, not listed.
-            pins_reported, pins_left_out = _split_by_edit(
+            # A finding is the batch's when the batch made or changed it: the same
+            # ``Finding.identity`` before and after, which a part moved or given a
+            # new value keeps where the rule says what it is about apart from
+            # where, is the sheet's, whichever part or point the batch named.
+            findings_reported, findings_left_out = _split(
+                found, found_before, key=lambda finding: finding.identity
+            )
+            # A pin is listed when it changed, or for the parts the batch rewired
+            # and the points it named; one whose value alone changed is joined as
+            # it was, and is counted, not listed.
+            rewired = rewired_refs(args.ops)
+            coords = touched_coords(args.ops)
+            pins_reported, pins_left_out = _split(
                 label_only,
                 label_only if before_pins is None else before_pins,
-                rewired_refs(args.ops),
-                touched_coords(args.ops),
+                key=canonical_json,
+                named=lambda row: (
+                    _names_ref(row, rewired) or any(coord in coords for coord in _row_coords(row))
+                ),
             )
             preexisting_rows = [finding_row(one) for one in findings_left_out] + [
                 {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out

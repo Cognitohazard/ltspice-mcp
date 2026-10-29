@@ -37,7 +37,8 @@ tool-surface changes.
   pane until `set_plot_panes` writes it again.
 - `run_experiments` said a job whose `wait_s` was held to the 120 s cap
   "keeps running" even when it had finished during the dwell. The cap is
-  still said; that the job keeps running is said only of a job still running.
+  still said; that the job runs on is the receipt's `hint`, given only for a
+  job still running.
 - `edit_schematic` read each library symbol once per session. A symbol
   redrawn in a library while the server ran kept its old pins in every later
   edit, and a symbol not found stayed not found after it was added, until the
@@ -69,7 +70,8 @@ tool-surface changes.
   at the start of a word as part of it, so a netlist with PSpice or OrCAD
   net names (`N$1`, `$N_0001`) lost a node on every such card. Comments now
   end at the end of their line, and only a `$` that stands alone begins
-  one.
+  one. A Monte Carlo or mismatch variant reads its `.model` card's nominal
+  values the same way.
 - A `.model` card edited by the server (a Monte Carlo or mismatch variant,
   a parameter set by a variation) was written again on one line in the
   server's spelling, so a card laid out over continuation lines lost its

@@ -114,6 +114,13 @@ class NetlistError(LTSpiceMCPError):
     code = "netlist_invalid"
 
 
+class UnsupportedFileError(NetlistError):
+    """A file of a kind the call does not take: one that is no circuit where a
+    circuit is needed."""
+
+    code = "unsupported_file"
+
+
 class SymbolResolutionError(NetlistError):
     """A schematic was found but a file it refers to was not.
 

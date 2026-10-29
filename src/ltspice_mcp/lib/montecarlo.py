@@ -507,10 +507,12 @@ def perturb_param_in_text(
 def parse_model_params(card_text: str) -> dict[str, float]:
     """Parse all ``KEY=VALUE`` tokens from a ``.MODEL`` card into a float dict.
 
-    Walks tokens via ``tokenize_body`` so quoted values and brace
-    expressions (``KP={2*kp_n}``) are handled correctly. Skips tokens
-    whose value can't be parsed via ``parse_spice_value`` (parametric
-    expressions, behavioural). Keys are upper-cased per SPICE convention.
+    The card is read as a deck is (``lex``): each line's comment ends at the
+    end of the line, and the ``+`` lines after it go on with the card. Walks
+    tokens via ``tokenize_body`` so quoted values and brace expressions
+    (``KP={2*kp_n}``) are handled correctly. Skips tokens whose value can't
+    be parsed via ``parse_spice_value`` (parametric expressions,
+    behavioural). Keys are upper-cased per SPICE convention.
     """
     out: dict[str, float] = {}
 
@@ -523,10 +525,9 @@ def parse_model_params(card_text: str) -> dict[str, float]:
             elif tok.kind == TokenKind.PARENED:
                 # Recurse into the .MODEL's parameter group.
                 _harvest(tokenize_body(tok.text[1:-1]))
-            elif tok.kind == TokenKind.COMMENT_TRAIL:
-                break
 
-    _harvest(tokenize_body(card_text))
+    for card in lex(card_text).cards:
+        _harvest(tokenize_body(card.body))
     return out
 
 

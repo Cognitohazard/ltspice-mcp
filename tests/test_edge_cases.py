@@ -563,26 +563,9 @@ class TestConfigTomlValidation:
 
 
 # ---------------------------------------------------------------------------
-# Round 5: continuation-line merge, edit_directive empty patterns, queued
+# Round 5: edit_directive empty patterns, queued
 # status, AC/DC substring false-positives, list_components metacharacters.
 # ---------------------------------------------------------------------------
-
-
-class TestMergeContinuationBlankLine:
-    def test_blank_line_preserves_continuation(self):
-        from ltspice_mcp.lib.library_parser import _merge_continuation_lines
-
-        # A blank line between a definition and its '+' continuation used to
-        # reset `current` to the empty string, producing a garbage
-        # ' BF=200' line and losing the real definition's params.
-        result = _merge_continuation_lines([".MODEL Q NPN", "", "+ BF=200"])
-        assert result == [".MODEL Q NPN BF=200"]
-
-    def test_multiple_blank_lines(self):
-        from ltspice_mcp.lib.library_parser import _merge_continuation_lines
-
-        result = _merge_continuation_lines([".MODEL Q NPN", "", "", "+ BF=200", "+ IS=1e-14"])
-        assert result == [".MODEL Q NPN BF=200 IS=1e-14"]
 
 
 class TestSimulatorSelectionCaseInsensitive:

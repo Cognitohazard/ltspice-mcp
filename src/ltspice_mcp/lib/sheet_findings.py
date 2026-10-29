@@ -250,20 +250,20 @@ class Finding:
     refs: tuple[str, ...] = ()
     points: tuple[Point, ...] = ()
     facts: Mapping[str, Any] = field(default_factory=dict)
-    #: What the finding is about besides its parts, for a rule whose points
-    #: move with the parts it names or whose facts hold an attribute's words:
-    #: so a part moved or given a new value keeps the finding it had. Said by
-    #: the other fields already, so two findings equal without it.
+    #: What the finding is about in place of its facts, where they hold an
+    #: attribute's words: so a part given a new value keeps the finding it
+    #: had. Said by the other fields already, so two findings equal without it.
     about: tuple[Any, ...] | None = field(default=None, compare=False)
 
     @property
     def identity(self) -> tuple[Any, ...]:
         """What makes this the same finding as another, before and after an
-        edit: its rule, its parts, and what it is about. Where the rule says
-        that apart from where it is (``about``), the places are left out."""
-        if self.about is not None:
-            return (self.rule, self.refs, self.about)
-        return (self.rule, self.refs, self.points, tuple(sorted(self.facts.items())))
+        edit: its rule, its parts, its places and its facts. A rule whose
+        findings move with the parts they name (``_finds(placeless=True)``)
+        leaves the places out, as does a finding with an ``about``."""
+        what = self.about if self.about is not None else tuple(sorted(self.facts.items()))
+        placeless = self.about is not None or self.rule in _PLACELESS
+        return (self.rule, self.refs, () if placeless else self.points, what)
 
 
 @dataclass(frozen=True)
@@ -391,11 +391,19 @@ _Finder = Callable[[_Index], list[Finding]]
 _FINDERS: dict[str, _Finder] = {}
 
 
-def _finds(rule_id: str) -> Callable[[_Finder], _Finder]:
-    """Register the function that finds ``rule_id``."""
+#: The rules whose findings move with the parts they name.
+_PLACELESS: set[str] = set()
+
+
+def _finds(rule_id: str, *, placeless: bool = False) -> Callable[[_Finder], _Finder]:
+    """Register the function that finds ``rule_id``. A ``placeless`` rule's
+    findings move with the parts they name, so a part moved keeps the finding
+    it had (``Finding.identity``)."""
 
     def register(finder: _Finder) -> _Finder:
         _FINDERS[rule_id] = finder
+        if placeless:
+            _PLACELESS.add(rule_id)
         return finder
 
     return register
@@ -409,7 +417,7 @@ def _wire(a: Point, b: Point) -> str:
     return f"{_at(a)}->{_at(b)}"
 
 
-@_finds("unresolved_symbol")
+@_finds("unresolved_symbol", placeless=True)
 def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for part in ix.view.parts:
@@ -427,7 +435,6 @@ def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
                 refs=(part.name,),
                 points=(part.at,) if part.at is not None else (),
                 facts=facts,
-                about=tuple(sorted(facts.items())),
             )
         )
     return found
@@ -460,7 +467,7 @@ def _dropped_wires(ix: _Index) -> list[Finding]:
     return found
 
 
-@_finds("duplicate_parameter")
+@_finds("duplicate_parameter", placeless=True)
 def _duplicate_parameters(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for part in ix.view.parts:
@@ -481,7 +488,6 @@ def _duplicate_parameters(ix: _Index) -> list[Finding]:
                     refs=(part.name,),
                     points=(part.at,) if part.at is not None else (),
                     facts={"parameter": key, "copies": tuple(given)},
-                    about=(key, tuple(given)),
                 )
             )
     return found
@@ -666,7 +672,7 @@ def _diagonal_wires(ix: _Index) -> list[Finding]:
     ]
 
 
-@_finds("floating_pin")
+@_finds("floating_pin", placeless=True)
 def _floating_pins(ix: _Index) -> list[Finding]:
     return [
         Finding(
@@ -675,7 +681,6 @@ def _floating_pins(ix: _Index) -> list[Finding]:
             refs=(part.name,),
             points=((x, y),),
             facts={"pin": name},
-            about=(name,),
         )
         for part, (name, x, y) in _floating(ix)
     ]
@@ -737,7 +742,7 @@ def _duplicate_wires(ix: _Index) -> list[Finding]:
     ]
 
 
-@_finds("symbol_overlap")
+@_finds("symbol_overlap", placeless=True)
 def _symbol_overlaps(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for position, (_index, part_a, box_a) in enumerate(ix.boxed):
@@ -753,7 +758,6 @@ def _symbol_overlaps(ix: _Index) -> list[Finding]:
                     f"{ox2 - ox1}x{oy2 - oy1} region at {_at((ox1, oy1))}",
                     refs=(part_a.name, part_b.name),
                     points=((ox1, oy1), (ox2, oy2)),
-                    about=(),
                 )
             )
     return found

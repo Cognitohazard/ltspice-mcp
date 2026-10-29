@@ -675,19 +675,22 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
     }
 
 
+#: A resistor placed R180, its value drawn leftward across the wire beside it
+#: and its two pins on nothing; ``{value}`` is replaced with the value.
+ACROSS_WIRE_SHEET = (
+    "Version 4\nSHEET 1 880 680\n"
+    "SYMBOL res 200 200 R180\nSYMATTR InstName R1\nSYMATTR Value {value}\n"
+    "WIRE 100 120 100 220\n"
+)
+
+
 async def test_layout_reports_attribute_text_drawn_across_a_wire(
     state_no_sim, work_dir, asc_symbols
 ):
     """On a part placed R180, LTspice draws a Left window's text leftward from
     its point, here across the wire beside the part: the drawing the layout
     scan used to leave out."""
-    asc = _write(
-        work_dir,
-        "crowded.asc",
-        "Version 4\nSHEET 1 880 680\n"
-        "SYMBOL res 200 200 R180\nSYMATTR InstName R1\nSYMATTR Value {Rload*2}\n"
-        "WIRE 100 120 100 220\n",
-    )
+    asc = _write(work_dir, "crowded.asc", ACROSS_WIRE_SHEET.replace("{value}", "{Rload*2}"))
     layout = await _run(state_no_sim, path=str(asc), checks=["layout"])
     (found,) = [f for f in layout["findings"] if f["rule_id"] == "attribute_text_overlap"]
     assert found["subject"] == "R1"

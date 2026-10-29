@@ -339,7 +339,8 @@ def test_a_run_stored_a_point_a_step_is_one_sweep_to_ltspices_reader_and_steps_h
     reader: str, written_by: str, name: str, tmp_path: Path
 ):
     """One point is stored a step, with the stepped parameter as the first
-    variable: a stepped operating point, and a stepped AC analysis at one
+    variable: a stepped operating point (over a parameter or a temperature), a
+    stepped transfer function, and a stepped AC or noise analysis at one
     frequency, which stores no frequency. LTspice's reader calls that an
     unstepped run with the parameter for its axis; the server's keeps the
     steps, and the values are the same."""

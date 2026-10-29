@@ -267,6 +267,16 @@ def _args(
     return RunExperimentsInput.model_validate(payload)
 
 
+def _export_snapshots(data: dict, work_dir: Path) -> list[Path]:
+    """The schematic exports in the store that a receipt's manifest names."""
+    exports = Store(work_dir).exports_dir
+    return [
+        Path(entry["path"])
+        for entry in data["source"][0]["manifest"]
+        if Path(entry["path"]).parent == exports
+    ]
+
+
 def _observation_code(data: dict, code: str) -> dict | None:
     return next((item for item in data["observations"] if item["code"] == code), None)
 
@@ -430,15 +440,15 @@ class TestReceiptThenDwell:
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         assert await job_done(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
 
-    async def test_a_held_dwell_says_the_job_keeps_running_only_while_it_does(
+    async def test_a_held_dwell_says_the_job_runs_on_only_while_it_does(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A wait_s above the cap is served at the cap and said so. That the job
-        keeps running is said of the receipt returned, so a job that finished
-        inside the dwell is not said to run on."""
+        runs on is the receipt's hint, said of the receipt returned, so a job
+        that finished inside the dwell is not said to run on."""
         fake_simulator(monkeypatch)
         finished = _assert_schema(
             await handle_run_experiments(
@@ -450,7 +460,7 @@ class TestReceiptThenDwell:
             "execution.wait_s=300s is above its cap of 120s; 120s was used."
             in (finished["warnings"])
         )
-        assert not any("keeps running" in warning for warning in finished["warnings"])
+        assert not any("running" in text for text in [*finished["warnings"], finished["hint"]])
 
         held: list[Callable[[], None]] = []
         fake_simulator(monkeypatch, delay_s=None, held=held)
@@ -462,7 +472,7 @@ class TestReceiptThenDwell:
         )
         assert running["outcome"] == "in_progress", running
         assert "execution.wait_s=300s is above its cap of 0s; 0s was used." in running["warnings"]
-        assert any("keeps running" in warning for warning in running["warnings"]), running
+        assert "still running; use jobs(wait)" in running["hint"], running
         await await_until(lambda: bool(held))
         for finish in held:
             finish()
@@ -1505,12 +1515,7 @@ class TestReplayRejectsChangedSources:
         _asc_exporter(state_with_sim)
         args = _args(schematic, "edited-schematic", provenance=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        exports = Store(work_dir).exports_dir
-        (exported,) = [
-            Path(entry["path"])
-            for entry in first["source"][0]["manifest"]
-            if Path(entry["path"]).parent == exports
-        ]
+        (exported,) = _export_snapshots(first, work_dir)
         exported_bytes = exported.read_bytes()
         _schematic(schematic, "2k")
 
@@ -1680,12 +1685,7 @@ class TestSchematicExportsLiveInTheStore:
         assert data["outcome"] == "complete"
         assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
         assert hand_written.read_bytes() == by_hand
-        exports = Store(work_dir).exports_dir
-        snapshots = [
-            Path(entry["path"])
-            for entry in data["source"][0]["manifest"]
-            if Path(entry["path"]).parent == exports
-        ]
+        snapshots = _export_snapshots(data, work_dir)
         assert [p.name.split(".run-")[0] for p in snapshots] == ["amp"]
         assert snapshots[0].is_file()
 

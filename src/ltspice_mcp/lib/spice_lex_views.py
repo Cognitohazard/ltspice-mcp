@@ -92,19 +92,20 @@ class _Params:
     def rendered(self) -> list[str]:
         return [f"{k}={v}" for k, v in self.pairs]
 
-    def set(self, card: SpiceCard, key: str, value: str) -> bool:
+    def set(self, card: SpiceCard, key: str, value: str, *, append_at: int | None = None) -> bool:
         """Set every copy of ``key``, matched without regard to case, or add it.
 
-        True when each copy was replaced in place, right to left so the offsets
-        still to edit stay put; False when the caller must render the card
-        again from the pairs: a new key, or a copy whose span cannot be
-        replaced in place.
+        True when the card was edited in place: each copy replaced, right to
+        left so the offsets still to edit stay put, or a new key written at
+        ``append_at``. False when the caller must render the card again from
+        the pairs: a new key with nowhere to go, or a copy whose span cannot
+        be replaced in place.
         """
         name = key.casefold()
         copies = [i for i, (k, _) in enumerate(self.pairs) if k.casefold() == name]
         if not copies:
             self.pairs.append((key, value))
-            return False
+            return append_at is not None and self._insert(card, append_at, key, value)
         for i in copies:
             self.pairs[i] = (self.pairs[i][0], value)
         try:
@@ -129,6 +130,27 @@ class _Params:
         """Move the tokens at or past ``edit_old_end`` by ``delta``."""
         if self.tokens is not None:
             self.tokens = _shift_tokens(self.tokens, edit_old_end, delta)
+
+    def _insert(self, card: SpiceCard, at: int, key: str, value: str) -> bool:
+        """Write the new last pair at body offset ``at``; False when it cannot go there."""
+        if self.tokens is None:
+            return False
+        text = f" {key}={value}"
+        try:
+            card.replace_span(at, at, text)
+        except ValueError:
+            return False
+        self.tokens.append(
+            Token(
+                kind=TokenKind.KEY_VALUE,
+                text=text[1:],
+                key=key,
+                value=value,
+                body_offset=at + 1,
+                body_length=len(text) - 1,
+            )
+        )
+        return True
 
     def _replace(self, card: SpiceCard, index: int, value: str) -> None:
         """Replace one pair's text in place; ``ValueError`` when it cannot be."""
@@ -185,22 +207,15 @@ class ModelCard:
         # of the line, and the lexer leaves it out.
         found: list[Token] = []
         in_parens = None
-        in_place = True
         for tok in tokens[3:]:
             if tok.kind == TokenKind.PARENED:
+                in_parens = tok.body_offset + 1
                 inner = tokenize_body(tok.text[1:-1])
-                in_place = tok.body_offset >= 0
-                start = tok.body_offset + 1
                 own = [t for t in inner if t.kind == TokenKind.KEY_VALUE]
-                if in_place:
-                    own = [replace(t, body_offset=t.body_offset + start) for t in own]
-                    in_parens = start
-                found.extend(own)
+                found.extend(_shift_tokens(own, 0, in_parens))
             elif tok.kind == TokenKind.KEY_VALUE:
                 found.append(tok)
-            elif tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-        params = _Params.of(found, in_place=in_place)
+        params = _Params.of(found)
         level = None
         for k, v in params.as_dict().items():
             if k.lower() == "level":
@@ -215,7 +230,7 @@ class ModelCard:
             type=type_,
             level=level,
             _params=params,
-            _name_token=tokens[1] if tokens[1].body_offset >= 0 else None,
+            _name_token=tokens[1],
             _in_parens=in_parens,
         )
 
@@ -237,13 +252,9 @@ class ModelCard:
         """Set every copy of a parameter, or add it, flipping the card dirty.
         In place where the card allows, a new one after the last inside the
         parentheses; otherwise the card is rendered again, every copy kept."""
-        text = _format_value(value)
-        name = key.casefold()
-        if not any(k.casefold() == name for k, _ in self._params.pairs) and self._add_in_place(
-            key, text
-        ):
-            return
-        if not self._params.set(self.card, key, text):
+        tokens = self._params.tokens
+        append_at = tokens[-1].body_end if tokens else self._in_parens
+        if not self._params.set(self.card, key, _format_value(value), append_at=append_at):
             self._canonical_rerender()
 
     def remove_param(self, key: str) -> None:
@@ -255,50 +266,21 @@ class ModelCard:
         """Rename the model, in place where the card allows; otherwise the
         card is rendered again, every parameter copy kept."""
         self.name = new_name
-        tok = self._name_token
-        try:
-            if tok is None:
-                raise ValueError("no in-place span for the name")
-            self.card.replace_span(tok.body_offset, tok.body_end, new_name)
-        except ValueError:
-            self._canonical_rerender()
-        else:
-            delta = len(new_name) - tok.body_length
-            self._params.shift(tok.body_end, delta)
-            if self._in_parens is not None:
-                self._in_parens += delta
-            self._name_token = replace(tok, text=new_name, body_length=len(new_name))
         self.card.name = new_name
-
-    def _add_in_place(self, key: str, value: str) -> bool:
-        """Write a new ``key=value`` after the last parameter, or just inside
-        empty parentheses; False where it cannot go in place."""
-        tokens = self._params.tokens
-        if tokens is None:
-            return False
-        if tokens:
-            at = tokens[-1].body_end
-        elif self._in_parens is not None:
-            at = self._in_parens
-        else:
-            return False
-        text = f" {key}={value}"
-        try:
-            self.card.replace_span(at, at, text)
-        except ValueError:
-            return False
-        self._params.pairs.append((key, value))
-        tokens.append(
-            Token(
-                kind=TokenKind.KEY_VALUE,
-                text=text[1:],
-                key=key,
-                value=value,
-                body_offset=at + 1,
-                body_length=len(text) - 1,
-            )
-        )
-        return True
+        tok = self._name_token
+        if tok is not None:
+            try:
+                self.card.replace_span(tok.body_offset, tok.body_end, new_name)
+            except ValueError:
+                pass
+            else:
+                delta = len(new_name) - tok.body_length
+                self._params.shift(tok.body_end, delta)
+                if self._in_parens is not None:
+                    self._in_parens += delta
+                self._name_token = replace(tok, text=new_name, body_length=len(new_name))
+                return
+        self._canonical_rerender()
 
     def _canonical_rerender(self) -> None:
         params_text = " ".join(self._params.rendered())
@@ -1040,18 +1022,6 @@ class FunctionCall:
     args_text: str  # raw text inside the parens, no surrounding ()
 
 
-def _as_written(body: str, tokens: list[Token]) -> str:
-    """``tokens`` as ``body`` writes them, each run of whitespace between two
-    one space: ``V(out)`` stays together, and a ``+`` line's gap closes."""
-    out = ""
-    for i, tok in enumerate(tokens):
-        if i:
-            gap = body[tokens[i - 1].body_end : tok.body_offset]
-            out += " " if gap and not gap.strip() else gap.strip()
-        out += tok.text
-    return out
-
-
 @dataclass
 class MeasCard:
     """Typed view over a ``.MEAS [analysis] NAME ...`` directive.
@@ -1059,10 +1029,7 @@ class MeasCard:
     Exposes its body as classified tokens (``body_tokens``) plus
     pre-extracted ``function_calls`` and ``signal_refs`` so callers
     (esp. ``spice_validator``) can run semantic checks without
-    re-parsing characters.
-
-    Setters operate on identity fields (analysis, label) only — the
-    measurement body itself is not mutated through this view.
+    re-parsing characters. Read-only.
     """
 
     card: SpiceCard
@@ -1071,9 +1038,6 @@ class MeasCard:
     body_tokens: list[Token]
     function_calls: list[FunctionCall]
     signal_refs: list[str]
-    _directive_text: str = ".MEAS"  # ``.MEAS`` or ``.MEASURE``
-    #: The body after the label as written, which a rename keeps.
-    _rest: str = ""
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard:
@@ -1083,7 +1047,6 @@ class MeasCard:
         # analysis kind or measurement label.
         if len(tokens) < 2:
             raise _malformed(card, "malformed .MEAS")
-        directive = tokens[0].text
         idx = 1
         analysis: MeasAnalysis | None = None
         second = tokens[idx].text.lower()
@@ -1094,7 +1057,6 @@ class MeasCard:
             raise _malformed(card, ".MEAS missing label")
         meas_name = tokens[idx].text
         body_tokens = list(tokens[idx + 1 :])
-        rest = _as_written(card.body, body_tokens)
 
         # Function-call detection: BARE immediately followed by PARENED.
         # Recurses into PARENED args so nested calls are also surfaced
@@ -1110,29 +1072,7 @@ class MeasCard:
             body_tokens=body_tokens,
             function_calls=function_calls,
             signal_refs=signal_refs,
-            _directive_text=directive,
-            _rest=rest,
         )
-
-    def set_label(self, new_name: str) -> None:
-        """Rename the measurement label. Canonical rerender."""
-        self.name = new_name
-        self._canonical_rerender()
-
-    def set_analysis(self, kind: MeasAnalysis | None) -> None:
-        """Set or clear the analysis-kind keyword. Canonical rerender."""
-        self.analysis = kind
-        self._canonical_rerender()
-
-    def _canonical_rerender(self) -> None:
-        parts: list[str] = [self._directive_text]
-        if self.analysis is not None:
-            parts.append(self.analysis.upper())
-        parts.append(self.name)
-        if self._rest:
-            parts.append(self._rest)
-        body = " ".join(parts)
-        self.card.replace_body(body)
 
 
 # ---------------------------------------------------------------------------

@@ -24,10 +24,10 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     ResultError,
     SimulationError,
+    UnsupportedFileError,
     raise_site_code,
 )
 from ltspice_mcp.lib import (
-    CIRCUIT_EXTENSIONS,
     NETLIST_SUFFIX_TEXT,
     experiment_store,
     now,
@@ -74,6 +74,7 @@ from ltspice_mcp.lib.pdk_native import (
     validate_family_ownership,
     validate_request,
 )
+from ltspice_mcp.lib.recent import is_circuit_file
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
     Recipe,
@@ -638,7 +639,6 @@ async def handle_run_experiments(
                     analysis_fields=analysis_fields,
                     budget=budget,
                     warnings=cap_warnings,
-                    wait_held=wait_note is not None,
                 )
             except Exception as exc:
                 return await _post_submit_error_response(
@@ -786,7 +786,6 @@ async def handle_run_experiments(
                 analysis_fields=analysis_fields,
                 budget=budget,
                 warnings=cap_warnings,
-                wait_held=wait_note is not None,
             )
         except Exception as exc:
             return await _post_submit_error_response(
@@ -866,10 +865,10 @@ async def handle_run_experiments(
             budget=budget,
             hint=path_denied_text(exc, state),
         )
-    except NetlistError as exc:
+    except UnsupportedFileError as exc:
         return await _error_response(
             args.request_id,
-            code=raise_site_code(exc) or exc.code,
+            code=exc.code,
             message=str(exc),
             stage="resolution",
             retryable=False,
@@ -1292,14 +1291,12 @@ def _circuit_decks_for_validation(
     notes: dict[str, dict[str, Any]] = {}
     for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
         path = safe_path(circuit.path, state)
-        if path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
-            error = NetlistError(
+        if not is_circuit_file(path):
+            raise UnsupportedFileError(
                 f"Circuit {circuit_id!r} is {path.name}, which is no circuit file: "
                 f"run_experiments takes {NETLIST_SUFFIX_TEXT} or an .asc.",
                 show_hint=False,
             )
-            error.code = "unsupported_file"
-            raise error
         decks.append(CircuitDeck(circuit_id=circuit_id, path=path, text=""))
         if note is not None:
             notes[circuit_id] = {
@@ -1396,14 +1393,9 @@ async def _dwell_and_respond(
     analysis_fields: list[str] | None = None,
     budget: ResponseBudget,
     warnings: list[str] | None = None,
-    wait_held: bool = False,
 ) -> types.CallToolResult:
-    """Wait up to ``wait_s`` for the job, then return its receipt.
-
-    ``wait_held`` says ``wait_s`` was held to its cap (a note among
-    ``warnings``); the receipt adds that the job keeps running only when the
-    snapshot it returns is not terminal.
-    """
+    """Wait up to ``wait_s`` for the job, then return its receipt. A job still
+    running when the dwell ends is said to be by the receipt's ``hint``."""
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
         job, _ = await state.job_registry.wait(job, wait_s)
@@ -1413,12 +1405,6 @@ async def _dwell_and_respond(
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
     )
-    if wait_held and snapshot.status not in TERMINAL_EXPERIMENT_STATUSES:
-        warnings = [
-            *(warnings or []),
-            "The job keeps running past the held dwell; continue with "
-            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g}).",
-        ]
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "
         f"({snapshot.completeness.terminal}/{snapshot.completeness.expanded} terminal cases)"

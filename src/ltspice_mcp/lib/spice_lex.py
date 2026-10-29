@@ -229,7 +229,7 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
         # Comment trail consumes the rest of the body. Layer 1 strips
         # trailing comments before they reach us, but tokenize_body is
         # also called directly on raw bodies (e.g. ad-hoc validation).
-        if c == ";" or _lone_dollar(body, i):
+        if c == ";" or (c == "$" and _lone_dollar(body, i)):
             yield _Atom(TokenKind.COMMENT_TRAIL.value, body[i:], i)
             return
 
@@ -741,7 +741,10 @@ def _build_body_with_layout(
         # A comment ends at the end of its line; the card goes on on the next
         # ``+`` line (recorded: deck/comment_then_continuation,
         # deck/comment_in_model_parens).
-        comment, brace = _comment_column(piece, brace)
+        # Only these characters change what the scan finds; most lines hold none.
+        comment = None
+        if _COMMENT_OR_BRACE.search(piece):
+            comment, brace = _comment_column(piece, brace)
         if comment is not None:
             piece = piece[:comment].rstrip()
             if j and not piece:
@@ -757,6 +760,9 @@ def _build_body_with_layout(
         )
         body_offset += len(piece)
     return "".join(parts), segments
+
+
+_COMMENT_OR_BRACE = re.compile(r"[;${}]")
 
 
 def _lone_dollar(text: str, i: int) -> bool:
@@ -791,15 +797,9 @@ def _comment_column(line: str, brace: int = 0) -> tuple[int | None, int]:
             brace += 1
         elif c == "}":
             brace = max(0, brace - 1)
-        elif brace == 0 and (c == ";" or _lone_dollar(line, i)):
+        elif brace == 0 and (c == ";" or (c == "$" and _lone_dollar(line, i))):
             return i, brace
     return None, brace
-
-
-def line_comment_start(line: str) -> int | None:
-    """Where the comment on one line of SPICE text starts, or ``None``: a
-    ``;`` outside quotes and braces, or a ``$`` that stands alone."""
-    return _comment_column(line)[0]
 
 
 def _classify_line(stripped: str) -> CardKind:
