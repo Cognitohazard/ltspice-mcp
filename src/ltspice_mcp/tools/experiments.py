@@ -52,6 +52,7 @@ from ltspice_mcp.lib.experiment_runner import (
     SubmissionCommitted,
     canonical_fingerprint,
     refuse_another_request,
+    refuse_inconsistent_record,
     verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -1357,14 +1358,7 @@ async def _load_matching_replay(
         if job is None:
             return None
         state.add_experiment_job(job, already_persisted=True)
-    if (
-        job.request_id != args.request_id
-        or job.fingerprint != fingerprint
-        or job.canonicalizer_version != CANONICALIZER_VERSION
-    ):
-        raise IdempotencyConflictError(
-            f"request_id {args.request_id!r} points to an inconsistent coordinator record"
-        )
+    refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
     await asyncio.to_thread(

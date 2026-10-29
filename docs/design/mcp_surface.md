@@ -1337,7 +1337,12 @@ cursors where listed:
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
     but not L1. It is plain text; a wildcard is refused with the plain
-    spelling to use
+    spelling to use. On a netlist, `detail: "full"` adds each card's
+    `nodes`, `model` and `params`, keyed as written (a key given twice in
+    one spelling reads as its last copy), and `repeated_params` for a
+    parameter the card gives more than once, compared without case: every
+    copy as `key=value`, in card order. Which copy a simulator reads is not
+    established
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice"|"ltspice:<name>", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
     selecting a subtree, and `prefix` is the `components` rule applied to
