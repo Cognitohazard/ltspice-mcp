@@ -17,12 +17,13 @@ then measure.
 
 An amplifier with 60-100 dB of DC gain multiplies any input offset by
 1,000-100,000. Driving both inputs from ideal DC sources at the same potential
-does not put the output at mid-rail: the amplifier's own input-referred offset
-(even tens of microvolts) drives the output to a supply rail, and the gain,
-bandwidth and phase you then measure are those of a saturated transistor
-stack, not of the amplifier in its linear region. Symptoms: DC gain tens of dB
-lower than expected, an `.op` output voltage within ~100 mV of either rail,
-device operating regions showing triode/cutoff where saturation was intended.
+does not put the output at mid-rail, because the amplifier's own input-referred
+offset (even tens of microvolts) drives the output to a supply rail. The gain,
+bandwidth and phase you then measure are those of a saturated transistor stack,
+and they do not describe the amplifier in its linear region. The symptoms are
+DC gain tens of dB lower than expected, an `.op` output voltage within ~100 mV
+of either rail, and device operating regions in triode or cutoff where
+saturation was intended.
 
 Always check `V(out)` in the `.op` result before trusting an AC sweep. If it is
 not near the intended quiescent level, the measurement is invalid.
@@ -51,32 +52,33 @@ open-loop transfer function.
 - Gain: magnitude at the lowest swept frequency; sweep from well below the
   dominant pole.
 - Unity crossing: use the first 0 dB crossing; verify there is only one, or
-  evaluate phase at every crossing, because a later crossing can carry an
-  unstable mode that a first-crossing readout misses.
+  evaluate phase at every crossing, because a later crossing can have an
+  unstable mode that a reading of only the first crossing misses.
 - Phase: unwrap before computing margin; wrapped (modulo-360) phase can show
   a margin that is not there.
-- Supply current: measure the supply source current at the `.op` point, not a
-  sum of device currents.
-- Compare measured DC gain with `gm*ro` expectations. A roughly 25 dB shortfall
-  usually means the bench is wrong, not the amplifier.
+- Supply current: measure the supply source current at the `.op` point instead
+  of summing device currents.
+- Compare measured DC gain with `gm*ro` expectations. A shortfall of roughly
+  25 dB usually means an error in the bench rather than in the amplifier.
 - Re-run one point at twice the sweep density. If gain or phase margin
-  changes, the difference comes from the sweep density or interpolation, not
-  from the circuit.
+  changes, the difference is an artifact of the sweep density or
+  interpolation.
 
 ## Render benches from one parameter dictionary
 
-Keep DUT pin order and run conditions in data, not copied through dozens of
-decks. A useful dictionary has `DUT_INCLUDE`, `DUT_INSTANCE`, `VDD`, `VCM`,
-`CL`, `TEMP`, and analysis limits such as `FSTART`, `FSTOP`, or `TSTOP`.
-Render the `@NAME@` host placeholders below, preserve SPICE `{PARAM}` braces,
-and reject output containing an unresolved `@NAME@`. Keep the title first and
-`.end` last. Choose include paths (absolute or deck-relative) explicitly.
+Keep DUT pin order and run conditions in the dictionary instead of copying
+them through dozens of decks. A useful dictionary has `DUT_INCLUDE`,
+`DUT_INSTANCE`, `VDD`, `VCM`, `CL`, `TEMP`, and analysis limits such as
+`FSTART`, `FSTOP`, or `TSTOP`. Fill the `@NAME@` placeholders below in your own
+code, preserve SPICE `{PARAM}` braces, and reject output that still contains an
+`@NAME@`. Keep the title first and `.end` last. Choose include paths (absolute
+or deck-relative) explicitly.
 
 ### Operating-point and supply-current archetype
 
 Use the same servo as the AC bench so `.op` proves the exact bias that the AC
-run will linearize. Read `V(out)`, device regions, and `I(VDD)`; source-current
-sign follows the source orientation.
+run will linearize. Read `V(out)`, device regions, and `I(VDD)`; the sign of a
+source current follows the source orientation.
 
 ```spice
 * generated operating-point bench
@@ -126,7 +128,7 @@ checks under "Reading and checking the result".
 ### Closed-loop transient and load-step archetype
 
 Use ordinary resistive feedback for a closed-loop transient bench; the DC-only
-servo belongs to open-loop characterization. Parameterize both the command
+servo is for open-loop characterization. Parameterize both the command
 step and the load step so one renderer covers settling and load regulation.
 
 ```spice
@@ -151,10 +153,10 @@ amplifier into overload.
 
 ## ngspice batch-output practice
 
-On ngspice a top-level `.meas` is skipped and its value comes back absent
-(guide section 'ngspice'). Prefer saved traces and `analyze_results` recipes;
-where a measurement has to run inside ngspice, use the dot-less interactive
-`meas` command in a `.control` block:
+On ngspice a top-level `.meas` is skipped and its value is absent from the
+result (guide section 'ngspice'). Prefer saved traces and `analyze_results`
+recipes; where a measurement has to run inside ngspice, use the dot-less
+interactive `meas` command in a `.control` block:
 
 ```spice
 .control
@@ -165,7 +167,8 @@ meas ac unity when vdb(out)=0 cross=1
 ```
 
 If you use `wrdata`, its columns repeat the scale vector for every dumped
-vector: dumping `V(out)` and `I(VDD)` yields `scale, V(out), scale, I(VDD)`,
-not one shared scale followed by both values. Parse repeated scale/value
-groups, and remember that `wrdata` writes only the text table; add an explicit
-`write` too if later server analysis needs a rawfile.
+vector, so dumping `V(out)` and `I(VDD)` yields `scale, V(out), scale, I(VDD)`
+instead of one shared scale followed by both values. Parse repeated
+scale/value groups. `wrdata` writes only the text table, and a `wrdata` in the
+deck stops `run_experiments` from adding its own `write`, so add an explicit
+`write` too if `analyze_results` needs a rawfile.

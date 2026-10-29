@@ -27,9 +27,12 @@ uv run python scripts/privacy_scan.py tracked   # the tracked working tree
 uv run python scripts/privacy_scan.py local     # unpublished history against local remote-tracking refs
 ```
 
-`local` uses the last fetched refs; the pre-push hook checks the actual
-destination. The release gate runs both commands. The tracked-file test uses
-the same scanner, which reads simulator artifacts in both UTF-16 byte orders.
+`local` compares against the last fetched refs, while the pre-push hook checks
+the remote it is pushing to. The release gate runs both commands.
+`tests/test_tracked_file_privacy.py` runs the same scanner
+(`tests/privacy_scan.py`) over the tracked tree in the ordinary suite. The
+scanner reads each file as UTF-8 and as UTF-16 in both byte orders, so it also
+finds a match in a simulator's UTF-16 output.
 
 ## Platforms and the release gate
 
@@ -51,15 +54,15 @@ push in each configuration the CI runners and the users have:
 
 The matrix has no Windows machine whose code page is not cp1252, because no
 runner has one. On such a machine, text read or written without a named
-encoding uses its code page: cp936 on a Simplified Chinese install, cp932 on a
-Japanese one. Name the encoding in every text read and write, in tests and in
-the source; `PYTHONWARNDEFAULTENCODING=1` makes Python warn at each one that
-does not.
+encoding uses its code page, such as cp936 on a Simplified Chinese install or
+cp932 on a Japanese one. Name the encoding in every text read and write, in
+tests and in the source; `PYTHONWARNDEFAULTENCODING=1` makes Python warn at
+each one that does not.
 
 The Windows run needs a clone on a Windows disk and the Windows `uv` on PATH;
 set `LTSPICE_MCP_WINDOWS_CLONE` to the clone's WSL path. Without it the script
-reports SKIP, not a pass. The container run clones the local `master`, so it
-tests that branch's last commit.
+reports SKIP instead of a pass. The container run clones the local `master`,
+so it tests that branch's last commit.
 
 The native Windows integration tier also needs:
 
@@ -68,7 +71,7 @@ The native Windows integration tier also needs:
 - For the comparison with the recordings (*Recorded LTspice behaviour*): the
   current build and LTspice XVII, each in its standard install location or
   named in `LTSPICE_MCP_RECORDER_EXES`, and each started once so that it has a
-  settings file. A missing build is skipped, and the skip names it.
+  settings file. A missing build is skipped, and the skip reason names it.
 - The console build of ngspice on PATH as `ngspice.exe`, with its DLLs. The GUI
   executable does not write the console output these tests read.
 - The `raster` extra. The tests of the `cairosvg` path also need native Cairo
@@ -81,35 +84,59 @@ With those set in the test shell, run
 uv run --locked --extra raster --python 3.12 pytest tests/ -v -ra
 ```
 
-and repeat with Python 3.13 in a separate environment. Read the skip reasons:
-a passing run without these dependencies has not tested simulation or PNG
-rendering. Worker timeout, cancellation and descendant cleanup tests need no
-simulator and run in the ordinary suite.
+and repeat with Python 3.13 in a separate environment. Read the skip reasons,
+because a passing run without these dependencies has not tested simulation or
+PNG rendering. The tests of the worker processes behind result parsing and
+`run_code` (`test_parser_process.py`, `test_run_code.py`), which cover
+timeouts, cancellation and the cleanup of child processes, need no simulator
+and run in the ordinary suite.
 
-Parser containment runs on Linux and native Windows. On macOS the supervisor
-refuses before it writes control files or starts a process, and the bootstrap
-refuses before it reads its admission gate or imports a decoder;
-`test_parser_process.py` checks both. Its portable platform-string checks test
-only the refusal. The `test_native_macos_bootstrap_*` checks need a native macOS
-interpreter and skip elsewhere; a pass there also shows only the refusal, not a
-working macOS parser. Supporting macOS needs native tests there of the hard
-memory bound before decoder import, and of cleanup after a deadline, repeated
-cancellation and owner death, including a child process that tries to escape.
+The server parses every `.raw` and `.log` file in a separate parser process
+with a deadline and a memory limit (`lib/parser_process.py`), and kills that
+process and every process it started when a read ends, times out or is
+cancelled. This runs on Linux and native Windows only. On macOS the server
+refuses to parse (`ParserProcessError` with code `unsupported_platform`,
+which the caller receives as a failed result read) before it writes any file
+for the parser or starts a process, and the parser's entry module
+(`lib/parser_bootstrap.py`) refuses too when started directly, before it reads
+its first request or imports any decoding code; `test_parser_process.py`
+checks both. Its checks that set `sys.platform` to another value run anywhere
+and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
+native macOS interpreter and skip elsewhere; a pass there also shows only the
+refusal and does not show a working macOS parser. Supporting macOS needs
+native tests there of the hard memory limit, applied before any decoding code
+is imported, and of the parser's cleanup after a deadline, after repeated
+cancellation and after the server process dies, including a child process
+that tries to break away from the parser's process tree.
 
 The optional Sky130 integration tests find a `sky130A` root containing
 `libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
-console ngspice. `TestOpenPdkDevice` in `test_subckt_mismatch.py` checks
-parameter forwarding and an exact per-instance threshold shift.
-`test_nested_targeting.py` tests nested edits and operating-point reads on real
-devices. `test_native_experiments.py` needs the pinned model acquisition
-`sky130-e6f9c887-ngspice-v1`; it checks all four statistical modes against
-direct ngspice runs, sample replay, included-device edits, input drift,
-cancellation and persisted provenance. The model files are not bundled with
-the server; native experiments also need the matching profile's model files at
-runtime.
+console ngspice. `TestOpenPdkDevice` in `test_subckt_mismatch.py` gives two
+instances of one Sky130 transistor different threshold shifts (`delvto`) and
+checks that the server passes each shift to its own instance as a parameter
+on the subcircuit (`X`) line, and that ngspice reports exactly that shift.
+`test_nested_targeting.py` changes the width and threshold of a transistor
+inside one subcircuit instance and checks with ngspice that only that
+instance changes, then reads that transistor's operating point through
+`analyze_results`.
+
+`test_native_experiments.py` tests the `pdk_native` variation of
+`run_experiments`, which samples the PDK's own statistical models (guide
+section 'sky130'). It needs a Sky130A installation that matches the profile
+`sky130-e6f9c887-ngspice-v1`, because the server checks the PDK's model files
+against that profile's hashes. It runs each of the four modes (`nominal`,
+`mismatch`, `process`, `combined`) and compares the result with ngspice run
+directly on the same prepared input. It also checks that a sample gives the
+same values whether it runs alone, serially or in parallel; that an edit to a
+device in an included file is applied to a copy of that file; that a case
+whose prepared input or included file changed after preparation fails before
+launch; that a case cancelled before launch records no submission; and that
+each case's record of its seed, inputs and model files (`native_statistics`)
+is stored and read back. The model files are not bundled with the server, so
+a `pdk_native` variation also needs that PDK installed at runtime.
 
 A test that depends on a POSIX facility skips on Windows with the reason
-(symlinks need a privilege; `wslpath` does not exist); it does not fail. Write
+(symlinks need a privilege; `wslpath` does not exist) instead of failing. Write
 a fixture that must be byte-exact with `newline="\n"` and read it with
 `encoding="utf-8"`, because the platform newline and codec differ on Windows.
 `.gitattributes` turns line-ending conversion off for the whole repository, so
@@ -130,7 +157,7 @@ code newly encodes "LTspice does X", add an input that makes LTspice do X,
 record it, and test against the recording. An expected value derived by hand
 from the assumption under test is not evidence for it.
 
-### What is where
+### File layout
 
 All files are under `tests/fixtures/ltspice_recorded/`.
 
@@ -140,8 +167,9 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   `-netlist`; anything else is run with `-Run -b`. A `plot` case runs a sheet
   in LTspice's window instead (*Plot settings* below), and a `save` case opens
   a sheet there and saves it (*Saved sheets* below). A behaviour with no input
-  gives the reason: `evidence` when the manifest records it another way,
-  `unrecordable` when it cannot be recorded.
+  of its own names in an `evidence` key where it is recorded instead (a
+  manifest field, the files of other cases, or the bridge recordings), or
+  gives in an `unrecordable` key the reason it cannot be recorded.
 - `ltspice26/` and `ltspice17/` hold each build's output, one file per output,
   and a `manifest.json` with the executable's digest, size and version; the
   build name its own output reports; the build's defaults for the settings the
@@ -152,7 +180,7 @@ All files are under `tests/fixtures/ltspice_recorded/`.
 
 The directory is named for the build's major version; XVII is 17.
 
-### What reads the recordings
+### Tests that read the recordings
 
 These tests run on any machine, without LTspice:
 
@@ -166,10 +194,12 @@ These tests run on any machine, without LTspice:
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
-They read the recordings through the same code as a live result: the contained
-decoder, the schematic editor, the lexer. A sheet is staged with the symbols
-LTspice resolved; the build's stock symbols are rebuilt from the pins in the
-manifest.
+They read the recordings through the same code that reads a live result (the
+parser process for `.raw` and `.log` files, the schematic editor and the
+netlist lexer). Each sheet is copied to a temporary folder with the symbols
+LTspice used for it. A symbol from the build's own library is written there
+from the pins the manifest recorded, so the server places the sheet's pins
+from the same symbol LTspice did, on a machine without LTspice.
 
 A difference between the server and a recording is a finding. If the fix is
 small, fix the server, with the recording as the regression test (it must fail
@@ -208,17 +238,17 @@ The recorder keeps a recording reproducible and free of personal data:
   dates, elapsed times and the thread count are replaced with fixed values in
   the file's own encoding; a raw file's samples are not changed. The recorder
   fails if a user name, host name or local path remains. It searches for a path
-  in each build's encoding: UTF-8 for LTspice 26, and cp1252 for LTspice XVII
-  on a machine of any code page, with a question mark for each character
-  cp1252 lacks (a home folder named in Chinese appears in an XVII export as
-  `C:\Users\??`). It also searches in the machine's own code page.
+  in UTF-8 for LTspice 26, and for LTspice XVII in cp1252 on a machine of any
+  code page, with a question mark for each character cp1252 lacks (a home
+  folder named in Chinese appears in an XVII export as `C:\Users\??`). It also
+  searches in the machine's own code page.
 - **No interaction.** LTspice opens a window even for a batch run, takes the
   keyboard focus while it runs, and on some inputs shows a message box that
   waits for OK. The recorder starts LTspice on a separate desktop with the
-  server's launch (`lib/hidden_desktop.py`), where it cannot take focus and
-  nobody can answer a box; when a build stops on a message box, the recording
-  notes that it stopped and keeps the box's text. The LTspice integration tier
-  uses the same launch, and
+  server's launch code (`lib/hidden_desktop.py`), where it cannot take focus
+  and nobody can answer a box; when a build stops on a message box, the
+  recording notes that it stopped and keeps the box's text. The LTspice
+  integration tier uses the same launch code, and
   `test_ltspice_integration.py::TestWindowStaysOffTheDesktop` checks that no
   LTspice window appears on the desktop the tests run on.
 
@@ -229,7 +259,10 @@ Command-line details:
 - The settings copy is never empty. A build started on an empty one behaves as
   on first launch, and XVII then runs its updater.
 - `-ascii` is ignored when a settings file is also named, and when the deck's
-  file name contains "ascii".
+  file name contains "ascii". So the two cases that test it
+  (`raw/tran_as_text`, `raw/ac_as_text`) run on the recording user's own
+  settings, and a new recording is compared with them on the raw header
+  alone.
 
 ### Plot settings
 
@@ -242,34 +275,36 @@ build's menu resource assigns to its label, read from the executable. A trace
 is typed into the Add Traces dialog. The case ends with File > Save Plot
 Settings, which writes `<sheet>.plt`. A case with a `plot` input first puts
 that file beside the sheet and saves immediately, so the saved file shows what
-the build read from it. Commands are sent to the waveform window's frame,
-because after a run the schematic window can be active, and its Save saves the
-sheet. A dialog the case did not open is recorded as a message box the build
-stopped on, and no `.plt` is kept. If the window completes none of these steps
+the build read from it. Commands are posted to the waveform pane's own window
+instead of LTspice's main window, because after a run the schematic pane can
+be active, and a Save sent to the main window would then save the sheet. A
+dialog the case did not open is recorded as a message box the build stopped
+on, and no `.plt` is kept. If the window completes none of these steps
 within the timeout, the recording fails.
 
 The committed plot entries were recorded on Windows with
 `uv run python scripts/record_ltspice_fixtures.py --only 'plot/*'`, and are
 byte-identical to an earlier recording of the same executables under Wine 11.
-An entry recorded under Wine records that in `host`; an entry recorded on
-Windows has no `host`. A partial recording keeps the library facts and settings
+Only an entry recorded under Wine has a `host` field, which records that it
+was made under Wine. A partial recording keeps the library facts and settings
 defaults of the rest of the recording, reports when this machine's differ, and
 adds any default a run writes back that the manifest lacks.
 
-One user setting affects a plot settings file: the waveform window's grid (the
-`grid` key of the settings file). With the grid on, each build writes a
-`GridStyle` line in every pane it creates and extends the Y axis with fewer
-divisions to match the other (`plot/ac_grid_on`, `plot/math_grid`). A pane read
-from a file keeps the file's line (`plot/read_grid`,
+The waveform window's grid (the `grid` key of the settings file) is the one
+user setting that affects a plot settings file. With the grid on, each build
+writes a `GridStyle` line in every pane it creates and extends the Y axis with
+fewer divisions to match the other (`plot/ac_grid_on`, `plot/math_grid`). A
+pane read from a file keeps the file's line (`plot/read_grid`,
 `plot/read_two_panes_grid`). The recorder removes the key, so each build uses
-its default, off.
+its default, which is off.
 
 Under Wine, the windows on the recorder's separate desktop cannot be listed, so
 the recorder launches on Wine's display and searches the started process's
-windows for a message box or the waveform window. Re-recorded under Wine with
-`--check`, LTspice 26's files match the committed ones except for the two cases
-that run on the recording user's own settings, which differ by design; XVII's
-logs lack the blank line after the matrix compiler report.
+windows for a message box or the waveform window. When both builds are
+re-recorded under Wine with `--check`, LTspice 26's files match the committed
+ones except for the two `-ascii` cases, which run on the recording user's own
+settings and are expected to differ, and XVII's logs lack the blank line after
+the matrix compiler report.
 
 ### Saved sheets
 
@@ -280,12 +315,13 @@ case when the file has been written and stops changing. The sheet is not
 edited first. If the build stops on a message box, the box is recorded and no
 sheet is kept.
 
-These are the only sheets in the suite written by LTspice. Both builds write
-the same, except for the sheet's first line:
+These are the only sheets in the suite written by LTspice. Both builds save a
+sheet the same way except for its first line. A saved sheet has these
+properties:
 
 - Line endings are LF, whatever the sheet had.
-- The text is 8-bit: a UTF-16 sheet is saved as 8-bit text, and UTF-8 bytes
-  are kept as they are, not decoded.
+- The text is 8-bit. A UTF-16 sheet is saved as 8-bit text, and UTF-8 bytes
+  are kept as they are without being decoded.
 - Records are grouped by kind in a fixed order (wires, flags each with its
   port line, symbols, text, drawn lines, other shapes). The build reorders
   wires by its own rule; other records keep their order.
@@ -314,61 +350,69 @@ the window's copy of each sheet (`sheets/`), every call and its reply
 behaviours with that tree as their `evidence`. LTspice XVII has no bridge, so
 only LTspice 26 is recorded here.
 
-`test_ltspice_bridge.py` checks `sheet_content` against the recorded pairs: a
-sheet LTspice only opened must compare equal to its file even when the text
-differs (of 700 of the example sheets LTspice ships, read back through the
-bridge, 79 came back unchanged). It also replays the recorded conversation
-against `tests/fake_ltspice_bridge.py`, the fake bridge the rest of the suite
-uses.
+`edit_schematic` decides whether a window's copy differs from the file by
+passing both through `sheet_content` (`lib/ltspice_window.py`), which ignores
+the changes LTspice makes when it loads a sheet (the first line, the order of
+wires and attributes, the micro sign, text off the grid).
+`test_ltspice_bridge.py` checks `sheet_content` against the recorded pairs of
+file and window copy. A sheet that LTspice only opened must compare equal to
+its file even when the text differs (when 700 of the example sheets LTspice
+ships were read back through the bridge, 79 were unchanged). It also replays
+the recorded conversation against `tests/fake_ltspice_bridge.py`, the fake
+bridge the rest of the suite uses.
 When LTspice is found to rewrite a sheet in a new way on opening it, add an
 input here; do not write the rule by hand.
 
-The manifest also lists the install's reference documents by file name and
-front matter key, the fields `lib/simulator_docs.py` reads; the documents
-belong to the vendor and are not recorded. The opt-in tier checks that the
-documents read from the install match the list LTspice's own server reports.
+The manifest also lists the reference documents LTspice installs for an
+assistant to read, by file name and front matter key, the fields
+`lib/simulator_docs.py` reads to serve them through
+`inspect(kind="simulator_docs")`; the documents belong to the vendor and are
+not recorded. The opt-in tier checks that the documents read from the install
+match the list LTspice's own server reports.
 
 The recording also covers:
 
 - **Which traces a pane draws** (`plot-settings-on-open`). The recorder writes
   plot settings beside a results file, opens the results, and reads back the
   plot settings the pane saves. The pane draws the named traces. If the
-  results are opened again while the pane is open, it keeps its old traces;
-  closed and reopened, it draws the new ones, which is why
-  `plot_waveform(in_ltspice=true)` closes and reopens a pane. The opt-in tier
-  checks the traces the reply names the same way.
+  results are opened again while the pane is open, the pane keeps its old
+  traces. It draws the new ones only after it is closed and reopened, which is
+  why `plot_waveform(in_ltspice=true)` closes and reopens a pane. The opt-in
+  tier uses the same method to check the traces that the reply names.
 - **A sheet closed from outside** (`sheet-closed-from-outside`), which the
   server does to make LTspice look for a sheet's results again. An unchanged
   sheet closes without a prompt, its plot closes with it, and once reopened it
   finds results added beside it in the meantime. For a sheet the bridge has
   written to, LTspice asks whether to save, even when the sheet matches the
   file. The recording keeps the box's text and records that the window accepts
-  no input while the box is up, that the bridge still responds, that Cancel
+  no input while the box is open, that the bridge still responds, that Cancel
   leaves the sheet open unchanged, and that No closes it without writing the
   file.
 - **Whether a plot is tied to its sheet** (`plot-tied-to-sheet`), so that
   clicking a net plots it. The recorder posts a grid of clicks over the sheet's
-  view and reads the plot's traces before and after. A plot opened by the
-  sheet's Visible Traces command changes; a plot the bridge opens, by the
-  results file's path or the sheet's, does not. A run made in the window also
-  ties its plot; this was seen in a window capture and is not recorded.
+  view and reads the plot's traces before and after. The clicks change a plot
+  opened by the sheet's Visible Traces command but not a plot that the bridge
+  opens by the path of the results file or of the sheet. A run made in the
+  window also ties its plot to the sheet; this was seen in a window capture
+  and is not recorded.
 - **The sheet menu's Visible Traces item.** LTspice disables it for a sheet
   with no associated results; the server uses this to decide which sheet to
   reopen before sending the command.
 - **The Visible Traces command**, which `plot_waveform(in_ltspice=true)` sends
   for a run of a sheet (`lib/ltspice_frame.py`). The recorder queries the
-  window's frame directly and records that panes are titled with their files'
-  names; that the command does not open results put beside a sheet that was
-  already open; that it opens, without a prompt, results that were beside the
+  frame (LTspice's main window, which holds a pane for each open document)
+  directly and records that panes are titled with their files' names; that
+  the command does not open results put beside a sheet that was already
+  open; that it opens, without a prompt, results that were beside the
   sheet when it was opened; and that with those results open it shows a
   dialog, whose title is recorded. A results pane keeps the data it read when
-  its file is replaced; told to close, it closes without a prompt and saves no
-  plot settings, with or without a trace added by hand; reopened from the
-  sheet, it shows the file's current content. The manifest records the command
+  its file is replaced. It closes without a prompt when told to, and saves no
+  plot settings, with or without a trace added by hand. Reopening it from the
+  sheet shows the file's current content. The manifest records the command
   id the build's sheet menu assigns to the label. `tests/test_ltspice_frame.py`
   checks `FakeFrame`, the frame the handler tests use, against these facts.
-  Seen in two window captures but not recorded: with no pane of the results
-  open, the command reads the file's current content.
+  Two window captures also showed, without a recording, that the command
+  reads the file's current content when no pane of the results is open.
 - **Which copy a run in the window simulates.** The recorder runs the sheet
   with one resistor value in the window and another in the file, and records
   which value the netlist beside the sheet has, and that the sheet file was not
@@ -385,32 +429,33 @@ The recording also covers:
   recorder starts LTspice the same way, with no document, and records that the
   bridge finds a window with no document open and none in front; `FakeStart`,
   the start the handler tests use, is checked against that. No test starts
-  LTspice on the visible desktop: the opt-in tier starts it on a separate
+  LTspice on the visible desktop. The opt-in tier starts it on a separate
   desktop, and the in-view start is tested only for the command line and flags
   it passes to Windows.
 
-One behaviour is not recorded: given a document containing a NUL character,
-LTspice 26.1.1 stops responding permanently. The client refuses to send such
-text (`replace_design_text`), and the test checks that it is never sent.
+One behaviour is not recorded. LTspice 26.1.1 stops responding permanently
+when it is given a document that contains a NUL character. The client refuses
+to send such text (`replace_design_text`), and the test checks that it is
+never sent.
 
-The bridge recording also holds LTspice's own reading of results files. The
+The bridge recording also contains LTspice's own reading of results files. The
 recorder passes every results file in the main recordings' `raw` group, from
 both builds, to LTspice's reader and keeps each reply under `reader/`.
-`tests/test_ltspice_reader_agreement.py` checks the server's decoder against
-these replies on any machine, without LTspice: every sample to the last bit, a
-stepped run split at the same points, and the same parameter values per step.
-When a results file in the main recordings is added or re-recorded, run the
-bridge recorder again on Windows with LTspice 26.1 or later; until then one
-test fails and names the script.
+`tests/test_ltspice_reader_agreement.py` checks that the server's decoder
+agrees with these replies on every sample to the last bit, splits a stepped run
+at the same points, and finds the same parameter values per step. It runs on
+any machine, without LTspice. When a results file in the main recordings is
+added or re-recorded, run the bridge recorder again on Windows with LTspice
+26.1 or later; until then one test fails and names the script.
 
 The replies for `raw/fra` and its `fra_1` results file, for both builds'
 `raw/step_ac_one_freq`, `raw/compress_*`, `raw/subckt_names_*` and
-`raw/save_subckt_names*`, and for XVII's
-`raw/op_save_device`, were made under Wine 11, by the recorder's own reading
-code with the same pinned executables, and the bridge manifest has no field
-that says so. Made the same way, the replies for
-four files already recorded on Windows (`ac`, `step_tran`, XVII's `tran`, and
-the refused `op`) were byte-identical to the committed ones.
+`raw/save_subckt_names*`, and for XVII's `raw/op_save_device`, were made under
+Wine 11, by the recorder's own reading code with the same pinned executables,
+and no field in the bridge manifest records this. When the replies for four
+files already recorded on Windows (`ac`, `step_tran`, XVII's `tran`, and the
+refused `op`) were made the same way, they were byte-identical to the
+committed ones.
 
 The two readers agree on every file's content. They present six kinds of file
 differently, and the tests pin LTspice's reading of each:
@@ -431,17 +476,21 @@ differently, and the tests pin LTspice's reading of each:
   stepped parameter first and no frequency.
 - LTspice's reader reads a run stopped part way up to its header's point count,
   which can lag the samples; the server's decoder refuses a file whose header
-  and samples disagree, and reports how far the run got by other means.
+  and samples disagree, and the server instead reports how far the run got by
+  counting the complete points in the file (`PartialRawProgress` in
+  `lib/raw_parser.py`).
 
 Other bridges may be running on the machine, each with its own hidden LTspice
 that starts and exits as windows open and close (an assistant session with
 LTspice's own MCP server registered runs one). A recording includes only the
 LTspice the recorder started.
 
-The recording disables the bridge's own LTspice launch. The opt-in tier tests
-that launch: `TestSheetOpenInAWindow` starts the bridge without blocking the
-launch and checks that the LTspice it starts has its windows on the server's
-desktop, none on the test's desktop, and exits when the session closes.
+The recorder starts the bridge as the server does, with `--ltspice-path`
+naming a file that does not exist, so the bridge cannot start an LTspice of
+its own during a recording. In the opt-in tier, `TestSheetOpenInAWindow` lets
+the bridge start LTspice and checks that the LTspice it starts has its windows
+on the server's desktop and none on the test's desktop, and that it exits when
+the session closes.
 
 ### The opt-in tier
 
@@ -449,46 +498,48 @@ With `LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`,
 `test_ltspice_recorder.py::test_an_installed_build_still_behaves_as_recorded`
 re-records each installed build, one group of cases at a time, and compares the
 result with the committed files. A build with a newer major version than any
-recorded one is compared with the newest recording of its generation, so a
-release that changes behaviour fails this test, which names the build. A build
-that is not installed is skipped with that reason, not failed. Text files are
-compared as bytes; raw files by header and by samples to one part in a million
-(a solver's last bits depend on the processor); a run stopped part way by its
-header only.
+recorded one is compared with the newest recording of its generation (LTspice
+XVII, or LTspice 24 and later, which keep their settings and library in other
+places), so a release that changes behaviour fails this test, which names the
+build. A build that is not installed is skipped with that reason instead of
+failing. Text files are compared as bytes; raw files by header and by samples
+to one part in a million (a solver's last bits depend on the processor); a run
+stopped part way by its header only.
 
-When it fails, read the difference before re-recording: either LTspice changed
-and the server's model may need to change, or the recorder missed something
-that varies. Add a path, date or duration to the scrubber (`Scrubber` in
-`tests/ltspice_recorder.py`). A file that differs for another person on the
-same build comes from one of their settings; add its key to `BEHAVIOUR_KEYS`
-(the waveform grid was one, *Plot settings* above).
+When it fails, read the difference before re-recording, because either LTspice
+changed and the server's model may need to change, or the recorder missed
+something that varies. Add a varying path, date or duration to the scrubber
+(`Scrubber` in `tests/ltspice_recorder.py`). A file that differs for another
+person on the same build comes from one of their settings; add its key to
+`BEHAVIOUR_KEYS` (the waveform grid was one, *Plot settings* above).
 
 ### How LTspice draws text
 
 Where LTspice draws a sheet's text is not in any file it writes, so the
 evidence is its own drawing. `tests/fixtures/ltspice_screenshots/` holds
 sheets that place text every way LTspice justifies it (each token at each of
-the eight placements, a symbol's own window, comments and directives of one
-and several lines, net labels, and every text size), and LTspice 26's and
-XVII's drawing of each (`ltspice26/`, `ltspice17/`). Each sheet marks the
-point every text is placed by with a small cross, and draws two larger crosses
-beyond its content. `res.asy` beside them stands in for LTspice's resistor,
-with its pins and windows; the sheets are left out of the records below,
-since they are not circuits.
+the eight placements, a symbol's own text positions (its `WINDOW` lines),
+comments and directives of one and several lines, net labels, and every text
+size), and LTspice 26's and XVII's drawing of each (`ltspice26/`,
+`ltspice17/`). Each sheet marks the point every text is placed by with a small
+cross, and draws two larger crosses beyond its content. `res.asy` beside them
+stands in for LTspice's resistor, with its pins and `WINDOW` lines; the sheets
+are left out of the records below, since they are not circuits.
 
-`test_ltspice_screenshots.py` reads each picture back: the two outer crosses
-give the scale from sheet units to pixels, and every other colour than the
-sheet's, the wires' and the symbols' is text. It checks that the scene puts
-each text on the same sides of its point as LTspice drew it, and as long and as
+`test_ltspice_screenshots.py` reads each picture back. The two outer crosses
+give the scale from sheet units to pixels, and any colour other than those of
+the sheet, the wires and the symbols is text. It checks that the layout the
+server's schematic renderer draws from (`lib/schematic_scene.py`) puts each
+text on the same sides of its point as LTspice drew it, and as long and as
 thick to a pixel or two. Both builds draw every case alike, in Tahoma Bold
-asked for by its line height, which scales with the size index by LTspice's
-multiples (0.625x to 7x); the widths the scene uses are Tahoma Bold's.
+requested by its line height, which scales with the size index by LTspice's
+multiples (0.625x to 7x); the renderer uses Tahoma Bold's widths.
 
 To capture again, open each sheet in each build with the window at
-1600x1200, fit the drawing to the window (View > Zoom to Fit), and save the
-drawing area alone as PNG, untouched by scaling: the reader needs the exact
+1600x1200, fit the drawing to the window (View > Zoom to Fit), and save only
+the drawing area as PNG without scaling, because the reader needs the exact
 colours. The fit leaves the outer crosses inside the picture. A sheet added
-here needs both builds' pictures, and a case whose texts stand closer than an
+here needs both builds' pictures, and a case whose texts are closer than an
 em apart cannot be read back.
 
 ## Re-recording the suite's records
@@ -512,12 +563,12 @@ LTSPICE_MCP_RECORD_SHEET_FINDINGS=1 uv run pytest tests/test_sheet_findings_snap
 |`LTSPICE_MCP_RECORD_INSPECT_SHEETS`|`tests/test_inspect_sheet_record.py`|`tests/fixtures/inspect_sheet_record.json`: the `inspect(kind="net")` and `inspect(kind="components")` replies for every sheet|
 |`LTSPICE_MCP_RECORD_BUILD_BENCHMARK`|`tests/test_build_benchmark.py`|`tests/fixtures/build_benchmark_record.json` and the built sheets (below)|
 
-`tests/fixtures/sheet_edit_record.json` holds what every `edit_schematic` call
-the suite makes answers: the committed sheet, read as records, and the reply.
+`tests/fixtures/sheet_edit_record.json` holds, for every `edit_schematic` call
+the suite makes, the committed sheet (read as records) and the reply.
 `tests/sheet_edit_record.py`, a plugin loaded by `tests/conftest.py`, compares
-each call with it and fails the test whose call answers differently; its
-docstring says how a call is keyed. To re-record it, run the whole suite with
-`LTSPICE_MCP_RECORD_SHEET_EDITS=1` with no LTspice library installed or
+each call with it and fails the test whose call gets a different answer; its
+docstring describes how a call is keyed. To re-record it, run the whole suite
+with `LTSPICE_MCP_RECORD_SHEET_EDITS=1` with no LTspice library installed or
 visible. A run that finds a symbol in an LTspice library writes nothing,
 because CI has no library and would make different keys. Mark a test whose
 `edit_schematic` replies differ on Windows and Linux with
@@ -555,10 +606,10 @@ uv run python scripts/build_benchmark.py score SHEET.asc NETLIST.cir
 - **Behavior-named test files.** Name a test file for the behavior it covers,
   never for a test campaign, date or version. Put a regression found in a test
   campaign in the existing module for its behavior, and note its origin in a
-  docstring or comment, not the filename.
+  docstring or comment instead of the filename.
 - **Plain-language findings.** Shipped code, docstrings, commit messages and
-  this doc describe a bug by its actual behavior in plain technical terms, with
-  no internal severity codes, codenames or pass numbers.
+  this doc describe a bug by its behavior in plain technical terms, with no
+  internal severity codes, codenames or pass numbers.
 - **Tables** use minimal separators (`|-|-|`); no box-drawing characters.
 - **A test that fails only on Windows** usually waits on a side effect or a
   fixed time instead of the value it reads; `tests/test_test_hygiene.py`

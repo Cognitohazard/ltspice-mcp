@@ -1,9 +1,9 @@
 # osic-mcp
 
 This package is an alias for [**ltspice-mcp**](https://pypi.org/project/ltspice-mcp/),
-an MCP server and Python library for circuit and open-source IC design work:
-SPICE simulation with ngspice and LTspice, sweeps and Monte Carlo as jobs,
-measurements as numbers, and LTspice schematic editing.
+an MCP server and Python library for circuit and open-source IC design. It
+runs SPICE simulations with ngspice and LTspice, runs sweeps and Monte Carlo
+as jobs, returns measurements as numbers, and edits LTspice schematics.
 
 Installing this package installs and runs `ltspice-mcp`:
 
@@ -13,4 +13,4 @@ pip install osic-mcp  # installs ltspice-mcp as a dependency
 ```
 
 `ltspice-mcp` is the canonical package. Documentation, configuration, issues,
-and source live there: https://github.com/cognitohazard/ltspice-mcp
+and source are at https://github.com/cognitohazard/ltspice-mcp

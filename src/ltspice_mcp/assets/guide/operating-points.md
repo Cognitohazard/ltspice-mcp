@@ -7,7 +7,7 @@ description: >
 # Device operating points (gm, gds, vth, gm/ID)
 
 The small-signal and model parameters of a MOSFET, BJT or diode (gm, gds,
-gmbs, vth, vdsat, gm/ID, the capacitances) come back as named numbers. Both
+gmbs, vth, vdsat, gm/ID, the capacitances) are returned as named numbers. Both
 simulators expose them, in different files; pick the method by what you need.
 
 ## One device at one bias (LTspice or ngspice)
@@ -22,17 +22,20 @@ Vg g 0 0.9
 ```
 
 Run it with `run_experiments`, then read
-`{"metric": "operating_point", "device": "M1"}`: gm, gds, vth, vdsat, the caps
-and the terminal currents at that bias. On LTspice these come from the log's
-*Semiconductor Device Operating Points* block, which LTspice writes only for
-`.op`: LTspice 26 only under `.options logopinfo`, which the server adds to
-every `.op` run, and XVII always, ending the run on that option. The block prints every value to three significant digits
-(`4.66e-05`), which rounds it by up to 0.5%; `analyze_results` says so in
-`observations` (`device_op_log_precision`). Neither build
-gives more: `.options numdgt=7` leaves the block at three digits, LTspice 26
-refuses `.save @m1[gm]` and XVII ignores it. On ngspice,
+`{"metric": "operating_point", "device": "M1"}`, which returns gm, gds, vth,
+vdsat, the caps and the terminal currents at that bias. On LTspice these come
+from the log's *Semiconductor Device Operating Points* block, which LTspice
+writes only for `.op`. LTspice 26 writes it only under `.options logopinfo`,
+which the server adds to every `.op` run. XVII writes it without the option and
+stops with an `unrecognized option` error on a deck that contains it. The block
+prints every value to three significant digits (`4.66e-05`), which rounds it by
+up to 0.5%, and `analyze_results` reports this in `observations`
+(`device_op_log_precision`). Neither build gives more digits.
+`.options numdgt=7` leaves the block at three digits. LTspice 26 stops with a
+syntax error on `.save @m1[gm]` and writes no raw file, and XVII ignores that
+line. On ngspice,
 `.save @m1[gm] @m1[gds] @m1[vth] @m1[id]` puts them in the raw at full
-precision. The recipe reads either the same way.
+precision. The recipe reads both the same way.
 
 ## gm/ID against a swept bias (ngspice)
 
@@ -41,13 +44,13 @@ precision. The recipe reads either the same way.
 .save @m1[gm] @m1[gds] @m1[vth] @m1[id]
 ```
 
-This `waveform` recipe is the gm/ID table:
+This `waveform` recipe returns the gm/ID table:
 
 ```json
 {"metric": "waveform", "signals": ["m1.gm", "m1.gds", "m1.id"], "format": "csv"}
 ```
 
-One value at a chosen bias is
+For one value at a chosen bias, read
 `{"metric": "value", "expr": "m1.gm", "at": …}`. The swept form needs ngspice,
 because LTspice's `logopinfo` is `.op`-only; on LTspice, differentiate the
 drain current (`d(Id(M1))`) instead. A `.dc` sweep is one deck and one run,
@@ -55,28 +58,29 @@ where sweeping the bias with `run_experiments` variations would make one run
 per point.
 
 Address an operating-point parameter by the `m1.gm` shorthand or its literal
-`@m1[gm]` name; the recipes resolve the bare, `v()` and `i()` wrappings and a
-subcircuit path such as `x1.m1.gm`. Values carry SI units where the simulator
+`@m1[gm]` name. The recipes find the trace whether the raw file names it
+`@m1[gm]`, `v(@m1[gm])` or `i(@m1[gm])`, and they accept a subcircuit path
+such as `x1.m1.gm`. Values have SI units where the simulator
 declares the type.
 
 ## A device inside a subcircuit
 
-Each place names it differently, and each LTspice build its own way. For
-`Mtail` inside `Xin` inside `Xa`:
+The device table and the raw file name such a device differently, and each
+LTspice build uses its own spelling. For `Mtail` inside `Xin` inside `Xa`:
 
 | | LTspice 26 | LTspice XVII |
 |-|-|-|
 | device table (`device_op_points`) | `@xa:xin:mtail[gm]` | `@m:a:in:tail[gm]` |
 | current in the raw | `Id(xa:xin:Mtail)` | `Id(a:in:Mtail)` |
 
-Name it by its path instead: `{"metric": "operating_point", "device":
-"xa.xin.mtail"}` keeps that device's parameters and currents on either build
-(`mtail` keeps every `Mtail`; `xa` keeps everything inside `Xa`), and
+Name it by its path instead. `{"metric": "operating_point", "device":
+"xa.xin.mtail"}` returns only that device's parameters and currents on either
+build (`mtail` returns every `Mtail`; `xa` returns everything inside `Xa`), and
 `{"metric": "value", "expr": "xa.xin.mtail.gm"}` reads one parameter. The
 `operating_point` result's `device_names` maps each path to its name in the
-table (`op_table`) and in the raw (`raw`). A node, a device current or a port
-current inside a subcircuit is named by its path in any recipe on either
-build: `V(xa.xin.mid)`, `Id(xa.xin.mtail)`, `Ix(xa.top)`. By default neither build stores the
-currents of devices inside a subcircuit, only the instance's port currents
-(`Ix(xa:out)`); `raw` is then null. LTspice's "Save subcircuit device
-currents" setting stores them.
+table (`op_table`) and in the raw (`raw`). In any recipe on either build, a
+node, a device current or a port current inside a subcircuit is named by its
+path, such as `V(xa.xin.mid)`, `Id(xa.xin.mtail)` or `Ix(xa.top)`. By default
+neither build stores the currents of devices inside a subcircuit, only the
+instance's port currents (`Ix(xa:out)`); `raw` is then null. LTspice's "Save
+subcircuit device currents" setting stores them.

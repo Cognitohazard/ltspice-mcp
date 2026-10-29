@@ -4,15 +4,15 @@ This extension installs the server in **Claude Desktop** (macOS/Windows). On
 install, Claude Desktop asks for two optional settings, a sandbox folder and
 the simulator path; there is no JSON config to edit.
 
-## What it does and does not bundle
+## Contents and host requirements
 
-This is a **`type: "uv"` bundle**: `manifest.json` plus a `pyproject.toml` that
-declares `ltspice-mcp` as its only dependency. The host runs
-`uv run --directory <bundle> server/run.py`, and `uv` installs the published
-package and its native dependencies (numpy/scipy) into an on-demand environment
-on first use. It does **not** vendor those. They ship as per-platform binary wheels, so a
-vendored bundle would be locked to one OS and Python ABI; `uv` pulls the
-correct wheels for the host instead.
+This is a **`type: "uv"` bundle**, with a `manifest.json` and a
+`pyproject.toml` that declares `ltspice-mcp` as its only dependency. The host
+runs `uv run --directory <bundle> server/run.py`, and `uv` installs the
+published package and its native dependencies (numpy/scipy) into an on-demand
+environment on first use. The bundle does **not** vendor those, because they
+ship as per-platform binary wheels and a vendored bundle would be locked to
+one OS and Python ABI. `uv` downloads the correct wheels for the host instead.
 
 **Requirements on the host machine:**
 
@@ -21,20 +21,18 @@ correct wheels for the host instead.
   cannot ship either (LTspice is a licensed app; ngspice is a native binary).
 - **Network access on first run**, so `uv` can download the package.
 
-Netlist editing (`.cir`/`.net`) works with no simulator at all. Editing an
-`.asc` schematic needs LTspice's `.asy` symbol libraries on disk — the
-geometry comes from those symbol files, so an install of LTspice is what
-supplies them (auto-detected on Windows and macOS). Running simulations
-needs a simulator.
+Reading and checking netlists (`.cir`/`.net`) works without a simulator.
+Editing an `.asc` schematic needs LTspice's `.asy` symbol libraries on disk,
+because the geometry comes from those symbol files. An LTspice install
+supplies them, and the server finds them automatically on Windows. Running
+simulations needs a simulator.
 
-**Optional: native Cairo, for PNG schematic renders.** The bundle installs the
-`raster` extra, but the Cairo library it loads is a native install that no
-wheel ships. Without it, renders come back as SVG files and are never shown
-inline. `inspect(kind="capabilities")` reports `render.png`, and when it is
-false it names what is missing and how to install it on your platform. See
-[PNG rendering](../../docs/USAGE.md#png-rendering) for the per-platform
-steps. The server reads its environment when Claude Desktop starts it, so
-restart Claude Desktop after installing Cairo.
+**PNG schematic renders.** The bundle installs the `raster` extra. Its
+rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no native
+library, so PNG renders work without further setup.
+`inspect(kind="capabilities")` reports `render.png`, and when it is false it
+names what is missing and how to install it. See
+[PNG rendering](../../docs/USAGE.md#png-rendering).
 
 ## Build
 
@@ -53,10 +51,12 @@ npx @anthropic-ai/mcpb pack . ltspice-mcp.mcpb      # zip this directory into th
 2. When prompted, leave the sandbox folder blank for no sandbox, or pick the
    folder the tools should be kept inside; leave the simulator path blank to
    auto-detect.
-3. In a chat, confirm the `ltspice` tools appear and run a trivial request
-   (e.g. "validate this netlist": a two-resistor divider).
+3. In a chat, confirm the `ltspice-mcp` tools appear and run a trivial
+   request (e.g. "validate this netlist": a two-resistor divider).
 
 If the server fails to start, the usual cause is `uv` not being on the
 GUI app's `PATH` (notably on macOS, where launched apps don't inherit your
-shell `PATH`). Fixes: install `uv` system-wide, or set the simulator/uv paths
-explicitly. Report what you see and we'll adjust the manifest.
+shell `PATH`). To fix it, install `uv` system-wide; the extension runs the
+command `uv` and has no setting for its path. If the server starts but finds
+no simulator, set the simulator path in the extension's settings. Report what
+you see and we'll adjust the manifest.

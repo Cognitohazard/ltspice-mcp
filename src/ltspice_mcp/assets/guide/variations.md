@@ -2,16 +2,17 @@
 name: variations
 description: >
   Sweeps, corners, Monte Carlo and mismatch with run_experiments variations:
-  what an `assign` can target, how `combine` pairs targets, `random` rules,
-  Pelgrom mismatch, and explicit per-instance values.
+  `assign` targets, how `combine` pairs targets, `random` rules, Pelgrom
+  mismatch, and explicit per-instance values.
 ---
 
 # Variations: sweeps, corners, Monte Carlo and mismatch
 
-## What `assign` can target
+## Targets of `assign`
 
-Each key of `run_experiments` `variations[].assign` is a target, each value the
-list of values it takes. Explicit forms are recognized first, then bare names:
+Each key of `run_experiments` `variations[].assign` is a target, and its value
+is the list of values that the target takes. Explicit forms are recognized
+first, then bare names:
 
 | Target | Meaning |
 |-|-|
@@ -23,22 +24,22 @@ list of values it takes. Explicit forms are recognized first, then bare names:
 A name that matches neither a declared parameter nor a component is an
 `ambiguous_target` error.
 
-`combine` decides how several targets in one entry combine: `"grid"` (default)
-takes the cartesian product, `"zip"` runs the i-th value of every target
-together as case i and requires equal list lengths. Separate entries are always
-cartesian with each other.
+`combine` sets how several targets in one entry combine. `"grid"` (default)
+takes the cartesian product, and `"zip"` runs the i-th value of every target
+together as case i and requires equal list lengths. Separate entries always
+combine as a cartesian product.
 
 ```json
 {"kind": "assign", "combine": "zip",
  "assign": {"RL": ["1k", "10k"], "VDD": [1.8, 3.3]}}
 ```
 
-runs two cases (1k/1.8 and 10k/3.3), not four.
+runs two cases (1k/1.8 and 10k/3.3), where `"grid"` would run four.
 
 ## Monte Carlo: `random` rules
 
-A `random` variation draws values without touching the deck. Its `rules` list
-carries four kinds:
+A `random` variation draws values without editing the deck. Its `rules` list
+takes four kinds of rule:
 
 | rule | what it perturbs | typical use |
 |-|-|-|
@@ -48,16 +49,18 @@ carries four kinds:
 | `mismatch` | per-instance `delvto`/`mulu0` from device area | matched-transistor offset (below) |
 
 The first three take `{target, tolerance, scale: "relative"|"absolute",
-distribution: "normal"|"uniform"}`; `model` adds `param`. Full field tables:
-`inspect(kind="reference", query="monte carlo")`. These coefficients are your
-own assumptions; for a PDK's own statistical models, see guide section
-'sky130'.
+distribution: "normal"|"uniform"}`; `model` adds `param`.
+`inspect(kind="reference", query="monte carlo")` returns the full field tables.
+These coefficients are your own assumptions; for a PDK's own statistical
+models, see guide section 'sky130'.
 
-The variation's `seed` controls these caller-assumed draws. A recoverable
-ngspice execution's `simulator_seed` instead controls static randomness inside
-the electrical deck (guide section 'ngspice'); native statistical families
-retain their own sample seeds. An execution seed does not select PDK statistics,
-and it cannot be mixed with a native statistical family.
+The variation's `seed` controls these draws from your assumed coefficients. It
+does not affect random functions written in the deck (`agauss`, `gauss`,
+`aunif`, `unif`, `limit`); in a recoverable ngspice run,
+`execution.simulator_seed` sets those (guide section 'ngspice'). A `pdk_native`
+variation has its own `seed` (guide section 'sky130'). `simulator_seed` does
+not turn on the PDK's statistical models, and a request that combines it with
+a `pdk_native` variation is refused.
 
 ## Pelgrom mismatch
 
@@ -71,14 +74,14 @@ V·m is 10⁶ too small, so the run succeeds but the spread is effectively zero:
  "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 3.2e-3, "AK": 0.01}]}
 ```
 
-To hit a target σ instead of a technology coefficient, invert it:
-`AVT = σ · √(W_µm · L_µm)` — 5 mV per device on a 20 µm × 1 µm FET is
+To set a target σ instead of a technology coefficient, invert the formula to
+`AVT = σ · √(W_µm · L_µm)`. For 5 mV per device on a 20 µm × 1 µm FET, `AVT` is
 `2.24e-2`. Each instance is drawn independently, so a differential pair's
 input-referred offset σ is √2 × the per-device figure.
 
-`.model`-based MOSFETs (what an `.asc` with plain `nmos`/`pmos` symbols
-exports) take the same rule with `prefix: "M"`, and the mismatch lands on the
-model card's `VTO`/`KP`:
+MOSFETs defined by a `.model` card, which an `.asc` with plain `nmos`/`pmos`
+symbols exports, take the same rule with `prefix: "M"`, and the mismatch
+applies to the model card's `VTO`/`KP`:
 
 ```json
 {"kind": "random", "id": "mc", "runs": 100,
@@ -93,11 +96,12 @@ model card's `VTO`/`KP`:
   `VTO`/`KP` defaults are Level-1 names.
 - Other prefixes (`"Q"` for BJTs) are accepted, but the Pelgrom law and those
   parameter defaults are for MOSFETs.
-- A `prefix` that matches subckt instances (such as Sky130's `X`-wrapped FETs)
-  descends into ngspice-compatible BSIM3/4 wrappers. For nested blocks, list
-  the physical MOS instances with `inspect(kind="hierarchy")` (guide section
-  'hierarchy'). Sampling uses each device's final W/L, after deterministic
-  assignments.
+- When a `prefix` matches subckt instances (such as Sky130's FETs, each wrapped
+  in an `X` subcircuit), the rule draws `delvto`/`mulu0` for the BSIM3/4
+  MOSFET inside each subcircuit. This works on ngspice only and one level deep
+  (`X` → `M`). For nested blocks, list the physical MOS instances with
+  `inspect(kind="hierarchy")` (guide section 'hierarchy'). Sampling uses each
+  device's final W/L, after any `assign` variation has set it.
 
 ## Explicit per-instance values
 
@@ -109,6 +113,6 @@ When you choose the offsets yourself (worst-case corners, a measured die), use
  "assign": {"X1:delvto": [0.002, -0.002], "X2:delvto": [-0.002, 0.002]}}
 ```
 
-`X1:delvto` binds when the subckt body holds a single FET; a multi-FET body
-needs the qualified form `X1.M0:delvto`. These targets work only in `assign`,
-not inside `random` rules, whose mismatch path is the Pelgrom rule above.
+`X1:delvto` selects the FET only when the subckt body contains exactly one; a
+multi-FET body needs the qualified form `X1.M0:delvto`. These targets work
+only in `assign`. In `random` rules, mismatch uses the Pelgrom rule above.

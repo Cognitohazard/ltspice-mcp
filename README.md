@@ -2,12 +2,17 @@
 
 <!-- mcp-name: io.github.cognitohazard/ltspice-mcp -->
 
-> **WIP**
-> **0.6.0 was a breaking release:** the old per-operation tools were merged
-> into the set described below, and the engine became importable as a Python
-> API. Pin `ltspice-mcp==0.5.*` if you need the old tools.
+> **Work in progress.** Version 0.6.0 was a breaking release. It merged the
+> old tools, each of which ran one operation, into the tools described below,
+> and made the engine importable as a Python API. Pin `ltspice-mcp==0.5.*` if
+> you need the old tools.
 
-ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit LTspice `.asc` schematics. Instead of raw output files, the assistant gets measurements back by name: cutoff frequency, overshoot, phase margin, rise time, and per-device operating-point values such as `gm`, `gds` and `vth`. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
+ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit
+LTspice `.asc` schematics. The server reads the simulator's output files and
+returns measurements by name, such as cutoff frequency, overshoot, phase
+margin, rise time, and the operating-point values `gm`, `gds` and `vth` of
+each device. It reads and writes the same files you open in LTspice. The
+server is built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
@@ -19,8 +24,8 @@ ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit LTsp
 ```
 
 **Claude Desktop:** build the extension in [`packaging/mcpb/`](https://github.com/cognitohazard/ltspice-mcp/tree/master/packaging/mcpb)
-and drag the `.mcpb` file onto Claude Desktop. It offers an optional sandbox
-folder; left blank, there is no sandbox.
+and drag the `.mcpb` file onto Claude Desktop. The extension asks for an
+optional sandbox folder. If you leave it blank, there is no sandbox.
 
 **Any other MCP client** ([Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp), …): install the server and add it to the client's MCP config.
 
@@ -36,39 +41,41 @@ uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
 }
 ```
 
-This needs Python 3.11 or newer. In Claude Code you can skip the JSON with
-`claude mcp add -s project spice -- ltspice-mcp`.
+The server needs Python 3.11 or newer. In Claude Code,
+`claude mcp add -s project spice -- ltspice-mcp` adds it without editing the
+JSON.
 
-**You also need a simulator** on the same machine: LTspice or ngspice, found
-automatically on Windows, Linux and macOS. On WSL, set the LTspice path
-yourself ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)). Editing `.asc` schematics needs LTspice,
-because it uses LTspice's symbol libraries. Reading and checking netlists
-works without a simulator. The plugin and the extension need
-[`uv`](https://docs.astral.sh/uv/).
+**You also need LTspice or ngspice** on the same machine. The server finds an
+installed simulator automatically on Windows, Linux and macOS. On WSL, you
+have to set the LTspice path yourself ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)). Editing `.asc`
+schematics needs LTspice, because the server uses LTspice's symbol libraries.
+Reading and checking netlists works without a simulator. The plugin and the
+extension need [`uv`](https://docs.astral.sh/uv/).
 
-**Make sure the assistant uses it.** An assistant may run the simulator from
-the shell out of habit. Keep the server's name `spice` (the plugin already
-does; avoid `ltspice`, which LTspice's own MCP server uses), and add this to
-your project's `CLAUDE.md` or your client's equivalent:
+**Make sure the assistant uses the server.** Some assistants run the
+simulator from the shell instead. Name the server `spice`, as the plugin
+does. Do not name it `ltspice`, because LTspice's own MCP server uses that
+name. Then add this rule to your project's `CLAUDE.md` or your client's
+equivalent:
 
 > Always use the spice MCP server for any SPICE/circuit simulation, sweep,
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
-[When the shell is fine](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#when-the-shell-is-fine) covers the
-exceptions, if you prefer a softer rule.
+If you prefer a less strict rule, [When the shell is fine](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#when-the-shell-is-fine)
+lists the cases in which running the simulator from the shell is acceptable.
 
 ## What you can ask
 
-You describe the circuit work; the assistant writes the circuit and picks
-what to measure; the server runs the simulator and returns the numbers.
+You describe the task, and the assistant writes the circuit and chooses the
+measurements. The server runs the simulator and returns the measured values.
 
 > **"Bias this NMOS common-source stage into saturation at the target drain current and report gm/ID."**
 
-The assistant writes the netlist, solves the bias point, and reads the
-transistor's operating point back by name: drain current, gm, gds, and VDS
-against VDSAT to confirm saturation. If the bias is off, it adjusts and runs
-again, a couple of seconds per pass.
+The assistant writes the netlist and runs an operating-point analysis. It
+reads the transistor's drain current, gm and gds by name, and compares VDS
+with VDSAT to confirm saturation. If the bias is wrong, it adjusts the
+circuit and runs it again, which takes a couple of seconds each time.
 
 Other examples:
 
@@ -81,61 +88,67 @@ Other examples:
 - *"Is this loop stable?"* (phase and gain margin at every crossover)
 - *"What's the resonant frequency and Q of this series RLC?"*
 
-Simulator warnings come back with the numbers they affect. If ngspice reports
-a singular matrix but still writes plausible values, the reply says so next
-to the value.
+The reply lists simulator warnings next to the values they affect, such as a
+singular-matrix warning from an ngspice run that still wrote plausible
+values.
 
 ## Working with LTspice
 
-Everything works on ordinary LTspice and SPICE files, so you and the
-assistant can take turns. Sketch a schematic in LTspice and ask *"why doesn't
-the output move?"*, or let the assistant build one and open it yourself. The
-assistant reads your hand edits from the file on its next request.
+The server reads and writes ordinary LTspice and SPICE files, so you and the
+assistant can edit the same circuit. You can draw a schematic in LTspice and
+ask *"why doesn't the output move?"*, or have the assistant build one and
+open it in LTspice yourself. The assistant reads your edits from the file on
+its next request.
 
 **With the schematic open in LTspice** (Windows, LTspice 26.1 or later), the
-assistant's edits show up in the window, and Ctrl+Z undoes them. If the
-window has unsaved changes, the assistant asks you to save first instead of
-overwriting them. The assistant can also see which schematic you have open,
-open a schematic or a simulation result in LTspice for you, and look things
-up in LTspice's own documentation. See [Working with LTspice
+assistant's edits appear in the LTspice window, and Ctrl+Z undoes them. If
+the window has unsaved changes, the assistant asks you to save them and does
+not overwrite them. The assistant can also tell which schematic you have
+open, open a schematic or simulation result in LTspice, and read LTspice's
+own documentation. See [Working with LTspice
 open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open) for details.
 
-**LTspice's own MCP server.** LTspice 26.1 and later ships its own MCP server,
-which registers as `ltspice`. You can install both. LTspice's server drives
-the LTspice window and returns raw samples and logs. This server works on the
-files: checked schematic edits, sweeps and Monte Carlo as background jobs,
-measurements as numbers, and ngspice support. The features above don't need
-LTspice's server. If you registered this server as `ltspice`, rename it to
-`spice`. See [Alongside LTspice's own MCP
-server](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#alongside-ltspices-own-mcp-server) for a setting worth
-changing on LTspice's side.
+**LTspice's own MCP server.** LTspice 26.1 and later include an MCP server
+that registers as `ltspice`, and you can install it next to this one.
+LTspice's server controls the LTspice window and returns raw samples and
+logs. This server does not depend on it, and it adds checked schematic edits,
+sweeps and Monte Carlo as background jobs, measurements returned as numbers,
+and ngspice support. If you registered this server as `ltspice`, rename it to
+`spice`. [Alongside LTspice's own MCP
+server](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#alongside-ltspices-own-mcp-server) describes an LTspice
+setting you may want to change.
 
 ## What it does
 
-**Simulation and measurement.** Runs LTspice or ngspice and reads the binary
-output directly. Measurements come back as numbers: time-domain (rise/fall,
-overshoot, settling, delay, period, duty cycle, jitter, RMS, THD),
-frequency-domain (filter cutoffs, gain and phase, stability margins,
-resonance and Q, integrated noise), DC operating points, and `.MEAS` results,
-including failed ones. Per-device operating-point values (`gm`, `gds`, `vth`,
-…) are available by name on both simulators.
+**Simulation and measurement.** The server runs LTspice or ngspice and reads
+the binary output files itself. It returns numeric measurements in the time
+domain (rise and fall time, overshoot, settling, delay, period, duty cycle,
+jitter, RMS, THD) and the frequency domain (filter cutoffs, gain and phase,
+stability margins, resonance and Q, integrated noise). It also reports DC
+operating points and `.MEAS` results, including failed ones. Operating-point
+values of each device, such as `gm`, `gds` and `vth`, are available by name
+on both simulators.
 
-**Schematic editing.** Creates and edits LTspice `.asc` files: places
-components, wires pins and labels nets. It refuses diagonal wires and wires
-that cross pins or junctions, and reports floating pins and dangling labels.
-An edit is refused if the file changed since the assistant last read it.
-Plain netlists (`.cir`, `.net`, `.sp`) are checked before they run; the
-assistant edits them with its own file tools.
+**Schematic editing.** The server creates and edits LTspice `.asc` files,
+placing components, wiring pins and labeling nets. It reports floating pins
+and dangling labels, and it refuses diagonal wires, wires that cross pins or
+junctions, and any edit to a file that changed since the assistant last read
+it. The assistant edits plain netlists (`.cir`, `.net`, `.sp`)
+with its own file tools, and the server checks them before they run.
 
-**Sweeps and Monte Carlo.** Multi-dimensional parameter sweeps, model
-swaps, and Monte Carlo with component tolerances, `.MODEL` process variation
-and device mismatch. Statistics are aggregated across runs, and any single
-run can be analyzed on its own.
+**Sweeps and Monte Carlo.** The server can sweep several parameters at once,
+swap models, and run Monte Carlo analyses with component tolerances,
+`.MODEL` process variation and device mismatch. It aggregates statistics
+across the runs, and any single run can also be analyzed alone.
 
-**Jobs.** Simulations run as jobs that can be cancelled or given a time
-limit, and that survive a server restart. Long runs return a job ID right
-away. Results list simulator warnings, missing measurements and extreme
-values; the server reports these and leaves the judgment to the assistant.
+**Jobs.** Each simulation runs as a job, which can be cancelled or given a
+time limit. A `run_experiments` call waits up to 60 seconds by default and
+then returns a receipt with the job ID while the job keeps running. Job
+records are saved in the working directory, so a restarted server can still
+read earlier jobs. A run still in progress when the server stopped is marked
+failed, and a job submitted with `execution.recoverable` set can run it again.
+The results list simulator warnings, missing measurements and extreme values,
+and the assistant decides whether they matter.
 
 ## Supported simulators
 
@@ -158,48 +171,48 @@ The server has 8 tools:
 | `edit_schematic` | Create and edit `.asc` schematics: place, move, wire, label |
 | `verify_circuit` | Check a circuit, compare a schematic with a netlist, draw a schematic |
 | `plot_waveform` | Interactive waveform chart, in the chat where the client supports it, otherwise in a browser |
-| `run_code` | Run a Python snippet against the engine, for loops and number crunching |
+| `run_code` | Run a Python snippet that calls the server's Python API, for loops and calculations |
 
-The assistant learns how to use them from the server itself:
-`inspect(kind="guide")` for guidance on simulators and common tasks, and
-`inspect(kind="reference")` for every option of every tool.
+The assistant learns to use the tools from `inspect(kind="guide")`, which
+covers the simulators and common tasks, and `inspect(kind="reference")`,
+which lists every option of every tool.
 
 ## Configuration
 
-None is needed. To change a setting, copy
+The server runs without configuration. To change a setting, copy
 [`ltspice-mcp.example.toml`](https://github.com/cognitohazard/ltspice-mcp/blob/master/ltspice-mcp.example.toml) to `ltspice-mcp.toml`
-in your working directory; every option is described there and can also be
-set with an `LTSPICE_MCP_` environment variable. The server keeps job records
-and results in `.ltspice-mcp/` in the working directory; add it to
-`.gitignore`.
+in your working directory. That file describes every option, and each option
+can also be set with an `LTSPICE_MCP_` environment variable. The server
+stores job records and results in `.ltspice-mcp/` in the working directory,
+so add that folder to `.gitignore`.
 
-**There is no folder sandbox unless you set one.** `[security] allowed_paths`
-confines the tools to the folders it lists. `run_code` runs Python with the
-server's own permissions, which that setting does not confine: approve it in
-your client as you would a shell command, and set `[tools] run_code = false`
-if anyone else can reach the server.
+**The tools can use any path unless you set a sandbox.**
+`[security] allowed_paths` limits the tools to the folders it lists. It does
+not limit `run_code`, which runs Python with the server's own permissions, so
+approve `run_code` in your client as you would a shell command. Set
+`[tools] run_code = false` if anyone else can reach the server.
 
-**Schematic and plot images** for the assistant to look at need an optional
-extra: see [PNG rendering](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#png-rendering).
+**Schematic and plot images** that the assistant can view need the optional
+`raster` extra ([PNG rendering](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#png-rendering)).
 
-[docs/USAGE.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md) covers the common settings, WSL, which files
-the server creates, and running it on another machine.
+[docs/USAGE.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md) covers the common settings, WSL, the files the
+server creates, and running the server on another machine.
 
 ## Python API
 
-The same engine is importable as `ltspice_mcp.api`, for scripts and notebooks:
-optimizers, curve fits, CI checks, or anything where each run depends on the
-last. It returns complete results and numpy arrays where the MCP tools return
-pages. Scripts and the server share job records in the working directory, so
-either can read a job the other ran.
+Scripts and notebooks can import the same engine as `ltspice_mcp.api`. Use it
+for optimizers, curve fits, CI checks, or any work in which each run depends
+on the previous one. The API returns complete results and numpy arrays, while
+the MCP tools return results in pages. Scripts and the server share the job
+records in the working directory, so each can read a job the other ran.
 
 ```bash
 pip install ltspice-mcp        # or: uv add ltspice-mcp
 ```
 
-The plugin and the Desktop extension install the server in their own
-environment, so a script needs this install. An assistant inside a session
-doesn't: it can use the API through `run_code`.
+The plugin and the Desktop extension install the server in an environment of
+their own, so a script needs this separate install. An assistant in a session
+does not need it, because it can use the API through `run_code`.
 
 With an RC low-pass in `circuits/rc.cir`:
 
@@ -230,17 +243,17 @@ with Api(working_dir="circuits") as api:
 ```
 
 `api.reference()` lists the operations and `api.guide()` returns the guide.
-See [Python API](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#python-api) for how it differs from the tools,
-and [docs/design/python_api.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/design/python_api.md) for the full
-contract.
+See [Python API](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#python-api) for how the API differs from the
+tools, and [docs/design/python_api.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/design/python_api.md) for the full
+specification.
 
-## Why it is shaped this way
+## Research behind the design
 
-Published studies by other groups support the main design choices:
+Published studies by other groups informed three design choices:
 
-- **Measurements come back as named numbers.** SPICEAssistant ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) gave a model scalar LTspice results instead of raw output, and o3's solve rate on a 269-task power-supply benchmark rose from 25.4% to 84.9%.
-- **Schematic edits are typed and checked.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on compound netlist edits fell from 80% at 3 dependent steps to 26% at 15. That study tested unassisted edits to text netlists, so `edit_schematic` (typed operations, validated before writing) is a response to the finding, not a measured fix for it.
-- **The tool interface is typed.** An RTL-to-GDS agent benchmark ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to tool-interface failures. It is a different domain, so this is context rather than evidence; its recommendations (registered APIs, persistent sessions, structured results) are what the server does.
+- **Measurements are returned as named numbers.** SPICEAssistant ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) gave a model scalar LTspice results instead of raw output, which raised o3's solve rate on a benchmark of 269 power-supply tasks from 25.4% to 84.9%.
+- **Schematic edits are typed and checked.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on netlist edits with dependent steps fell from 80% at 3 steps to 26% at 15. The study measured unassisted edits to text netlists. `edit_schematic` validates each typed operation before it writes the file and was designed in response to that finding, but its effect has not been measured.
+- **The tool interface is typed.** A benchmark of agents that take chip designs from RTL to GDS ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to failures at the tool interface. That work is in a different domain, so it does not show the same effect in circuit simulation. The server follows its recommendations of registered APIs, persistent sessions and structured results.
 
 ## Development
 
@@ -252,13 +265,19 @@ uv run ruff check src/ tests/  # lint
 uv run ltspice-mcp             # run the server (stdio)
 ```
 
-To release, run `scripts/release.sh <version>` (it needs a dated
-`CHANGELOG.md` section for that version) and push the tag it creates; the tag
-publishes to PyPI.
+To release, add a dated section for the version to `CHANGELOG.md`, run
+`scripts/release.sh <version>`, and push the tag it creates. Pushing the tag
+publishes the release to PyPI.
 
 ## Contributing
 
-The architecture is in [docs/DESIGN.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/DESIGN.md), the tool and Python API contracts in [docs/design/](https://github.com/cognitohazard/ltspice-mcp/tree/master/docs/design), and the test practice in [docs/TESTING.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/TESTING.md). Vendored components are listed in [THIRD_PARTY_NOTICES.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/THIRD_PARTY_NOTICES.md). The project is not taking outside contributions at this stage; bug reports with a reproduction are welcome as issues.
+- [docs/DESIGN.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/DESIGN.md): the architecture
+- [docs/design/](https://github.com/cognitohazard/ltspice-mcp/tree/master/docs/design): specifications of the MCP tools and the Python API
+- [docs/TESTING.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/TESTING.md): testing practice
+- [THIRD_PARTY_NOTICES.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/THIRD_PARTY_NOTICES.md): vendored components
+
+The project does not take outside contributions yet. Bug reports with a
+reproduction are welcome as issues.
 
 ## License
 

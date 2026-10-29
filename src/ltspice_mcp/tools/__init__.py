@@ -6,11 +6,10 @@ from ltspice_mcp.config import ServerConfig, ToolListing
 from ltspice_mcp.tools._base import RegisteredTool, registry
 from ltspice_mcp.tools._schema import strip_argument_descriptions
 
-# Importing these modules triggers @registry.tool registrations, and a tool is
-# advertised in the order it registered — so this list IS the advertised order,
-# and is kept off the import sorter for that reason. Each module's dependencies
-# also load ahead of it (analysis before analyze; experiments before jobs, which
-# reads the wait cap from it).
+# Importing these modules triggers @registry.tool registrations. The list is
+# kept off the import sorter because each module's dependencies load ahead of
+# it (analysis before analyze; experiments before jobs, which reads the wait cap
+# from it). ADVERTISED_ORDER below sets the order tools/list advertises.
 # isort: off
 from . import (  # noqa: F401
     analysis,
