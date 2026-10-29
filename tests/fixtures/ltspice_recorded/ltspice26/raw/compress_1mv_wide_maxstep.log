@@ -1,0 +1,18 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\compress_1mv_wide_maxstep.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.000 seconds.
+Total iterations: 62
+
+Files loaded:
+C:\recording\compress_1mv_wide_maxstep.cir
+
+vavg: AVG(V(out))=0.000800917533189 FROM 0 TO 0.005
+vat: V(out)=0.000625301959119 at 0.001
