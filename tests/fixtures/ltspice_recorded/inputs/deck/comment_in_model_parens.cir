@@ -1,0 +1,7 @@
+* a semicolon comment inside a .model card's parentheses, the card continued on the next line
+I1 0 a 1m
+D1 a 0 dx
+.model dx d(is=1e-14 ; saturation current
++ n=2)
+.op
+.end

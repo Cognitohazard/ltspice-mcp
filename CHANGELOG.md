@@ -28,6 +28,16 @@ tool-surface changes.
   read one copy without a word; which one the simulator uses is not known.
   Such a card is now refused, naming the copies; copies that agree read as
   their value.
+- A `.model` card edited by the server (a Monte Carlo or mismatch variant,
+  a parameter set by a variation) was written again on one line in the
+  server's spelling, so a card laid out over continuation lines lost its
+  layout and its comments. A card with a `;` comment on a line it goes on
+  past also lost every parameter after the comment, since the server reads
+  such a comment to the end of the card. A value is now set where it
+  stands, a new parameter is written after the last one inside the
+  parentheses, and a variant's new name replaces the name alone. A card
+  that goes on past a comment is refused by name, as how LTspice reads one
+  is not yet recorded.
 - The compressed-transient observation (`coarse_compressed_waveform`) reported
   a run whose deck asked for a maximum time step wider than a twentieth of the
   run, though a gap no wider than that step is what the deck asked for. A

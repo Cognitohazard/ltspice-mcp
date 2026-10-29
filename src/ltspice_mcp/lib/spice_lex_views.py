@@ -67,8 +67,8 @@ class _Params:
     copy a simulator reads is not recorded here.
 
     ``tokens`` holds each pair's token while every offset is good for an
-    in-place edit, else None: after a re-render, or for parameters with no
-    offset of their own (inside a ``.MODEL`` card's parentheses).
+    in-place edit, else None: after a re-render, or for parameters whose place
+    in the card is not known.
     """
 
     pairs: list[tuple[str, str]] = field(default_factory=list)
@@ -147,6 +147,14 @@ class _Params:
 # ---------------------------------------------------------------------------
 
 
+def _goes_on_past_its_body(card: SpiceCard) -> bool:
+    """Whether the card has a ``+`` line past the end of its body: the line the
+    body ends on ends in a comment, which the lexer reads to the end of the
+    card. Rendering the card again would drop those lines."""
+    last = card.body_layout[-1].raw_line_idx if card.body_layout else 0
+    return any(line.lstrip().startswith("+") for line in card.raw_lines[last + 1 :])
+
+
 @dataclass
 class ModelCard:
     """Typed view over a ``.MODEL NAME TYPE(...)`` card.
@@ -161,6 +169,13 @@ class ModelCard:
     type: str
     level: int | None
     _params: _Params = field(default_factory=_Params)
+    #: The name's token, renamed in place while it is good.
+    _name_token: Token | None = None
+    #: Just inside the card's opening parenthesis, for a new parameter written
+    #: in place: after the last one, or here when there is none.
+    _in_parens: int | None = None
+    #: What rendering the card again would drop, when it would drop text.
+    _would_drop: str | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> ModelCard:
@@ -174,22 +189,37 @@ class ModelCard:
         name = strip_matching_quotes(tokens[1].text)
         type_ = strip_matching_quotes(tokens[2].text)
         # Params can come as a single PARENED group or as a sequence of
-        # KEY_VALUE tokens after the type. PARENED params have no body
-        # offsets of their own (they're nested), so an edit of a card with
-        # them renders it again.
+        # KEY_VALUE tokens after the type. A PARENED group's own tokens are
+        # placed in the card by the group's offset, so they are edited where
+        # they stand. A comment ends the parameters this reads, but the card
+        # may go on past it on later lines, which may give more of them; such
+        # a card is neither edited, where a copy might be missed, nor
+        # rendered again, which would drop those lines (``_would_drop``).
         found: list[Token] = []
-        nested = False
+        in_parens = None
+        would_drop = (
+            "its line ends in a comment, and the card goes on past it"
+            if _goes_on_past_its_body(card)
+            else None
+        )
+        in_place = would_drop is None
         for tok in tokens[3:]:
             if tok.kind == TokenKind.PARENED:
-                nested = True
-                found.extend(
-                    t for t in tokenize_body(tok.text[1:-1]) if t.kind == TokenKind.KEY_VALUE
-                )
+                inner = tokenize_body(tok.text[1:-1])
+                if any(t.kind == TokenKind.COMMENT_TRAIL for t in inner):
+                    would_drop = "it has a comment inside its parentheses"
+                in_place = tok.body_offset >= 0 and would_drop is None
+                start = tok.body_offset + 1
+                own = [t for t in inner if t.kind == TokenKind.KEY_VALUE]
+                if in_place:
+                    own = [replace(t, body_offset=t.body_offset + start) for t in own]
+                    in_parens = start
+                found.extend(own)
             elif tok.kind == TokenKind.KEY_VALUE:
                 found.append(tok)
             elif tok.kind == TokenKind.COMMENT_TRAIL:
                 break
-        params = _Params.of(found, in_place=not nested)
+        params = _Params.of(found, in_place=in_place)
         level = None
         for k, v in params.as_dict().items():
             if k.lower() == "level":
@@ -198,7 +228,16 @@ class ModelCard:
                 except ValueError:
                     level = None
                 break
-        return cls(card=card, name=name, type=type_, level=level, _params=params)
+        return cls(
+            card=card,
+            name=name,
+            type=type_,
+            level=level,
+            _params=params,
+            _name_token=tokens[1] if tokens[1].body_offset >= 0 else None,
+            _in_parens=in_parens,
+            _would_drop=would_drop,
+        )
 
     @property
     def params(self) -> dict[str, str]:
@@ -216,9 +255,15 @@ class ModelCard:
 
     def set_param(self, key: str, value: float | str) -> None:
         """Set every copy of a parameter, or add it, flipping the card dirty.
-        In place where the card allows; otherwise the card is rendered again,
-        every copy kept."""
-        if not self._params.set(self.card, key, _format_value(value)):
+        In place where the card allows, a new one after the last inside the
+        parentheses; otherwise the card is rendered again, every copy kept."""
+        text = _format_value(value)
+        name = key.casefold()
+        if not any(k.casefold() == name for k, _ in self._params.pairs) and self._add_in_place(
+            key, text
+        ):
+            return
+        if not self._params.set(self.card, key, text):
             self._canonical_rerender()
 
     def remove_param(self, key: str) -> None:
@@ -227,18 +272,64 @@ class ModelCard:
             self._canonical_rerender()
 
     def set_name(self, new_name: str) -> None:
-        """Rename the model. Canonical rerender, every parameter copy kept."""
+        """Rename the model, in place where the card allows; otherwise the
+        card is rendered again, every parameter copy kept."""
         self.name = new_name
-        self._canonical_rerender()
+        tok = self._name_token
+        try:
+            if tok is None:
+                raise ValueError("no in-place span for the name")
+            self.card.replace_span(tok.body_offset, tok.body_end, new_name)
+        except ValueError:
+            self._canonical_rerender()
+        else:
+            delta = len(new_name) - tok.body_length
+            self._params.shift(tok.body_end, delta)
+            if self._in_parens is not None:
+                self._in_parens += delta
+            self._name_token = replace(tok, text=new_name, body_length=len(new_name))
         self.card.name = new_name
 
+    def _add_in_place(self, key: str, value: str) -> bool:
+        """Write a new ``key=value`` after the last parameter inside the
+        parentheses; False where it cannot go in place."""
+        tokens = self._params.tokens
+        if self._in_parens is None or tokens is None:
+            return False
+        at = tokens[-1].body_end if tokens else self._in_parens
+        text = f" {key}={value}"
+        try:
+            self.card.replace_span(at, at, text)
+        except ValueError:
+            return False
+        self._params.pairs.append((key, value))
+        tokens.append(
+            Token(
+                kind=TokenKind.KEY_VALUE,
+                text=text[1:],
+                key=key,
+                value=value,
+                body_offset=at + 1,
+                body_length=len(text) - 1,
+            )
+        )
+        return True
+
     def _canonical_rerender(self) -> None:
+        if self._would_drop is not None:
+            raise NetlistError(
+                f".MODEL {self.name} cannot be edited: {self._would_drop}. What follows "
+                "the comment may give more of its parameters, and how LTspice reads a "
+                "card that goes on past a comment is not recorded. Edit it by hand."
+            )
         params_text = " ".join(self._params.rendered())
         body = f".MODEL {self.name} {self.type}({params_text})"
         self.card.replace_body(body)
         # The offsets are now stale, so later edits on this view render the
         # card again too; re-derive the view via from_card for in-place edits.
         self._params.tokens = None
+        self._name_token = None
+        self._in_parens = None
 
 
 # ---------------------------------------------------------------------------

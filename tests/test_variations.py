@@ -1116,9 +1116,10 @@ class TestRulesReadWhatEarlierRulesWrote:
         )
 
         # The second rule perturbed the card the first one injected, so both
-        # variants are on the deck and the instance names the newer of them.
-        assert ".MODEL NM__M1 " in cases[0].text
-        assert ".MODEL NM__M1__M1 " in cases[0].text
+        # variants are on the deck, each a copy of the card as the deck spells
+        # it, and the instance names the newer of them.
+        assert ".model NM__M1 " in cases[0].text
+        assert ".model NM__M1__M1 " in cases[0].text
         assert "M1 d g 0 0 NM__M1__M1" in cases[0].text
 
     def test_an_unparsable_twin_declaration_reports_the_reference(self, tmp_path: Path):

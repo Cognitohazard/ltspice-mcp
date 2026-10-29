@@ -937,6 +937,67 @@ class TestModelCard:
         assert "KP" not in view.params
         assert "KP" not in emit(cards)
 
+    def test_a_value_in_parentheses_is_replaced_where_it_stands(self) -> None:
+        """A model card as a PDK writes one, over continuation lines: every
+        copy of a value is set where it stands, a new parameter goes after the
+        last, and the rest of the card keeps every character, where the card
+        was rendered again on one line."""
+        text = (
+            ".model nch  nmos ( level=54  version=4.5\n+ vth0 = 0.4\n+ toxe=1.8e-9  vth0=0.41 )\n"
+        )
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        view.set_param("VTH0", "0.45")
+        view.set_param("toxe", "2e-9")
+        view.set_param("k1", "0.5")
+        assert emit(cards) == (
+            ".model nch  nmos ( level=54  version=4.5\n"
+            "+ vth0=0.45\n"
+            "+ toxe=2e-9  vth0=0.45 k1=0.5 )\n"
+        )
+        assert ModelCard.from_card(lex(emit(cards)).cards[0]).param_pairs() == [
+            ("level", "54"),
+            ("version", "4.5"),
+            ("vth0", "0.45"),
+            ("toxe", "2e-9"),
+            ("vth0", "0.45"),
+            ("k1", "0.5"),
+        ]
+
+    def test_a_rename_changes_the_name_alone(self) -> None:
+        """What a Monte Carlo variant does to a model card: renamed, then a
+        value set, each in place."""
+        text = ".model nch nmos (level=54\n+ vth0=0.4 )\n"
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        view.set_name("nch_mc1")
+        view.set_param("vth0", "0.42")
+        assert emit(cards) == ".model nch_mc1 nmos (level=54\n+ vth0=0.42 )\n"
+        assert cards[0].name == "nch_mc1"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            ".model dx d(is=1e-14 ; saturation current\n+ n=2)\n",
+            ".model dx d is=1e-14 ; saturation current\n+ n=2\n",
+        ],
+        ids=["inside_the_parentheses", "at_the_end_of_a_line"],
+    )
+    def test_a_card_that_goes_on_past_a_comment_is_not_edited(self, text: str) -> None:
+        """The parameters read stop at the comment, and the card goes on past
+        it. Edited, a copy past it could be missed, and rendered again the
+        card would lose those lines; how LTspice reads it is not recorded."""
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        for edit in (
+            lambda: view.set_param("n", "3"),
+            lambda: view.set_param("is", "2e-14"),
+            lambda: view.remove_param("is"),
+        ):
+            with pytest.raises(NetlistError, match="goes on past a comment"):
+                edit()
+        assert emit(cards) == text
+
     def test_clean_card_round_trips_byte_for_byte(self) -> None:
         text = ".MODEL NMOS1 NMOS  (VTO=0.7   KP=100u)\n"
         cards = lex(text).cards
