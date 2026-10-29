@@ -275,14 +275,14 @@ def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool,
 UNRESOLVED_STEPS = "Step boundaries are unresolved; this plot supports inventory only"
 
 
-def unresolved_steps_reason(header: RawPlotHeader) -> str:
-    """Why a stepped plot's steps cannot be read one at a time, and what to
-    read instead, where the plot shows it.
+def unresolved_steps_reason(stepped: str | None) -> str:
+    """Why a stepped plot whose kind is ``stepped`` (its ``stepped_kind``)
+    cannot be read a step at a time, and what to read instead, where it shows.
 
     The operating-point raw of a stepped ``.tran`` or ``.ac`` on LTspice 26
     is one point that does not say whose step it is (``STEPPED_RUN_OP``).
     """
-    if stepped_kind(header) is STEPPED_RUN_OP:
+    if stepped == STEPPED_RUN_OP.name:
         return (
             "This operating-point raw of a stepped run holds one point and does not say "
             "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
@@ -434,7 +434,11 @@ class DecodedPlot:
         object.__setattr__(self, "descriptor", descriptor)
         object.__setattr__(self, "_has_step_metadata", steps is not None)
         object.__setattr__(self, "_stored_waves", tuple(waves))
-        refusal = unresolved_steps_reason(header) if unresolved_boundaries else UNRESOLVED_STEPS
+        refusal = (
+            unresolved_steps_reason(descriptor.stepped_kind)
+            if unresolved_boundaries
+            else UNRESOLVED_STEPS
+        )
         object.__setattr__(
             self,
             "_traces",
@@ -505,7 +509,7 @@ class DecodedPlot:
     def step_refusal(self) -> str:
         """What a read of one step of this plot is refused with when its steps
         cannot be told apart."""
-        return unresolved_steps_reason(self.header)
+        return unresolved_steps_reason(self.descriptor.stepped_kind)
 
     def get_steps(self, **kwargs: StepValue) -> list[int]:
         if not self.descriptor.steps:
