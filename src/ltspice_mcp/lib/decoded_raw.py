@@ -22,9 +22,9 @@ from numpy.typing import NDArray
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
 from ltspice_mcp.lib.result_kinds import (
-    STEPPED_RUN_OP,
     Analysis,
     header_analysis,
+    kind_named,
     sampled_axis,
     stepped_kind,
 )
@@ -271,24 +271,21 @@ def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool,
     return True, "nonmonotonic"
 
 
-#: The refusal of a stepped plot whose steps cannot be told apart.
-UNRESOLVED_STEPS = "Step boundaries are unresolved; this plot supports inventory only"
-
-
 def unresolved_steps_reason(stepped: str | None) -> str:
     """Why a stepped plot whose kind is ``stepped`` (its ``stepped_kind``)
     cannot be read a step at a time, and what to read instead, where it shows.
 
     The operating-point raw of a stepped ``.tran`` or ``.ac`` on LTspice 26
-    is one point that does not say whose step it is (``STEPPED_RUN_OP``).
+    is one point that does not say whose step it is.
     """
-    if stepped == STEPPED_RUN_OP.name:
+    kind = kind_named(stepped)
+    if kind is not None and kind.stepping == "point_of_no_step":
         return (
             "This operating-point raw of a stepped run holds one point and does not say "
             "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
             "an operating point at each step, run .op under the same .step."
         )
-    return UNRESOLVED_STEPS
+    return "Step boundaries are unresolved; this plot supports inventory only"
 
 
 @dataclass(frozen=True)
@@ -298,7 +295,8 @@ class DecodedTrace:
     descriptor: TraceDescriptor
     _values: NDArray
     _boundaries: tuple[int, ...] | None
-    _unresolved: str = UNRESOLVED_STEPS
+    #: The refusal of a step read when the boundaries are unresolved.
+    _unresolved: str
 
     @property
     def name(self) -> str:
@@ -357,7 +355,7 @@ class DecodedPlot:
                 "Resident arrays must be one-dimensional numeric arrays of the declared length"
             )
         descriptors, boundaries = _step_descriptors(header.point_count, steps, step_offsets)
-        stepped = any(flag.lower() == "stepped" for flag in header.flags)
+        stepped = header.stepped
         if step_status is None:
             if step_offsets is None and stepped:
                 step_status = "unresolved"
@@ -408,6 +406,11 @@ class DecodedPlot:
                 offset,
             )
         missing_steps = steps is None and step_status != "unstepped"
+        step_variables = (
+            tuple(header.variables[index].name for index in leading_parameters(header))
+            if kind is not None and kind.step_values == "raw"
+            else ()
+        )
         descriptor = PlotDescriptor(
             snapshot_id,
             header.index,
@@ -422,9 +425,7 @@ class DecodedPlot:
             header.dialect_evidence,
             step_status,
             None if kind is None else kind.name,
-            tuple(header.variables[index].name for index in leading_parameters(header))
-            if kind is not None and kind.step_values == "raw"
-            else (),
+            step_variables,
         )
         for wave in waves:
             wave.setflags(write=False)
@@ -434,11 +435,7 @@ class DecodedPlot:
         object.__setattr__(self, "descriptor", descriptor)
         object.__setattr__(self, "_has_step_metadata", steps is not None)
         object.__setattr__(self, "_stored_waves", tuple(waves))
-        refusal = (
-            unresolved_steps_reason(descriptor.stepped_kind)
-            if unresolved_boundaries
-            else UNRESOLVED_STEPS
-        )
+        refusal = unresolved_steps_reason(descriptor.stepped_kind)
         object.__setattr__(
             self,
             "_traces",
@@ -505,15 +502,9 @@ class DecodedPlot:
             )
         return self.get_wave(self.descriptor.axis.trace_index, step)
 
-    @property
-    def step_refusal(self) -> str:
-        """What a read of one step of this plot is refused with when its steps
-        cannot be told apart."""
-        return unresolved_steps_reason(self.descriptor.stepped_kind)
-
     def get_steps(self, **kwargs: StepValue) -> list[int]:
         if not self.descriptor.steps:
-            raise ResultError(self.step_refusal)
+            raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
         indices = []
         for step in self.descriptor.steps:
             parameters = dict(step.parameters)
@@ -567,10 +558,6 @@ class DecodedRaw:
     @property
     def steps(self) -> list[dict[str, StepValue]] | None:
         return self.plots[self.plot_index].steps
-
-    @property
-    def step_refusal(self) -> str:
-        return self.plots[self.plot_index].step_refusal
 
     def select_plot(self, plot_index: int) -> DecodedRaw:
         return DecodedRaw(self.plots, plot_index=plot_index, logs=self.logs)

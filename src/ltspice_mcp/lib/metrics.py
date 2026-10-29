@@ -111,7 +111,7 @@ from ltspice_mcp.lib.recipes import (
     Window,
     quantile_row,
 )
-from ltspice_mcp.lib.result_kinds import AC_SHAPED, STEPPED_AC_ONE_FREQUENCY
+from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
 from ltspice_mcp.lib.result_observations import (
     deck_observation_inputs,
     deck_one_ac_frequency,
@@ -246,21 +246,19 @@ def reject_non_transient(raw) -> None:
         )
 
 
-def _one_frequency_ac(raw: DecodedRaw | DecodedPlot) -> bool:
-    """Whether the plot is a stepped ``.ac`` at one frequency, which holds one
-    point a step and stores no frequency (``result_kinds``).
-
-    Another analysis's table (``.tf``, ``.pz``) stays a table even at one
-    point, because its traces' declared types do not name what they hold.
-    """
-    return raw.descriptor.stepped_kind == STEPPED_AC_ONE_FREQUENCY.name
+def _point_a_step_at_one_frequency(raw: DecodedRaw | DecodedPlot) -> bool:
+    """Whether the plot holds one point a step at a frequency only its deck
+    names, as a stepped ``.ac`` or ``.noise`` at one frequency does
+    (``result_kinds``)."""
+    kind = kind_named(raw.descriptor.stepped_kind)
+    return kind is not None and kind.stepping == "point_a_step" and kind.axis == "deck"
 
 
 def _no_axis_error(raw: DecodedRaw | DecodedPlot) -> NoAxisError:
     """Why a plot with no sampled axis cannot be read along one, and what reads it."""
     if raw.descriptor.analysis == "op":
         hint = "Use operating_point to read this bias point."
-    elif _one_frequency_ac(raw):
+    elif _point_a_step_at_one_frequency(raw):
         hint = (
             "It holds one point a step: read it with the value recipe and no 'at', "
             "or api.load_raw(...).value(name, step=k)."
@@ -1095,10 +1093,10 @@ async def value(
     With no ``at``, a run whose axis holds a single sample answers from that
     sample. An operating point, which has no axis, falls back to its bias point,
     where the expression is addressed by the name the operating point carries.
-    An AC plot with no axis answers from the one point it holds at the step, as
-    a stepped ``.ac`` at one frequency does; the raw stores no frequency, so
-    the deck's is given as ``actual_x`` with ``actual_x_source: "deck"`` when
-    the run's deck names it.
+    A stepped ``.ac`` or ``.noise`` at one frequency answers from the one point
+    it holds at the step. Its raw stores no frequency, so for an ``.ac`` the
+    deck's is given as ``actual_x`` with ``actual_x_source: "deck"`` when the
+    run's deck names it.
     """
     at = recipe.at
     if at is None:
@@ -1109,13 +1107,13 @@ async def value(
         except NoAxisError:
             if raw.descriptor.analysis == "op":
                 return await _value_from_operating_point(source, recipe, raw, step, state)
-            if not _one_frequency_ac(raw):
+            if not _point_a_step_at_one_frequency(raw):
                 raise
             data = await point_value(source, recipe.expr, None, step, state)
             frequency = (
-                None
-                if source.netlist is None
-                else await asyncio.to_thread(deck_one_ac_frequency, source.netlist)
+                await asyncio.to_thread(deck_one_ac_frequency, source.netlist)
+                if source.netlist is not None and raw.descriptor.analysis == "ac"
+                else None
             )
             if frequency is not None:
                 data["actual_x"] = frequency

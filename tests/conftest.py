@@ -956,16 +956,22 @@ def make_experiment_job(
     case_id: str | None = None,
     run_index: int | None = None,
     raw: Path | None = None,
+    netlist: Path | None = None,
 ) -> ExperimentJob:
     """ExperimentJob registered on ``state``, for the Python API door tests.
 
     ``count`` expands that many synthetic cases (``case-0000``…), each with its
     own unwritten artifact pair. ``case_id`` / ``run_index`` name a single case
     instead, and ``raw`` points every case at one real recorded artifact pair —
-    which is what the run-addressing tests resolve through.
+    which is what the run-addressing tests resolve through. ``netlist`` is
+    copied in as the job's deck, for a reader that consults what the deck
+    says; without it the deck is a bare ``.tran``.
     """
     deck = state.working_dir / f"{job_id}.cir"
-    deck.write_text(".tran 1m\n.end\n", encoding="utf-8")
+    if netlist is None:
+        deck.write_text(".tran 1m\n.end\n", encoding="utf-8")
+    else:
+        deck.write_bytes(netlist.read_bytes())
     complete = status == "completed"
     cases = [
         ExperimentCase(

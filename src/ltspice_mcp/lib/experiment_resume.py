@@ -184,10 +184,11 @@ def _refuse_case_selection(parent: ExperimentJob, requested: set[str]) -> None:
         for case in parent.cases
         if case.case_id in requested and case.status == "produced"
     )
-    reasons = [
-        *([f"not cases of job {parent.job_id}: {', '.join(unknown)}"] if unknown else []),
-        *([f"produced already, so not rerun: {', '.join(produced)}"] if produced else []),
-    ]
+    reasons = []
+    if unknown:
+        reasons.append(f"not cases of job {parent.job_id}: {', '.join(unknown)}")
+    if produced:
+        reasons.append(f"produced already, so not rerun: {', '.join(produced)}")
     if reasons:
         raise RecoveryError("recovery_case_selection", f"case_ids {'; '.join(reasons)}")
 

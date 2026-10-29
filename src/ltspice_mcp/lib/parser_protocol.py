@@ -300,10 +300,7 @@ def _materialize_raw(
         if plot.numeric_bytes != plot.point_count * sum(plot.value_bytes):
             raise ValueError("Parser plot numeric byte count disagrees")
         transient_time_offset(plot)
-        if (
-            "stepped" in {flag.casefold() for flag in plot.flags}
-            and reply.plots[index].step_status == "unstepped"
-        ):
+        if plot.stepped and reply.plots[index].step_status == "unstepped":
             raise ValueError("Unstepped status contradicts stored step evidence")
         parameters = reply.plots[index].step_parameters
         if parameters is not None and (

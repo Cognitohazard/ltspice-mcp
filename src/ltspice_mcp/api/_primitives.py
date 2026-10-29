@@ -107,8 +107,8 @@ class RawResult:
         return axis
 
     def _validate_step(self, step: int) -> None:
-        if not self._raw.descriptor.steps:
-            raise ResultError(self._raw.step_refusal)
+        # Refused, with why, when the plot's steps cannot be told apart.
+        self._raw.get_steps()
         if step < 0 or step >= self._step_count:
             raise ResultError(
                 f"Step {step} out of range. Valid range: 0 to {self._step_count - 1}"
@@ -182,8 +182,8 @@ class RawResult:
         return rows
 
     def _keyed_traces(self) -> dict[TraceKey, int]:
-        """This plot's traces but its axis, by ``trace_key``, each to its index;
-        a key two traces share is left out, never guessed between."""
+        """This plot's signals but its axis, by ``trace_key``, each to its
+        index; a key two traces share is left out, never guessed between."""
         xvii = writes_xvii_names(self._raw)
         descriptor = self._raw.descriptor
         keyed: dict[TraceKey, int] = {}
@@ -315,7 +315,7 @@ class RawResult:
         """The trace ``signal`` names in this result, found as :meth:`trace`
         finds one."""
         return services.find_trace(
-            self._raw.get_trace_names(),
+            list(self._signals),
             signal,
             xvii=writes_xvii_names(self._raw),
         )

@@ -10,6 +10,9 @@ tool-surface changes.
 
 ### Fixed
 
+- The `value` recipe refused a stepped `.noise` at one frequency as a table,
+  though guide section 'signals' says to read it, as a stepped `.ac` at one
+  frequency is read, with no `at`. It now reads each step's point.
 - Cancelling a run, or its timeout, could leave its simulator running. psutil
   keeps the process objects of one process scan for the next, and when the
   simulator had taken the process id of a process that had exited since, the

@@ -992,7 +992,7 @@ class _AscEditor(AscEditor):
     def _get_subcircuit(self, symbol: Any) -> Any:
         if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
             return super()._get_subcircuit(symbol)
-        if "Prefix" in symbol.attributes:
+        if INSTANCE_PREFIX in symbol.attributes:
             return None
         sheet = symbol.get_schematic_file()
         if not sheet.exists():

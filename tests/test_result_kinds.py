@@ -77,8 +77,10 @@ def test_every_stepped_recording_is_of_a_kind(build: str, stem: str, tmp_path: P
     assert rec.decode(build, stem, tmp_path).raw.descriptor.stepped_kind is not None
 
 
-#: Recorded runs that keep each step's values in the raw.
-POINT_A_STEP = ["raw/step_op", "raw/step_temp_op", "raw/tf_step", "raw/step_ac_one_freq"]
+#: The recordings of the kinds that keep each step's values in the raw.
+POINT_A_STEP = [
+    pair for kind in STEPPED_KINDS if kind.step_values == "raw" for pair in _cases(kind)
+]
 
 
 def _step_variable(build: str, case_id: str, scratch: Path) -> str:
@@ -86,8 +88,7 @@ def _step_variable(build: str, case_id: str, scratch: Path) -> str:
     return variable
 
 
-@pytest.mark.parametrize("build", rec.BUILDS)
-@pytest.mark.parametrize("case_id", POINT_A_STEP)
+@pytest.mark.parametrize(("build", "case_id"), POINT_A_STEP)
 def test_the_api_reads_a_step_variable_as_a_step_value(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
 ):
@@ -96,13 +97,13 @@ def test_the_api_reads_a_step_variable_as_a_step_value(
     variable = _step_variable(build, case_id, work_dir / "decoded")
     loaded = SyncApi(state_no_sim).load_raw(rec.stage_run(build, case_id, work_dir / "run"))
     assert variable not in loaded.signals
-    assert len(loaded.steps) == 3 and all(variable in step for step in loaded.steps)
+    assert len(loaded.steps) == rec.declared_points(build, case_id)
+    assert all(variable in step for step in loaded.steps)
     with pytest.raises(ResultError, match="stepped value, not a signal"):
         loaded.trace(variable)
 
 
-@pytest.mark.parametrize("build", rec.BUILDS)
-@pytest.mark.parametrize("case_id", POINT_A_STEP)
+@pytest.mark.parametrize(("build", "case_id"), POINT_A_STEP)
 async def test_inspect_lists_no_step_variable_among_the_signals(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
 ):

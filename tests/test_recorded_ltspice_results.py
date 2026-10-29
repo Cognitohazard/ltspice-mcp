@@ -605,11 +605,11 @@ async def test_a_job_whose_deck_asked_for_wide_steps_is_not_reported_coarse(
     assert gap["gap_to_s"] - gap["gap_from_s"] == pytest.approx(1e-3, rel=1e-6)
 
     job = make_experiment_job(
-        state_no_sim, job_id="exp_wide", raw=rec.stage_run(build, case_id, work_dir / "run")
+        state_no_sim,
+        job_id="exp_wide",
+        raw=rec.stage_run(build, case_id, work_dir / "run"),
+        netlist=INPUTS / f"{case_id}.cir",
     )
-    deck = job.cases[0].staged_deck
-    assert deck is not None
-    deck.write_bytes((INPUTS / f"{case_id}.cir").read_bytes())
     request = AnalyzeResultsInput.model_validate(
         {
             "sources": [{"job_id": job.job_id, "label": "dut"}],
@@ -627,15 +627,14 @@ async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):
     """A stepped .ac at one frequency stores none; its deck's .ac list 100k is
-    the frequency, given with that source when the run's deck is known. The
-    RC low-pass (C = 1n) over r = 1k, 2k, 4k agrees with it at every step.
-    Read by path, with no deck, no frequency is given."""
+    the frequency, given with that source when the run's deck is known, and
+    each step's gain is the low-pass's there. Read by path, with no deck, no
+    frequency is given."""
     case_id = "raw/step_ac_one_freq"
     raw = rec.stage_run(build, case_id, work_dir / "run")
-    job = make_experiment_job(state_no_sim, job_id="exp_one_freq", raw=raw)
-    deck = job.cases[0].staged_deck
-    assert deck is not None
-    deck.write_bytes((INPUTS / f"{case_id}.cir").read_bytes())
+    job = make_experiment_job(
+        state_no_sim, job_id="exp_one_freq", raw=raw, netlist=INPUTS / f"{case_id}.cir"
+    )
 
     async def values(source: dict[str, str]) -> list[dict[str, Any]]:
         request = AnalyzeResultsInput.model_validate(
@@ -651,15 +650,41 @@ async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
         return data["results"]["v"]["per_run"]["items"]
 
     rows = await values({"job_id": job.job_id})
-    assert [row["step_values"]["r"] for row in rows] == [1000.0, 2000.0, 4000.0]
-    for row in rows:
+    assert [row["step_values"] for row in rows] == ONE_FREQUENCY_STEPS
+    for row, gain in zip(rows, ONE_FREQUENCY_GAINS, strict=True):
         value = row["value"]
         assert (value["actual_x"], value["actual_x_source"]) == (100e3, "deck")
-        resistance = row["step_values"]["r"]
-        gain = 1 / math.sqrt(1 + (2 * math.pi * value["actual_x"] * resistance * 1e-9) ** 2)
-        assert value["magnitude_linear"] == pytest.approx(gain, rel=1e-5)
+        assert value["magnitude_linear"] == pytest.approx(abs(gain), rel=1e-5)
     by_path = await values({"raw_path": str(raw)})
     assert all("actual_x" not in row["value"] for row in by_path)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_one_frequency_noise_is_read_a_step_at_a_time(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped .noise at one frequency holds one point a step, as the .ac
+    does, and the value recipe reads each with no 'at': the thermal noise of
+    r through the RC low-pass (100 nF) at 1 kHz, at 27 °C."""
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [
+                {"raw_path": str(rec.stage_run(build, "raw/step_noise_one_freq", work_dir))}
+            ],
+            "all_steps": True,
+            "recipes": [{"key": "n", "metric": "value", "expr": "V(onoise)"}],
+            "include": {"per_run": True},
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None and data["failures"] == []
+    rows = data["results"]["n"]["per_run"]["items"]
+    assert [row["step_values"] for row in rows] == ONE_FREQUENCY_STEPS
+    for row in rows:
+        r = row["step_values"]["r"]
+        gain = abs(1 / (1 + 2j * math.pi * 1e3 * r * 100e-9))
+        density = math.sqrt(4 * 1.380649e-23 * 300.15 * r) * gain
+        assert row["value"]["value"] == pytest.approx(density, rel=1e-3)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

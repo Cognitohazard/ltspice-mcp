@@ -53,13 +53,14 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import numpy as np
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
@@ -321,19 +322,31 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
     return out
 
 
+def _first_directive(netlist_text: str, head: str) -> list[str] | None:
+    """The tokens of a deck's first ``head`` directive (``.tran``, ``.ac``);
+    None when it has none."""
+    for card in lex(netlist_text).cards:
+        tokens = card.body.split() if card.kind == "directive" else []
+        if tokens and tokens[0].casefold() == head:
+            return tokens
+    return None
+
+
+def _read_deck(netlist: Path, parse: Callable[[str], float | None]) -> float | None:
+    """``parse`` of the deck at ``netlist``; None when it cannot be read."""
+    try:
+        return parse(read_spice_text(netlist))
+    except OSError:
+        return None
+
+
 def tran_max_step(netlist_text: str) -> float | None:
     """The maximum time step a deck's first ``.tran`` asks for, its fourth
     number (``.tran <Tstep> <Tstop> <Tstart> <Tmax>``). None when the card
     gives none, or a value that is not a number, or the deck has no ``.tran``."""
-    for card in lex(netlist_text).cards:
-        if card.kind != "directive":
-            continue
-        tokens = card.body.split()
-        if not tokens or tokens[0].casefold() != ".tran":
-            continue
-        numbers = leading_numeric_tokens(tokens[1:5])
-        return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
-    return None
+    tokens = _first_directive(netlist_text, ".tran")
+    numbers = leading_numeric_tokens(tokens[1:5]) if tokens else []
+    return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
 
 
 def one_ac_frequency(netlist_text: str) -> float | None:
@@ -342,31 +355,26 @@ def one_ac_frequency(netlist_text: str) -> float | None:
     store (``result_kinds.STEPPED_AC_ONE_FREQUENCY``, recorded as
     ``raw/step_ac_one_freq``). None for any other form, or a value that is not
     a number."""
-    for card in lex(netlist_text).cards:
-        tokens = card.body.split() if card.kind == "directive" else []
-        if not tokens or tokens[0].casefold() != ".ac":
-            continue
-        if len(tokens) != 3 or tokens[1].casefold() != "list":
-            return None
-        numbers = leading_numeric_tokens(tokens[2:])
-        return numbers[0] if numbers and numbers[0] > 0 else None
-    return None
+    tokens = _first_directive(netlist_text, ".ac")
+    if tokens is None or len(tokens) != 3 or tokens[1].casefold() != "list":
+        return None
+    numbers = leading_numeric_tokens(tokens[2:])
+    return numbers[0] if numbers and numbers[0] > 0 else None
+
+
+#: Each deck's ``one_ac_frequency``, kept while the deck is unchanged: a
+#: stepped run asks it once for every step it reads.
+_ONE_AC_FREQUENCIES: FileCache[float | None] = FileCache(maxsize=64)
 
 
 def deck_one_ac_frequency(netlist: Path) -> float | None:
     """``one_ac_frequency`` of the deck at ``netlist``; None when it cannot be read."""
-    try:
-        return one_ac_frequency(read_spice_text(netlist))
-    except OSError:
-        return None
+    return _ONE_AC_FREQUENCIES.get(netlist, lambda path: _read_deck(path, one_ac_frequency))
 
 
 def deck_tran_max_step(netlist: Path) -> float | None:
     """``tran_max_step`` of the deck at ``netlist``; None when it cannot be read."""
-    try:
-        return tran_max_step(read_spice_text(netlist))
-    except OSError:
-        return None
+    return _read_deck(netlist, tran_max_step)
 
 
 def coarse_compressed_waveform(

@@ -365,7 +365,7 @@ def _step_facts(
             {"step_index": 0, "offset": 0, "length": header.point_count, "log_row": None}
         ],
     }
-    if "stepped" not in {flag.lower() for flag in header.flags}:
+    if not header.stepped:
         return result
     result["step_status"] = "unresolved"
     result["step_ranges"] = None

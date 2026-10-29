@@ -102,6 +102,16 @@ class RawPlotHeader:
     payload_bytes: int
     numeric_bytes: int
 
+    @property
+    def stepped(self) -> bool:
+        """The writer marked the plot as holding a ``.step`` run's steps."""
+        return any(flag.casefold() == "stepped" for flag in self.flags)
+
+    @property
+    def first_type(self) -> str:
+        """The declared type of the plot's first variable, empty with none."""
+        return self.variables[0].declared_type if self.variables else ""
+
 
 def leading_parameters(plot: RawPlotHeader) -> list[int]:
     """The variables a stepped plot opens with that hold the stepped parameters
