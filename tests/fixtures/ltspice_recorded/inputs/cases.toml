@@ -193,13 +193,15 @@ inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
 [behaviour.export-hierarchical-block]
-summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it: the netlist each build exports for it, and what a build writes when it runs the sheet."
+summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it, the symbol drawn as LTspice draws one or given a Prefix of X: the netlist each build exports for it, and what a build writes when it runs the sheet."
 model = ["lib/deck_staging.py", "lib/schematic_ops.py"]
-# hier_amp.asy is a block symbol with pins IN and OUT; hier_amp.asc, the
-# block's own sheet, is a 1k/1k divider between ports of those names. The top
-# sheet drives the block from a 1 V source into a 10k load and runs .op.
-inputs = ["export/hier_top.asc"]
-extra = ["export/hier_amp.asc", "export/hier_amp.asy"]
+# hier_plain.asy is a block symbol with pins IN and OUT and no attribute, as
+# LTspice makes one for a sheet; hier_amp.asy is the same block with
+# SYMATTR Prefix X. Each block's own sheet (hier_plain.asc, hier_amp.asc) is
+# a 1k/1k divider between ports of those names. Each top sheet drives its
+# block from a 1 V source into a 10k load and runs .op.
+inputs = ["export/hier_top.asc", "export/hier_plain_top.asc"]
+extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", "export/hier_plain.asy"]
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
@@ -466,6 +468,12 @@ inputs = ["log/meas_trig.cir"]
 summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
 model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
 inputs = ["log/meas_db.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-complex-format]
+summary = "How .options meascplxfmt=polar and =cartesian change the way the log prints an AC .meas result: a complex one, a magnitude, a negative real, a phase and a real part."
+model = ["lib/log_parser.py"]
+inputs = ["log/meas_cplxfmt_polar.cir", "log/meas_cplxfmt_cartesian.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-reserved-name]
@@ -1066,6 +1074,14 @@ behaviour = "export-hierarchical-block"
 kind = "run"
 source = "export/hier_top.asc"
 extra = ["export/hier_amp.asc", "export/hier_amp.asy"]
+keep = ["net", "log", "raw"]
+
+[[case]]
+id = "export/hier_plain_top_run"
+behaviour = "export-hierarchical-block"
+kind = "run"
+source = "export/hier_plain_top.asc"
+extra = ["export/hier_plain.asc", "export/hier_plain.asy"]
 keep = ["net", "log", "raw"]
 
 # A frequency response analysis over two .step values: how the results file
