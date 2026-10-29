@@ -28,7 +28,7 @@ import re
 import signal
 import sys
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from enum import Enum
 from pathlib import Path, PurePath
 
@@ -89,6 +89,26 @@ def _names_run_deck(token: str, arg: str) -> bool:
     return re.search(re.escape(token) + r"\.(?:cir|net|sp)$", arg, re.IGNORECASE) is not None
 
 
+def _running_processes(attrs: tuple[str, ...]) -> Iterator[psutil.Process]:
+    """Every running process, each a ``psutil.Process`` built now with its
+    ``info`` read now (``attrs``; an unreadable one is None).
+
+    ``psutil.process_iter`` yields the ``Process`` it built for a pid on an
+    earlier call without checking that the pid still names that process. For
+    a pid reused since, that object reads the new process's command line, but
+    its ``kill()`` refuses the pid as reused, and on Windows its name is the
+    old process's: a simulator that took a dead process's pid was found and
+    not killed.
+    """
+    for pid in psutil.pids():
+        try:
+            process = psutil.Process(pid)
+            process.info = process.as_dict(attrs=list(attrs), ad_value=None)
+        except psutil.NoSuchProcess:
+            continue
+        yield process
+
+
 def _own_descendant_pids() -> frozenset[int]:
     """Every process this server started, directly or through another."""
     try:
@@ -126,7 +146,7 @@ def kill_simulator_by_token(token: str, executable_names: Collection[str]) -> in
         return 0
     own = _own_descendant_pids()
     killed = 0
-    for proc in psutil.process_iter(("name", "cmdline")):
+    for proc in _running_processes(("name", "cmdline")):
         try:
             cmdline = proc.info.get("cmdline") or []
             if not any(token_in_argument(token, arg) for arg in cmdline):
@@ -259,7 +279,7 @@ def simulator_presence(token: str, executable_names: Collection[str]) -> Process
         return ProcessPresence.UNKNOWN
     unknown = False
     try:
-        for process in psutil.process_iter(("name", "cmdline", "status"), ad_value=None):
+        for process in _running_processes(("name", "cmdline", "status")):
             try:
                 if process.info.get("status") == psutil.STATUS_ZOMBIE:
                     continue
