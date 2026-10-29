@@ -583,6 +583,42 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     assert "plotwinsize=0" in observation["detail"]
 
 
+#: The same charge under a maximum step of a fifth of the run, 1 ms: the
+#: points each build stored, the widest gap between them being that step.
+WIDE_MAX_STEP_POINTS = {"ltspice26": 32, "ltspice17": 12}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_job_whose_deck_asked_for_wide_steps_is_not_reported_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Read through the job that ran it, the run is judged against its own
+    deck: a 1 ms gap is the step the deck allowed, on both builds."""
+    case_id = "raw/compress_1mv_wide_maxstep"
+    assert declared_points(build, case_id) == WIDE_MAX_STEP_POINTS[build]
+    raw = rec.decode(build, case_id, work_dir / "decoded").raw
+    gap = coarse_compressed_waveform(raw)
+    assert gap is not None
+    assert gap["gap_to_s"] - gap["gap_from_s"] == pytest.approx(1e-3, rel=1e-6)
+
+    job = make_experiment_job(
+        state_no_sim, job_id="exp_wide", raw=rec.stage_run(build, case_id, work_dir / "run")
+    )
+    deck = job.cases[0].staged_deck
+    assert deck is not None
+    deck.write_bytes((INPUTS / f"{case_id}.cir").read_bytes())
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"job_id": job.job_id, "label": "dut"}],
+            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "1m"}],
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None
+    assert data["failures"] == []
+    assert [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"] == []
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 async def test_a_measurements_only_call_reports_a_transient_compression_left_coarse(
     build: str, state_no_sim: SessionState, work_dir: Path
@@ -640,6 +676,19 @@ def test_the_api_says_compression_left_a_raw_coarse(
     raw = SyncApi(state_no_sim).load_raw(rec.stage_run(build, "raw/compress_1mv", work_dir))
     codes = [o["code"] for o in raw.observations]
     assert ("coarse_compressed_waveform" in codes) == (gap is not None)
+
+
+@pytest.mark.parametrize("run", ["step_tran_op_raw", "step_ac_op_raw"])
+def test_the_api_says_why_26s_op_raw_of_a_stepped_run_has_no_steps(
+    run: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 wrote one point and no step variable, so trace() is refused
+    with the cause and where to read an operating point a step."""
+    raw = rec.stage_run("ltspice26", f"raw/{run}.op", work_dir)
+    loaded = SyncApi(state_no_sim).load_raw(raw)
+    with pytest.raises(ResultError, match="does not say which step") as refused:
+        loaded.trace(loaded.signals[0])
+    assert "run .op under the same .step" in str(refused.value)
 
 
 def test_the_apis_log_readers_say_a_stopped_cases_results_end_early(

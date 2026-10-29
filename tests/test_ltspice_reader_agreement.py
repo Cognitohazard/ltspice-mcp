@@ -303,8 +303,11 @@ def test_a_stepped_runs_op_raw_that_does_not_say_its_step_is_refused_by_both(
     assert declared_points(written_by, f"raw/{name}") == 1
     assert "stepped" in header_fields(written_by, f"raw/{name}")["Flags"][0].split()
     raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
-    with pytest.raises(ResultError, match="Step boundaries are unresolved"):
-        raw.get_wave(raw.get_trace_names()[0], 0)
+    # The refusal says why, and where an operating point a step is read.
+    for read in (lambda: raw.get_wave(raw.get_trace_names()[0], 0), raw.get_steps):
+        with pytest.raises(ResultError, match="does not say which step") as refused:
+            read()
+        assert "run .op under the same .step" in str(refused.value)
 
 
 def test_every_file_of_one_point_or_of_the_axis_alone_is_refused_and_no_other():

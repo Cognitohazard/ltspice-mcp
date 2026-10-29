@@ -109,6 +109,10 @@ tool-surface changes.
   - guide section 'fundamentals' says LTspice prints every AC `.meas`
     result in its log as dB and angle, a real one included, and that
     `measurements` decodes them.
+  - a read of one step of an LTspice 26 `.op.raw` from a stepped `.tran`
+    or `.ac`, which holds one point and does not say whose step it is, is
+    refused with that cause and the remedy (run `.op` under the same
+    `.step`), where it said only that step boundaries were unresolved.
 - `inspect(kind="symbols")` lists the LTspice build's `sym` folder as the
   `stock` library, where it listed the `lib` folder above it.
 - The equivalence compare's `duplicate_params` names a card that gives a

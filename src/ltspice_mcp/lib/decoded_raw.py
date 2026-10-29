@@ -319,6 +319,27 @@ def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool,
     return True, "nonmonotonic"
 
 
+#: The refusal of a stepped plot whose steps cannot be told apart.
+UNRESOLVED_STEPS = "Step boundaries are unresolved; this plot supports inventory only"
+
+
+def unresolved_steps_reason(header: RawPlotHeader) -> str:
+    """Why a stepped plot's steps cannot be read one at a time, and what to
+    read instead, where the plot shows it.
+
+    LTspice 26 writes the operating-point raw of a stepped ``.tran`` or ``.ac``
+    as one point with no step variable (``raw/step_tran_op_raw``,
+    ``raw/step_ac_op_raw``), so nothing says whose step it is.
+    """
+    if header.dialect == "ltspice" and header_analysis(header) == "op" and header.point_count == 1:
+        return (
+            "This operating-point raw of a stepped run holds one point and does not say "
+            "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
+            "an operating point at each step, run .op under the same .step."
+        )
+    return UNRESOLVED_STEPS
+
+
 @dataclass(frozen=True)
 class DecodedTrace:
     """Original trace metadata and a read-only step slice, with no lazy loader."""
@@ -326,6 +347,7 @@ class DecodedTrace:
     descriptor: TraceDescriptor
     _values: NDArray
     _boundaries: tuple[int, ...] | None
+    _unresolved: str = UNRESOLVED_STEPS
 
     @property
     def name(self) -> str:
@@ -343,7 +365,7 @@ class DecodedTrace:
 
     def get_wave(self, step: int = 0) -> NDArray:
         if self._boundaries is None:
-            raise ResultError("Step boundaries are unresolved; this plot supports inventory only")
+            raise ResultError(self._unresolved)
         if type(step) is not int or not 0 <= step < len(self._boundaries) - 1:
             raise IndexError(f"Step {step} is outside this plot")
         return self._values[self._boundaries[step] : self._boundaries[step + 1]]
@@ -449,11 +471,12 @@ class DecodedPlot:
         object.__setattr__(self, "descriptor", descriptor)
         object.__setattr__(self, "_has_step_metadata", steps is not None)
         object.__setattr__(self, "_stored_waves", tuple(waves))
+        refusal = unresolved_steps_reason(header) if unresolved_boundaries else UNRESOLVED_STEPS
         object.__setattr__(
             self,
             "_traces",
             tuple(
-                DecodedTrace(t, w, None if unresolved_boundaries else boundaries)
+                DecodedTrace(t, w, None if unresolved_boundaries else boundaries, refusal)
                 for t, w in zip(traces, arrays, strict=True)
             ),
         )
@@ -513,9 +536,15 @@ class DecodedPlot:
             )
         return self.get_wave(self.descriptor.axis.trace_index, step)
 
+    @property
+    def step_refusal(self) -> str:
+        """What a read of one step of this plot is refused with when its steps
+        cannot be told apart."""
+        return unresolved_steps_reason(self.header)
+
     def get_steps(self, **kwargs: StepValue) -> list[int]:
         if not self.descriptor.steps:
-            raise ResultError("Step boundaries are unresolved; this plot supports inventory only")
+            raise ResultError(self.step_refusal)
         indices = []
         for step in self.descriptor.steps:
             parameters = dict(step.parameters)
@@ -569,6 +598,10 @@ class DecodedRaw:
     @property
     def steps(self) -> list[dict[str, StepValue]] | None:
         return self.plots[self.plot_index].steps
+
+    @property
+    def step_refusal(self) -> str:
+        return self.plots[self.plot_index].step_refusal
 
     def select_plot(self, plot_index: int) -> DecodedRaw:
         return DecodedRaw(self.plots, plot_index=plot_index, logs=self.logs)

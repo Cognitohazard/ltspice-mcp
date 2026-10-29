@@ -108,7 +108,7 @@ class RawResult:
 
     def _validate_step(self, step: int) -> None:
         if not self._raw.descriptor.steps:
-            raise ResultError("Step boundaries are unresolved; this plot supports inventory only.")
+            raise ResultError(self._raw.step_refusal)
         if step < 0 or step >= self._step_count:
             raise ResultError(
                 f"Step {step} out of range. Valid range: 0 to {self._step_count - 1}"
