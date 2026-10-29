@@ -943,13 +943,16 @@ net joined only by labels. The edit computes them on the text it is about to
 write. The findings and the label-only-pin list describe the whole sheet, and
 on an existing sheet most of them predate the call. The transaction therefore
 computes both before and after the ops, each on the editor's rendering of the
-sheet, and reports a finding only if it is new (no finding with the same rule,
-parts, points and facts existed before; any change makes it new) or if it
-names a part or point the batch named. An op names a reference through its
-`reference` or a `REF.PIN` endpoint, and a coordinate through its `x`/`y`, a
-segment's two ends, a waypoint or an `{x, y}` endpoint, and through the labels
-and wire ends a `move` names, where they were and where they went. All other findings go
-in the `preexisting` block:
+sheet, and reports a finding only if the batch made or changed it: no finding
+with the same rule, parts and subject existed before. A finding's subject is
+what it is about apart from where, for a rule whose places move with the parts
+it names or whose facts hold an attribute's words: which attribute's text, and
+what it is drawn across; which pin floats; the parameter and its copies. So a
+part moved, or given a new value, keeps the findings it had, and a finding the
+batch left as it was is not the batch's, whichever part it names. For any other
+rule the subject is its points and facts, and any change makes it new. All
+other findings go in the `preexisting` block, with the label-only pins of the
+parts the batch did not rewire or name:
 
 ```
 preexisting {count, findings, label_only_pins, cursor}

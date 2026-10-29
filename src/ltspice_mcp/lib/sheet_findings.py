@@ -250,11 +250,19 @@ class Finding:
     refs: tuple[str, ...] = ()
     points: tuple[Point, ...] = ()
     facts: Mapping[str, Any] = field(default_factory=dict)
+    #: What the finding is about besides its parts, for a rule whose points
+    #: move with the parts it names or whose facts hold an attribute's words:
+    #: so a part moved or given a new value keeps the finding it had. Said by
+    #: the other fields already, so two findings equal without it.
+    about: tuple[Any, ...] | None = field(default=None, compare=False)
 
     @property
     def identity(self) -> tuple[Any, ...]:
-        """What makes this the same finding as another: its rule and what it is
-        about. The sentence says no more than these do."""
+        """What makes this the same finding as another, before and after an
+        edit: its rule, its parts, and what it is about. Where the rule says
+        that apart from where it is (``about``), the places are left out."""
+        if self.about is not None:
+            return (self.rule, self.refs, self.about)
         return (self.rule, self.refs, self.points, tuple(sorted(self.facts.items())))
 
 
@@ -419,6 +427,7 @@ def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
                 refs=(part.name,),
                 points=(part.at,) if part.at is not None else (),
                 facts=facts,
+                about=tuple(sorted(facts.items())),
             )
         )
     return found
@@ -472,6 +481,7 @@ def _duplicate_parameters(ix: _Index) -> list[Finding]:
                     refs=(part.name,),
                     points=(part.at,) if part.at is not None else (),
                     facts={"parameter": key, "copies": tuple(given)},
+                    about=(key, tuple(given)),
                 )
             )
     return found
@@ -665,6 +675,7 @@ def _floating_pins(ix: _Index) -> list[Finding]:
             refs=(part.name,),
             points=((x, y),),
             facts={"pin": name},
+            about=(name,),
         )
         for part, (name, x, y) in _floating(ix)
     ]
@@ -742,6 +753,7 @@ def _symbol_overlaps(ix: _Index) -> list[Finding]:
                     f"{ox2 - ox1}x{oy2 - oy1} region at {_at((ox1, oy1))}",
                     refs=(part_a.name, part_b.name),
                     points=((ox1, oy1), (ox2, oy2)),
+                    about=(),
                 )
             )
     return found
@@ -933,14 +945,17 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for n, (index, part, at, text, core) in enumerate(drawn):
         # What the text is drawn across: words for it, the parts and the
-        # points it names, and its own facts.
-        across: list[tuple[str, tuple[str, ...], tuple[Point, ...], dict[str, str]]] = [
-            (f"wire {_wire(a, b)}", (), (a, b), {"across": "wire"})
+        # points it names, its own facts, and what it is by name, which a move
+        # of the parts it names or a new value leaves as it was.
+        across: list[
+            tuple[str, tuple[str, ...], tuple[Point, ...], dict[str, str], tuple[Any, ...]]
+        ] = [
+            (f"wire {_wire(a, b)}", (), (a, b), {"across": "wire"}, ("wire", a, b))
             for a, b in ix.wires
             if _through(a, b, core)
         ]
         across += [
-            (f"{other.name}'s body", (other.name,), (), {"across": "body"})
+            (f"{other.name}'s body", (other.name,), (), {"across": "body"}, ("body",))
             for other_index, other, body in ix.drawn
             if other_index != index and _draws_over(other, body, core)
         ]
@@ -951,6 +966,9 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
                 (owner.name,) if owner else (),
                 (other_at,),
                 {"across": "text", "other_text": other_text},
+                ("text", _attribute_of(owner, other_text))
+                if owner
+                else ("text", other_text, other_at),
             )
             for owner, other_at, other_text, other_core in texts[n + 1 :]
             if other_core.overlaps(core)
@@ -962,10 +980,17 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
                 refs=(part.name, *others),
                 points=(at, *points),
                 facts={"text": text, **facts},
+                about=(_attribute_of(part, text), *of),
             )
-            for what, others, points, facts in across
+            for what, others, points, facts, of in across
         ]
     return found
+
+
+def _attribute_of(part: Part, text: str) -> str:
+    """Which of a part's two drawn attributes ``text`` is: its reference, which
+    the InstName window shows, or else its value."""
+    return "InstName" if text == part.ref else "Value"
 
 
 @_finds("label_over_component")

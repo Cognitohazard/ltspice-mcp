@@ -222,8 +222,10 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   beside the part it names: move the part (`move_component`, or `move` for a
   region) or what its text crosses.
 - **On an existing sheet, the reported findings are the edit's.** `warnings`
-  and `wiring.label_only_pins` list only what your ops introduced or named;
-  older ones are counted in `preexisting`, not listed. A batch that only sets
+  lists only the findings your ops made or changed, and
+  `wiring.label_only_pins` only the pins of parts they rewired or named; a
+  part moved or given a new value keeps the findings it had, and older ones
+  are counted in `preexisting`, not listed. A batch that only sets
   values or attributes lists no pins at all, since it leaves every pin joined
   as it was. Before calling a sheet
   done, list them with `return_views: ["preexisting"]` (on an op-less read,

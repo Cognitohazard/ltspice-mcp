@@ -2235,7 +2235,9 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is True
         assert data["failed_count"] == 0
-        assert data["results"][0]["removed"] == "directive"
+        assert data["results"][0]["removed_texts"] == [
+            {"kind": "directive", "text": ".tran 1m", "x": 16, "y": 16}
+        ]
 
         read2 = _sheet_facts(asc_state, "rm_dir.asc")
         assert not any(".tran 1m" in d for d in read2["directives"])

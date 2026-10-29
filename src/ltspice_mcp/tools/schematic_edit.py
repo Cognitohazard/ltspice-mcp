@@ -375,9 +375,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "preexisting": {
             "type": "object",
             "description": (
-                "What the sheet already reported before this batch and that involves "
-                "no reference or coordinate the batch named: counted here, left out "
-                "of 'warnings' and wiring.label_only_pins. count = findings + "
+                "What the sheet already had that this batch left as it was: findings "
+                "it neither made nor changed, and label-only pins of parts it did not "
+                "rewire or name. Counted here, left out of 'warnings' and "
+                "wiring.label_only_pins. count = findings + "
                 "label_only_pins. Echo cursor as view_cursors.preexisting, or ask "
                 "return_views ['preexisting'], to list them."
             ),
@@ -418,15 +419,23 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 ),
             },
         },
+        "applied": {
+            "type": "integer",
+            "description": (
+                "How many ops applied, in order: every op of a committed batch. An "
+                "op with nothing to report has no results entry; this counts it."
+            ),
+        },
         "results": {
             "type": "array",
             "description": (
                 "What each op found on the sheet, by op index; an op with nothing "
-                "to report has no entry. wire_pins reports already_present "
+                "to report has no entry, and 'applied' counts it. wire_pins reports already_present "
                 "(requested segments already on the sheet, not redrawn) and "
                 "junctions (where the route joined existing wiring off its "
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
-                "report how much they took. set_component_value and "
+                "report how much they took; remove_directive names each text it "
+                "removed in removed_texts, with its kind and place. set_component_value and "
                 "set_component_attribute report each attribute they changed, with "
                 "what it was and what it is now (null where absent). set_plot_panes "
                 "reports the plot_settings file it writes and the replaced_panes it "
@@ -454,6 +463,19 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         },
                     },
                     "removed": {"type": "integer"},
+                    "removed_texts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["directive", "comment"]},
+                                "text": {"type": "string"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                            "required": ["kind", "text", "x", "y"],
+                        },
+                    },
                     "deleted_wires": {"type": "integer"},
                     "changed": {
                         "type": "object",
@@ -765,30 +787,26 @@ def finding_row(finding: Finding) -> dict[str, Any]:
 
 
 def _split_findings(
-    after: Sequence[Finding],
-    before: Sequence[Finding],
-    refs: set[str],
-    coords: set[tuple[int, int]],
+    after: Sequence[Finding], before: Sequence[Finding]
 ) -> tuple[list[Finding], list[Finding]]:
-    """``(reported, preexisting)``: the findings of ``after`` this batch accounts for, and the rest.
+    """``(reported, preexisting)``: the findings of ``after`` this batch made or
+    changed, and the ones it left as they were.
 
-    A finding is reported when the sheet did not have it before the batch, or
-    when any part it names is in ``refs`` (casefolded) or any point it names is
-    in ``coords``. Every other finding was already there and involves nothing
-    the batch named. Being there before is by ``Finding.identity`` and is
-    counted, so a second finding like one that was there once is new.
+    The same finding before and after is the same ``Finding.identity``, which a
+    part moved or given a new value keeps where the rule says what it is about
+    apart from where. It is counted, so a second finding like one that was
+    there once is new. A finding the batch left as it was is the sheet's,
+    whichever part or point the batch named.
     """
     remaining = Counter(found.identity for found in before)
     reported: list[Finding] = []
     preexisting: list[Finding] = []
     for found in after:
-        was_there = remaining[found.identity] > 0
-        if was_there:
+        if remaining[found.identity] > 0:
             remaining[found.identity] -= 1
-        named = any(ref.casefold() in refs for ref in found.refs) or any(
-            point in coords for point in found.points
-        )
-        (preexisting if was_there and not named else reported).append(found)
+            preexisting.append(found)
+        else:
+            reported.append(found)
     return reported, preexisting
 
 
@@ -1227,6 +1245,7 @@ def _envelope(
     verification: dict | None = None,
     netlist: str | None = None,
     results: list[dict] | None = None,
+    applied: int | None = None,
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
@@ -1255,6 +1274,8 @@ def _envelope(
         "failures": failures or [],
         "observations": observations or [],
     }
+    if applied is not None:
+        data["applied"] = applied
     if error is not None:
         # Mirror the top-level commit_state into the error object so a failure
         # envelope is self-describing without cross-referencing the top level.
@@ -1604,19 +1625,14 @@ async def _evaluate_edit_schematic(
                 target,
                 symbols_of(editor),
             )
-            refs, coords = touched_refs(args.ops), touched_coords(args.ops)
-            findings_reported, findings_left_out = _split_findings(
-                found, found_before, refs, coords
-            )
+            findings_reported, findings_left_out = _split_findings(found, found_before)
             # A pin is listed for the parts the batch rewired; one whose value
             # alone changed is joined as it was, and is counted, not listed.
-            # Findings stay the batch's for every part it named: a value can
-            # be what a finding is about (a parameter given twice).
             pins_reported, pins_left_out = _split_by_edit(
                 label_only,
                 label_only if before_pins is None else before_pins,
                 rewired_refs(args.ops),
-                coords,
+                touched_coords(args.ops),
             )
             preexisting_rows = [finding_row(one) for one in findings_left_out] + [
                 {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out
@@ -1664,6 +1680,7 @@ async def _evaluate_edit_schematic(
                             preexisting=preexisting,
                             rules_run=rules_run,
                             results=op_results,
+                            applied=len(results),
                             warnings=warnings,
                             failures=failures,
                             observations=revision_notes + window_notes,
@@ -1792,6 +1809,7 @@ async def _evaluate_edit_schematic(
                         verification=verification,
                         netlist=netlist,
                         results=op_results,
+                        applied=len(results),
                         warnings=warnings,
                         observations=window_notes,
                         open_in_ltspice=shown,

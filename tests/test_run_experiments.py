@@ -154,27 +154,6 @@ def test_wait_caps_are_held_not_advertised_as_a_maximum():
     assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
 
-@pytest.mark.asyncio
-async def test_a_dwell_past_its_cap_is_held_and_names_the_continuation(
-    state_with_sim: SessionState,
-    work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    submissions: list[str] = []
-    fake_simulator(monkeypatch, submissions)
-    deck = _deck(work_dir / "dwell.cir")
-
-    data = _assert_schema(
-        await handle_run_experiments(_args(deck, "dwell-past-cap", wait_s=900), state_with_sim)
-    )
-
-    assert "error" not in data, data.get("error")
-    assert len(submissions) == 1
-    (note,) = [w for w in data["warnings"] if "execution.wait_s" in w]
-    assert "execution.wait_s=900s" in note and "120s was used" in note
-    assert "jobs(action='wait', timeout_s<=300)" in note
-
-
 def test_variation_schema_keeps_discriminated_union_through_defs():
     """Schemas keep $defs instead of inlining: the variation discriminated
     union must stay fully resolvable through local refs, so a client sees the
@@ -450,6 +429,44 @@ class TestReceiptThenDwell:
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         assert await job_done(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
+
+    async def test_a_held_dwell_says_the_job_keeps_running_only_while_it_does(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A wait_s above the cap is served at the cap and said so. That the job
+        keeps running is said of the receipt returned, so a job that finished
+        inside the dwell is not said to run on."""
+        fake_simulator(monkeypatch)
+        finished = _assert_schema(
+            await handle_run_experiments(
+                _args(_deck(work_dir / "quick.cir"), "held-quick", wait_s=300), state_with_sim
+            )
+        )
+        assert finished["outcome"] == "complete", finished
+        assert (
+            "execution.wait_s=300s is above its cap of 120s; 120s was used."
+            in (finished["warnings"])
+        )
+        assert not any("keeps running" in warning for warning in finished["warnings"])
+
+        held: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=held)
+        monkeypatch.setattr(experiments_mod, "SUBMISSION_DWELL_CAP_S", 0.0)
+        running = _assert_schema(
+            await handle_run_experiments(
+                _args(_deck(work_dir / "slow.cir"), "held-slow", wait_s=300), state_with_sim
+            )
+        )
+        assert running["outcome"] == "in_progress", running
+        assert "execution.wait_s=300s is above its cap of 0s; 0s was used." in running["warnings"]
+        assert any("keeps running" in warning for warning in running["warnings"]), running
+        await await_until(lambda: bool(held))
+        for finish in held:
+            finish()
+        assert await job_done(state_with_sim, state_with_sim.all_jobs[running["job_id"]])
 
     async def test_failure_after_submit_reports_committed_with_handles(
         self,

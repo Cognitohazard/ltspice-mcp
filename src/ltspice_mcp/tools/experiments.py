@@ -637,6 +637,7 @@ async def handle_run_experiments(
                     analysis_fields=analysis_fields,
                     budget=budget,
                     warnings=cap_warnings,
+                    wait_held=wait_note is not None,
                 )
             except Exception as exc:
                 return await _post_submit_error_response(
@@ -784,6 +785,7 @@ async def handle_run_experiments(
                 analysis_fields=analysis_fields,
                 budget=budget,
                 warnings=cap_warnings,
+                wait_held=wait_note is not None,
             )
         except Exception as exc:
             return await _post_submit_error_response(
@@ -1375,13 +1377,11 @@ async def _load_matching_replay(
 
 def _argument_warnings(args: RunExperimentsInput, wait_note: str | None) -> list[str]:
     """What this call asked for that is served differently: a value held to its
-    cap, and a repeat in the attached analysis read once."""
+    cap, and a repeat in the attached analysis read once. Whether the job runs
+    on past a held dwell is the receipt's to say (``_dwell_and_respond``)."""
     notes: list[str] = []
     if wait_note is not None:
-        notes.append(
-            f"{wait_note} The job keeps running; continue with "
-            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g})."
-        )
+        notes.append(wait_note)
     if args.analyze is not None:
         notes.extend(f"analyze.{note}" for note in args.analyze.argument_notes())
         per_run = args.analyze.include.per_run if args.analyze.include else None
@@ -1402,7 +1402,14 @@ async def _dwell_and_respond(
     analysis_fields: list[str] | None = None,
     budget: ResponseBudget,
     warnings: list[str] | None = None,
+    wait_held: bool = False,
 ) -> types.CallToolResult:
+    """Wait up to ``wait_s`` for the job, then return its receipt.
+
+    ``wait_held`` says ``wait_s`` was held to its cap (a note among
+    ``warnings``); the receipt adds that the job keeps running only when the
+    snapshot it returns is not terminal.
+    """
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
         job, _ = await state.job_registry.wait(job, wait_s)
@@ -1412,6 +1419,12 @@ async def _dwell_and_respond(
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
     )
+    if wait_held and snapshot.status not in TERMINAL_EXPERIMENT_STATUSES:
+        warnings = [
+            *(warnings or []),
+            "The job keeps running past the held dwell; continue with "
+            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g}).",
+        ]
     text = (
         f"Experiment {snapshot.job_id}: {snapshot.status} "
         f"({snapshot.completeness.terminal}/{snapshot.completeness.expanded} terminal cases)"

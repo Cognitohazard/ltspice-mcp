@@ -10,6 +10,9 @@ tool-surface changes.
 
 ### Fixed
 
+- `run_experiments` said a job whose `wait_s` was held to the 120 s cap
+  "keeps running" even when it had finished during the dwell. The cap is
+  still said; that the job keeps running is said only of a job still running.
 - `edit_schematic` read each library symbol once per session. A symbol
   redrawn in a library while the server ran kept its old pins in every later
   edit, and a symbol not found stayed not found after it was added, until the
@@ -85,8 +88,18 @@ tool-surface changes.
   sheet's findings alone. `wire_pins` no longer warns that a route passing
   over a pin or touching wiring already on its net is joined there; the point
   is in its `results` entry under `junctions`, as it already was.
-- A finding about a label or wire a `move` op names counts as the batch's,
-  as a finding about any point an op names does.
+- `edit_schematic` reports a sheet finding as the batch's when the batch
+  made or changed it, where it reported any finding that named a part or
+  point an op named, unchanged or not. A part moved or given a new value
+  keeps the findings it had: a text overlap is the same finding while the
+  same attribute crosses the same thing, whatever its words, and a floating
+  pin while the same pin floats, wherever the part went. Such findings are
+  counted in `preexisting`.
+- `edit_schematic`'s reply counts the ops it applied (`applied`): `results`
+  lists only ops with something to report, so an op without, such as
+  `add_directive`, read as one that did not run. `remove_directive` names
+  each text it removed, with its kind and place (`removed_texts`), which a
+  `regex:` match otherwise leaves unknown.
 
 ### Added
 

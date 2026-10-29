@@ -1167,7 +1167,7 @@ def _remove_exact_directive(editor, instruction: str) -> bool:
     return False
 
 
-def _remove_directive_or_comment(editor, instruction: str) -> str:
+def _remove_directive_or_comment(editor, instruction: str) -> None:
     """Remove a directive or comment matching ``instruction``.
 
     The default path is an exact, literal match: a DIRECTIVE is removed only when
@@ -1178,9 +1178,8 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
     turn into regex capture groups under any "metachar means regex" heuristic.
     Pass an explicit ``regex:`` prefix to opt in to regex matching.
 
-    Returns a label describing what was removed. Raises NetlistError when
-    nothing matched, so the user can't think they cleaned a directive
-    that's still in the file.
+    Raises NetlistError when nothing matched, so the user can't think they
+    cleaned a directive that's still in the file.
     """
     matcher = _text_matcher(instruction)
     if isinstance(matcher, re.Pattern):
@@ -1191,7 +1190,7 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
                 f"No directive or comment matched regex {matcher.pattern!r}. It is matched "
                 "against each TEXT line's text, where a line break is a \\n escape."
             )
-        return "directive(s)/comment(s)"
+        return
 
     directive_hit = _remove_exact_directive(editor, instruction)
     comment_hit = _strip_matching_comments(editor, instruction)
@@ -1203,7 +1202,6 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
             "(directive) or ';' (comment); a line break may be given as a newline "
             "or as the \\n escape the file holds."
         )
-    return "directive"
 
 
 def _strip_matching_comments(editor, matcher) -> bool:
@@ -2256,15 +2254,16 @@ KEEPS_WIRING = frozenset(
 # of a result restates the op or carries geometry a surface reports through
 # views of its own. A route's ``wire_count`` is not one: ``already_present``
 # names the segments it did not draw, and relaying the count would put a line
-# per route on every build. Nor is ``remove_directive``'s ``removed``, which
-# names a kind, not an amount. An op missing here reports nothing beyond its
-# arguments.
+# per route on every build. ``remove_directive``'s ``removed_texts`` names each
+# text it took, since a regex leaves that unknown. An op missing here reports nothing
+# beyond its arguments, and the reply's ``applied`` count says it ran.
 OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "set_component_value": ("changed",),
     "set_component_attribute": ("changed",),
     "wire_pins": ("already_present", "junctions"),
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
+    "remove_directive": ("removed_texts",),
     "remove_component": ("deleted_wires",),
     "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
@@ -2544,9 +2543,26 @@ def apply_op_inplace(
         return {"op": "add_directive", "instruction": op.instruction}
 
     if isinstance(op, OpRemoveDirective):
-        # Literal-by-default, 'regex:' opt-in, raises if nothing matched.
-        removed = _remove_directive_or_comment(editor, op.instruction)
-        return {"op": "remove_directive", "instruction": op.instruction, "removed": removed}
+        # Literal-by-default, 'regex:' opt-in, raises if nothing matched. What
+        # it removed is read off the sheet's texts, not the matcher's say-so.
+        had = list(editor.directives)
+        _remove_directive_or_comment(editor, op.instruction)
+        kept = {id(text) for text in editor.directives}
+        removed_texts = [
+            {
+                "kind": "comment" if text.type == TextTypeEnum.COMMENT else "directive",
+                "text": text.text,
+                "x": int(text.coord.X),
+                "y": int(text.coord.Y),
+            }
+            for text in had
+            if id(text) not in kept
+        ]
+        return {
+            "op": "remove_directive",
+            "instruction": op.instruction,
+            "removed_texts": removed_texts,
+        }
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
 
