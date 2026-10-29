@@ -1400,6 +1400,33 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_bare": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_bare.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_bare.asc": "5cad42b6cfb2ebb12c38fe26567ef58179b9ff79d8bcf2291c165d197e9c2a7a"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_bare.net": {
+          "bytes": 114,
+          "sha256": "d237b68aecc34d47a2536434c1b42ba9b494af4e8c5750c9acbc150e552a5a17"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_detour": {
       "behaviour": "same-instance-wire",
       "command": [

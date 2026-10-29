@@ -85071,6 +85071,135 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_bare.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    }
+   ],
+   "total": 1
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "24a7a79cf65c3745",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 2,
+    "total_pins": 2,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire between two pins of the same component; LTspice drops that wire from the netlist, so this connection may not exist in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "24a7a79cf65c3745",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 2,
+    "total_pins": 2,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire between two pins of the same component; LTspice drops that wire from the netlist, so this connection may not exist in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": [
+     96,
+     144
+    ],
+    "coordinates_sha256": "24a7a79cf65c3745",
+    "is_shorted": false,
+    "labels": [],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "snapped_to_wire": {
+     "from": {
+      "x": 96,
+      "y": 96
+     },
+     "to": {
+      "x": 96,
+      "y": 192
+     }
+    },
+    "total_coordinates": 2,
+    "total_pins": 2,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire between two pins of the same component; LTspice drops that wire from the netlist, so this connection may not exist in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
   "components": {
    "rows": [
