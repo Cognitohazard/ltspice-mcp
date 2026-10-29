@@ -16,5 +16,7 @@
    {
       traces: 1 {0,0,"V(out)"}
       Log: 1 2 0
+      PltMag: 1
+      PltPhi: 1 0
    }
 }

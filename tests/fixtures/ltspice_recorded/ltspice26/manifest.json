@@ -6129,14 +6129,14 @@
       ],
       "exit_code": null,
       "inputs": {
-        "plot/ac.plt": "a611b01e577ef40d452b4e91adbaa86b7bcce2a0cec1d12012db4412cd460cc0",
+        "plot/ac.plt": "765891d122b0ff41b05802cc4b8d85846232c9377f47c37f0c1f2cae34ce6841",
         "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
       },
       "kind": "plot",
       "outputs": {
         "plot/read_ac.plt": {
-          "bytes": 196,
-          "sha256": "9d05baba093cc933d2fd63134452880a08a7461aa82c8246c23aa50b46f9ec6a"
+          "bytes": 230,
+          "sha256": "df546ff4c9e0bc622d121fbc51657c7d1785166783f1bb52e5feb9a349c0d183"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -6160,14 +6160,14 @@
       ],
       "exit_code": null,
       "inputs": {
-        "plot/ac_grid.plt": "9d3d52b31afa9f9ef95336e32c99f4bf513b689bd566ac5ed8c17f888486b171",
+        "plot/ac_grid.plt": "bcc3c2805d19e1f233945361299717e78c6e1393cbbe6d927944ef251299f0d8",
         "plot/rc_ac.asc": "50ca6f547e840e47d08fd7995f43d0080fdbea7992e6996aee92bbcd2efe7841"
       },
       "kind": "plot",
       "outputs": {
         "plot/read_ac_grid.plt": {
-          "bytes": 215,
-          "sha256": "b8ad0a0eb725c001ca400e9bea93fa9b53b4c17f9b6ff6697d9b5696e6ddde3a"
+          "bytes": 248,
+          "sha256": "b3a6444d86de53c0e6754a33e42e90e2664a3578bdf291f54e7d377ee6fc647b"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
@@ -6442,13 +6442,13 @@
       "exit_code": null,
       "inputs": {
         "plot/rc_tran.asc": "3fc80f619e61b41c97af2fa0b8e6376138162c33c48b6ef0888b7dbc108fc9c5",
-        "plot/two_sections.plt": "d090016c80a3118099c39024fa25c8a7091dc8acc890a854a153882f879f97a5"
+        "plot/two_sections.plt": "63f2578e75525dee8d93f9f2ae44f9d2cd6284855a26b3232798426844bdbd3e"
       },
       "kind": "plot",
       "outputs": {
         "plot/read_two_sections.plt": {
-          "bytes": 320,
-          "sha256": "a135dab31d637299af312eaff8c590c53cad2c13fededcad58e35a1ff81b2a78"
+          "bytes": 354,
+          "sha256": "7c317abf72aad0a467dc3b68c9f87ab3892f81ffcc022cd60c9c52ccbae7e439"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",
