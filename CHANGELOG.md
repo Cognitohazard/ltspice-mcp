@@ -23,19 +23,19 @@ tool-surface changes.
   the line. All text was drawn at two thirds of LTspice's size in a monospace
   font, and comments and directives ignored their justification. Text is now
   laid out as both builds draw it, based on screenshots of each
-  (`docs/TESTING.md`, "How LTspice draws text"). Each justification follows
-  the part's placement, text is drawn in Tahoma Bold at LTspice's size for
-  each text size, a multi-line comment's lines are one line apart, and a net
-  label starts or ends at its point.
+  (`docs/TESTING.md`, "How LTspice draws text"). Each justification is
+  rotated and mirrored with the part, text is drawn in Tahoma Bold at
+  LTspice's size for each text size, a multi-line comment's lines are one line
+  apart, and a net label starts or ends at its point.
 - `inspect(kind="hierarchy")` told LTspice users to add `.options logopinfo`
   to read a nested MOSFET's operating point, but LTspice XVII ends the run on
   that option. It also wrote a nested resistor's `.save I(xa:xin:r1)` and a
   node's trace in LTspice 26's syntax, which XVII's `.save` refuses; XVII then
-  saves everything except the current (recorded: `raw/save_subckt_names*`). A
-  MOSFET's address no longer names a directive, because the server asks
-  LTspice 26 for the device table on every `.op` run and XVII prints it by
-  default. Names inside subcircuits are now written for the session's
-  LTspice, with each instance's X dropped on XVII.
+  saves everything except the current (recorded: `raw/save_subckt_names*`). On
+  LTspice a MOSFET's address now has no `address.save` line, because the
+  server asks LTspice 26 for the device table on every `.op` run and XVII
+  prints it by default. Names inside subcircuits are now written for the
+  session's LTspice, with each instance's X dropped on XVII.
   `simulator: "ltspice:<name>"` selects the spelling for a named build, and
   the reply's `profile.xvii_names` reports which spelling was used.
 - A signal inside a subcircuit named by its path (`V(xa.xin.mid)`,
@@ -82,9 +82,10 @@ tool-surface changes.
   suffix as µ in the exported netlist, whatever the sheet contains (recorded:
   `benchmark/nmos_mirror_drawn`), so no change to the sheet could clear it.
   The build that wrote the export reads its µ as micro, so an export's micro
-  signs are now reported only as a per-value warning when a reader in the
-  session misreads them, which happens when LTspice XVII reads a UTF-8
-  export. A netlist passed to `verify_circuit` still gets the observation.
+  signs are now reported only when LTspice XVII would read them from a file
+  that is not cp1252, such as a UTF-8 export, and so misread them. Each is
+  then a warning per value. A netlist passed to `verify_circuit` still gets
+  the observation.
 - A run row's `status` is its case's status (`produced` once the simulator
   wrote its output), while the receipt's `status` is the job's
   (`completed`). This was not documented, so a caller that selected rows on
@@ -112,8 +113,8 @@ tool-surface changes.
   an `.asc` reference, in an otherwise empty folder, so a symbol saved next to
   the sheet was not found and the export failed, though `verify_circuit`
   passed on the same sheet. Each copy is now staged with the project-local
-  symbol and library files under its original's folder, as
-  `verify_circuit`'s managed export stages them.
+  symbol and library files under its original's folder, as `verify_circuit`
+  stages them for its own export.
 - `run_experiments` accepted a circuit outside the sandbox and made a job
   whose every case failed with `path_denied`. The call is now refused at
   submission with `path_denied` and the sandbox guidance, and no job is made.
@@ -136,8 +137,8 @@ tool-surface changes.
   as if they were on the deck's nodes of the same name, and a body card that
   shared a reference with a deck card replaced it. Only the deck's own cards
   are members now.
-- `inspect(kind="net")` on a netlist dropped the lexer's `warnings` about a
-  deck it had to guess at (an unclosed `.SUBCKT`, a stray continuation),
+- `inspect(kind="net")` on a netlist dropped the `warnings` about a deck the
+  parser had to guess at (an unclosed `.SUBCKT`, a stray continuation),
   which `components` reports. The net reply now includes them too.
 - The server treated a `GND` label, in any letter case, as a net name,
   although both LTspice builds export it as node `0`. The net trace kept it
@@ -190,9 +191,9 @@ tool-surface changes.
   still refused.
 - `add_net_label` warned on every label with a name the sheet already had
   ("already labels a net"), though the netlist merges such labels into one
-  net as intended. One build got this warning 17 times. The warning existed
-  only because a later `net:NAME` could not tell the labels apart, and that
-  refusal now handles this itself, so the warning is removed. A second name
+  net as intended. The warning existed only because a later `net:NAME` could
+  not tell the labels apart, and that refusal now names one label by its
+  point, so the warning is removed. A second name
   for one net is still reported (`net_with_two_names`).
 - The results file of an LTspice frequency response analysis
   (`<run>.fra_1.raw`) could not be read, because the raw reader refused its
@@ -248,8 +249,8 @@ tool-surface changes.
   threshold that agreed reported `equivalent: true` with no mention of the
   second copy. It now reports each such parameter in `duplicate_params` and
   treats it as equal only when it is equal whichever copy is read. The
-  structural diff includes both copies in its signature, so adding a second
-  copy counts as a change.
+  structural diff compares both copies, so adding a second copy counts as a
+  change.
 - A run that produced results was listed in a `run_experiments` or
   `jobs(status|wait)` receipt without its `raw` and `log` paths and its
   `simulator_version`, which only `jobs(runs)` and `run_fields` returned, and
@@ -261,7 +262,7 @@ tool-surface changes.
 - An `inspect` net trace or components listing made while an `edit_schematic`
   call was in progress could show that edit's changes before they were
   committed, next to the digest of the file as it still was. Both now read
-  the file.
+  the file on disk, so they show only committed changes.
 - On Windows, every LTspice run and every schematic export took the keyboard
   focus for its whole duration, because LTspice opens a window even in batch
   mode, and a sweep held the focus continuously. LTspice is now started on a
@@ -274,9 +275,9 @@ tool-surface changes.
   the timeout or for someone to click the box.
   `[simulator] hidden_desktop = false` (or `LTSPICE_MCP_HIDDEN_DESKTOP=0`)
   starts LTspice on your own desktop as before. Named executables are
-  launched the same way. So is the audited LTspice launch that a recoverable
-  experiment resumes with; it keeps its command, environment and timeout and
-  still does not answer any message box. WSL and Wine are unchanged.
+  launched the same way. So is the LTspice launch that resumes a recoverable
+  experiment; it keeps the same command, working directory, environment and
+  timeout, and does not answer any message box. WSL and Wine are unchanged.
 - An `edit_schematic` commit removed every data label (`DATAFLAG` record) from
   the sheet it edited and reported a complete edit, because the underlying
   schematic editor skips them when it reads a sheet and never writes them.
@@ -363,9 +364,9 @@ against the recording that showed it.
   first part's highest pin in SpiceOrder connects to it. The other pin is on
   a separate node, and neither tool reported it. A zero-length wire connects
   nothing.
-- `edit_schematic` left a part whose symbol is not found out of every
-  geometry pass without reporting it, so the part's pins were missing from
-  the floating-pin check and from the pin counts. It now reports the part
+- `edit_schematic` skipped a part whose symbol is not found in every check of
+  the sheet's geometry, without reporting it, so the part's pins were missing
+  from the floating-pin check and from the pin counts. It now reports the part
   (`unresolved_symbol`, a new kind among its findings), as `verify_circuit`
   does.
 - `verify_circuit` judged two parts to overlap by what each draws, and
@@ -379,8 +380,8 @@ against the recording that showed it.
   sheet under its bare name, which neither build does; such a symbol is
   drawn as the placeholder and reported as not found. `edit_schematic` now
   finds a symbol whose name includes a folder when the file is beside the
-  sheet, as XVII does, and a symbol whose name includes a library folder that
-  does not hold it, as both builds do. On Linux and macOS it now also finds
+  sheet, as XVII does, and a symbol whose name includes a library folder other
+  than the one that contains it, as both builds do. On Linux and macOS it now also finds
   any symbol named with a library folder. The backslashes in the name were
   read as part of a file name on those systems, and the part was left with
   no pins.
@@ -417,11 +418,12 @@ against the recording that showed it.
   relayed from a run that LTspice 26 refused now includes the fix.
 - Results from LTspice 26 could not be read for a deck with two or more
   subcircuit instances. LTspice 24 and later write one `Backannotation:` line
-  in the raw header for each instance, and the raw preflight refused a header
-  field that appeared twice.
+  in the raw header for each instance, and the server's check of the raw
+  header refused a field that appeared twice.
 - Results could not be read for a deck containing `.options plotwinsize=0`,
   which adds a `nocompression` flag to the raw header, or for a `.tf` run,
-  whose `Transfer Function` plot had no validated layout. Both are read now.
+  whose `Transfer Function` plot the raw reader did not recognise. Both are
+  read now.
 - On LTspice XVII every `.op` deck run through the server failed. The server
   adds `.options logopinfo` so that LTspice prints the operating point of each
   semiconductor, but XVII prints it by default and stops with "unrecognized
@@ -448,9 +450,9 @@ against the recording that showed it.
 - A pin or label on the interior of a diagonal wire was not connected to it by
   the schematic editor's net trace and warnings; LTspice connects it, as it
   does anywhere along a horizontal or vertical wire.
-- A directive on a deck's first line was treated as live by the lint and by
-  `verify_circuit`. LTspice reads line 1 as the title whatever it contains,
-  so `.param r=2k` there defines nothing.
+- A directive on a deck's first line was checked as a directive by the lint
+  and by `verify_circuit`. LTspice reads line 1 as the title whatever it
+  contains, so `.param r=2k` there defines nothing.
 - `inspect(kind:"hierarchy")` did not treat `gnd` as ground on LTspice. It is
   node 0 there too, except in a subcircuit that names a port `gnd`.
 - The `suffix-mega-milli` lint missed a capital `M` followed by a unit,
@@ -575,16 +577,18 @@ against the recording that showed it.
   still the model. The same parsing keeps the area factor through a
   `set_component_value` model change and stops `verify_circuit` from
   reporting the subckt name before `params:` as a dangling node.
-- The arity check refused valid LTspice cards. It refused a comma-continued
-  value (`IC=1,2,3`, `tc=0.001,1e-6`), which the lexer split at the commas,
-  and the behavioural resistor and power forms `B1 a 0 R=...` and
-  `B1 a 0 P=...`. A value given by a keyword (`C1 a 0 Q=...`,
-  `L1 a 0 Flux=...`, `V1 a 0 wavefile="in.wav"`) was counted one node short.
-  An expression with spaces around its operators (`B1 c 0 V = V(a) + V(b)`)
-  is a warning in the validator, but the linter and `verify_circuit`'s
-  `syntax` check both reported it as an error. A comma-continued value now
-  lexes as one `key=value`, a keyword value leaves every positional field a
-  node, and each issue is reported at the severity the validator gives it.
+- The arity check, which counts each card's nodes, refused valid LTspice
+  cards. It refused a comma-continued value (`IC=1,2,3`, `tc=0.001,1e-6`),
+  which was split at the commas, and the behavioural resistor and power forms
+  `B1 a 0 R=...` and `B1 a 0 P=...`. A value given by a keyword
+  (`C1 a 0 Q=...`, `L1 a 0 Flux=...`, `V1 a 0 wavefile="in.wav"`) was counted
+  one node short. An expression with spaces around its operators
+  (`B1 c 0 V = V(a) + V(b)`) is a warning in the arity check, but the linter
+  and `verify_circuit`'s `syntax` check both reported it as an error. A
+  comma-continued value is now read as one `key=value`, a keyword value
+  leaves every positional field a node, and the linter and the `syntax` check
+  report each arity issue at the arity check's own severity, so the spaced
+  expression is a warning.
   `R=` and `P=` are still refused for ngspice, whose B-source takes only `V=`
   and `I=`.
 - A deck whose title on line 1 starts with an element letter
@@ -596,7 +600,7 @@ against the recording that showed it.
   (`vdb()` in a `.meas`, `C=` as a capacitor's value) and never ngspice's (a
   zero `.tran` step, `.backanno`). It now checks against the session's default
   simulator, the one `run_experiments` runs on when no simulator is named.
-- The netlist lexer reported `.ends opamp` as not matching `.SUBCKT OPAMP`.
+- The netlist parser reported `.ends opamp` as not matching `.SUBCKT OPAMP`.
   SPICE names are case-insensitive, and the match now is too.
 - `inspect(kind="model", mode="enumerate")` refused a `query` because it never
   filtered. It now lists only the models whose name contains the query,
@@ -625,7 +629,7 @@ against the recording that showed it.
   the descriptions state the cap.
 - `analyze_results` refused `reduce` without `field` on a multi-field recipe
   (`{metric: "stability", reduce: ["min"]}`), while a keyed recipe's bare
-  `reduce` covered every key. A bare `reduce` now covers every field the
+  `reduce` reduced every key. A bare `reduce` now reduces every field the
   recipe reports, with one row per field and statistic, each equal to the
   result of a reduction that names that field; `spec` still needs `field`.
   `edges` reports its transition time as `rise_time` or `fall_time` by the
@@ -642,8 +646,8 @@ against the recording that showed it.
   the ids in the call.
 - `run_experiments` refused two `random` variation entries in one call even
   when their `applies_to` lists named different circuits, so a Monte Carlo
-  run of two designs could not share one job. The rule applies per circuit,
-  because the product of two random families on one deck is ill-defined. A
+  run of two designs could not share one job. The limit is now per circuit,
+  because two `random` entries on one deck have no defined combination. A
   circuit still takes at most one (`multiple_random_variations`, now naming
   the circuit), and entries on different circuits each run with their own
   seed.
@@ -690,9 +694,9 @@ against the recording that showed it.
   it pointed at a file that does not exist. Only text that ngspice cannot read
   is changed now. The `.backanno` card is dropped, and the `§` LTspice writes
   into an instance name (`R§Load`) is removed from that name wherever the
-  deck uses it, including `.meas` references. A value's micro sign is left to
-  staging, which writes it as `u` for every simulator without touching a
-  path.
+  deck uses it, including `.meas` references. A value's micro sign is written
+  as `u` when the deck is staged for the run, for every simulator, without
+  touching a path.
 - A deck or include that staging had to rewrite, and a case deck a variation
   wrote, was always written as UTF-8. A cp1252 deck, which is what LTspice XVII
   writes, came out with every other non-ASCII character re-encoded, and XVII
@@ -731,8 +735,9 @@ against the recording that showed it.
 - `inspect` model queries refused a `libs` file inside the detected
   simulator's own model library (for example LTspice's
   `lib/cmp/standard.bjt`) under a sandbox that left that library out,
-  although staging, the include resolver and the hierarchy reader all read
-  that library. These reads now accept it too, and
+  although a run reads that library when it stages the deck and resolves its
+  includes, and so does `inspect(kind="hierarchy")`. These reads now accept
+  it too, and
   `verify_circuit`'s compare reads an include into any detected simulator's
   library rather than only the default simulator's, so the two agree on every
   file a model search names.
@@ -773,13 +778,11 @@ against the recording that showed it.
   (12.96 dB for an ideal notch at 10 points per decade) with no warning that
   it was only a lower bound. The warning now fires when either neighbour is
   more than 3 dB higher, as its description always stated.
-- A runner's cap on running simulators could be exceeded by one. Each new
-  submission rebuilt the runner's launch permits whenever none were out, and
-  that included the moment a released permit had been handed to a waiting run
-  that had not yet resumed; the woken run and a newcomer then both launched.
-  The permits are now rebuilt only when nothing holds or waits for one, and a
-  lowered cap takes effect as soon as the runner drains rather than at the next
-  submission.
+- The cap on simulators running at once (`[simulation] max_parallel`) could
+  be exceeded by one. A run submitted just as a finished run handed its slot
+  to a waiting run was launched together with that run. The cap now holds in
+  that case, and a lowered cap takes effect as soon as no run holds or waits
+  for a slot, rather than at the next submission.
 - An unterminated single quote in a netlist was reported with the hint "add a
   closing \" after the opening quote". The hint now names the quote that was
   opened, and a quote left open inside a braced or parenthesized expression is
@@ -804,10 +807,10 @@ against the recording that showed it.
   different time vectors, the usual case. Each step's trace was padded onto
   the combined time axis with a gap wherever another step had a sample, so
   every sample was isolated and none was drawn. Each step's trace now keeps
-  its own time vector in the chart data, and the chart aligns them with
-  uPlot's own join, which draws each trace through its own samples and
-  breaks it only at its own non-finite ones. The chart file for such a run
-  is also smaller, because no padding is written. Linear axes also printed
+  its own time vector in the chart data, and the chart draws each trace
+  through its own samples, breaking it only at its own non-finite values.
+  The chart file for such a run is also smaller, because no padding is
+  written. Linear axes also printed
   neighbouring ticks with the same label (0.5 ms and 1 ms both as `0.001`);
   they now use one SI prefix per axis and as many decimals as the tick step
   needs.
@@ -830,25 +833,29 @@ against the recording that showed it.
   is uncommented. A file written by an earlier release keeps its values.
 - On Windows, a job record read while its running job rewrote it could read as
   missing, because opening a file at the instant a rename replaces it briefly
-  fails with access denied. The request gate then created a second job for a
+  fails with access denied. The server then created a second job for a
   repeated `request_id` instead of replaying the first, and a lookup, a
   listing or a cancel could report a live job as not found. Reading a job
   record now retries that denial on the same short schedule that writing one
   already used.
-- `analyze_results` binds its sources to RAW, log and console bytes captured
-  in a bounded worker. Repeated labels and plot selections share a capture;
-  continuation checks the recorded content again, including companions that
-  appeared or disappeared. A rewrite that kept both size and timestamp is
-  still `source_drift`, and an expired capture deadline remains
-  `analysis_deadline`. Result-set records keep their original content identity.
+- `analyze_results` reads each source's RAW, log and console files in a
+  worker process with a deadline and a memory limit, and analyzes the
+  content it read. Sources that read the same files share one capture,
+  whatever their labels and plot selections. A call that continues a result
+  set reads each source again and compares it with the capture, including a
+  log or console file that has since appeared or disappeared. A rewrite that
+  kept both size and timestamp is still reported as `source_drift`, and a
+  capture that runs past its deadline still reports `analysis_deadline`. A
+  result set keeps the content hashes of its first capture.
 - A `run_code` call that arrives while the worker is still starting is answered
   `busy`, as one arriving while a snippet runs already was. The call in
-  progress claimed the worker only after it had booted, so a second call
-  during a slow boot read the reply pipe alongside the first and failed.
+  progress reserved the worker only after it had booted, so a second call
+  during a slow boot read the worker's replies alongside the first and
+  failed.
 - A stopped case's kill grace now ends when its last wait expires instead of
   when the loop clock reads past the deadline. asyncio fires a timer up to one
   clock resolution early (15.6 ms on Windows), so the clock could read earlier
-  than a deadline the wait had reached, and the coordinator then killed the
+  than a deadline the wait had reached, and the server then killed the
   process again.
 - A `wire_pins` waypoint on an existing wire, or a route passing through
   another wire's end or a lone net label, joined that wiring without a
@@ -882,29 +889,36 @@ against the recording that showed it.
   on the author's own library. `verify_circuit` and `edit_schematic`'s
   reference check now resolve each side's relative includes from the folder
   of the file the caller named, as LTspice does.
-- Variation conflict checks treat component references case-insensitively and
-  preserve parameter assignment followed by random variation when an unrelated
-  nested-device edit is also requested.
-- Native Windows ngspice PDK runs use compact staged model filenames to avoid long include paths. Original model bytes and provenance are preserved.
+- The check that refuses two variation entries writing the same field
+  (`overlapping_assignment`) now compares component references without
+  regard to case. It also refused an `assign` of a parameter followed by a
+  `random` entry for it whenever the call also edited an unrelated nested
+  device; that order is now accepted, as it is without the nested edit.
+- On native Windows, an ngspice run with a `pdk_native` variation stages the
+  pinned model files under short file names, because ngspice on Windows
+  cannot open the long include paths of the full PDK layout. The staged
+  copies keep the originals' content, and the run's records still name the
+  original files.
 - `execution.run_timeout_s` is now the actual per-case limit. Every simulator
   process was also capped at a fixed, undocumented 600 s inside spicelib, so a
   case given a longer timeout was killed at 600 s and reported as a generic
   failure with exit code -2. spicelib's limit is now the case's own timeout
-  plus the kill grace plus 60 s. It is a backstop that ends the process
-  spicelib launched when the scoped kill is not confirmed, and it is clamped
-  below Windows' 32-bit millisecond wait. When spicelib does end a run, the
-  failure names its `TimeoutExpired` instead of a bare -2.
-- Stopping a case makes up to five scoped kills inside the kill grace rather
-  than one. A stop that arrived between launch and the simulator's spawn
-  found no process, and the simulator then kept running with its concurrency
-  slot reserved. The kill also reaches a simulator this server launched under
-  a name it does not know, such as a wrapper or launcher script and its
-  child, matched by the run deck path in its arguments. Unused re-scan
-  constants left from the removed batch runner are deleted.
+  plus the kill grace plus 60 s. It ends the process spicelib launched when
+  the server's kill of the case's processes is not confirmed, and it is
+  capped at 4,000,000 s, below the longest wait Windows can express (about
+  49.7 days). When spicelib does end a run, the failure names its
+  `TimeoutExpired` instead of a bare -2.
+- Stopping a case makes up to five attempts to kill the case's processes
+  inside the kill grace rather than one. A stop that arrived between launch
+  and the simulator's spawn found no process, and the simulator then kept
+  running with its concurrency slot reserved. The kill also reaches a
+  simulator this server launched under a name it does not know, such as a
+  wrapper or launcher script and its child, matched by the run deck path in
+  its arguments.
 - A case stopped for `run_timeout`, `job_deadline` or `cancelled` keeps the
-  killed run's diagnostics again, as the 0.6.0 notes stated; the experiment
-  path had dropped them. Its failure evidence includes the limit that
-  applied, the simulator's `exit_code`, the log's classified cause as
+  killed run's diagnostics again, as the 0.6.0 notes stated;
+  `run_experiments` had dropped them. Its failure evidence includes the limit
+  that applied, the simulator's `exit_code`, the log's classified cause as
   `log_failure_code` when there is one, and `log_excerpt`. The message names
   the timeout or deadline value; a cancelled case no longer reads "stopped
   because cancelled elapsed". `kill_unconfirmed` rows include the stop
@@ -931,19 +945,18 @@ against the recording that showed it.
   `run_code` as the place to run it, or the `ltspice_mcp.api` library when
   `run_code` is turned off. The guide has a new section on naming signals and
   on trace math.
-- An edit to `[security] allowed_paths` now applies to every reader of the
-  sandbox on the next call. The capabilities report, the `spice://config`
-  resource, netlist resource reads, the hierarchy query, raw and log source
-  resolution and deck staging used to read whatever list the last path check
-  had loaded,
-  so a capabilities query could list the old roots in the same batch that read
-  a newly allowed file.
+- An edit to `[security] allowed_paths` now takes effect on the next call
+  everywhere the server checks a path against the sandbox. The capabilities
+  report, the `spice://config` resource, netlist resource reads, the
+  hierarchy query, raw and log source resolution and deck staging used to
+  read whatever list the last path check had loaded, so a capabilities query
+  could list the old roots in the same batch that read a newly allowed file.
 - Every sandbox refusal gives the same guidance in its structured `hint`. It
   lists the allowed paths and the config file and key that widen them, and
   states that the file is re-read on the next call. This applies to `inspect`
   items, `verify_circuit` findings (including a refused include),
   `run_experiments` case failures, `jobs` errors, `analyze_results` sources,
-  and a refusal the dispatcher reports, which now returns it in
+  and a refusal returned as a tool error, which now includes it in
   structuredContent as well as text. A refusal raised through the Python API
   attaches it as a note on the `PathSecurityError`, so it appears in the
   traceback. With
@@ -962,11 +975,11 @@ against the recording that showed it.
   deck as cp1252, read `Âµ`, and ran `23µ` as 23 without a diagnostic. Every
   staged deck and include, every case deck, and every per-case include copy
   now writes a `µ`/`μ` scale suffix as `u`, for every simulator. Comments,
-  names, quoted strings and include paths are left alone, a file with nothing
-  to fold keeps its original bytes, and the schematic is never touched. Each
-  folded file is reported as a `micro_sign_folded` observation.
+  names, quoted strings and include paths are left alone, a file with no such
+  suffix keeps its original bytes, and the schematic is never touched. Each
+  file changed this way is reported as a `micro_sign_folded` observation.
 - `inspect(kind="components")` on an `.asc` compares `prefix` without regard
-  to case, as the netlist branch already did. The prefix went to spicelib as
+  to case, as it already did on a netlist. The prefix went to spicelib as
   given, so `prefix: "r"` returned no components on a sheet full of resistors.
 - The `wire_pins` op's `waypoints` description no longer tells callers to omit
   waypoints and "let the router pick the elbow". There is no router. With no
@@ -1019,30 +1032,31 @@ against the recording that showed it.
   the stages that did not complete (the no-op `stage_assets` is removed), and
   its commit hint no longer restates the `wiring` counts.
 - A `run_experiments` call repeating the `request_id` of one still being
-  admitted (a client retry, or two calls racing) could find the job's record
-  before the job was registered, then wait on a copy read from disk that was
-  never updated, so it replied only when its whole `wait_s` ran out, however
-  early the job finished. A repeat of a job another server process runs read
-  its record once and waited the same way. The job is now registered before
-  its record is written, so a repeat waits on the live job, and a repeat of
-  another process's job re-reads its record until it finishes, as
+  submitted (a client retry, or two calls racing) could find the job's record
+  before the server had started tracking the job, then wait on a copy read
+  from disk that was never updated, so it replied only when its whole
+  `wait_s` ran out, however early the job finished. A repeat of a job another
+  server process runs read its record once and waited the same way. The
+  server now tracks the job before it writes the record, so a repeat waits on
+  the running job and replies when it finishes, and a repeat of another
+  process's job re-reads its record until it finishes, as
   `jobs(action="wait")` does.
 - A `run_experiments` repeat of a job whose record names this process as its
   owner while nothing in the process was running it (a reused process id, or
-  a coordinator lost to a crash) still waited out its whole `wait_s` on a
-  copy of the record that would never be finished. It now replies from the
-  record at once, as `jobs(action="wait")` already did. A job's record no
-  longer contains anything to wait on. The wait state belongs to the job this
-  process runs, so a copy read from disk cannot be waited on by mistake.
+  a crash that stopped the job's runner) still waited out its whole `wait_s`
+  on a copy of the record that would never be finished. It now replies from
+  the record at once, as `jobs(action="wait")` already did. A wait now
+  applies only to a job this process runs, never to a copy of a record read
+  from disk.
 - On Windows, a result read that was stopped (it timed out, was cancelled or
-  failed) was reported as fully ended while processes its decoder had started
-  were still exiting. Windows counts a job's processes as gone as soon as it
-  is asked to terminate them, and the server used that count as
-  confirmation. In measurements, every process of a terminated job was still
-  running when the count read zero, for 2 to 50 ms depending on the memory
-  the processes held. The read's scratch directory was removed next, and a
-  process still exiting can hold it open. A tree is now confirmed gone only
-  once each of its processes has exited.
+  failed) was reported as fully ended while processes the result parser had
+  started were still exiting. Windows counts the processes in a job object
+  as gone as soon as it is asked to terminate them, and the server used that
+  count as confirmation. In measurements, every process of a terminated job
+  object was still running when the count read zero, for 2 to 50 ms
+  depending on the memory the processes held. The read's scratch directory
+  was removed next, and a process still exiting can hold it open. The read's
+  processes are now confirmed gone only once each of them has exited.
 - An unknown `[tools] listing` (or `LTSPICE_MCP_TOOL_LISTING`) value was
   logged as falling back to `full`, though the value was ignored and the
   listing already in effect, `compact` by default, was kept. The warning now
@@ -1065,7 +1079,7 @@ against the recording that showed it.
   `analyze_results` reports as a missing case.
 - `run_experiments` takes `execution.keep_partial_raw`. With it set, a case
   stopped by its run timeout, the job deadline or a cancel keeps its raw
-  file, cut to the points a full read reaches, instead of deleting it.
+  file, cut to the points that can be read in full, instead of deleting it.
   `analyze_results`, `plot_waveform`, `inspect(kind="results")` and the
   Python API read it, each with a `partial_raw` observation that reports
   where its values end. An LTspice raw file keeps the points its header
@@ -1156,7 +1170,7 @@ against the recording that showed it.
   in the same transaction as the sheet, under its own file lock. The format
   LTspice writes and reads was recorded on LTspice 26.1.1 and XVII 17.0.37
   (new `plot-settings` cases in `tests/fixtures/ltspice_recorded`), and the
-  writer follows it. It writes UTF-16 LE without a byte order mark and with
+  op writes that format. It writes UTF-16 LE without a byte order mark and with
   LF line ends, the form XVII writes and both builds read. LTspice 26 writes
   UTF-8, and when XVII saves over a UTF-8 file it appends the old bytes after
   its own, so UTF-16 is the form that neither build's save damages. Panes are
@@ -1164,15 +1178,17 @@ against the recording that showed it.
   space, so a trace with whitespace is refused. New panes keep the waveform
   grid when every pane they replace had it. A pane that LTspice saves with
   its grid setting on has a `GridStyle` line, and a pane without one has no
-  grid whatever the setting. The recorder has a new `plot` case kind that
+  grid whatever the setting. The recording script
+  (`scripts/record_ltspice_fixtures.py`) has a new `plot` case kind that
   runs a sheet in LTspice's window, builds panes with the window's own menu
-  commands and saves them. The recorder also runs every case with the
+  commands and saves them. The script also runs every case with the
   waveform grid setting removed from its copy of the settings, as it does
   the settings that change a run's results.
 - A new `analyze_results` recipe, `tone`, reads the amplitude and phase of a
-  transient signal at one frequency you give. It cuts the window to the whole
-  periods that fit from its start and weights the samples by time, using
-  `thd`'s trim and resample, and returns `amplitude`, `phase_deg`, `dc` and
+  transient signal at one frequency you give. As `thd` does, it cuts the
+  window to the whole periods that fit from its start and resamples it onto
+  an even time grid by linear interpolation, so each sample counts by the
+  time it covers. It returns `amplitude`, `phase_deg`, `dc` and
   the sine and cosine coefficients, each reducible. The phase is relative to
   `sin(2*pi*f*t)`, with `t` the simulation's own time, so it does not change
   with the window and two signals' phases can be subtracted. A warning names
@@ -1195,9 +1211,12 @@ against the recording that showed it.
   different sheet from the file (unsaved changes, or a file that changed
   after it was opened). The comparison uses content, because LTspice rewrites
   a sheet's text on opening it. This uses the MCP bridge that LTspice ships,
-  started so that any LTspice the bridge launched could not be seen or left
-  behind. LTspice is never started for it, and text containing a NUL
-  character, which makes LTspice stop responding, is never sent to a window.
+  which starts an LTspice of its own when none is running. The server gives
+  the bridge an LTspice path that does not exist, so that launch fails, and
+  starts the bridge on its hidden desktop in a Windows job object that ends
+  with the session, so anything it does launch is not visible and does not
+  keep running. Text containing a NUL character, which makes LTspice stop
+  responding, is never sent to a window.
   `[schematic] sync_open_window = false` turns it off, and
   `inspect(kind="capabilities")` reports it under `open_window_sync`.
 - `inspect(kind="open_in_ltspice")` lists the sheets and netlists open in
@@ -1252,18 +1271,26 @@ against the recording that showed it.
   beside `circuit-mcp` and `ngspice-mcp`, with the same program at the same
   version.
 
-- Opt-in recoverable experiments freeze circuit inputs, simulator startup
-  settings, seeds and attempt history. `jobs(action="resume")` retains
-  verified completed cases and retries eligible unfinished cases under the
-  recorded executable. Initial support covers controlled ngspice runs and
-  the audited native Windows LTspice build; other execution policies are
-  refused before launch.
-- RAW, log and console decoding runs in worker processes with time, memory
+- `execution.recoverable=true` makes an experiment recoverable. The server
+  saves copies of the circuit's validated inputs, the simulator's startup
+  settings, the seeds and a record of each attempt, so a resumed case runs
+  with the same inputs. `jobs(action="resume")` makes a new job that reuses
+  each completed case whose saved results still match their recorded hashes.
+  It runs again each case stopped by a server restart or the job deadline,
+  and failed or cancelled cases when asked (`retry_failed`,
+  `retry_cancelled`), all under the executable the job recorded. Recovery
+  supports ngspice, run with a startup file the server provides and the
+  user's startup file turned off, and LTspice 26.0.2 on native Windows, the
+  one build whose startup behaviour was checked. Other builds and platforms
+  are refused before launch.
+- RAW, log and console files are read in worker processes with time, memory
   and output limits on Linux and native Windows. Analysis can select a RAW
-  plot or read log-only results, including native transfer, sensitivity,
-  pole-zero and distortion tables. Unsupported layouts and ambiguous dialects
-  are reported explicitly. The parser refuses macOS until its process
-  containment has native validation.
+  plot or read results that exist only in the log, including the tables the
+  simulator prints for `.tf`, `.sens`, `.pz` and `.disto`. A raw layout the
+  reader does not support, or a file whose simulator format cannot be
+  determined, is reported as such instead of being guessed. Reading results
+  is refused on macOS, because the workers' memory limit and the cleanup of
+  their child processes have not been tested there.
 
 - The guide is now a short core plus topic sections and task playbooks, and
   every interface can read it. `inspect` has a `guide` query kind. With no
@@ -1292,8 +1319,9 @@ against the recording that showed it.
   named executables of its own, and a name is accepted when the family is
   detected and this host can run it. An undetected family is refused with
   the existing "not available" error, which lists what was detected. A QSPICE
-  run's `.qraw` and a Xyce run's raw parse with their own dialect, read from
-  the job's recorded simulator (Xyce's raw does not name its writer).
+  run's `.qraw` and a Xyce run's raw file are read in their own formats,
+  chosen from the job's recorded simulator (Xyce's raw file does not name the
+  program that wrote it).
 - `inspect(kind="capabilities")` reports, for every simulator, whether a run
   can select it (`selectable`), and for a family this host cannot run, the
   `refusal` explaining why. The reference lookup finds `run_experiments`' argument
@@ -1347,7 +1375,7 @@ against the recording that showed it.
   requested segments that were `already_present` and not redrawn and the
   `junctions` its route made; `remove_wire`, `remove_net_label` and
   `remove_component`'s wire cleanup give how much they removed. These facts
-  used to stay inside the op runner, so a caller saw a redundant junction
+  were not reported before, so a caller saw a redundant junction
   only as warning text and did not see a skipped segment, though the design
   doc stated that `already_present` was reported. An op that found nothing
   has no entry. `Api.edit_schematic` returns the same list.
@@ -1364,10 +1392,10 @@ against the recording that showed it.
   server, Python script or `run_code` worker that does not have the same
   setting looks in `<working_dir>/.ltspice-mcp/` and finds none of them, and
   a `request_id` submitted from there runs again instead of replaying.
-  Detached owners and `run_code` workers inherit the setting from the process
-  that starts them.
+  The process that runs a detached job and the `run_code` worker inherit the
+  setting from the process that starts them.
 - A new `partial_progress` observation is recorded for every case the
-  coordinator stops and whose simulator exit is seen. It gives the plot, its
+  server stops, once the simulator's exit is confirmed. It gives the plot, its
   axis, the complete points on disk and the last axis value reached, read
   from the partial raw file before cleanup deletes it. The count comes from
   the file's length, because ngspice leaves `No. Points` at 0 until a plot
@@ -1402,10 +1430,17 @@ against the recording that showed it.
   its `export` check on the netlist exported from an `.asc`, along with the
   file's encoding and the `Generated by LTspice` header when present, so decks
   run outside the server are also checked.
-- Exact nested-instance assignments and caller-defined mismatch, preserving
-  untouched peers and original files through private case copies.
-- Seeded native Sky130 NMOS statistical experiments on ngspice, with a pinned
-  model profile, independently replayable samples and persisted provenance.
+- A variation can target one exact instance inside nested subcircuits by its
+  list of instance names: an `assign` entry's `instances`, or a `random`
+  entry's `mismatch` rule with mismatch coefficients you give. Each case gets
+  its own copies of the subcircuits on the path to that instance, so other
+  instances of the same subcircuit and the original files are unchanged.
+- A `pdk_native` variation runs Monte Carlo on ngspice with the statistics
+  built into the Sky130 PDK models, for its `sky130_fd_pr__nfet_01v8` NMOS
+  (profile `sky130-e6f9c887-ngspice-v1`, pinned to one PDK revision). Each
+  sample has its own seed, so one sample can be run again by itself with
+  `runs: 1` and its `sample_start`, and the job record keeps each case's
+  seeds, model file hashes and paths.
 - Time-weighted quantiles. The `signal_stats` recipe takes
   `quantiles: [0.01, 0.99]` (up to 16 levels in [0, 1]) on a transient run
   and adds `q01`, `q99` and `quantile_peak_to_peak`, the highest level minus
@@ -1455,19 +1490,20 @@ against the recording that showed it.
   (`XVIIx64.exe` is LTspice), and an executable whose name does not identify
   the family needs `family:name`. A run selects one with
   `execution.simulator = "ltspice:xvii"`; a plain family name runs the
-  family's own executable as before. Each named executable is a simulator
-  class of its own, so it never retargets the family's class or the runs
-  already using it. It has its own runner and launch permits, so each build
-  gets the whole `max_parallel_sims`, as each family already did. Its records,
-  replay check, scoped kill, raw dialect, linter, `.asc` exporter and model
-  library roots follow the build the run selected. Startup binds them; an
-  entry that cannot be bound (missing file, a family the allowlist excludes,
-  a file that looks like another simulator) is left out
-  with a startup diagnostic. `inspect(kind="capabilities")` lists them under
+  family's own executable as before. Adding a named executable does not
+  change what the family name runs, nor any run already in progress. Each
+  build has its own cap on simulators running at once, so each can run
+  `[simulation] max_parallel` simulations, as each family already could. The
+  job record, the `request_id` replay check, the kill on stop, the raw file
+  format, the lint rules, the `.asc` export and the model library folders all
+  use the build the run selected. Each entry is checked at startup; one that
+  cannot be used (a missing file, a family not listed in `[simulator]
+  enabled`, a file that looks like another simulator) is left out with a
+  startup diagnostic. `inspect(kind="capabilities")` lists them under
   `named_executables`, keyed by the selector, each with its executable,
   `executable_sha256` and last reported `version`. A `request_id` replayed
-  under another name, or under a name now bound to another build, is an
-  `idempotency_conflict`.
+  under another name, or under a name whose executable is now another build,
+  is an `idempotency_conflict`.
 
 - `inspect(kind="capabilities")` takes an optional `fields` list naming the
   top-level keys to return, such as `["allowed_paths", "config_path"]` after a
@@ -1503,9 +1539,10 @@ against the recording that showed it.
   each op. A net relabelled in remove-and-add pairs got a second-name warning
   though the batch ended with one name, and `move` did not report a pin it
   put on a crossing, while `move_component` warned about it. Those op
-  warnings, and the route planner's "crosses the wire" advice, are removed;
-  the refusals are unchanged. The value-slot check of `set_component_value`
-  stays in the op, because it checks the given value.
+  warnings, and `wire_pins`' "crosses the wire" advice, are removed; the
+  refusals are unchanged. The check in `set_component_value` that a value
+  would not split into an extra node stays in the op, because it checks the
+  given value.
 - `Api.wait` takes its timeout as `timeout_s`, as `jobs(action="wait")` does.
   `timeout=` is still accepted; giving both is refused.
 - `inspect(kind="net")` and `inspect(kind="components")` on an `.asc` read the
@@ -1580,9 +1617,10 @@ against the recording that showed it.
   reads. In `edit_schematic` the `preexisting` view's rows include the six
   new kinds, and a row lists every part (`refs`) and point (`points`) its
   finding names.
-- An edit's findings are scoped by every part and point a finding names. A
-  finding about two parts used to count as the batch's only when the batch
-  named the first part.
+- An edit reports a finding that was already on the sheet, instead of
+  counting it under `preexisting`, when the batch named any part or point the
+  finding names. A finding about two parts used to be reported only when the
+  batch named the first part.
 - Neither tool reports anything about the extent of a part whose symbol is
   not found. `verify_circuit` used to report overlaps with, and wires
   through, the placeholder box such a part is drawn as, which is not the
@@ -1609,23 +1647,25 @@ against the recording that showed it.
 - Reading a result again no longer starts a parser process. Each read first
   stats the source's RAW, log and console files. A source whose files still
   have the device, inode, size, modification time and change time recorded
-  when it was last parsed is served from the resident cache. Any change,
-  including a same-size rewrite that puts the modification time back, sends
-  the read to a worker as before. A stamp is recorded only once both its times
-  are older than a filesystem timestamp tick. A parser process also starts
-  faster, because the worker imports its decoders only when it has content to
-  decode, and the store no longer imports psutil until it checks a job
-  owner's liveness. On Linux a repeated read took about 300 ms and now takes
-  under a millisecond.
+  when it was last parsed is served from the server's in-memory cache. Any
+  change, including a same-size rewrite that puts the modification time back,
+  sends the read to a worker as before. A file's times are recorded for this
+  check only once both are older than a filesystem timestamp tick. A parser
+  process also starts faster, because the worker imports its decoders only
+  when it has content to decode, and the store no longer imports psutil until
+  it checks a job owner's liveness. On Linux a repeated read took about
+  300 ms and now takes under a millisecond.
 - A session keeps its parser process between reads of new results instead of
-  starting one per read. A read's results are taken only once the worker has
-  replied and is again the only process in its tree. The tree is replaced
-  after 64 reads, after half an hour, and after two idle minutes, and at once
-  after a failed, cancelled or timed-out read or a process it did not start;
-  a tree whose exit cannot be confirmed still closes parser admission. Waits
-  on a parser process are woken by the operating system (a pidfd and
-  `SIGCHLD` on Linux, a handle to each process on Windows) rather than
-  by polling every 5 or 10 ms. On Linux each read of new results took about
+  starting one per read. A read's results are used only once the parser has
+  replied and no other process is left in its process tree. The parser is
+  replaced after 64 reads, after half an hour, and after two idle minutes,
+  and at once after a failed, cancelled or timed-out read or when its tree
+  holds a process the server did not start. If the server cannot confirm
+  that a replaced parser and its child processes exited, the session's later
+  reads of new results fail with `cleanup_failed` instead of starting another
+  parser. Waits on a parser process are woken by the operating system (a
+  pidfd and `SIGCHLD` on Linux, a handle to each process on Windows) rather
+  than by polling every 5 or 10 ms. On Linux each read of new results took about
   400 ms; a session's first read still does, and the reads after it take
   about 15 ms.
 - A run's simulator library roots, the install directories staging accepts as
@@ -1660,8 +1700,9 @@ against the recording that showed it.
   misread the file. That is when the session's LTspice is XVII or earlier
   (from the executable's name, or the build a run on it reported) or the deck
   names XVII as its writer, and the file is not cp1252. The warning's
-  evidence names that reader. Both value-suffix rules are now under the
-  per-rule finding cap, with the usual `showing N of M` observation.
+  evidence names that reader. Both value-suffix rules now count toward the
+  cap of 25 findings listed per rule, and a `showing N of M` observation
+  reports the total when more were found.
 - `run_experiments` reports the `micro_sign_folded` observation only when the
   job runs on an LTspice that decodes decks as cp1252. Staging still writes
   every micro-sign suffix as `u`. For every other simulator the result reads
@@ -1708,8 +1749,8 @@ against the recording that showed it.
   instead of suggesting an install path.
 - A `.asc` circuit on QSPICE or Xyce fails with `asc_export_unavailable`
   before LTspice is launched. A schematic runs through LTspice's netlist
-  export, in LTspice's own dialect, which is scrubbed only for ngspice; a run
-  on QSPICE or Xyce takes a hand-written `.cir`/`.net`/`.sp`.
+  export, in LTspice's own syntax, which the server rewrites only for
+  ngspice; a run on QSPICE or Xyce takes a hand-written `.cir`/`.net`/`.sp`.
 - `plot_waveform` and the `analyze_results` `plot` recipe give each declared
   unit its own panel, so volts and amps no longer share a y-axis; an AC plot
   gets a magnitude and phase pair per unit. Panel titles include the unit, and
@@ -1748,8 +1789,8 @@ against the recording that showed it.
     store's `exports/`, beside the job records that name it. Staging resolves
     the snapshot's relative includes from the schematic's folder, so the
     sibling exception is removed;
-  - the ngspice-scrubbed `<name>.ngspice.net` twin is written straight into
-    that snapshot;
+  - the copy of the export rewritten for ngspice, `<name>.ngspice.net`, is
+    written straight into that snapshot;
   - `plot_waveform` charts written without an `out_dir`
     (`<circuit or raw dir>/.ltspice-mcp/plots/`) are now in the store's
     `plots/`.
@@ -1765,11 +1806,13 @@ against the recording that showed it.
 - `analyze_results` reports a `raw_path` the sandbox refused as `path_denied`
   rather than `source_unavailable`, and the `inspect` hierarchy query reports
   one as `path_denied` rather than `error`.
-- Native statistical run listings expand only the requested evidence on the
-  returned page. Sample validation reuses unchanged original model parsing
-  within each circuit while retaining per-case checks.
-- Job run listings accept field projection, including explicit full native
-  statistical provenance.
+- `jobs(action="runs")` builds the full `native_statistics` evidence only
+  for the rows on the returned page, and only when asked. A `pdk_native` run
+  parses each unchanged original model file once per circuit instead of once
+  per case, and still checks each case's sample.
+- `jobs(action="runs")` accepts `run_fields`, which selects the fields each
+  row returns; naming `native_statistics` returns a `pdk_native` case's full
+  coverage and dependency paths.
 - A case has no time limit unless one is set. Before, every case was capped
   at spicelib's hidden 600 s. Now a case runs until it ends or is cancelled,
   unless the request sets `execution.run_timeout_s` or the operator sets the
@@ -1787,7 +1830,7 @@ against the recording that showed it.
   compare error or no verdict still returns it, as the sheet's side of the
   comparison to diagnose. To get the netlist of a matching sheet, run
   `verify_circuit` with the `export` check. The Python API's `edit_schematic`
-  follows the same rule.
+  does the same.
 
 - The Claude Code plugin and the Claude Desktop extension install
   `ltspice-mcp[raster]`. Neither lets a user add an extra to the launch it
@@ -1864,9 +1907,9 @@ against the recording that showed it.
 
 ### Fixed
 
-- A simulation runner released while one of its tasks had been queued but
-  never started could hang the process that released it, indefinitely and
-  without a diagnostic. spicelib's runner destructor waits for its task list
+- The server process could hang indefinitely, without a diagnostic, after it
+  released a spicelib simulation runner that held a task queued but never
+  started. spicelib's runner destructor waits for its task list
   to drain and takes its deadline only from tasks that have started, so a
   task that was queued but never started is never removed and sets no
   deadline. Because the last reference usually goes away during garbage
@@ -1946,12 +1989,13 @@ every sample to a file and returns its path.
   and `close()` cancels the jobs it owns, as server shutdown does. `__all__`
   is the stability boundary and is pinned. The full contract is
   `docs/design/python_api.md`.
-- `run_experiments` runs one experiment across declared variations — strict
-  assignments plus one random or Monte Carlo dimension — as a single durable
-  job. `request_id` is optional. If it is omitted, a fresh id is generated
-  and echoed on the receipt. Pass your own to make submission idempotent, so
-  a retry with the same id, the same arguments, and unchanged source decks
-  replays the existing receipt instead of running anything again.
+- `run_experiments` runs one experiment across declared variations — `assign`
+  entries that set exact values, plus one `random` (Monte Carlo) entry — as a
+  single durable job. `request_id` is optional. If it is omitted, a fresh id
+  is generated and echoed on the receipt. Pass your own to make submission
+  idempotent, so a retry with the same id, the same arguments, and unchanged
+  source decks replays the existing receipt instead of running anything
+  again.
 - A `run_experiments` call waits up to `execution.wait_s` (default 60 s,
   maximum 120 s) and returns the results inline when the job finishes in that
   time. Otherwise it returns a receipt with a `job_id` and the job keeps
@@ -1959,20 +2003,19 @@ every sample to a file and returns its path.
   immediately.
 - `run_experiments` takes a per-run simulator (`execution.simulator`:
   `"ltspice"` or `"ngspice"`), so one deck can be cross-checked on a second
-  engine without changing config. Runners are cached per (kind, simulator,
-  output folder), so a second engine's runner does not evict the first's
-  in-flight concurrency and cancel state, and a cancel resolves the runner by
-  the job's own recorded simulator. Result reads also follow the job. The raw
-  dialect comes from the simulator the job ran on instead of the session
-  default, so an ngspice run under an LTspice default parses correctly, and
+  engine without changing config. A run on the second engine does not
+  disturb the concurrency cap or the cancels of jobs running on the first,
+  and a cancel reaches the simulator the job recorded. Results are read in
+  the raw format of the simulator the job ran on, instead of the session
+  default's, so an ngspice run under an LTspice default parses correctly, and
   the reverse.
 - `Api.run_experiments(wait=False, detach=True)` hands the job to a small
   owner process that outlives the caller. The caller validates the request,
   and the owner submits the job, supervises it to a terminal status, and
   exits. The caller's `close()` leaves a detached job running.
-  `jobs(action="cancel")` from any process stops it through the existing
-  foreign-owner path, and a running server sees it as another session's live
-  job. The receipt names the owner's pid and log file. Requires
+  `jobs(action="cancel")` from any process stops it, as it stops any job
+  another process owns, and a running server sees it as another session's
+  live job. The receipt names the owner's pid and log file. Requires
   `[state] persist_jobs`.
 
 - A new `run_code` tool, on by default (`[tools] run_code`,
@@ -1987,11 +2030,10 @@ every sample to a file and returns its path.
   instead of inside the sandbox, so grant it permission in the client as you
   would a shell. Set `run_code = false` when the server is reachable by more
   than one trusted client, for example through a proxy. The capabilities
-  report names the key (`python_api.run_code`), the reference table lists the
-  tool only on a session that serves it, and the registration itself
-  declares the gate, so the served tool list, the reference table, the
-  capabilities entry and the instructions all derive from that one
-  declaration.
+  report names the key (`python_api.run_code`), and the reference table lists
+  the tool only on a session that serves it. The served tool list, the
+  reference table, the capabilities entry and the server instructions all
+  read the same setting, so they agree on whether `run_code` is served.
 - `[tools] listing` (env `LTSPICE_MCP_TOOL_LISTING`) selects how much of each
   tool definition the tool list includes. `compact`, the default, advertises
   the same tools and the same schemas with every per-argument description
@@ -2105,9 +2147,10 @@ every sample to a file and returns its path.
 - `.asc` schematics now run on ngspice. The LTspice netlist export is converted
   for ngspice by removing the LTspice-only `.backanno` command (ngspice aborts
   on it) and translating `µ` suffixes and `§` name prefixes. The converted
-  netlist is written to a separate `{name}.ngspice.net` sidecar instead of
-  replacing the shared `.net`, so concurrent LTspice and ngspice runs of one
-  schematic cannot pick up a netlist generated for the other simulator.
+  netlist is written to a separate `{name}.ngspice.net` file beside it
+  instead of replacing the shared `.net`, so concurrent LTspice and ngspice
+  runs of one schematic cannot pick up a netlist generated for the other
+  simulator.
 - A clean simulator exit that wrote results only to the log (for example an
   ngspice `.control` script) now completes with the log-parsed measurements
   instead of reporting "Simulation failed (no output generated)". A run with no
@@ -2115,9 +2158,9 @@ every sample to a file and returns its path.
   analysis that must produce a `.raw` and none appeared, the run fails with a
   `missing_required_raw` observation, a log excerpt, and the known `.save`-list
   workaround.
-- Timed-out runs now include diagnostics. The timeout response derives the
-  run's log path (the completion callback does not record it for a job that is
-  already terminal) and shows the end of the log. Cleanup of a killed run keeps
+- Timed-out runs now include diagnostics. The timeout response finds the
+  run's log, which the job record does not name for a job that has already
+  stopped, and shows the end of it. Cleanup of a killed run keeps
   the `.log`, `.exe.log`, and `.fail` files and removes the possibly
   multi-gigabyte `.raw` and netlist copies. A killed run exits with a nonzero
   status, so spicelib renames its log to `.fail`; the job record is updated with
@@ -2155,10 +2198,10 @@ every sample to a file and returns its path.
   first crossing pair was measured.
 - The `summary` recipe reports the run temperature (`temp_c`) and nominal
   temperature (`tnom_c`) parsed from the simulator log, so tempco, noise, and
-  leakage tasks don't have to assume 27 °C. It also declares `ac_signal_used`,
-  and it declares, attaches, and renders `suggestions` (model-resolution
-  candidates for unresolved references) on completed runs as well as on
-  failures — the success path previously computed them and dropped them.
+  leakage tasks don't have to assume 27 °C. Its output schema now lists
+  `ac_signal_used`, and it returns `suggestions` (model-resolution candidates
+  for unresolved references) on completed runs as well as on failures;
+  before, they were computed for a completed run and then dropped.
 - The `signal_stats` recipe reports `t_at_min` and `t_at_max`, the time of the
   minimum and maximum sample, so a transient droop or peak can be located in
   time from one call. (Named `t_at_*` rather than `t_min`/`t_max`, which would
@@ -2194,17 +2237,18 @@ every sample to a file and returns its path.
 - Independent server processes (for example several coding agents sharing
   one directory) no longer interfere with each other.
   - Circuit-file mutations and `.asc` exports take a cross-process file lock
-    (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file from
-    two sessions serialize on the latest content instead of silently losing one
-    session's edit. Pin and route geometry resolves inside the lock, so it
-    reflects a peer's just-completed move; an export locks the sidecar `.net`
-    it overwrites as well as the `.asc`. If the lock is still held after a 10 s
+    (in `.ltspice-mcp/locks/` beside the file), so concurrent edits of the
+    same file from two sessions run one after the other on the latest content
+    instead of silently losing one session's edit. Pin and route geometry is
+    read while the lock is held, so it reflects a peer's just-completed move;
+    an export locks the `.net` it overwrites beside the `.asc` as well as the
+    `.asc`. If the lock is still held after a 10 s
     wait, the call fails with a "locked by another ltspice-mcp process" error.
-  - Job sidecars record the owning server's pid. A running job whose owner is
-    still alive now loads in other sessions as `running` (previously it was
-    mislabeled `interrupted`), refreshes from its sidecar when its status or
-    results are read or listed, and is excluded from other sessions' shutdown
-    cleanup.
+  - Each job record stores the owning server's pid. A running job whose
+    owner is still alive now loads in other sessions as `running` (previously
+    it was mislabeled `interrupted`), is read again from its record when its
+    status or results are read or listed, and is left alone by other
+    sessions' shutdown cleanup.
   - `psutil` is now a direct dependency; it was already installed as a
     transitive dependency of spicelib.
 - The `edit_schematic` `set_component_attribute` op with an empty value now
@@ -2224,7 +2268,7 @@ every sample to a file and returns its path.
 
 ### Changed
 
-- The sandbox now follows the config file while the server runs.
+- The sandbox now changes with the config file while the server runs.
   `[security] allowed_paths` is re-read whenever `ltspice-mcp.toml` changes,
   so a refused path names the exact line to add and states that it takes
   effect on the next call. Before, the only self-serve route the refusal
@@ -2255,9 +2299,10 @@ every sample to a file and returns its path.
   `.step` iterations. A run's step axis belongs to the run instead of to each
   measurement taken on it, so the choice is made once and every recipe in the
   call reads it. The selection is kept in the stored result set, so a
-  continuation replays it. Because the attached block now hashes two more keys,
-  the request canonicalizer moves to version 4: a `request_id` stored under
-  version 3 raises an idempotency conflict instead of replaying.
+  continuation replays it. Because the two keys are now part of an attached
+  block's request identity, the request identity format moves to version 4,
+  and a `request_id` stored under version 3 raises an idempotency conflict
+  instead of replaying.
 - A recipe now names the number a reduction or a spec reads once, as `field`.
   It replaces `reduce_field` and `spec.field`, which specified the same thing
   and had to agree; `spec` keeps `min`, `max` and `allow_incomplete`. A
@@ -2298,8 +2343,9 @@ every sample to a file and returns its path.
   pid until the process that started it collects it.
 
 - Every tool's response is built from one envelope (`outcome`, `failures`,
-  `observations`, `warnings`, `hint`) with one outcome rule, and a finding's
-  location has the same fields on every tool. The advertised schemas did not
+  `observations`, `warnings`, `hint`), `outcome` is set by the same rule on
+  every tool (`docs/design/mcp_surface.md`), and a finding's location has the
+  same fields on every tool. The advertised schemas did not
   change; the internal modules behind the tools were split so that each tool
   is its own file.
 
@@ -2309,9 +2355,9 @@ every sample to a file and returns its path.
   records, a request index, a per-circuit index, cancellation markers),
   `runs/{job_id}/` (every artifact one job produced, with its staged decks),
   `results/`, `detached/`, `verify/` (with its `renders/` beneath it),
-  `edit-exports/`, and `locks/`. The per-circuit pointer files that let a
-  circuit's sidecar find working-directory jobs are removed; the store's own
-  index provides that lookup.
+  `edit-exports/`, and `locks/`. The pointer files written beside each
+  circuit, which let a lookup by circuit find the working directory's jobs,
+  are removed; the store's own per-circuit index does that lookup.
 
 - **The `.asc` edit engine moved into the core.** It is now
   `ltspice_mcp.lib.schematic_ops`, and every name another module imports from
@@ -2404,9 +2450,10 @@ every sample to a file and returns its path.
   `set_component_attribute`.
 - The `thd` recipe labels its per-harmonic magnitudes with the signal's native
   `unit` (V or A); the ratios, percentages, and dB values stay dimensionless.
-- An axis-backed recipe run against a stepped `.op` whose raw collapsed to step
-  0 points its no-axis error at the `.dc` conversion, matching the hint the
-  `summary` recipe already emits.
+- A recipe that needs a sweep axis, run on a stepped `.op` whose raw file
+  holds only step 0, now ends its no-axis error with the fix: convert the
+  `.step` to `.dc <param> START STOP STEP`, as the `summary` recipe's hint
+  already said, or use `operating_point` for a single bias point.
 - The SPICE guide has several new sections and corrections. They cover the
   two-directive `.meas` argmax pattern (finding the frequency or time *of* a
   maximum), the dBΩ reading of an impedance trace under the 1 A probe, how to
@@ -2518,8 +2565,8 @@ every sample to a file and returns its path.
 - A recipe's `field` accepts the result row's own key. `stability` reports
   `phase_margin_worst_deg`, and passing that name back for a reduction or a
   spec was refused in favour of `phase_margin_deg`; either spelling now names
-  the number (the one reducible name is passed downstream). A key two fields
-  read, such as `transition_time` under `edges`, is still refused as ambiguous.
+  the number. A key two fields read, such as `transition_time` under `edges`,
+  is still refused as ambiguous.
 - `edit_schematic` accepts an empty `ops` list when `return_views` is set,
   and the batch then runs as a dry run and returns the requested pin table.
   The whole-sheet table is only reachable through this tool, and reading it
@@ -2527,10 +2574,11 @@ every sample to a file and returns its path.
 
 - Two `run_experiments` calls sharing a `request_id` and sent at the same
   time now stage one set of decks between them instead of two. A submission
-  claims its `request_id` before it stages. It takes that id's gate, looks
-  the id up, and stages only if nothing is recorded under it. The second call
-  waits on the gate, finds the record, and replays it (or is refused as an
-  `idempotency_conflict`) without copying a deck set of its own. Both used to
+  now looks up its `request_id` before it stages and stages only if nothing
+  is recorded under it, and a second call with the same id waits until the
+  first has finished that step. The second call then finds the record and
+  replays it (or is refused as an `idempotency_conflict`) without copying a
+  deck set of its own. Both used to
   stage in full, and the losing call's `runs/{job_id}/` tree was deleted
   afterwards, so a crash in between left an unclaimed tree in the shared runs
   root.
@@ -2538,10 +2586,13 @@ every sample to a file and returns its path.
   when the post-commit comparison against `reference` does not match or
   cannot export, or when a requested render fails. It reported `complete`
   in all three cases while `verify_circuit` reported `partial` for the same
-  conditions; every tool now decides its outcome by one rule, and a test
-  scans every handler module for a hand-written outcome.
-- `max_parallel_sims` is now enforced per simulator runner instead of per
-  `run_experiments` call. Three concurrent calls in one server used to get
+  conditions; every tool now sets `outcome` by the same rule
+  (`docs/design/mcp_surface.md`), and a test scans every handler module for
+  a hand-written outcome.
+- `max_parallel_sims` now caps the simulations of each simulator across the
+  server's `run_experiments` calls, instead of within each call. A deck that
+  runs in its own folder, because of a relative include, has a cap of its
+  own. Three concurrent calls in one server used to get
   three times the cap, and a request could raise its own share above it.
 
 - An analysis failure is now classified as a deadline by its exception type
@@ -2558,15 +2609,15 @@ every sample to a file and returns its path.
   cancellation failure by type rather than by the words "not authorized".
 
 - ngspice decks that drive their own analysis from a `.control` block now get
-  a rawfile through `run_experiments`. The write injection was wired only into
-  a path no registered tool reaches, so a scripted deck completed cleanly with
-  nothing for any recipe to read. The case reports `control_write_injected`
-  when the server supplied the write.
+  a rawfile through `run_experiments`. The server adds a `write` command to
+  such a block, but only code that no tool called did so, so a scripted deck
+  completed cleanly with nothing for any recipe to read. The case reports
+  `control_write_injected` when the server supplied the write.
 - A `.step` directive on ngspice is reported by the deck lint
   (`step-ngspice`). ngspice ignores the line in batch mode, so the deck ran
   once at its base value with no warning that the sweep had not happened.
   The lint rule set is versioned as `2`.
-- `verify_circuit` and `inspect` relay the netlist lexer's own notes (unclosed
+- `verify_circuit` and `inspect` relay the netlist parser's own notes (unclosed
   `.SUBCKT`, unmatched `.ENDS`, stray continuation) into `observations` and
   the netlist payload's `warnings` instead of discarding them.
 - `edit_schematic` reports the warnings its ops raise. They were dropped
@@ -2601,12 +2652,11 @@ every sample to a file and returns its path.
   requires both the simulator's executable name and the job id in its command
   line, so it cannot terminate a parallel session's simulators, which a
   name-global kill would have hit once it worked.
-- Cancelling a batch when several batch runners were live, with decks running in
-  different output folders, could signal the wrong runner instance. The
-  in-flight processes were killed, but the owning runner's submission loop kept
-  launching the batch's queued runs behind a `cancelled` status. Batch cancels,
-  both explicit and at shutdown, now route to the runner instance that owns the
-  job's cancel state.
+- Cancelling a batch while other batches with decks in different output
+  folders were running could send the cancel to the wrong batch's queue. The
+  running processes were killed, but the batch's queued runs kept launching
+  while its status read `cancelled`. A batch cancel, explicit or at shutdown,
+  now stops the queue that holds that batch's runs.
 - Simulator aborts no longer stall the event loop. The completion callback used
   to read and scan the entire log on the event-loop thread, so a stalled read —
   a huge abort log, a hung network or DrvFs mount — blocked every request in the
@@ -2618,16 +2668,17 @@ every sample to a file and returns its path.
   worker thread, so concurrent requests, including a cancel, stay responsive
   during the export. Exports of the same schematic are serialized by the
   per-`.asc` lock described in Added under independent server processes.
-  LTspice always writes the same sidecar `.net`, so concurrent exports could
-  otherwise corrupt the output and run the wrong deck.
+  LTspice always writes the same `.net` beside the schematic, so concurrent
+  exports could otherwise corrupt the output and run the wrong deck.
 - WSL interop calls (`wslpath`, `cmd.exe` environment resolution) now have a
   15-second timeout; a hung Windows-interop process previously stalled server
   startup or left a run request waiting forever.
 - The `thd` per-harmonic `magnitude` is now the sinusoid amplitude in the
   signal's own units. It was the raw FFT bin, off by n_fft/2 — a 0.1 V harmonic
-  read as about 819 "V" at n_fft=16384. The Hann path's ±2-bin lobe sum is
-  calibrated back to amplitude as well; a bin-centered tone's lobe RSS is √1.5
-  times the amplitude. THD percentages and dBc ratios were, and remain, correct.
+  read as about 819 "V" at n_fft=16384. When `thd` uses a Hann window, the
+  root-sum-square over the five bins centred on each harmonic is scaled back
+  to amplitude as well; for a tone centred on a bin, that sum is √1.5 times
+  the amplitude. THD percentages and dBc ratios were, and remain, correct.
 - Setting a `.asc` behavioral source's expression (a `set_component_value` op
   with `V=...`) corrupted the schematic. The expression was routed to
   SpiceLine as a parameter while the old expression stayed in Value, so two
@@ -2664,8 +2715,8 @@ every sample to a file and returns its path.
   instead of rejected with a self-contradicting "outside axis range" message.
 - Repeated identical log diagnostics collapse to one entry with a repeat count.
   A PDK deck repeats "unknown model parameter" once per device instance, which
-  hides the fatal line. The failure-excerpt reader now also anchors on "File not
-  found" and "already defined" lines, which previously fell outside the excerpt
+  hides the fatal line. The failure excerpt now also includes the lines around
+  "File not found" and "already defined", which previously fell outside it
   entirely.
 - Temperature-swept runs (`.step temp`) no longer report "no temperature steps"
   on modern LTspice. The simulator log is now decoded with the same BOM, UTF-16,
@@ -2712,8 +2763,8 @@ every sample to a file and returns its path.
 - `edit_schematic` no longer accepts `render`, `render_format`, `render_scale`,
   or `render` in `return_views`, and its response contains neither
   `views.render` nor the `artifacts` array that rendering was the only
-  producer for. Rendering is done by `verify_circuit`, whose policy adds a
-  pixel cap, inline delivery and a render-only mode.
+  producer for. Rendering is done by `verify_circuit`, which adds a pixel
+  cap, inline delivery and a render-only mode.
 - `edit_schematic` no longer accepts `write_failed_draft`. A failed batch writes
   nothing by design and the response names the stage that failed, so there was
   no draft to quarantine that the caller's own ops did not already describe.
@@ -2740,12 +2791,13 @@ every sample to a file and returns its path.
 
   Rows now keep their shape at every budget. A row is always an object with
   the same keys, and a tight budget returns fewer rows instead of
-  differently shaped ones. The reduction order is trim, then answer, then
-  shrink. The columns keys (`items_columns`, `values_columns`,
-  `reduced_columns`, and every other `*_columns` sibling) are removed from
-  every response and output schema. Code that read the columns form should
-  read the rows from `items`, `values`, or `reduced` and page on with the
-  cursor the response includes.
+  differently shaped ones. A response over its budget first empties its
+  presentation blocks (trim), then drops the extra detail the caller asked
+  for (answer), then returns fewer rows (shrink). The columns keys
+  (`items_columns`, `values_columns`, `reduced_columns`, and every other
+  `*_columns` sibling) are removed from every response and output schema.
+  Code that read the columns form should read the rows from `items`,
+  `values`, or `reduced` and page on with the cursor the response includes.
 - **The pre-0.6 tool handlers and job machinery.** The handlers behind the
   removed 0.5 tools were kept in place through 0.6 development so a tool
   could be re-exposed by putting its decorator back. That option is removed.
@@ -2773,9 +2825,6 @@ every sample to a file and returns its path.
   wrote there, and the files themselves are left in place; delete them by
   hand to recover the space. The `legacy_job_record` observation code is
   removed along with the code that read them.
-- **The internal tool-profile filter.** Tool registration no longer takes a
-  profile, and there is no profile filter for looking up a tool, because the
-  server serves one surface. Serving zero tools is still a hard error.
 - `CONTRIBUTING.md` and the code of conduct are removed, and the sdist no
   longer ships them. The project is not taking outside contributions at this
   stage. The setup notes moved into `CLAUDE.md`, and the review rules
@@ -2832,8 +2881,8 @@ every sample to a file and returns its path.
   point" for each method it abandons before a later method converges. Those
   intermediate failures were classified as errors and copied into every
   analysis tool's warnings. A failed method is now an error only when its own
-  solve block never converged, and detection is scoped per solve block, so a
-  converged step in a stepped `.op` no longer masks a failed later step. A
+  solve block never converged, and each solve block is judged on its own, so
+  a converged step in a stepped `.op` no longer masks a failed later step. A
   no-data run (no success line) still classifies as an error.
 - Every `.asc` write path (`add_component`'s value and attributes,
   `set_component_attribute`, and the `apply_schematic_ops` op) now refuses an
@@ -2848,13 +2897,17 @@ every sample to a file and returns its path.
   component exists but has none (it was added without a value), symmetric with
   `add_component(value=)`, instead of failing "not found".
 - Transient reads now report a `.meas WHEN` crossing time that the solver
-  dropped, and flag under-floor divergences, instead of silently omitting them
-  (`run_simulation` / `simulation_summary` / `measurement_stats`). A behavioral
+  dropped, and flag a trace that diverges without reaching the 1e8
+  extreme-value threshold (a peak of at least 1e4 that is at least 1e5 times
+  the trace's median), instead of silently omitting them (`run_simulation` /
+  `simulation_summary` / `measurement_stats`). A behavioral
   (B-source) expression with unquoted internal spaces is now a warning instead
   of a hard error.
-- Output-schema generation stays valid for schema-checking clients:
-  `NotRequired` fields are no longer marked required under stringized
-  annotations, and heterogeneous tuples are refused (with an invariant guard).
+- The published output schemas no longer mark optional (`NotRequired`)
+  fields as required, so a client that checks replies against them no longer
+  rejects a valid reply. Schema generation also refuses a tuple of mixed
+  types, which it cannot describe correctly, instead of publishing a wrong
+  schema.
 - `pulse_response` no longer reports a false `settling_time` when the trailing
   window is still ringing (the automatic final value falls on a ripple sample,
   so a settle band based on it produced a definite but wrong time). That state
@@ -2868,8 +2921,8 @@ every sample to a file and returns its path.
 - Cancelling or timing out a simulation could leave the simulator process
   running while the job was reported as cancelled, when the run's output was not
   in the default folder (e.g. a deck in a subdirectory). `cancel_job` now
-  resolves the runner by the job's own netlist, so it reaches the runner that
-  launched the job.
+  finds the run through the job's own netlist, so it stops the process the
+  job launched.
 
 ### Changed
 
@@ -3073,8 +3126,7 @@ every sample to a file and returns its path.
   produces a descending axis, but the `at=` slice used a binary search that
   assumes ascending order, so asking for the value at one axis point could
   return the value at another. The axis and its wave are now flipped to ascending
-  before the search; ascending sweeps are unaffected, and the per-run work stays
-  allocation-free.
+  before the search; ascending sweeps are unaffected.
 - `batch_results` now reports per-step data it cannot aggregate instead of
   silently dropping it. A run whose `.raw` contains its own `.step` sweep is
   read at step 0 only; those runs are now reported in `step_collapsed_runs`
@@ -3093,10 +3145,9 @@ every sample to a file and returns its path.
   sample vectors. For the samples themselves (e.g. a gm/ID table) use
   `export_waveform`/`get_waveform` with `job_id`+`run_index`.
 - `query_value` (raw and job-run modes) and the step-by-axis-value lookup now
-  resolve the nearest point correctly on a descending sweep axis. They share the
-  same binary-search resolver as the batch reader, which was ascending-only, so
-  a high→low `.dc`/`.step` lookup could return the wrong point. The direction
-  handling is now in that one resolver.
+  resolve the nearest point correctly on a descending sweep axis. They used the
+  same binary search as the batch reader, which assumed an ascending axis, so
+  a high→low `.dc`/`.step` lookup could return the wrong point.
 - `operating_point` now includes the simulator's "unrecognized variable"
   warning. A `.save`d `@dev[param]` the device class doesn't have (a typo, or
   an unsupported parameter) is written to the raw file as a plausible `0.0`,
@@ -3119,10 +3170,9 @@ every sample to a file and returns its path.
 - A cancelled or timed-out simulation now has its partial output deleted
   instead of left on disk. A timed-out LTspice run can keep its `.raw` open
   and reach several GB; before, that file (and the run netlist/log) was never
-  removed. The runner now deletes the run's artifacts when the killed
-  process's completion callback fires (the point at which the file handle is
-  released). Cleanup runs only for the killed statuses, so a completed run's
-  good output is never removed.
+  removed. The server now deletes the run's artifacts once the killed
+  process has exited and released the file. Cleanup runs only for the killed
+  statuses, so a completed run's good output is never removed.
 - `get_waveform` overview buckets are capped at 2000 (it was the
   `max_points_returned` limit, which is sized for one-value-per-point arrays).
   Each bucket has ~8 scalar fields, so requesting the old maximum exceeded the
@@ -3154,20 +3204,21 @@ every sample to a file and returns its path.
   design, because it can hold unsaved in-memory edits that eviction would
   drop.
 - A netlist with a relative `.include`/`.lib` now also keeps its run in the
-  working dir on WSL with a Linux-filesystem working dir. That branch moves
-  artifacts off the UNC path, but it did so before the local-dependency check,
-  which left the include unresolvable. Self-contained decks are still moved.
+  working dir on WSL with a Linux-filesystem working dir. In that case the
+  server moves a run's artifacts off the UNC path, but it did so before
+  checking for a relative include, so the include could not be resolved.
+  Self-contained decks are still moved.
 - Simulation artifacts no longer fill the working directory. Runs that
   previously wrote their `.raw`/`.log`/`.db`/`.op.raw`/netlist files directly
   into the project root (the non-WSL-Linux and WSL-on-`/mnt/` cases) now write
-  to a single `.ltspice-mcp/runs` sidecar beside the job metadata, so they are
+  to a single `.ltspice-mcp/runs` folder beside the job metadata, so they are
   in one place to find or delete (a 30-run Monte Carlo alone writes ~180
-  files). The sidecar stays on the working dir's own filesystem, so a
+  files). The folder stays on the working dir's own filesystem, so a
   Windows-native (`/mnt/`) working dir keeps LTspice's `.db`/`.MEAS` support.
   A netlist that includes a sibling file through a *relative*
   `.include`/`.lib` keeps its artifacts beside the netlist (a relocated copy
   couldn't resolve the dependency); self-contained and
-  lib-path/absolute-include decks get the sidecar.
+  lib-path/absolute-include decks use the `runs` folder.
 - Unexpected tool errors now report the exception type and message
   (e.g. `Internal error in foo: KeyError: 'bar'`) instead of "Check server
   logs for details". An MCP client cannot reach the server's stderr
@@ -3184,9 +3235,9 @@ every sample to a file and returns its path.
   between every data row. The writer now opens text mode with `newline=""`,
   which also gives every text artifact consistent `\n` endings
   cross-platform. (Latent on Linux, which does no newline translation.)
-- `export_waveform` / `plot_waveform` no longer double-nest their sidecar when
-  the source `.raw` is already inside a `.ltspice-mcp/` tree (a job-run raw
-  passed by path was written to
+- `export_waveform` / `plot_waveform` no longer double-nest their output
+  folder when the source `.raw` is already inside a `.ltspice-mcp/` tree (a
+  job-run raw passed by path was written to
   `…/.ltspice-mcp/runs/.ltspice-mcp/waveforms/`). The artifact now goes into
   the existing tree (`…/runs/<job>/waveforms/`).
 
@@ -3294,8 +3345,8 @@ every sample to a file and returns its path.
   covers the end of the log. It places a window at both the first and last
   diagnostic line, so the failing-node lines at the end of a convergence
   abort ("Timestep too small", "trouble with node", "Last Node Voltages") are
-  kept even when an earlier harmless line came first. Those phrases are now
-  recognized as error anchors.
+  kept even when an earlier harmless line came first. Those phrases now count
+  as diagnostic lines for placing the excerpt.
 - An interrupted job (the server stopped mid-run and recovered it on restart)
   no longer reports a wall-clock-to-recovery "duration … (running)" in the
   `check_job` list. Its runtime cannot be known after a restart, so the list
@@ -3445,8 +3496,8 @@ simulation lifecycle, result parsing, and schematic editing.
   `.subckt` netlists, and quoted/braced/single-quoted expression tokens
   are handled correctly (one malformed expression form previously hung the
   server).
-- Single-run and batch jobs are kept in one job store with a unified read
-  model. Any job id works with `check_job`, `cancel_job`, and
+- Single-run and batch jobs are kept in one job store and read the same way.
+  Any job id works with `check_job`, `cancel_job`, and
   `measurement_stats`, and a wrong-tool lookup redirects to the right tool
   instead of stating that the job does not exist.
 - File decoding for netlists and libraries tries a fixed sequence (BOM
@@ -3503,8 +3554,9 @@ Numeric correctness (each of these returned a plausible but wrong number):
 
 Simulation lifecycle:
 
-- Timeouts above the synchronous threshold (including the default) were
-  never enforced, so a hung simulator ran forever; jobs now start a watchdog
+- A `run_simulation` timeout above 30 s without `wait=true`, which returns a
+  job id at once instead of waiting, was never enforced (the default timeout
+  included), so a hung simulator ran forever; such jobs now start a watchdog
   that marks the job timed out and kills the process at the deadline.
 - Cancelling or timing out a job on WSL did not kill the Windows-side
   LTspice process; single-run and batch cancel now terminate

@@ -169,5 +169,6 @@ meas ac unity when vdb(out)=0 cross=1
 If you use `wrdata`, its columns repeat the scale vector for every dumped
 vector, so dumping `V(out)` and `I(VDD)` yields `scale, V(out), scale, I(VDD)`
 instead of one shared scale followed by both values. Parse repeated
-scale/value groups. `wrdata` writes only the text table, so add an explicit
-`write` too if later server analysis needs a rawfile.
+scale/value groups. `wrdata` writes only the text table, and a `wrdata` in the
+deck stops `run_experiments` from adding its own `write`, so add an explicit
+`write` too if `analyze_results` needs a rawfile.

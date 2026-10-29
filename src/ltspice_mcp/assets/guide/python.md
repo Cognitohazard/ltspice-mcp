@@ -9,14 +9,15 @@ description: >
 
 # Working in Python
 
-`api` provides the six tool operations as methods, on the same engine, job
-records and store as the tools. The core has an example that reads a sweep
-back in one loop.
+`api` provides the six tool operations as methods. They run on the same engine
+as the tools and read and write the same job records and result files. The
+core has an example that reads a sweep back in one loop.
 
 ## Where `api` comes from
 
-**`run_code`** (when the server serves it) runs a snippet in a warm worker with
-`api` already open on the server's working directory. The snippet also has
+**`run_code`** (when the server serves it) runs a snippet in a warm worker, a
+process the server starts once and keeps for the session, with `api` already
+open on the server's working directory. The snippet also has
 `np`, `load_raw`, `measurements`, `reference`, `window_and_clean`,
 `compute_signal_stats` and `time_weighted_quantiles` in scope. `print()`
 output and the repr of a trailing expression are returned, so print the result
@@ -44,7 +45,7 @@ with Api(working_dir=".") as api:
 Create one `Api` per process, and not inside a process that serves the MCP
 server.
 Relative paths resolve against `working_dir`. Closing it, or exiting the
-process, cancels the jobs it owns.
+process, cancels the jobs it submitted without `detach=True`.
 
 ## The six operations
 
@@ -80,20 +81,22 @@ starting the engine.
   `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
 
 For recovery, submit with `execution={"simulator": "ngspice", "recoverable": True}`
-and keep the root receipt's `control_token`. Once the job is terminal, use
+and keep the original receipt's `control_token`. Once the job is terminal, use
 `api.jobs(action="resume", job_id=parent_id, resume_request_id="retry-1",
 control_token=parent_token)`. Save the child's token too, including when it
 finishes immediately. Guide section 'tools' describes selection, retry flags,
-reused successes and no-op receipts, and the audited LTspice startup on native
-Windows with its `ltspice_ini` setting. Guide section 'ngspice' covers static
-simulator seeds.
+reused successes and no-op receipts, and recovery on LTspice, which needs
+native Windows, one checked LTspice build and its `ltspice_ini` setting.
+Guide section 'ngspice' covers `simulator_seed`, which makes a deck's random
+functions repeatable on ngspice.
 
 `api.jobs(detach=True, action="resume", ...)` gives the child its own supervising
 process. Detach applies only to resume and cannot be combined with
-`raw_page=True`. The owner process authorizes the request itself, because a
-handoff does not grant authority. The resume's `wait_s` is honored, defaults
-to zero and is capped at 120 s. For a full wait, call `api.wait` on the child
-receipt's job id.
+`raw_page=True`. As with any resume, pass the parent's `control_token` unless
+this process submitted or resumed the parent. The token is checked before the
+owner process starts. The resume's `wait_s` is honored, defaults to zero and
+is capped at 120 s. For a full wait, call `api.wait` on the child receipt's
+job id.
 
 ## Reading results
 
@@ -120,15 +123,22 @@ The other run is read at this run's points over the span both cover,
 interpolated where its axis differs (as in a compressed LTspice raw, guide
 section 'ltspice'). You choose the tolerance.
 
-`api.load_raw(..., plot_index=1, dialect=None)` selects a plot independently of
-case/run and step. `plot_index` defaults to zero and takes a nonnegative integer;
-`dialect` is `None` or `ltspice`, `ngspice`, `qspice`, `xyce`, and must agree
-with captured producer/header evidence. `r.plots` returns a detached list of
-the file's plots, and `r.descriptor` and `r.plot_index` describe the selected
-one. The descriptor contains the analysis type, axis and physical units.
-`r.table(step=0)` reads native quantities; it keeps the first quantity and
-returns complex values as real and imaginary components. `r.axis()` refuses a
-native table. Step metadata comes from the same captured snapshot.
+`api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
+zero-based position in the file, separately from the case (or run) and the
+step. `plot_index` defaults to zero and takes a nonnegative integer. `dialect`
+is `None` or `ltspice`, `ngspice`, `qspice`, `xyce`, and names the simulator
+that wrote the file; leave it `None` unless a read fails because the file's
+header does not name its simulator. A `dialect` that contradicts the job's
+simulator or the header is refused. `r.plots` returns the file's plots as a
+list of plain dicts, and `r.descriptor` and `r.plot_index` describe the
+selected one. The descriptor contains the analysis type, axis and physical
+units. In a plot with a sampled axis, the first quantity is that axis (time,
+frequency or the swept value). `r.table(step=0)` reads a plot without one,
+such as an `.op` or `.tf` result. It returns every value of every quantity,
+the first included, with complex values as real and imaginary components.
+`r.axis()` raises on such a plot, and `r.table()` on a plot that has an axis.
+Step parameters (`r.steps`) are read at the same time as the traces, from the
+RAW itself or the `.log` beside it.
 
 For a log without a RAW file:
 
@@ -149,14 +159,17 @@ measured = api.analyze_results(
 )
 ```
 
-The `measurements` inspect view returns values and recorded range/AT metadata,
-and `native_tables` returns the literal printed entries and frequency rows.
-Both are detached plain data for your code to arrange or export. Unknown units
-stay unknown, and no plot or step identity is invented. Omit `plot_index` on
-log views. Whole-log measurements reject `step`/`all_steps`. A direct log
-import does not guess a sibling RAW file, and in a mixed request a malformed
-RAW fails only the RAW recipes. Guide section 'tools' covers capture identity,
-changed companion files and initialization timeouts.
+The `measurements` inspect view returns each measurement's values with its
+`range_from` and `range_to` (a `FROM`/`TO` window) or its `at` point, and
+`native_tables` returns the value blocks printed in the log, as `name = value`
+entries and `Index frequency` table rows. Both return plain dicts and lists
+for your code to arrange or export. A unit the log does not print is `None`,
+and rows are not assigned to a plot or step. Omit `plot_index` on log views.
+The `measurements` recipe reads the whole log and rejects `step` and
+`all_steps`. A `log_path` source does not look for a RAW beside the log, and
+in a request that also has RAW recipes, a malformed RAW fails only those
+recipes. Guide section 'tools' covers when a page cursor stops working because
+a file changed, and a timeout while `analyze_results` first reads its sources.
 
 Arrays are copies, so you can modify them. Trace math across steps and its
 statistics are in guide section 'signals'. `api.analyze_results(...)` returns
@@ -213,22 +226,26 @@ Import these from `ltspice_mcp.api`. They take arrays and return dicts.
 
 - `ApiValidationError` (a `ValueError`): the arguments did not validate; the
   message is the one the tool would give.
-- `ApiCallError`: the call failed. `.code` names the reason, and `.job_id` and
-  the full payload keep every recovery handle.
+- `ApiCallError`: the call failed. `.code` names the reason. `.job_id`,
+  `.control_token`, `.commit_state` (whether a submission was recorded) and
+  `.payload`, the full error reply, hold what you need to find or retry the
+  job.
 - A per-item failure, or an `outcome` of `"partial"` or `"failed"`, does not
   raise. It is returned in the data, so read `failures`, `observations` and
   `warnings`.
 - `ApiSessionError` (with `ApiClosedError`): a second `Api` in one process, a
   call after `close()`, or a call from a forked child.
-- A refused path raises the engine's path error with a note on what to change.
+- A refused path raises `PathSecurityError` (from `ltspice_mcp.errors`) with a
+  note on what to change.
   When the path is outside the sandbox, the note names the setting that
   defines the sandbox.
 
 ## Controls that exist only on the wire
 
 `budget` and `execution.wait_s` are dropped, with a warning in the result, and
-a cursor or continuation is rejected. With `raw_page=True`, a call accepts them
-and returns exactly one page, as the tool would.
+a paging argument (`cursor`, `continue` and the like) raises
+`ApiValidationError`. With `raw_page=True`, a call accepts them and returns
+exactly one page, as the tool would.
 
 ## More than one build of a simulator
 

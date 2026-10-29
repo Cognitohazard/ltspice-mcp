@@ -18,8 +18,9 @@ LTspice-specific** operations:
   instead of free text.
 - **Validated**: tools that change a file refuse invalid states before
   writing it.
-- **Geometry-aware**: `.asc` schematic operations work in symbol
-  coordinates as well as netlist tokens.
+- **Geometry-aware**: `.asc` schematic operations work with the positions
+  of pins, parts and wires on the sheet as well as with component names and
+  nets.
 - **LTspice-specific**: the server handles `.asc`/`.asy`/`.raw` behavior and
   Windows interop directly. ngspice is fully supported for simulation, result
   parsing, diagnostics and analysis; it has no schematic format, so the
@@ -40,8 +41,11 @@ detects WSL.
 |QSPICE|Windows native only (runs are refused under WSL or Wine)|
 |Xyce|Linux, macOS and Windows native|
 
-A schematic (`.asc`) runs through LTspice's netlist export, which is adapted
-only for ngspice, so QSPICE and Xyce runs need a hand-written netlist.
+A schematic (`.asc`) runs through the netlist LTspice exports from it, which
+is in LTspice's own dialect. The server prepares that netlist for ngspice
+only, by removing the `.backanno` line and the `§` LTspice puts in some
+instance names, so a schematic run on QSPICE or Xyce is refused and needs a
+hand-written netlist.
 ngspice runs in spicelib's default compatibility mode, `kiltpsa`, which drops
 the section name from a `.lib <file> <section>` line that selects a corner;
 set `[simulator] ngbehavior` (for example `hsa`) when a deck uses one.
@@ -94,8 +98,8 @@ rename, so a failed batch leaves the sheet unchanged. `expected_sha256` names
 the revision the batch was prepared against; if another writer committed
 first, the call returns `revision_conflict` and writes nothing. `dry_run`
 resolves and validates a batch and returns its geometry without writing.
-`verify_circuit` exports a committed sheet on a copy and compares it with a
-reference netlist or schematic to report any unintended change.
+`verify_circuit` has LTspice export a saved sheet to a netlist and compares
+that with a reference netlist or schematic, to report any unintended change.
 
 Even when every op succeeds, the reply includes sheet-level warnings such as
 floating pins, duplicate wire segments and dangling net labels, so the caller
@@ -104,9 +108,9 @@ does not need a separate call to inspect the sheet.
 ### Structured outputs
 
 Tools declare an output schema and return `structuredContent` beside their
-text. A client that runs code against tool calls can use the schemas as
-types. The tool listing omits the schemas because they were its largest block
-and each reply contains its own structure.
+text, and the test suite checks every reply it produces against its tool's
+schema. The tool listing leaves the output schemas out, because they would be
+its largest part and each reply shows its own structure.
 
 ### A short tool listing
 
@@ -115,15 +119,17 @@ stay in context for every later turn. Each argument description is therefore
 short (the unit, the sign convention, the default, the interaction with
 sibling fields), and the details are in a section of the packaged guide or in
 [mcp_surface.md](design/mcp_surface.md). `[tools] listing` sets how much is
-sent. The default, `compact`, omits argument descriptions, and `full` sends
-them (mcp_surface.md, "Two listing modes").
+sent. The default, `compact`, omits argument descriptions, which a model can
+read with `inspect(kind="reference")`, and `full` sends them (mcp_surface.md,
+"Two listing modes").
 
 ### Results report facts
 
 Results report measured conditions and the simulator's own messages. They
 give no verdict on whether a result can be trusted and no name for a
-waveform's shape. A result reports "crest factor 8.1, 5.2 times the median
-bucket" and leaves conclusions such as "spike" or "unreliable" to the model.
+waveform's shape. A result reports a fact such as a crest factor (peak over
+RMS) of 8.1 for one stretch of a waveform, and leaves conclusions such as
+"spike" or "unreliable" to the model.
 A result has a severity only when the simulator assigned one.
 
 ### Scalars and waveform shape
@@ -133,8 +139,9 @@ rise time or phase margin, because a correct scalar is easier for a model to
 reason over than an array. When the waveform shape matters, three levels of
 detail are available:
 
-- **Detectors** return a number for a known shape. Prefer one when it
-  exists.
+- **A recipe for a known shape**, such as `edges` for rise and fall times
+  or `transient_response` for a step response, returns a number for it.
+  Prefer one when it exists.
 - **The `waveform` recipe** returns the min, max, rms and mean of each bucket
   of samples, so decimation keeps a narrow spike. To zoom in, call it again
   with a narrower `window`. With `format: "csv"` it writes every sample to
@@ -157,8 +164,9 @@ Each consumer has its own channel:
 The HTML file is for terminal clients such as Claude Code, which do not show
 images to the user and pass a PNG only to the model. Each unit gets its own
 chart panel, so volts and amps never share a y-axis. The chart plots every
-sample unless the count exceeds a high cap, in which case it downsamples and
-reports that. The PNG is off by default (`[analysis] attach_plot`), costs
+sample of a trace up to 100,000 points (the `max_points` argument); above that
+it keeps the minimum and maximum of each interval and reports that it
+downsampled. The PNG is off by default (`[analysis] attach_plot`), costs
 about 1,000 tokens for two panels, and needs the optional `raster` extra. The
 core install adds no plotting dependency; the chart library is bundled.
 
@@ -188,38 +196,40 @@ Config / state        config.py, state.py, errors.py
 
 ### The tool surface
 
-The server has 8 registered tools. Six are operations over three planes:
+The server has 8 registered tools. Six of them form three pairs by purpose:
 
 - **Execute**: `run_experiments` and `jobs`.
 - **Understand**: `analyze_results` and `inspect`.
 - **Author**: `edit_schematic` and `verify_circuit`.
 
 The other two are `plot_waveform`, the interactive waveform chart, and
-`run_code`, which runs a Python snippet in a warm worker that holds the
-engine (`[tools] run_code = false` removes it).
-`inspect(kind="capabilities")` reports `tool_profile: "consolidated"`, the
-only profile.
+`run_code`, which runs a Python snippet in a separate Python process that the
+server starts on first use and keeps for the session, with the engine already
+loaded (`[tools] run_code = false` removes it). Releases before 0.6.0 offered
+other tool sets with one tool per operation; a deployment that needs those
+pins `ltspice-mcp==0.5.*`. `inspect(kind="capabilities")` reports
+`tool_profile: "consolidated"`, the name of the current and only tool set.
 
-Each of the six takes a declarative payload rather than a fixed argument
-list. Sweeps, corners and Monte Carlo are `run_experiments` `variations`;
-each analysis is an `analyze_results` recipe; each schematic change is an
-`edit_schematic` op; each read is an `inspect` kind. No tool edits netlist
-text, since an agent with file access does that directly. Releases before
-0.6.0 had one tool per operation; a deployment that needs those pins
-`ltspice-mcp==0.5.*`.
+Each of the six covers many operations, which the caller describes as data in
+its arguments instead of calling a separate tool for each. Sweeps, corners
+and Monte Carlo are `run_experiments` `variations`; each analysis is an
+`analyze_results` recipe; each schematic change is an `edit_schematic` op;
+each read is an `inspect` kind. No tool edits netlist text, since an agent
+with file access does that directly.
 
 Schematic editing is one tool with many ops (`add_component`,
-`move_component`, `remove_component`, `set_component_value`,
+`move_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `wire_pins`, `add_net_label`, `remove_net_label`,
-`remove_wire`, `add_directive`, `remove_directive`, and `set_plot_panes`,
-which writes the waveform panes LTspice opens for the sheet). Every tool's
-schema uses model context whether or not the tool is called, so one tool
-with an op union is cheaper than one tool per op, and it lets a caller batch
-ops into one transaction. The ops work on pin coordinates, bounding boxes and
-the topology of named nets. `wire_pins` refuses diagonal wires, pin
-collisions, shorts between named nets and a waypoint that would join another
-net's wiring, and accepts a point on an existing wire as an endpoint for a
-T-junction.
+`remove_wire`, `add_directive`, `remove_directive` and `set_plot_panes`).
+`move` shifts parts, wires, labels and text by one offset, and
+`set_plot_panes` writes the waveform panes LTspice opens for the sheet. Every
+tool's schema uses model context whether or not the tool is called, so one
+tool that takes every kind of op is cheaper than one tool per op, and it lets
+a caller batch ops into one transaction. The ops work on pin coordinates,
+bounding boxes and the topology of named nets. `wire_pins` refuses diagonal
+wires, pin collisions, shorts between named nets and a waypoint that would
+join another net's wiring, and accepts a point on an existing wire as an
+endpoint for a T-junction.
 `add_component` returns the placed pins and bounding box.
 `inspect(kind="symbol")` returns the same geometry without placing anything,
 for planning an edit.
@@ -235,10 +245,12 @@ The server implements Monte Carlo perturbation itself, and perturbed cases
 run through the same execution path as every other run.
 
 Each job records the simulator executable it launches (path, size,
-modification time and SHA-256), and each case records the build version its
-run reported in its output, so results from two builds stay distinguishable.
-A reused `request_id` that would now launch a different build is refused as
-an `idempotency_conflict`.
+modification time and SHA-256), and each case (one simulation in the job)
+records the build version its run reported in its output, so results from
+two builds stay distinguishable. A submission that repeats a request under
+the same `request_id` returns the existing job, unless the build it would
+launch now differs from the recorded one; then it is refused as an
+`idempotency_conflict`.
 
 ## WSL support
 

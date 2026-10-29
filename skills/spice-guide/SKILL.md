@@ -18,8 +18,8 @@ session, before you start:
 - With the MCP tools: `inspect(queries=[{"kind": "guide"}])`
 - In Python, in `run_code` or a script with `from ltspice_mcp.api import Api`:
   `print(Api.guide())`
-- From a shell where the package is installed, without starting the engine:
-  `python -m ltspice_mcp.api guide`
+- From a shell where the package is installed, without starting a server or
+  opening an `Api`: `python -m ltspice_mcp.api guide`
 
 The core ends in an index. Before each task, read the section the index names
 for it, by passing its name: `inspect(queries=[{"kind": "guide", "section":

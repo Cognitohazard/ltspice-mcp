@@ -220,14 +220,15 @@ C1 out 0 {C}
   XVII reads the file as cp1252 and drops the scale, so `23µ` runs as 23.
   `run_experiments` stages decks with `u`; write `u` in any deck you run
   elsewhere. `verify_circuit` reports µ suffixes (`value_suffix_micro_sign`)
-  in a netlist as one observation per file, and as a warning per value only
-  when it knows of an LTspice XVII that would misread the file. In an `.asc`'s
-  exported netlist, where both builds write µ however the sheet spells it,
-  only that warning is reported. A suffix that shows the file was decoded in
-  the wrong encoding (`value_suffix_mojibake`, such as `Âµ`) is an error; any
-  other symbol (`value_suffix_nonascii`, such as `10Ω`) is a warning, read as
-  the bare number. These checks run on a netlist and on an
-  `.asc`'s exported netlist.
+  in a netlist as one observation per file. It reports a warning per value
+  instead only when the file is not cp1252 and an LTspice XVII would read it,
+  because the session's LTspice is XVII or the netlist shows XVII exported
+  it. In an `.asc`'s exported netlist, where both builds write µ however the
+  sheet spells it, only that warning is reported. A suffix that shows the
+  file was decoded in the wrong encoding (`value_suffix_mojibake`, such as
+  `Âµ`) is an error; any other symbol (`value_suffix_nonascii`, such as `10Ω`)
+  is a warning, read as the bare number. These checks run on a netlist and on
+  an `.asc`'s exported netlist.
 - **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
   engine and cannot name a measurement. LTspice 26 refuses the whole deck and
   XVII skips that measurement. `run_experiments` refuses them before the run
@@ -259,12 +260,13 @@ C1 out 0 {C}
   beside `other_raws.op`, the transient's operating point. `other_raw: "fra_1"`
   reads it by job and case in `analyze_results` (on a job source),
   `run_experiments`' attached `analyze` block, `plot_waveform`,
-  `inspect(kind="results")` and `api.load_raw`; its path reads it too. No
-  stepped FRA run has been recorded, so how its results file splits into steps
-  is not modelled. Its `gain_N` is the negative of the loop gain the
-  `stability` recipe takes, so `stability` on `-gain_1` gives the crossover and
-  phase margin LTspice prints at the end of the log. LTspice XVII 17.0 has no
-  FRA and refuses the analyzer.
+  `inspect(kind="results")` and `api.load_raw`; its path reads it too. The
+  server does not split a stepped FRA run's results file into steps, because
+  it has not been checked against stepped FRA output. The results' `gain_N`
+  is the negative of the loop gain the `stability` recipe takes, so
+  `stability` on `-gain_1` gives the crossover and phase margin LTspice prints
+  at the end of the log. LTspice XVII 17.0 has no FRA and refuses the
+  analyzer.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
   `\n`. On export, both builds write a comment of several lines as one netlist
   comment with the `\n` kept as it is, and split a directive at each `\n` into

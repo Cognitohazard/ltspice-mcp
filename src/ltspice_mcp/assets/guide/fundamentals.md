@@ -130,8 +130,8 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
 - AC measurements use a 65k-point ceiling; exceeding it silently reduces
   resolution.
 - A WHEN or AT measurement returns the crossing time (`.tran`) or frequency
-  (`.ac`) in the result's `at` field; the `values` scalar reports the target
-  level.
+  (`.ac`) in the result's `at` field, and its `values` list holds the target
+  level, one entry per `.step` run.
 
 ## General notes
 

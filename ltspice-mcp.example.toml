@@ -16,8 +16,9 @@
 # Explicit path to simulator executable (overrides auto-detection)
 # Unset: auto-detect
 # path = "C:\\Program Files\\ADI\\LTspice\\LTspice.exe"
-# Established native Windows settings for recoverable LTspice runs.
-# Unset uses APPDATA/LTspice.ini; the original file is never written.
+# LTspice.ini whose settings recoverable LTspice runs use (native Windows).
+# Each run gets a private copy, so this file is never changed.
+# Unset: %APPDATA%/LTspice.ini.
 # ltspice_ini = "C:/SPICE/LTspice.ini"
 
 # On Windows, start LTspice on a desktop of its own, so its window does not
@@ -56,17 +57,19 @@
 # Maximum cases after run_experiments variation expansion.
 # max_experiment_cases = 1024
 
-# Bound on one LTspice schematic netlist export, in seconds
+# Time limit, in seconds, for LTspice to export one schematic's netlist
 # timeout = 300.0
 
 # Per-case simulation timeout in seconds when a request sets none.
 # Default: no limit. execution.run_timeout_s overrides it.
 # run_timeout = 3600
 
-# Preflight size guard, estimated from .tran/.ac/.dc directives.
-# Warn when the estimated point count exceeds this:
+# Before a run, the server estimates its output size from the .tran, .ac
+# and .dc directives. It warns when the estimated point count exceeds
+# max_estimated_points.
 # max_estimated_points = 20000000
-# Refuse a run whose estimated raw (MB, single-trace) exceeds this:
+# It refuses a run whose estimated raw file exceeds max_raw_mb megabytes.
+# The estimate counts one trace, so a real raw file is larger.
 # max_raw_mb = 4096
 
 [analysis]
@@ -74,9 +77,11 @@
 # max_points = 10000
 # Whole-call work budget for analyze_results, in seconds
 # analysis_budget_s = 60.0
-# Default response budget in tokens for consolidated calls (0 disables)
+# Default response budget, in tokens, for run_experiments, jobs,
+# analyze_results and inspect replies (0 disables)
 # default_budget = 4000
-# Retention for raw-path-only analysis result sets, in hours
+# Hours to keep an analyze_results result set whose sources are all
+# raw_path files. A result set read from jobs is kept as long as its jobs.
 # result_set_ttl_hours = 24.0
 # Open plot_waveform's chart in a local browser window (a call's open wins)
 # open_plot = true
@@ -90,12 +95,12 @@
 # removed, read on demand through inspect(kind="reference"); "full"
 # advertises them as registered. Both give the same capabilities.
 # listing = "compact"
-# run_code = false removes the tool that runs a Python snippet with the engine
-# in scope (loops over runs, numpy on samples). The snippet has the server's
-# own file and process authority, which allowed_paths does not confine.
-# Approve it in your client as you would a shell command, and turn it off
-# when the server is reachable by more than one trusted client, for example
-# through a proxy.
+# run_code = false removes the tool that runs a Python snippet with the
+# Python API in scope (loops over runs, numpy on samples). The snippet has
+# the server's own file and process authority, which allowed_paths does not
+# confine. Approve it in your client as you would a shell command, and turn
+# it off when the server is reachable by more than one trusted client, for
+# example through a proxy.
 # run_code = true
 
 [schematic]
@@ -104,7 +109,7 @@
 # Set this to override auto-detection or for non-standard installs
 # symbol_paths = ["/path/to/LTspice/lib/sym"]
 
-# Show an edit_schematic commit in the LTspice window that has the sheet
+# Show each edit_schematic change in the LTspice window that has the sheet
 # open, and refuse an edit while that window has unsaved changes. Needs
 # Windows and LTspice 26.1 or later; LTspice is never started for it. Set
 # false to leave LTspice windows unchanged.

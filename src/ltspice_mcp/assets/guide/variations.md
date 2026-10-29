@@ -54,11 +54,13 @@ distribution: "normal"|"uniform"}`; `model` adds `param`.
 These coefficients are your own assumptions; for a PDK's own statistical
 models, see guide section 'sky130'.
 
-The variation's `seed` controls these draws from your assumed coefficients. In
-a recoverable ngspice execution, `simulator_seed` controls the static random
-functions in the deck instead (guide section 'ngspice'), and native statistical
-families keep their own sample seeds. An execution seed does not select PDK
-statistics, and it cannot be mixed with a native statistical family.
+The variation's `seed` controls these draws from your assumed coefficients. It
+does not affect random functions written in the deck (`agauss`, `gauss`,
+`aunif`, `unif`, `limit`); in a recoverable ngspice run,
+`execution.simulator_seed` sets those (guide section 'ngspice'). A `pdk_native`
+variation has its own `seed` (guide section 'sky130'). `simulator_seed` does
+not turn on the PDK's statistical models, and a request that combines it with
+a `pdk_native` variation is refused.
 
 ## Pelgrom mismatch
 
@@ -94,11 +96,12 @@ applies to the model card's `VTO`/`KP`:
   `VTO`/`KP` defaults are Level-1 names.
 - Other prefixes (`"Q"` for BJTs) are accepted, but the Pelgrom law and those
   parameter defaults are for MOSFETs.
-- A `prefix` that matches subckt instances (such as Sky130's `X`-wrapped FETs)
-  descends into ngspice-compatible BSIM3/4 wrappers. For nested blocks, list
-  the physical MOS instances with `inspect(kind="hierarchy")` (guide section
-  'hierarchy'). Sampling uses each device's final W/L, after deterministic
-  assignments.
+- When a `prefix` matches subckt instances (such as Sky130's FETs, each wrapped
+  in an `X` subcircuit), the rule draws `delvto`/`mulu0` for the BSIM3/4
+  MOSFET inside each subcircuit. This works on ngspice only and one level deep
+  (`X` → `M`). For nested blocks, list the physical MOS instances with
+  `inspect(kind="hierarchy")` (guide section 'hierarchy'). Sampling uses each
+  device's final W/L, after any `assign` variation has set it.
 
 ## Explicit per-instance values
 
@@ -110,6 +113,6 @@ When you choose the offsets yourself (worst-case corners, a measured die), use
  "assign": {"X1:delvto": [0.002, -0.002], "X2:delvto": [-0.002, 0.002]}}
 ```
 
-`X1:delvto` binds when the subckt body contains a single FET; a multi-FET body
-needs the qualified form `X1.M0:delvto`. These targets work only in `assign`.
-In `random` rules, mismatch uses the Pelgrom rule above.
+`X1:delvto` selects the FET only when the subckt body contains exactly one; a
+multi-FET body needs the qualified form `X1.M0:delvto`. These targets work
+only in `assign`. In `random` rules, mismatch uses the Pelgrom rule above.

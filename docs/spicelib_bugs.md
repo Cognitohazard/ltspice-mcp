@@ -164,22 +164,20 @@ and point those tests at the spicelib path, which will then be correct.
 **Status:** draft for an upstream spicelib pull request. Filed 2026-07-04.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor._get_text_space`, ~line 590).
-**Our workaround:** none; we accept this as a known limitation. Our own
-directive placement (`_append_asc_text` in `src/ltspice_mcp/lib/schematic_ops.py`,
-used by the `add_directive` schematic-edit op and by directive edits that give
-coordinates) does not call `_get_text_space`. It places text at a fixed
-`(16, 16)` and moves it down when another text already occupies that point, so
-it is unaffected. Only a directive added without coordinates goes through
-`add_instruction` and therefore `_get_text_space`. We keep that path on
-`add_instruction` because it also applies spicelib's replacement of unique
-analysis directives (adding `.ac` after `.tran` replaces it), which
-`_append_asc_text` does not. We accept the off-canvas placement in the uncommon
-empty-schematic case to keep that replacement.
+**Our workaround:** none needed, because we call neither `add_instruction` nor
+`set_parameter`, the two callers of `_get_text_space`. Every directive or
+comment our schematic editor adds goes through our own placement
+(`_append_asc_text` in `src/ltspice_mcp/lib/schematic_ops.py`). It writes the
+text at the coordinates the caller gives, or at `(16, 16)` when none are given,
+and moves it down when another text already occupies that point. Unlike
+`add_instruction`, it does not replace an existing analysis directive (with
+`add_instruction`, adding `.ac` after `.tran` replaces the `.tran`).
 
 ### Summary
 
-`AscEditor.add_instruction` places a new directive or comment at the coordinate
-returned by `_get_text_space()`. On a schematic with **no wires, labels,
+`AscEditor.add_instruction` places a new directive at the coordinate returned
+by `_get_text_space()`, and `set_parameter` places a new `.param` line there
+too. On a schematic with **no wires, labels,
 directives or components**, that coordinate is far **off-canvas** — e.g.
 `(880, -99976)` on the default 880 x 680 sheet — so the added text is invisible
 in the LTspice view. (The netlist still exports correctly; position is
@@ -232,7 +230,7 @@ directive renders far outside the visible schematic.
 
 ### Impact
 
-- Adding a directive or comment to a freshly created (empty) `.asc` via
+- Adding a directive to a freshly created (empty) `.asc` via
   `add_instruction` places it off-canvas. Subsequent adds stagger downward
   (`max_y + 24` each time) but remain off-canvas until enough on-canvas content
   exists to dominate `max_y`.
@@ -277,10 +275,9 @@ def test_get_text_space_on_empty_sheet_is_on_canvas(tmp_path):
 ### Cross-reference
 
 Downstream: `tests/test_circuit_asc.py::test_standalone_directives_no_coords_do_not_stack`
-pins that repeated no-coordinate directive adds stagger to distinct anchors
-rather than stacking. It does not assert on-canvas placement, since that
-depends on this upstream bug. If spicelib is fixed, that path's placement
-becomes on-canvas automatically with no downstream change needed.
+and `::test_stacked_directives_auto_shift` pin that our placement gives
+directives added without coordinates distinct positions. They do not touch
+`_get_text_space`, so a fixed spicelib needs no downstream change.
 
 ---
 
@@ -289,16 +286,22 @@ becomes on-canvas automatically with no downstream change needed.
 **Status:** draft for an upstream spicelib pull request. Filed 2026-07-13.
 **Affected version:** spicelib 1.5.1 (`spicelib/raw/plot_data.py`,
 `PlotData._read_ascii_vector`, the trailing-empty-line skip at ~line 401).
-**Our workaround:** `src/ltspice_mcp/lib/raw_parser.py` —
-`_MultiPlotAsciiGuard`, installed over `_read_ascii_vector` by
-`_install_multiplot_ascii_guard()` at import. It wraps the file object passed to
-the ASCII reader. When the skip loop seeks back onto a line it has just read as
-non-empty, the wrapper returns one empty read, which breaks the loop and leaves
-the cursor on the next plot's header. It also adds a stall backstop
-(`_STALL_LIMIT`) that aborts any sequence of reads that stops advancing past the
-furthest byte offset reached so far. It detects the read and seek pattern
-instead of depending on spicelib internals, so it works with any spicelib
-version and has no effect once upstream is fixed.
+**Our workaround:** the server reads raw files with `decode_raw` in
+`src/ltspice_mcp/lib/raw_decode.py`. It first finds each plot's
+byte range with its own header scan (`preflight_raw` in `raw_header.py`), then
+gives spicelib's `PlotData` a file view (`_PlotView`) that ends where that plot
+ends. The skip loop therefore reads EOF where it would have met the next plot's
+`Title:` line. Separately, `src/ltspice_mcp/lib/raw_parser.py` installs
+`_MultiPlotAsciiGuard` over `_read_ascii_vector` when the module is imported
+(`_install_multiplot_ascii_guard()`), so it also protects a direct `RawRead`
+call in any process that has imported that module. The guard wraps the file
+object passed to the ASCII reader. When the skip loop seeks back onto a line it
+has just read as non-empty, the wrapper returns one empty read, which breaks the
+loop and leaves the cursor on the next plot's header. It also adds a stall
+backstop (`_STALL_LIMIT`) that raises `RuntimeError` once more than 128 reads
+in a row fail to advance past the furthest byte offset reached so far. The
+guard recognises the read and seek pattern rather than the loop's code, so it
+has no effect on a spicelib that breaks the loop correctly.
 
 ### Summary
 
@@ -410,9 +413,14 @@ Downstream: `tests/test_raw_parser.py::TestMultiPlotNoiseRaw` pins the guard —
 `test_two_plot_noise_raw_parses_without_hanging` (parsed in a worker thread with
 a hard deadline, so a regression fails fast instead of hanging the suite), plus
 `test_stall_backstop_aborts_a_nonprogressing_loop` and
-`test_stall_backstop_allows_a_large_forward_read` for the stall backstop. Once
-the upstream fix is released, delete `_MultiPlotAsciiGuard` and
-`_install_multiplot_ascii_guard()` and point those tests at the fixed reader.
+`test_stall_backstop_allows_a_large_forward_read` for the stall backstop.
+`tests/test_raw_decode.py::test_recorded_ngspice_ascii_preserves_both_plot_quantities`
+decodes a recorded ngspice `.noise` raw
+(`tests/fixtures/ngspice_noise_2plot.raw`) through the server's reader and
+checks both plots. Once the upstream fix is released, delete
+`_MultiPlotAsciiGuard` and `_install_multiplot_ascii_guard()` and point those
+tests at the fixed reader. `_PlotView` stays, because it also refuses any read
+outside the plot's checked byte range.
 
 ---
 
@@ -423,11 +431,14 @@ known limitation.
 **Affected version:** spicelib 1.5.1 (`spicelib/raw/raw_read.py`
 `RawRead.get_axis` ~line 545, into `spicelib/raw/plot_data.py`
 `PlotData.get_axis` ~line 779).
-**Our workaround:** `src/ltspice_mcp/lib/raw_parser.py` — `OffsetAwareRawRead`,
-a `RawRead` subclass that reads `raw_params["Offset"]` in `__init__` and adds it
-to the axis in `get_axis`, but only for transient plots with a nonzero offset.
-The server constructs this subclass instead of a bare `RawRead` whenever it
-loads a raw file.
+**Our workaround:** the server's raw reader (`decode_raw` in
+`src/ltspice_mcp/lib/raw_decode.py`) takes each trace's stored samples from
+`PlotData` unchanged and never calls `get_axis`. `DecodedPlot.__init__` in
+`src/ltspice_mcp/lib/decoded_raw.py` then corrects the time axis of a transient
+plot by taking the absolute value of the stored times and adding the header's
+`Offset:` value (`transient_time_offset`). `OffsetAwareRawRead` in
+`src/ltspice_mcp/lib/raw_parser.py`, a `RawRead` subclass that adds the offset
+in `get_axis`, applies the same correction but has no caller in the server.
 
 ### Summary
 
@@ -505,11 +516,15 @@ def test_windowed_tran_axis_includes_offset(windowed_raw):
 
 ### Cross-reference
 
-Downstream: `tests/test_raw_parser.py::TestOffsetAwareRawRead` pins that
-`OffsetAwareRawRead` rebases a nonzero-offset transient axis to deck time and
-leaves zero-offset and non-transient plots untouched. Once the upstream fix is
-released, delete `OffsetAwareRawRead` and construct a bare `RawRead` wherever
-the server loads a raw file.
+Downstream: `tests/test_decoded_raw.py::test_transient_offset_once_on_later_plot_and_every_axis_accessor`
+and `::test_mixed_case_offset_field_rebases_axis_without_changing_header` pin
+that the server's decoded plot adds the offset exactly once, on every axis
+accessor. `tests/test_raw_parser.py::TestOffsetAwareRawRead` pins that
+`OffsetAwareRawRead` adds a nonzero offset to a transient axis and leaves
+zero-offset and non-transient plots untouched. A fix in `RawRead.get_axis` does
+not change the server's output, because the server reads the stored samples, so
+the correction in `DecodedPlot` stays. Once the upstream fix is released, delete
+`OffsetAwareRawRead` and its tests.
 
 ---
 
@@ -517,10 +532,10 @@ the server loads a raw file.
 
 **Status:** draft for an upstream spicelib pull request.
 **Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py` ~lines 354/357).
-**Our workaround:** `src/ltspice_mcp/lib/log_parser.py` — `_RE_FOURIER_NAN` plus
-`_sanitize_log_for_reader` (called by `make_log_reader`) rewrites `-nan%`/`inf%`
-THD/PHD lines to `0.0%` in a temporary copy before passing the log to
-`LTSpiceLogReader`, then parses that copy.
+**Our workaround:** `make_log_reader` in `src/ltspice_mcp/lib/log_parser.py`.
+When `LTSpiceLogReader` raises on a log, it retries on a temporary copy in which
+`_sanitize_log_for_reader` (with the regex `_RE_FOURIER_NAN`) has rewritten
+each `-nan%`/`inf%` THD or PHD line to `0.0%`.
 
 ### Summary
 
@@ -589,10 +604,11 @@ the upstream fix is released, delete `_RE_FOURIER_NAN` and
 
 **Status:** draft for an upstream spicelib pull request.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py` ~line 186).
-**Our workaround:** `src/ltspice_mcp/lib/schematic_ops.py` —
-`_reject_empty_attr_value` and `_require_clearable_attr` refuse to *write* an
-empty SYMATTR value (an empty value removes the attribute line instead), so we
-never write a two-token line that spicelib cannot read back.
+**Our workaround:** we never write a two-token `SYMATTR` line, so spicelib can
+always read back what we save. In `src/ltspice_mcp/lib/schematic_ops.py`,
+`_reject_empty_attr_value` refuses an empty attribute value when a component is
+added. Setting an existing attribute to an empty value removes its `SYMATTR`
+line instead, and `_require_clearable_attr` refuses that for `InstName`.
 
 ### Summary
 
@@ -652,10 +668,10 @@ def test_symattr_with_empty_value_loads(tmp_path):
 
 ### Cross-reference
 
-Downstream: `tests/test_circuit_asc.py::...::test_empty_attribute_raises` and
-`tests/test_edge_cases.py::...::test_empty_attribute_rejected`. Our guard
-applies only when writing. A fixed spicelib would also let us read such files,
-which we currently cannot.
+Downstream: `tests/test_circuit_asc.py::TestEmptyAttributeHandling` pins the
+refusals and the removal of a cleared attribute. Our guard applies only when
+writing. A fixed spicelib would also let us read such files, which we currently
+cannot.
 
 ---
 
@@ -665,9 +681,10 @@ which we currently cannot.
 **Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
 `LTSpiceLogReader`).
 **Our workaround:** `src/ltspice_mcp/lib/log_parser.py` — `_RE_MEAS_FAILED`
-reads failed measurement names from the log text and returns them with
-`value=None`, so a measurement that was requested and failed is reported
-instead of missing.
+reads failed measurement names from the log text. `parse_measurements` returns
+each one with a `None` value for every step and also lists the names under
+`failed_measurements`, so a measurement that was requested and failed is
+reported instead of missing.
 
 ### Summary
 
@@ -717,9 +734,10 @@ def test_failed_measurement_name_is_present(tmp_path):
 
 ### Cross-reference
 
-Downstream: the `failed_measurements` list and the `value=None` entries in
-`parse_measurements` (`lib/log_parser.py`). Once upstream reports failed names,
-delete `_RE_MEAS_FAILED`.
+Downstream: `tests/test_log_parser.py::TestParseMeasurementsFailed` pins the
+`failed_measurements` list and the `None` values that `parse_measurements`
+(`lib/log_parser.py`) returns. Once upstream reports failed names, delete
+`_RE_MEAS_FAILED`.
 
 ---
 
@@ -728,9 +746,10 @@ delete `_RE_MEAS_FAILED`.
 **Status:** draft for an upstream spicelib pull request.
 **Affected version:** spicelib 1.5.1 (`spicelib/utils/detect_encoding.py`,
 `detect_encoding` called with no `expected_pattern`).
-**Our workaround:** `src/ltspice_mcp/lib/log_parser.py` — decode the log with
-our own BOM/UTF-16/cp1252 detector (`read_spice_text`), rewrite it to a UTF-8
-temporary file, and pass that file to `opLogReader` so its detection cannot
+**Our workaround:** `read_device_op_points` in
+`src/ltspice_mcp/lib/log_parser.py` decodes the log with our own
+BOM/UTF-16/cp1252 detector (`read_spice_text`), rewrites it to a UTF-8
+temporary file, and passes that file to `opLogReader`, so its detection cannot
 choose the wrong encoding.
 
 ### Summary
@@ -745,8 +764,8 @@ ASCII with a high byte to garbage **without raising**, so utf-16 is returned and
 the block is garbled. utf-16 comes **before** cp1252 in the try order. The only
 utf-16 guard (`lines[1] == '\x00'`) runs only when `encoding == 'utf-8'`, a
 branch already skipped once UTF-8 raised, so nothing catches the misdetection.
-The operating-point reader then finds no device parameters and wrongly reports
-that there are no small-signal device parameters.
+`opLogReader` then finds no device parameters and returns an empty result, as
+if the log held none.
 
 ### Affected code
 
@@ -796,10 +815,12 @@ def test_cp1252_with_high_byte_not_detected_as_utf16(tmp_path):
 
 ### Cross-reference
 
-Downstream: `tests/test_log_parser.py::...::test_cp1252_degree_byte_in_step_value_recovered`
-plus the cp1252 cases in `tests/test_encoding.py`. Once upstream fixes the
-order, delete the step that rewrites the log to a UTF-8 temporary file before
-`opLogReader` reads it.
+Downstream: `tests/test_device_op_points.py::TestReadDeviceOpPoints::test_recovers_op_points_from_nonutf8_log`
+pins the operating-point read of a cp1252 log with a degree-sign byte.
+`tests/test_log_parser.py::...::test_cp1252_degree_byte_in_step_value_recovered`
+and the cp1252 cases in `tests/test_encoding.py` pin our decoder. Once upstream
+fixes the order, delete the step that rewrites the log to a UTF-8 temporary
+file before `opLogReader` reads it.
 
 ---
 
@@ -906,12 +927,12 @@ same predicate makes `RunTask.wait_results()` unbounded
 (`while self.is_alive() or self.start_time is None or self.retcode == -1`).
 
 Because the last reference is usually dropped by ordinary garbage collection,
-the infinite wait runs on whichever thread happened to allocate. On 2026-09-07
-a release-gate CI job produced no output for 12 minutes 48 seconds because of
-it and was killed by the job timeout. The job reported only "The operation was
-canceled", with no traceback, no failing test and no simulator process left
-behind, because the simulation had finished and only the waiting thread was
-stuck.
+the infinite wait runs on whichever thread's allocation triggered the
+collection. On 2026-09-07 one of our CI jobs produced no output for 12 minutes
+48 seconds because of it and was killed by the job timeout. The job reported
+only "The operation was canceled", with no traceback, no failing test and no
+simulator process left behind, because the simulation had finished and only
+the waiting thread was stuck.
 
 Under CPython's reference counting, the destructor can run at the end of the
 statement that submits. `run()` starts the simulation on a run-task thread and
@@ -967,14 +988,15 @@ Observed: it returns only when the simulation completes.
 
 The failure is severe and raises no error for any caller that submits from a
 worker thread and expects to keep working, which every async wrapper does. In
-this project the coordinator submits a case via `asyncio.to_thread` and then
-resumes to mark the case running and start watching for cancellation. Because
-the worker thread was blocked in the destructor, the coroutine never resumed.
-The case never reached the cancellation watcher, so **a cancellation could
-never reach the simulator**. The run continued to completion, the job
-accounting recorded a case that had started as never submitted, and the
-completed result was left on disk with no record that referred to it. The user
-saw that cancel did nothing, and the cause was the destructor.
+this project, a coroutine submitted each simulation through `asyncio.to_thread`
+and, once that call returned, marked the simulation running and started
+watching for a cancel request. Because the worker thread was blocked in the
+destructor, the coroutine never resumed and the cancel watch never started, so
+**a cancellation could never reach the simulator**. The run continued to
+completion, our job records listed a simulation that had started as never
+submitted, and the completed result was left on disk with no record that
+referred to it. The user saw that cancel did nothing, and the cause was the
+destructor.
 
 Because the destructor passes `abort_all_on_timeout=True`, a garbage collection
 at an unlucky moment can also *abort* simulations that belong to a runner the
@@ -1043,9 +1065,9 @@ applies.
 **Affected version:** observed on LTspice 26.0.2 for Windows (via WSL interop).
 spicelib is not involved; see "Why this is not a spicelib bug" below.
 **Our handling:** `src/ltspice_mcp/lib/netlist_graph.py` already strips the
-marker (`_LTSPICE_INSTANCE_MARKER`, applied in `_strip_marker`) and the
-netlist lexer discards the trailing `;` comment. There is no workaround to
-remove later.
+marker from each reference (`_strip_marker`), `canon_ref` drops it when two
+references are compared, and the netlist lexer discards the trailing `;`
+comment. There is no workaround to remove later.
 
 ### Summary
 
@@ -1145,7 +1167,7 @@ stock.net  -> ref='XU1' type='X' nodes=(...x4)                   model='bk_inv' 
 The comment is read neither as a fourth or fifth node nor as a parameter, so
 the node count and the parameters are right. This entry guards against a
 *future* parser that splits the card before stripping comments, or that
-matches references literally instead of through the reference canonicalizer.
+compares references with the `§` still in them instead of through `canon_ref`.
 
 ### Why this is not a spicelib bug
 
@@ -1164,9 +1186,9 @@ output, so spicelib neither introduces nor can remove the marker.
 ### No workaround
 
 There is deliberately no workaround. The marker is stripped where references
-are canonicalized, and the annotation is a SPICE comment. A separate pass that
-removed them would be dead code and would hide a real change in LTspice's
-output format.
+are parsed and compared, and the annotation is a SPICE comment. A separate
+pass that removed them would be dead code and would hide a real change in
+LTspice's output format.
 
 ### Cross-reference
 
@@ -1181,18 +1203,20 @@ reference, node count, model and parameters.
 
 ### Summary
 
-For a `.raw` file that parsed but contains no plot data, `RawRead.get_axis()`
-(and by the same route `get_time_axis()` / `get_wave()`) returns
-`numpy.array([])` built as a 0-dimensional array rather than an empty
-1-d array. `len(axis)` then raises `TypeError: len() of unsized object`
+For a `.raw` file that parsed but contains no plots, `RawRead.get_axis()`,
+`get_wave()` and `get_time_axis()` each return `numpy.ndarray([])`. That is the
+low-level constructor, whose first argument is the shape, so it builds an
+uninitialized 0-dimensional array rather than an empty 1-d array.
+`len(axis)` then raises `TypeError: len() of unsized object`
 instead of returning `0`, and any caller that sizes the axis before
 reading it has to handle, as a special case, a Python exception that gives
 no information about the file.
 
 ### Affected code
 
-spicelib 1.5.1, `spicelib/raw/raw_read.py`, the empty-data branch of
-`get_axis()` / `get_trace()`.
+spicelib 1.5.1, `spicelib/raw/raw_read.py`, the `if len(self._plots) == 0`
+branch of `get_wave()`, `get_time_axis()` and `get_axis()` (~lines 531, 542 and
+556). `get_trace()` raises `SpiceReadException` in the same case instead.
 
 ### Reproduction
 
@@ -1227,11 +1251,13 @@ def test_empty_axis_is_one_dimensional(tmp_path):
 
 ### Cross-reference
 
-Workaround: `src/ltspice_mcp/lib/raw_parser.py` catches `TypeError`
-alongside `RuntimeError` at the axis read in `build_simulation_summary`
-(the comment there names this bug). Pinned by
-`tests/test_log_parser.py::test_missing_log_with_invalid_raw`. Remove
-`TypeError` from that catch once upstream returns a 1-d empty array.
+Workaround: `build_simulation_summary` and `query_point_value` in
+`src/ltspice_mcp/lib/raw_parser.py` catch `TypeError` alongside `RuntimeError`
+at the axis read, for a caller that passes them a spicelib `RawRead` (the
+comments there describe this bug). The server's own decoded plots raise
+`NoAxisError` instead (`DecodedPlot.get_axis` in `lib/decoded_raw.py`). No
+current test pins the catch. Remove `TypeError` from those catches once
+upstream returns a 1-d empty array.
 
 ## Bug 12 — `AscEditor.save_netlist` silently drops hierarchical ports
 
@@ -1257,11 +1283,10 @@ IOPIN 160 0 Out
 ```
 
 The output contains both `FLAG` lines and neither `IOPIN`. We reproduced this
-through our public `edit_schematic` handler by adding `.param marker=1` with a
-matching revision hash. The handler reported a complete, committed edit, and
-the port count fell from two to zero. The acceptance check for native export
-uses a parent/child pair to check the interface instead of treating retained
-labels as retained ports.
+through our `edit_schematic` tool, which saves a sheet through `save_netlist`,
+by adding `.param marker=1` (with the sheet's current SHA-256, which the tool
+requires before it changes an existing file). The tool reported a complete,
+saved edit, and the port count fell from two to zero.
 
 ### Impact, proposed upstream fix and test
 
@@ -1277,12 +1302,15 @@ Also cover a removed label still referenced by a port.
 
 ### Workaround and regression
 
-`tools/schematic_edit.py::_render_editor_text` restores port records next to
-the flags it writes and checks their association before staging.
-`tests/test_edit_schematic.py::TestHierarchicalPortPreservation` covers the
-public edit, a refused label removal, reordered or changed labels, and
-ambiguous associations. Remove this workaround when the pinned dependency
-preserves the same cases itself.
+`tools/schematic_edit.py::_render_editor_text` renders the sheet with
+`save_netlist` into a `StringIO`, then writes each port's `IOPIN` line after
+its `FLAG` line, matching ports to labels by label object. It refuses the edit
+before anything is written when a label belongs to more than one port or the
+rendered `FLAG` lines no longer match the editor's labels.
+`tests/test_edit_schematic.py::TestHierarchicalPortPreservation` covers an
+ordinary edit through `edit_schematic`, a refused label removal, reordered or
+changed labels, and ambiguous associations. Remove this workaround when the
+pinned dependency preserves the same cases itself.
 
 ## Bug 13 — a `StringIO` schematic save can write modified child files
 
@@ -1299,8 +1327,9 @@ Load a parent ASC containing a BLOCK symbol backed by a child ASC. Obtain the
 child with `parent.get_subcircuit("X1")`, call
 `child.set_parameter("changed", 1)`, and render the parent into `StringIO`.
 The child's on-disk file changes. The same branch is reached while our
-`edit_schematic(dry_run=true)` renders its candidate sheet before the dry run
-returns. A parent-only transaction cannot safely commit those child changes.
+`edit_schematic(dry_run=true)` renders the edited sheet before the dry run
+returns. Our tool saves only the parent sheet, in one atomic write, so it cannot
+safely include those child changes.
 
 ### Proposed upstream fix and test
 
@@ -1313,13 +1342,15 @@ portless parent and a deeper loaded descendant.
 
 ### Workaround and regression
 
-`tools/schematic_edit.py::_refuse_pending_child_edits` checks loaded descendants
-before invoking the dependency serializer, including portless sheets. It refuses
-pending child updates without modifying editor flags or child files.
+`tools/schematic_edit.py::_refuse_pending_child_edits` runs before every call
+to `save_netlist`. It walks every loaded child sheet at any depth, including
+sheets with no ports, and refuses the edit if any has pending changes
+(`updated` set), without modifying editor flags or child files.
 `TestHierarchicalPortPreservation.test_pending_child_changes_never_write_through_parent`
-covers the public normal-edit and dry-run paths with real loaded child editors.
-The root sheet's existing revision guard and atomic commit remain the only
-place where files are written.
+covers an ordinary edit and a dry run through `edit_schematic`, with real
+loaded child editors. Files are written only when our tool saves the edited
+sheet itself, which it does with an atomic rename after checking the caller's
+SHA-256 of the file.
 
 ## Bug 14 — `SimRunner.run` cannot run without a timeout, though `None` is documented as "no timeout"
 
@@ -1380,9 +1411,9 @@ Reproduced on spicelib 1.5.1, 2026-09-29, with any deck.
 
 A caller cannot leave the simulator bounded only by its own logic. Before we
 found this bug we passed a fixed 600 s instead, which became a hidden limit on
-every run. A case given a longer `run_timeout_s` was killed at 600 s by
-`subprocess.run`, and the kill was reported as spicelib's generic exit code -2
-instead of as a timeout.
+every run. A run given a longer limit through our `run_timeout_s` setting was
+killed at 600 s by `subprocess.run`, and the kill was reported as spicelib's
+generic exit code -2 instead of as a timeout.
 
 The obvious substitute for `None`, a very large number, is not safe on Windows.
 There `subprocess` converts the timeout to integer milliseconds and passes it
@@ -1425,10 +1456,16 @@ finished files. Recorded 2026-09-29.
 and `read_trace_data`; `spicelib/sim/run_task.py`, `RunTask.run`).
 **Our workaround:** `src/ltspice_mcp/lib/raw_parser.py` —
 `read_partial_raw_progress` reads the header itself and counts complete records
-from the file length. The experiment coordinator calls it for every case it
-stops, before the partial raw is deleted, and records the result as a
-`partial_progress` observation. It reads only how far the run got, never the
-values, so no workaround is needed for the waveform parse itself.
+from the file length. When our server stops a simulation (for its time limit, a
+job deadline or a cancel), it calls this before deleting the run's files and
+reports the result to the caller as a `partial_progress` note in the job's
+results. When the caller asked to keep the partial raw (our `keep_partial_raw`
+option), `cut_partial_raw` also truncates a binary file stored in record order
+after its last kept point and writes that point count into the header, so an
+ordinary spicelib read loads it. An ngspice file keeps every complete point.
+An LTspice file keeps at most the points its header count declares, because
+LTspice's own reader stops there and LTspice XVII's records past that count
+need not continue in time.
 
 ### Summary
 
@@ -1497,11 +1534,12 @@ ngspice copy still raises.
 
 ### Cross-reference
 
-Workaround: `raw_parser.py` `read_partial_raw_progress`, used by
-`experiment_runner.py` `_note_partial_progress`. Pinned by
+Workaround: `raw_parser.py` `read_partial_raw_progress` and `cut_partial_raw`,
+used by `ExperimentRunner._read_progress` in `experiment_runner.py`. Pinned by
 `tests/test_raw_parser.py::TestPartialRawProgress` (the lagging LTspice count in
-`test_a_declared_count_behind_the_records_does_not_cap_them`) and, against a
-real killed ngspice run,
+`test_a_declared_count_behind_the_records_does_not_cap_them`),
+`tests/test_raw_parser.py::TestCutPartialRaw` (each cut file read back with
+spicelib's `RawRead`) and, against a real killed ngspice run,
 `tests/test_ngspice_e2e.py::test_run_timeout_reports_the_killed_runs_diagnostics_and_progress`.
 
 ## Bug 16 — `AscEditor.get_components(prefixes)` matches a character set, case-sensitively (limitation)
@@ -1536,12 +1574,13 @@ lower-case letter, a multi-letter prefix, and the `'*'` default.
 
 ### Workaround and regression
 
-`tools/inspect_tools.py::_do_components` no longer passes a prefix to
-spicelib. It lists every reference and keeps those for which
-`montecarlo.matches_prefix` matches the prefix. That function compares the
-prefix case-insensitively with the start of the reference, the same rule that
-the netlist branch and the `hierarchy` query use (`_check_prefix` returns the
-upper-cased prefix that all three compare against). Pinned by
+Our component listing (`tools/inspect_tools.py::_do_components`) does not call
+`get_components`. It reads the sheet with our own `.asc` reader, lists every
+reference, and keeps those for which `montecarlo.matches_prefix` matches the
+prefix. That function compares the prefix case-insensitively with the start of
+the reference. Our component listing for a netlist and our listing of a
+design's hierarchy use the same rule (`_check_prefix` validates the prefix and
+returns it upper-cased for all three to compare against). Pinned by
 `tests/test_inspect_tools.py::test_components_prefix_filter_asc_ignores_case`
 and `test_components_prefix_is_a_case_insensitive_reference_prefix`. Nothing
 here depends on spicelib's filter, so there is no workaround to remove when
@@ -1661,8 +1700,9 @@ the folders they loaded.
 `bind_named_executable` creates a subclass of the family's class for each named
 executable and calls `create_from` on the subclass, so the program is written
 onto that subclass alone. Keep the subclass even once upstream is fixed,
-because the runner, the launch permits and the process names used for kills
-are all looked up by class, with one class per build. Only the comment that
+because our runner cache, our limit on simultaneous simulator processes and
+the process names we kill by are all looked up by class, with one class per
+build. Only the comment that
 explains why `create_from` must never touch the family's class can then be
 removed.
 
@@ -1813,10 +1853,12 @@ xvii.get_default_library_paths()
 
 ### Impact
 
-A program that trusts the running simulator's own library (we accept a deck's
-reference into it without widening the sandbox, because LTspice's netlister
-writes such references itself) extends that trust to another program's
-library too. On WSL none of the listed directories exists, so XVII's library
+A program that trusts the running simulator's own library extends that trust
+to another program's library too. We let a deck include files from the
+simulator's library even when our path allow-list (`allowed_paths`) leaves the
+install out, because LTspice's netlister writes such include lines itself (for
+example `.lib <install>/lib/cmp/standard.mos` for every schematic with a
+MOSFET). On WSL none of the listed directories exists, so XVII's library
 could not be found until we searched for it ourselves.
 
 ### Proposed fix
@@ -1861,12 +1903,16 @@ launched.
 **Affected version:** spicelib 1.5.1
 (`spicelib/simulators/ltspice_simulator.py`, `LTspice.ltspice_args` and
 `LTspice.valid_switch`).
-**Our workaround:** `lib/controlled_ltspice.py::controlled_ltspice` constructs
-separate `'-ini', path` arguments directly. It starts from an established
-profile that it never modifies and gives each attempt a writable copy that it
-verifies. Controlled recovery runs only with the audited Windows executable and
-startup policy; correcting this upstream typo alone does not establish support
-for other builds.
+**Our workaround:** `lib/controlled_ltspice.py::controlled_ltspice` launches
+LTspice for a job submitted with our `recoverable` option (its inputs are saved
+so it can be resumed later; native Windows only). It builds the command itself,
+with `-ini` and the path as separate arguments (`-Run -b <deck> -ini <path>`).
+The path names a fresh writable copy of a saved settings file that LTspice
+itself had written; the saved file is never modified, and each copy is checked
+against it just before launch. This launch path accepts only one
+LTspice executable, identified by its SHA-256, whose startup behaviour we
+inspected, so correcting this upstream typo alone does not make other builds
+supported.
 
 ### Summary
 
@@ -1937,14 +1983,17 @@ No simulator process or settings file is needed.
 `src/ltspice_mcp/lib/controlled_ltspice.py::controlled_ltspice` bypasses the
 malformed expansion. `tests/test_controlled_ltspice.py::test_launch_uses_documented_flags_and_child_environment`
 pins the separate flag and path arguments and the environment local to the
-launch. The other tests in that file also cover profile templates that must not
-change, the initial verification of the writable copy, the effective Windows
-profile values and unsupported execution policies.
+launch (it sets `APPDATA` to the copy's folder for the child process only).
+The other tests in that file cover the saved settings file that must not
+change, the check of the writable copy before launch, the settings values as
+the Windows profile API reads them, and the refusal of other executables and
+launch settings.
 
-The first investigation, on 2026-10-02, had no production adapter and did not
-launch the malformed flag. Later runs on native Windows completed a numeric
-batch solve and exited normally using `-Run -b <deck> -ini <profile>` with a
-real copy of settings that LTspice itself had prepared. These runs do not
+The first investigation, on 2026-10-02, came before we had any launch code for
+this and did not launch the malformed flag. Later runs on native Windows
+completed a numeric batch solve and exited normally using
+`-Run -b <deck> -ini <profile>` with a real copy of settings that LTspice
+itself had prepared. These runs do not
 establish the behavior of the malformed argv, and they do not validate every
 LTspice build and solver configuration.
 
@@ -1959,9 +2008,14 @@ forwards arguments to `subprocess`.
 `Simulator.run` and `run_function`; `spicelib/simulators/ngspice_simulator.py`,
 `NGspiceSimulator.run`; `spicelib/sim/run_task.py`, `RunTask.run`).
 **Our workaround:** `src/ltspice_mcp/lib/controlled_ngspice.py::controlled_ngspice`
-binds recorded startup settings to a simulator subclass and passes a private
-environment mapping directly to `subprocess.run`. The existing runner still
-handles submission and cancellation.
+launches ngspice for a job submitted with our `recoverable` option (its inputs
+and startup settings are saved so it can be resumed later). It returns an
+`NGspiceSimulator` subclass whose `run` builds the command from the saved
+settings and calls `subprocess.run` with an environment of its own, made from
+the server's environment without any `SPICE_*` variable plus the saved
+`SPICE_SCRIPTS`.
+Submission and cancellation go through spicelib's `SimRunner` and `RunTask`
+as for any other run.
 
 ### Summary
 
@@ -1971,11 +2025,11 @@ environment. A caller cannot bind a particular `SPICE_SCRIPTS` directory to one
 run through that interface. Changing `os.environ` around a launch changes shared
 process state and can affect concurrent runs.
 
-This matters for controlled ngspice startup. Measured runs on Linux and Windows
-showed that `-n` suppresses user and local initialization but not the system
-spinit. To meet our recovery requirements, each child process therefore needs a
-`SPICE_SCRIPTS` override that points to a captured, inert spinit, in addition
-to `-n`.
+This matters when a resumed job must start ngspice the same way as the original
+run. Measured runs on Linux and Windows showed that `-n` suppresses user and
+local initialization but not the system spinit. Each child process therefore
+needs, in addition to `-n`, a `SPICE_SCRIPTS` override that points to a spinit
+we write ourselves, which holds only a comment.
 
 ### Affected code
 
@@ -2023,7 +2077,7 @@ for function, first_arg in (
 ### Impact
 
 Runs that need different startup directories cannot pass those environments
-through the standard adapter API. Startup files inherited from the ambient
+through spicelib's simulator interface. Startup files inherited from the ambient
 environment can change simulator behavior even when the deck bytes are
 unchanged. Working around this by changing the process-wide environment would
 also make the result depend on how launches overlap in time.
@@ -2042,24 +2096,28 @@ the parent's environment to implement it.
 Use a Python child process instead of a simulator to test the real helper. Give
 two concurrent calls different values of a test environment variable, have each
 child assert its own value, and assert that the parent's environment is unchanged.
-Test `env=None` inheritance separately. At the adapter/runner boundary, assert
-that each mapping reaches the helper unchanged for both `exe_log` modes.
+Test `env=None` inheritance separately. Through `SimRunner`, `RunTask` and the
+simulator's `run`, assert that each mapping reaches the helper unchanged for
+both `exe_log` modes.
 
 ### Cross-reference
 
-The downstream adapter copies the inherited environment, removes ambient
-`SPICE_*` variables, applies its recorded `SPICE_SCRIPTS` override, and includes
-`-n` without changing shared environment or compatibility-mode state.
+Our subclass copies the server's environment, removes every `SPICE_*`
+variable, adds the `SPICE_SCRIPTS` value saved with the job, and adds `-n`. It
+changes neither `os.environ` nor the compatibility mode of `NGspiceSimulator`
+itself (it sets `_compatibility_mode` on its own subclass).
 `tests/test_controlled_ngspice.py::test_concurrent_launches_keep_separate_environments`
 pins separate environment mappings and an unchanged parent environment.
-`::test_verification_refuses_before_spawn` pins that verification refuses
-before any process starts. `::test_real_ngspice_uses_only_the_recorded_startup`
-runs a real ngspice process with hostile startup files in its environment and
-checks its numeric output and that the startup marker is absent.
+`::test_verification_refuses_before_spawn` pins that a failed check of the
+saved inputs stops the launch before any process starts.
+`::test_real_ngspice_uses_only_the_recorded_startup` runs a real ngspice process
+with `SPICE_SCRIPTS` and `SPICE_USERINIT_DIR` pointing at startup files that
+print a marker and quit, and checks its numeric output and that the marker is
+absent.
 
 An upstream `env` argument would let us delete our duplicate of the subprocess
-call. Verification of frozen bytes and the captured startup policy would stay
-in this project's recovery code.
+call. The checks that the saved input files and startup settings are unchanged
+would stay in this project's recovery code.
 
 ---
 
@@ -2071,20 +2129,25 @@ adapter.
 **Affected version:** ngspice 42, observed with the Linux console package
 `42+ds-3build1`. Matching upstream source defines `WaGauss` and calls
 `frontend/trannoise/wallace.c::initw` during startup.
-**Existing workaround:** `src/ltspice_mcp/lib/ngspice_driver.py::seeded_commands`
-places `setseed` immediately before `source` inside a driver script that this
-project writes. Both `pdk_native.driver_bytes` and
-`controlled_ngspice.prepare_seeded_driver` use this sequence. The seeds of
-native statistical samples stay separate from the explicit `simulator_seed` of
-an ordinary recoverable run, and neither sets a seed in spinit.
+**Our workaround:** we never set a seed in spinit.
+`src/ltspice_mcp/lib/ngspice_driver.py::seeded_commands` writes a short control
+script (a driver script) that runs `setseed <seed>`, then `source <deck>`,
+`run` and `write`, so the seed is set directly before ngspice reads the deck.
+`pdk_native.driver_bytes` uses it for Monte Carlo samples that ngspice draws
+from a PDK's own statistical models (our native statistics), and
+`controlled_ngspice.prepare_seeded_driver` uses it for a job submitted with our
+`recoverable` option and an explicit `simulator_seed`. An explicit
+`simulator_seed` cannot be combined with native statistics, which give each
+sample its own seed.
 
 ### Summary
 
 A positive `setseed N` in system spinit executes and sets the `rndseed`
-variable, but the initial electrical deck's `AGAUSS` values are not controlled
-by that seed. Later process initialization overwrites the shared generator
-state. The variable still reports the caller's seed, so checking that variable
-or checking a random draw within spinit can falsely suggest reproducibility.
+variable, but the `AGAUSS` values in the circuit deck that ngspice loads at
+startup (the electrical deck) are not controlled by that seed. Later process
+initialization overwrites the shared generator state. The variable still
+reports the caller's seed, so checking that variable or checking a random draw
+within spinit can falsely suggest reproducibility.
 
 ### Affected code and mechanism
 
@@ -2153,8 +2216,8 @@ before electrical input evaluation.
 ### Impact
 
 A run seed recorded only in spinit cannot guarantee repeatable random
-parameter values in the electrical deck on the affected build. Frozen input
-bytes and an unchanged executable are not enough when the shared generator
+parameter values in the electrical deck on the affected build. Unchanged input
+files and an unchanged executable are not enough when the shared generator
 state is later initialized from the process ID.
 
 ### Proposed fix
@@ -2177,19 +2240,22 @@ pool instead of the parameter evaluator's generator.
 
 ### Cross-reference
 
-`ngspice_driver.seeded_commands` provides the shared deterministic command
-order, which `pdk_native.driver_bytes` uses for native samples. For ordinary
-seeded recovery, `controlled_ngspice.prepare_seeded_driver` captures a separate
-driver script, and `verify_seeded_driver` checks its identity and bytes before
-launch. `tests/test_recovery_seed.py::test_shared_sequence_preserves_the_audited_native_driver_bytes`
-pins reuse of the native command sequence;
-`::test_real_seeded_coordinator_reproduces_electrical_results` and
-`::test_seeded_retry_keeps_successes_and_reuses_recorded_seed` cover seeded
-runs and retries through the ordinary coordinator.
+`ngspice_driver.seeded_commands` writes the command order both features share,
+and `pdk_native.driver_bytes` uses it for native statistics samples. For a
+recoverable job with `simulator_seed`,
+`controlled_ngspice.prepare_seeded_driver` saves its own driver script, and
+`verify_seeded_driver` checks the script's path, bytes and SHA-256 before each
+launch.
+`tests/test_recovery_seed.py::test_shared_sequence_preserves_the_audited_native_driver_bytes`
+pins that native statistics keep producing the same driver bytes from the
+shared sequence; `::test_real_seeded_coordinator_reproduces_electrical_results`
+and `::test_seeded_retry_keeps_successes_and_reuses_recorded_seed` cover seeded
+runs and retries through our normal job runner.
 
-`native_execution.prepare_native_cases` captures electrical and driver bytes
-before publication, and `pdk_native.verify_launch` verifies them before
-submission. `tests/test_pdk_native.py::test_windows_paths_with_spaces_use_only_generated_relative_names`
+`native_execution.prepare_native_cases` writes each sample's deck and driver
+script before the job is recorded, and `pdk_native.verify_launch` checks both
+against their saved SHA-256 before the run is submitted.
+`tests/test_pdk_native.py::test_windows_paths_with_spaces_use_only_generated_relative_names`
 checks the generated driver. A separate check that launches console ngspice
 three times confirms repeatable numeric results for the small `.param AGAUSS`
 deck. This project does not claim that a seed set in a startup file controls
@@ -2305,7 +2371,8 @@ assertion fails, and `_AscEditor` can be removed.
 **Our workaround:** `lib/ltspice_windows.py` provides the LTspice class that a
 server on native Windows launches. It overrides `run` and `create_netlist` to
 start spicelib's own command lines through `lib/hidden_desktop.py`, on a
-desktop that the server creates. The fixture recorder uses the same launch.
+desktop that the server creates. The code that records LTspice's output for our
+test fixtures (`tests/ltspice_recorder.py`) uses the same launch.
 
 ### Summary
 
@@ -2477,7 +2544,8 @@ def test_log_with_a_byte_no_listed_codec_defines(tmp_path):
 
 `tests/test_recorded_ltspice_results.py::test_a_run_whose_title_holds_a_byte_cp1252_lacks_is_read`
 reads the recorded log through `parse_measurements`. Once upstream reads
-such a log, the last candidate in `make_log_reader` can be removed.
+such a log, the last retry in `make_log_reader`, which passes spicelib the
+log's text unchanged in a UTF-8 copy, can be removed.
 
 ---
 
@@ -2537,9 +2605,9 @@ AscEditor(sheet).save_netlist(out)
 assert "DATAFLAG" not in out.getvalue()   # both data labels are gone
 ```
 
-Before the workaround, an `edit_schematic` commit through our server that
-added one net label to such a sheet reported a complete, committed edit, and
-the file it wrote contained no `DATAFLAG` line.
+Before the workaround, an edit through our `edit_schematic` tool that added one
+net label to such a sheet reported the edit as saved, and the file it wrote
+contained no `DATAFLAG` line.
 
 The sheet above is the smallest that shows the loss. The same loss is
 reproduced on a recorded sheet,
@@ -2599,15 +2667,16 @@ and their ports. A second sheet is in cp1252 with a micro sign in its label,
 which is written back in the sheet's own codec.
 `tests/test_recorded_ltspice_schematics.py::TestSheetRecords` applies the same
 checks to the recorded sheet. Both builds export it with no trace of the data
-labels in the netlist, and an edit that sets the resistor's value commits the
+labels in the netlist, and an edit that sets the resistor's value saves the
 sheet unchanged except for that value. The workaround places the records
 together after the net labels and before the first symbol, where the example
 sheets that both builds install place them (*Reproduction*). This position
 keeps them out of a symbol's block of `WINDOW` and `SYMATTR` lines and out of
 the space between a `FLAG` and its `IOPIN`. `TestPathsThatLeaveTheSheetAsItIs`
-pins that a read, a dry run and a batch that only sets plot panes leave such a
-sheet's bytes unchanged. Once upstream keeps the records, `_data_flag_lines`
-and `_with_data_flags` can be removed.
+pins that a read, a dry run and an edit that only sets waveform plot panes
+(stored in the `.plt` file beside the sheet) leave such a sheet's bytes
+unchanged, because none of them rewrites the sheet. Once upstream keeps the
+records, `_data_flag_lines` and `_with_data_flags` can be removed.
 
 ---
 
@@ -2621,10 +2690,10 @@ LTspice XVII both read the two kinds of sheet it refuses (`export/bus_tap`,
 `AscEditor.reset_netlist` ~line 274).
 **Our workaround:** `lib/schematic_ops.py::make_editor` converts the
 `NotImplementedError` into a `NetlistError` (`_unreadable_record`) that names
-the sheet containing the line (the target or a sheet it loads) and gives the
-line's number and text. It finds that sheet in the traceback. The innermost
-`reset_netlist` frame is the read that refused; its editor gives the file and
-codec, and its `line` variable gives the line.
+the sheet containing the line (the sheet being opened or a sheet it loads) and
+gives the line's number and text. It finds that sheet in the traceback. The
+innermost `reset_netlist` frame is the read that refused; its `self` gives the
+file and codec, and its `line` variable gives the line.
 
 ### Summary
 
@@ -2653,8 +2722,9 @@ on a node of its own, `N001`. A reader that keeps the record and derives no
 connection from it therefore gets the same connections at the tap as LTspice.
 The node that a bus's own label names is a separate question that does not
 involve spicelib. Both builds put a wire labelled `D[0:3]` on the node of a
-wire labelled `D[0]` (`connectivity/bus_label`), and our net partition does
-not, which `tests/test_recorded_ltspice_schematics.py` pins as
+wire labelled `D[0]` (`connectivity/bus_label`), and our own grouping of a
+sheet's wires into nets (`lib/connectivity.py`) does not, which
+`tests/test_recorded_ltspice_schematics.py` pins as
 `JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY`.
 
 The field layout still comes from KiCad's importer, not from a recording. No
@@ -2695,9 +2765,10 @@ Path("blank_line.asc").write_bytes(b"Version 4\nSHEET 1 880 680\n\nWIRE 0 0 160 
 AscEditor("blank_line.asc")    # the same error, for the line "\n"
 ```
 
-Before the workaround, `edit_schematic` through our server failed on the first
-sheet with `Internal error in edit_schematic: NotImplementedError: ...`, and
-`inspect`'s `components` and `net` queries on it returned `internal_error`.
+Before the workaround, our `edit_schematic` tool failed on the first sheet with
+`Internal error in edit_schematic: NotImplementedError: ...`, and the component
+and net listings of our `inspect` tool returned our generic `internal_error`
+code for it.
 
 The two sheets above are the smallest that show the error. The recorded sheets
 `export/bus_tap.asc` and `export/blank_line.asc` under
@@ -2714,12 +2785,13 @@ recordings show both builds exporting those sheets.
 - The exception type is "not implemented" and the message gives no file or
   line, so a caller cannot tell an unreadable sheet from a defect, or find the
   line in a hierarchy.
-- Downstream, `verify_circuit` reads a sheet with its own parser
-  (`lib/schematic_scene.py::_parse_asc`), which skips a keyword it does not
+- Downstream, our `verify_circuit` tool reads a sheet with our own parser
+  (`lib/asc_document.py::parse_asc`, drawn by
+  `lib/schematic_scene.py::build_scene`), which skips a keyword it does not
   draw, so it draws and checks such a sheet without that record while the
-  editing tools refuse it. It used to do this without any report; it now
-  reports, as an observation, each such keyword, the number of lines that
-  contain it and the first such line.
+  editing tools refuse it. It reports each such keyword as an observation (a
+  note in its result), with the number of lines that contain it and the first
+  such line.
 
 ### Proposed fix
 
@@ -2765,7 +2837,7 @@ names); the observation `verify_circuit` reports; and that its drawing, which
 skips a tap, shows each tapped wire ending unconnected, as the netlist does.
 Once upstream opens such a sheet, `_unreadable_record` can be removed. An edit
 of a sheet containing a bus tap then needs the same check as Bug 25, that a
-commit writes the record back instead of dropping it.
+saved edit writes the record back instead of dropping it.
 
 ---
 
@@ -2780,8 +2852,9 @@ on the recorded inputs `export/micro_utf8_bom.asc` and
 **Our workaround:** `lib/schematic_ops.py::make_editor` converts the
 `EncodingDetectError` into a `NetlistError` (`_unrecognised_sheet`) that names
 the UTF-8 mark; `tools/schematic_edit.py::_commit_codec` writes a sheet that
-started with a UTF-16 mark back as UTF-16 LE without it; and `verify_circuit`'s
-quality check reports either mark (`byte_order_mark`). `lib/encoding.py`
+started with a UTF-16 mark back as UTF-16 LE without it; and the `quality`
+check of our `verify_circuit` tool reports either mark as a finding with the
+rule id `byte_order_mark`. `lib/encoding.py`
 defines which marks LTspice refuses (`refused_sheet_mark`) and the note
 reported for them (`refused_sheet_mark_note`).
 
@@ -2832,8 +2905,8 @@ editor.save_netlist("saved.asc")   # saved.asc starts with b'\xff\xfe'
 
 Both sheets are the recorded inputs named above. Before the workaround,
 `inspect` and `edit_schematic` through our server failed on the first with an
-internal error, and an edit of the second committed a sheet that still started
-with the mark, so neither build could export the edited sheet either.
+internal error, and an edit of the second saved a sheet that still started with
+the mark, so neither build could export the edited sheet either.
 
 ### Impact
 
@@ -2881,10 +2954,11 @@ against the symbol library and example sheets installed with LTspice 26.1.1.
 `AsyReader.__init__`; reached from `spicelib/editor/asc_editor.py`,
 `AscEditor.reset_netlist` and `AscEditor._get_symbol`).
 **Our workaround:** none. A sheet that places such a symbol cannot be opened
-by anything that reads it through `AscEditor`, which includes `edit_schematic`
-and the `inspect` queries that use the editor. `verify_circuit` draws and
-checks it, because it reads symbols with `lib/symbol_file.py`, which takes
-everything after `PINATTR PinName` as the name.
+by anything that reads it through `AscEditor`, which in this project is the
+`edit_schematic` tool. Our `inspect` and `verify_circuit` tools read and check
+it, because they read sheets with our own reader and symbols with
+`lib/symbol_file.py`, which takes everything after `PINATTR PinName` as the
+name.
 
 ### Summary
 
@@ -2969,9 +3043,9 @@ def test_a_pin_name_with_a_space_is_read(tmp_path):
 `tests/test_symbol_file.py::TestAPinNameWithASpace` pins two behaviors: this
 project's reader takes `OUT A` as the pin's name, and the schematic editor
 cannot open a sheet that places the symbol. Once upstream reads such a symbol,
-the second assertion can be removed and such a sheet can be added to the
-sheets the editor must open. Reading such a sheet without spicelib would
-remove the dependency entirely.
+the second test (`test_the_editor_cannot_open_a_sheet_that_places_it`) fails
+and can become a check that the sheet opens. If `edit_schematic` read sheets
+with our own reader instead of `AscEditor`, this bug would no longer affect it.
 
 ---
 
@@ -3072,13 +3146,14 @@ def test_a_parameter_in_value2_is_set_there(tmp_path):
 ### Cross-reference
 
 `tests/test_circuit_asc.py::TestSetComponentValueParameterSlots` pins the
-workaround through the `set_component_value` op. It checks that a threshold in
-`Value` and a width in `Value2` are replaced in place, that a key the part does
-not give is still appended to `SpiceLine` after its existing text, and that
-copies already on a part are all set to the same value, with the sheet's
-`duplicate_parameter` finding naming the part. `tests/test_netlist_graph.py`
-pins that the comparison reports a parameter given twice (`duplicate_params`)
-and treats it as equal only when it is equal whichever copy is read. Once
+workaround through the `set_component_value` operation of our `edit_schematic`
+tool. It checks that a threshold in `Value` and a width in `Value2` are
+replaced in place, that a key the part does not give is appended to
+`SpiceLine` after its existing text, and that copies already on a part are all
+set to the same value, with our sheet check's `duplicate_parameter` finding
+naming the part. `tests/test_netlist_graph.py` pins that our netlist
+comparison reports a parameter given twice (`duplicate_params`) and treats it
+as equal only when it is equal whichever copy is read. Once
 upstream searches every slot and appends as text, the workaround can call
 `set_component_parameters` again.
 
@@ -3087,10 +3162,13 @@ upstream searches every slot and appends as text, the workaround can call
 **Status:** draft for an upstream spicelib pull request. Observed 2026-10-22
 on a resistor named `X9`.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
-`AscEditor._load_asc_file`, the `SYMATTR InstName` branch).
-**Our workaround:** `lib/schematic_ops.py:level_label_lint` decides whether a
-part is a subcircuit call by `element_class`, the letter LTspice netlists it
-as, and no longer reads spicelib's `_SUBCKT` attribute.
+`AscEditor.reset_netlist`, the `SYMATTR InstName` branch).
+**Our workaround:** `lib/schematic_ops.py:level_label_lint` warns when a
+subcircuit part's `Value` would break its netlist line (for example an opamp
+complexity label such as `Level.2`). It decides whether a part is a subcircuit
+call by `element_class`, the letter LTspice netlists it as (the part's own
+`Prefix`, else its symbol's, else its name's first letter), and does not read
+spicelib's `_SUBCKT` attribute.
 
 ### Summary
 

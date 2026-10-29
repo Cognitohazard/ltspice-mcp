@@ -28,7 +28,7 @@ There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, py
 - A regression test must fail before the fix and pass after. Run it against the unfixed code to confirm it fails.
 - Test through real code paths, never a bypass, and assert on real values. Never stub the mechanism a test claims to cover.
 - Re-run a passing suite only after the tree changes.
-- In tests, wait for the value the assertion reads, never for a side effect or a fixed time. Await work the server started through its owner (`await runner.settled(job)`, `await state.settled()`), and anything else (a thread, a fake simulator's callback, another process) through an event or a handshake. A timeout on a wait only caps a hang (`LIVENESS_S` in `tests/conftest.py`), so it is not a test of speed. `tests/test_test_hygiene.py` checks part of this rule mechanically. To reproduce on Linux a test that fails only on Windows, rerun it with `--jitter-seed=random`, which perturbs thread hand-offs, timers and process starts as Windows scheduling does (`tests/schedule_jitter.py`) and prints the seed that reproduces a failure. A test that fails only under a seed has a race. No gate runs it; use it to investigate a flaky test.
+- In tests, wait for the value the assertion reads, never for a side effect or a fixed time. Await work the server started through the object that started it (`await runner.settled(job)`, `await state.settled()`), and anything else (a thread, a fake simulator's callback, another process) through an event or a handshake. A timeout on a wait only caps a hang (`LIVENESS_S` in `tests/conftest.py`), so it is not a test of speed. `tests/test_test_hygiene.py` checks part of this rule mechanically. To reproduce on Linux a test that fails only on Windows, rerun it with `--jitter-seed=random`, which perturbs thread hand-offs, timers and process starts as Windows scheduling does (`tests/schedule_jitter.py`) and prints the seed that reproduces a failure. A test that fails only under a seed has a race. No gate runs it; use it to investigate a flaky test.
 
 Read `docs/TESTING.md` before adding a tool or an op. Some tests check the code against a committed snapshot. After a deliberate change, regenerate the snapshot by running the test with its variable (`LTSPICE_MCP_RECORD_SHEET_FINDINGS`, `LTSPICE_MCP_RECORD_ROUTE_PLANNER`, `LTSPICE_MCP_RECORD_LABELS_AND_MOVES`, `LTSPICE_MCP_RECORD_BUILD_BENCHMARK` or `LTSPICE_MCP_RECORD_INSPECT_SHEETS`) set to `1`. `LTSPICE_MCP_RECORD_SHEET_EDITS` re-records the result of every `edit_schematic` call in the suite (`tests/sheet_edit_record.py`), so it needs a run of the whole suite with no LTspice library installed or visible.
 
@@ -97,23 +97,23 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
     ...
 ```
 
-- `tools/__init__.py` imports every tool module to register it. Its import order is the advertised tool order; do not alphabetise it.
+- `tools/__init__.py` imports every tool module to register it. Do not alphabetise the imports, because each module's dependencies load ahead of it. `ADVERTISED_ORDER` in the same file sets the order `tools/list` advertises, because clients cache the list and prompt caching depends on its exact bytes; a registered tool missing from it stops the server at startup.
 - Every tool declares a `title`.
-- Every registered tool's `output_schema` must be an object schema at the top level. A bare `oneOf`/`anyOf` makes strict clients, Claude Code included, reject the whole `tools/list` response.
+- Every registered tool's `output_schema` must be an object schema at the top level, as MCP requires. `tools/list` leaves output schemas out (`ToolRegistry.get_tools`), but advertising a bare `oneOf`/`anyOf` would make strict clients, Claude Code included, reject the whole response.
 - A tool with an `output_schema` must return `structuredContent` on every code path, text-only replies included.
 - `structuredContent` must contain everything the caller needs, because structured-aware clients drop the text channel when it is present. Copy any hint, referral, recovery step or caveat from the text into the data, conventionally as an optional `hint` key declared in the schema.
-- A handler that a registered tool delegates to declares its own output schema with `@declare_output_schema(...)`; `tests/test_conformance_hook_armed.py` fails a delegation without one.
+- A handler that a registered tool delegates to declares its own output schema with `@declare_output_schema(...)`, so the suite checks its `structuredContent` against that schema instead of the delegating tool's; `tests/test_conformance_hook_armed.py` fails a delegation without one.
 - Keep argument descriptions to one or two plain sentences (unit, sign convention, default, interaction with a sibling field). Put longer explanation in a guide section and point to it (`tests/test_guide_delivery.py` checks that pointers resolve).
 - A file argument is named `path`.
 - Raise errors from the hierarchy in `errors.py`. `server.py:call_tool` converts every failure into an `is_error` result, with one recovery hint per error type in `_ERROR_HINTS`.
 
 ## Rules the code depends on
 
-- **Blocking work**: every request runs on one shared event loop, so offload slow filesystem and parse work with `asyncio.to_thread`. Build responses (`format_response`, `json_response`) in the handler coroutine, and touch cached editors only on the loop.
-- **Background work**: start an unawaited task with its owner's `BackgroundTasks.spawn` (`lib/background.py`), never a bare `create_task`. A direct spawn elsewhere must be listed in `tests/test_test_hygiene.py`.
-- **Paths**: every user-provided path is resolved through `state.resolve_path()` (`safe_path()` on the tool side).
-- **Runners**: get a runner from `state.runners` (`RunnerManager`); never create one directly.
-- **Circuit files**: every circuit-file mutation or export runs inside `circuit_file_lock`, taken before the cached editor is fetched. Resolve any geometry the mutation depends on inside the lock.
+- **Blocking work**: every request runs on one shared event loop, so offload slow filesystem and parse work with `asyncio.to_thread`. Build responses (`format_response`, `json_response`) in the handler coroutine, and use the cached editors (`state.editors`, the parsed circuit files the session keeps between calls) only on the loop.
+- **Background work**: start a task you do not await with `spawn` on the `BackgroundTasks` (`lib/background.py`) of the object that starts it, never with a bare `create_task`, so that object's `settled()` can wait for the work. A direct spawn elsewhere must be listed in `tests/test_test_hygiene.py`.
+- **Paths**: every user-provided path is resolved through `state.resolve_path()` (`safe_path()` on the tool side), which resolves a relative path and refuses a path outside `[security] allowed_paths` when that is set.
+- **Runners**: get a runner from `state.runners` (`RunnerManager`); never create one directly. The manager keeps one runner per simulator and output folder, so runs share its limit on parallel simulations and its per-job cancel events.
+- **Circuit files**: every circuit-file mutation or export runs inside `circuit_file_lock`, taken before the cached editor is fetched. The lock serializes edits from parallel server processes, whose saves would otherwise overwrite each other, and taking it first means the editor cache sees another writer's finished save. Resolve any geometry the mutation depends on inside the lock.
 
 ## Configuration
 
@@ -122,7 +122,7 @@ The server reads `ltspice-mcp.toml` from the working directory and, if it is mis
 - **Sandbox**: paths are unrestricted unless `[security] allowed_paths` (or `LTSPICE_MCP_ALLOWED_PATHS`) is set; then a path outside the list raises `PathSecurityError`.
 - **Named executables**: `[simulator.executables]` (or `LTSPICE_MCP_SIMULATOR_EXECUTABLES`) adds more builds of a simulator, selected per run as `execution.simulator = "ltspice:xvii"`. Each keeps its family's class name, so code that identifies a build reads the executable (`simulator_build.executable_identity`) instead of the class name.
 - **Symbol libraries**: `.asc` editing needs LTspice's `.asy` symbol files. spicelib locates them on Windows and under Wine; `wsl.get_ltspice_lib_paths()` locates them on WSL. `[schematic] symbol_paths` (or `LTSPICE_MCP_SYMBOL_PATHS`) overrides both. Without LTspice there is no `.asc` support.
-- **ngspice mode**: spicelib runs ngspice in `kiltpsa` mode by default, which reads a sectioned `.lib <file> <section>` as two plain includes. `[simulator] ngbehavior` (or `LTSPICE_MCP_NGBEHAVIOR`) sets another mode, such as `"hsa"`.
+- **ngspice mode**: spicelib runs ngspice in `kiltpsa` mode by default, which reads a sectioned `.lib <file> <section>` as plain includes and drops the section, so `run_experiments` refuses such a deck (lint rule `lib-section-ngspice`). `[simulator] ngbehavior` (or `LTSPICE_MCP_NGBEHAVIOR`) sets another mode, such as `"hsa"`.
 
 ## WSL
 

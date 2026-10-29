@@ -12,8 +12,8 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 
 - Write `.cir`, `.net` and `.sp` decks with your own file tools. Change an
   `.asc` schematic only through `edit_schematic`, which checks geometry and
-  writes in one guarded transaction. Iterate on a netlist; build the `.asc`
-  last.
+  writes a whole batch of ops at once, or nothing if one fails. Iterate on a
+  netlist; build the `.asc` last.
 - Simulate instead of reasoning it out, because runs are cheap and a sweep's
   cases run in parallel.
 - Use `run_experiments` for LTspice, for sweeps, corners and Monte Carlo, and

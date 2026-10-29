@@ -33,7 +33,8 @@ MCP client (Claude Desktop, Claude Code, etc.) **and as an importable Python
 library** (`ltspice_mcp.api`) inside a trusted local process. It is not
 hardened as a public, multi-tenant network service. The library runs with the
 importing process's own privileges, and the `allowed_paths` sandbox, when one
-is set, applies to both the server and the library. Relevant considerations:
+is set, limits the paths that both the server's tools and the library's calls
+accept. Relevant considerations:
 
 - **Filesystem access** — unless `[security] allowed_paths` (or
   `LTSPICE_MCP_ALLOWED_PATHS`) is set, there is no sandbox, and tool calls can
@@ -50,18 +51,21 @@ is set, applies to both the server and the library. Relevant considerations:
   Treat third-party `.asc`, `.cir`, and `.lib` files as untrusted executable
   input.
 - **`run_code` runs Python with the server's own authority** — the tool is on
-  by default and runs a snippet in a worker process that holds the engine.
+  by default and runs a snippet in a worker process where `api` is an
+  `ltspice_mcp.api.Api` open on the server's working directory.
   The snippet has the server process's file and process rights, which the
   `allowed_paths` sandbox does not confine. The tool is meant for a local
   server with a single client. Grant it permission in the client as you would
   a shell, and set `[tools] run_code = false` when the server is reachable by
   more than one trusted client, for example through a proxy in front of it.
-- **Job-addressed result reads are not checked against a sandbox** — when
-  `analyze_results` or a job tool reads a `.raw` or `.log` for a `job_id`, the
-  path comes from the server's own job record rather than from the caller, so
-  it is not re-checked against `allowed_paths`. Those files are artifacts this
-  server produced. A result addressed by path instead (`raw_path`, `log_file`)
-  goes through the `allowed_paths` check when a sandbox is set.
+- **Results read by `job_id` are not checked against a sandbox** — when
+  `analyze_results`, `plot_waveform`, `inspect` or the `analyze` argument of
+  `run_experiments` reads a `.raw` or `.log` for a `job_id`, the path comes
+  from the server's own job record rather than from the caller, so it is not
+  re-checked against `allowed_paths`. Those files are artifacts this server
+  produced. A result named by path instead (`raw_path` or `log_path` in
+  `analyze_results`, `raw_file` in `plot_waveform`, `path` in `inspect`) goes
+  through the `allowed_paths` check when a sandbox is set.
 - **Simulation artifacts can be stored outside `allowed_paths`** — staged
   decks, `.raw` and `.log` files are normally stored under the working
   directory's `.ltspice-mcp/runs/`; on WSL with LTspice they are written to a
@@ -71,22 +75,24 @@ is set, applies to both the server and the library. Relevant considerations:
   `runs/{job_id}/` subdirectory under it, so a job's artifacts can be listed
   as a set without guessing at a filename prefix. The root is still shared,
   and any process running as that user can read everything in it. The server
-  takes an artifact's provenance from the job record that names it; a file's
-  presence in that folder does not establish provenance.
+  reads a job's output only from the files that job's record names, never
+  from other files in that folder.
 - **Deck staging** — before a run, the deck and every file its
-  `.include`/`.lib` directives reach are copied into a staging directory and
-  hashed. With no sandbox, every file that exists is staged. With a sandbox, a
-  reference is staged only if it resolves inside `[security] allowed_paths` or
-  inside the detected simulator's own shipped library directory (LTspice's
-  netlister appends a `.lib` into its install for any schematic with a MOSFET
-  on it); anything else is refused and the run does not start.
+  `.include`/`.lib` directives reach are copied into a staging directory, and
+  each file's SHA-256 is recorded in the job record. With no sandbox, every
+  file that exists is staged. With a sandbox, a reference is staged only if it
+  resolves inside `[security] allowed_paths` or inside the detected
+  simulator's own shipped library directory (LTspice's netlister appends a
+  `.lib` into its install for any schematic with a MOSFET on it); anything
+  else is refused and the run does not start. Includes are followed at most 8
+  levels deep, and a deeper reference is refused the same way.
   `allow_live_includes=true` overrides a refusal. The file is then read in
-  place at run time, and the response records that the deck's snapshot hash
-  does not cover its content. Include recursion is bounded at 8 levels by
-  default. A schematic runs as the netlist LTspice exports from it,
-  which the server keeps in its store; that export is admitted because the
-  schematic is, and its relative references resolve from the schematic's own
-  folder, so the store itself need not be inside `allowed_paths`.
+  place at run time, so its content is not in the recorded hashes, and the
+  response reports it in a `live_include` observation. A schematic runs as the
+  netlist LTspice exports from it, which the server keeps in its store. That
+  netlist is allowed to run whenever the schematic is, and its relative
+  references resolve from the schematic's own folder, so the store itself
+  need not be inside `allowed_paths`.
 - **Where the server writes** — the working directory's `.ltspice-mcp/` store
   (or, with `LTSPICE_MCP_STORE_DIR`, a per-working-directory store under that
   directory, which may be outside `allowed_paths`), the run directory above,
@@ -94,13 +100,16 @@ is set, applies to both the server and the library. Relevant considerations:
   directory elsewhere, `LTSPICE_MCP_HOME` to override) holding the
   recent-circuits index and one lock file per circuit ever edited, named by a
   digest of its path. Beside a circuit, the server writes only the files a
-  caller asks for (an edited sheet, a `verify_circuit` `sidecar` export, a
-  `plot_waveform` `out_dir`) and the `<name>.net` that LTspice's own exporter
-  writes beside a schematic it is asked to run.
+  caller asks for (an edited sheet; a `verify_circuit` `sidecar` export; a
+  `plot_waveform` `out_dir`; the `<name>.raw`, `<name>.log` and `<name>.plt`
+  that `plot_waveform` with `in_ltspice` places beside a schematic) and the
+  `<name>.net` that LTspice's own exporter writes beside a schematic it is
+  asked to run.
 - **`plot_waveform` opens a local window by default** — where the client
   cannot render the chart in-chat, the tool writes an HTML file and, with
-  `open` (default `true`), spawns a detached local process to display it in a
-  browser or app window. Pass `open=false` to write the file only.
+  `open` (default `[analysis] open_plot`, which is `true`), spawns a detached
+  local process to display it in a browser or app window. Pass `open=false`,
+  or set `[analysis] open_plot = false`, to write the file only.
 - **The Claude Desktop extension sets a sandbox only when asked** — its
   optional folder picker sets `allowed_paths`, and if the picker is left
   empty, the extension runs with no sandbox.

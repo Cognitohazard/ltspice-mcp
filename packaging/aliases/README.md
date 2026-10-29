@@ -43,9 +43,9 @@ contains its folder has been published.
 If an alias's trusted publisher is registered only after a release, use
 manual dispatch (Actions tab → Run workflow). Run the workflow against that
 release's tag and set the `alias` input to the single package (default
-`all`). Run it against a tag ref, because `hatch-vcs` produces a
-PyPI-acceptable version only on an exact tag. A build from a branch or any
-other commit gets a `.devN+g<sha>` local segment that PyPI rejects.
+`all`). Run it against a tag ref, because the workflow takes the version from
+the ref name and stops with an error when the ref is not a release tag
+(`v` followed by a version such as `0.3.0`).
 
 In the repository, the `ltspice-mcp` dependency is a `>=` lower bound used
 only for local development. At release, `publish-aliases.yml` rewrites it to an

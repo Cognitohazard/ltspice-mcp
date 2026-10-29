@@ -21,10 +21,11 @@ one OS and Python ABI. `uv` downloads the correct wheels for the host instead.
   cannot ship either (LTspice is a licensed app; ngspice is a native binary).
 - **Network access on first run**, so `uv` can download the package.
 
-Netlist editing (`.cir`/`.net`) works without a simulator. Editing an `.asc`
-schematic needs LTspice's `.asy` symbol libraries on disk, because the
-geometry comes from those symbol files. An LTspice install supplies them
-(auto-detected on Windows and macOS). Running simulations needs a simulator.
+Reading and checking netlists (`.cir`/`.net`) works without a simulator.
+Editing an `.asc` schematic needs LTspice's `.asy` symbol libraries on disk,
+because the geometry comes from those symbol files. An LTspice install
+supplies them, and the server finds them automatically on Windows. Running
+simulations needs a simulator.
 
 **PNG schematic renders.** The bundle installs the `raster` extra. Its
 rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no native
@@ -50,10 +51,12 @@ npx @anthropic-ai/mcpb pack . ltspice-mcp.mcpb      # zip this directory into th
 2. When prompted, leave the sandbox folder blank for no sandbox, or pick the
    folder the tools should be kept inside; leave the simulator path blank to
    auto-detect.
-3. In a chat, confirm the `ltspice` tools appear and run a trivial request
-   (e.g. "validate this netlist": a two-resistor divider).
+3. In a chat, confirm the `ltspice-mcp` tools appear and run a trivial
+   request (e.g. "validate this netlist": a two-resistor divider).
 
 If the server fails to start, the usual cause is `uv` not being on the
 GUI app's `PATH` (notably on macOS, where launched apps don't inherit your
-shell `PATH`). To fix it, install `uv` system-wide, or set the simulator and
-uv paths explicitly. Report what you see and we'll adjust the manifest.
+shell `PATH`). To fix it, install `uv` system-wide; the extension runs the
+command `uv` and has no setting for its path. If the server starts but finds
+no simulator, set the simulator path in the extension's settings. Report what
+you see and we'll adjust the manifest.

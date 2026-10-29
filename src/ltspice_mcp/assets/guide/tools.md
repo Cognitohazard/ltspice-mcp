@@ -52,42 +52,68 @@ observation.
 `inspect(kind="reference")` finds a recipe, schematic op, variation kind,
 check or job action from plain words (`query="phase margin"`) and returns its
 fields, types, defaults and units; with no `query` it lists them all. Use it
-instead of guessing a name. Always use it with the compact tool listing, which
-omits the argument descriptions.
+instead of guessing a name. Always use it when your tool schema has no
+argument descriptions, as with the server's default
+`[tools] tool_listing = "compact"`, which leaves them out.
 
 ## Recovering a job
 
 Submit with `execution={"simulator": "ngspice", "recoverable": true}` and save
 the receipt's `control_token`, even if the job finishes immediately. Recovery
-captures validated electrical inputs and controlled startup. It currently
-supports ngspice on Linux and native Windows, and the audited LTspice 26.0.2
-executable on native Windows. A job that uses live dependencies, caller
-control scripts, external modules or unbound simulator randomness is refused
-before submission. For static randomness, see guide section 'ngspice'.
+saves the job's validated inputs and the simulator's startup settings, so a
+resumed case runs with the same inputs. It currently supports ngspice on Linux
+and native Windows. On native Windows it also supports one LTspice
+executable, the LTspice 26.0.2 build whose startup behavior was checked,
+matched by the SHA-256 hash of its file. Any other LTspice executable, a later
+version included, is refused (`recovery_startup_unsupported`).
+
+A recoverable request is refused before submission, with an error code that
+names the reason, when a deck reads an include in place at run time
+(`allow_live_includes`, `recovery_live_dependency`), has a `.control` block
+(`recovery_control_unsupported`), loads an external module with `.load`,
+`.osdi` and the like or has an `A` device (`recovery_external_module`), or
+calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
+`aunif`, `flat`, `sgauss`, `limit`, `mc`, `poisson`, `white`, `flicker`,
+`trnoise` or `trrandom` (`recovery_random_unsupported`). A source that reads a
+file and a function the server does not know are refused the same way. On
+ngspice, `simulator_seed` allows `agauss`, `gauss`, `aunif`, `unif` and
+`limit` (guide section 'ngspice').
 
 For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.
-The established LTspice settings come from `simulator.ltspice_ini`
-(environment `LTSPICE_MCP_LTSPICE_INI`) or `%APPDATA%/LTspice.ini`. Each
-attempt runs with a private copy, and the original file is not changed. The
-captured profile needs a real LTspice update-query time less than 15 days old,
-at submission and again at resume. Resolve startup prompts in LTspice first,
-because the server does not answer dialogs or change consent. Other LTspice
-builds are refused until their startup behavior is verified.
+Each case starts LTspice with its own copy of an LTspice settings file, so the
+original is not changed. The file is `simulator.ltspice_ini` (environment
+`LTSPICE_MCP_LTSPICE_INI`) when that is set, and `%APPDATA%/LTspice.ini`
+otherwise. It must already hold the answers LTspice saves from its startup
+prompts, which are an `[Options]` `UUID`, a `CaptureAnalytics` choice and a
+`LastWebUpdateQuery` time no more than 15 days old. The server checks them at
+submission, at resume and before each case starts. A missing value returns
+`recovery_startup_unsupported`, and an older time `recovery_startup_stale`.
+Resolve startup prompts in LTspice first, because the server does not answer
+dialogs or write these values.
 
-Once the lineage head is terminal, recover it with
+A resume creates a child job. The original job and its children form a
+lineage, and its head is the newest of them, which a resume reply returns as
+`head_job_id`. Only the head can be resumed; an older job returns
+`recovery_stale_parent`. Once the head is terminal, recover it with
 `jobs(action="resume", job_id=..., resume_request_id="retry-1", control_token=...)`.
-Interrupted cases are retried by default; add `retry_failed=true` for simulator
-failures or `retry_cancelled=true` for explicit cancellation. `case_ids` selects
-eligible unfinished cases; `wait_s` defaults to zero and is capped at 120 s.
-Successful cases keep their original artifacts. `completeness.reused` counts
-them, and each run's `attempt` identifies the execution that produced it.
+Cases that failed with code `server_restarted` (the owning process exited) or
+`job_deadline` are retried by default; add `retry_failed=true` for other
+failed cases or `retry_cancelled=true` for explicit cancellation.
+`case_ids` limits the retry to those of the eligible cases, and naming an
+unknown or `produced` case returns `recovery_case_selection`. `wait_s`
+defaults to zero and is capped at 120 s. The child copies the parent's
+`produced` cases with their original `.raw` and `.log` files instead of
+running them again. `completeness.reused` counts them, each run's
+`attempt.execution_job_id` names the job that ran it, and `attempt.reused` is
+true for a copied case.
 
 The child has a new job id and token. Repeating the same resume request returns
 that same child, and a repeat with a different selection or different retry
-flags returns a conflict. If no case is eligible, the resume is a no-op
-(`resumed=false`) and returns no child token. To retry only the analysis, call
-`analyze_results`. Read-only job replies never return tokens. For a child with
-its own owner process, see guide section 'python'.
+flags returns `idempotency_conflict`. If no case is eligible, the resume is a
+no-op (`resumed=false`) and returns no child token. To retry only the analysis,
+call `analyze_results`. Of the `jobs` replies, only `resume` returns a
+`control_token`. To give the child an owner process of its own, so it outlives
+the process that resumed it, see guide section 'python'.
 
 ## A sweep in one call
 
@@ -146,8 +172,10 @@ lint blocks a mismatch. A case that produced nothing is counted in
   while there are any, unless you set `allow_incomplete`.
 - `inspect` reads decks, schematics, libraries and result facts:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
-- `edit_schematic` edits one `.asc` in a transaction; pass `expected_sha256`
-  to commit to a sheet that exists (`inspect` and a dry run report it).
+- `edit_schematic` edits one `.asc` in a transaction. Changing a sheet that
+  exists requires `expected_sha256`, the `sha256` that `inspect` or a dry run
+  reports; if the file has changed since, the edit returns `revision_conflict`
+  and writes nothing.
 - `verify_circuit` checks a schematic against a netlist with
   `{"path": "amp.asc", "compare": {"reference": "golden.net"}}`.
 - Charts: `plot_waveform` draws an interactive chart (`attach_plot` adds a PNG
@@ -155,21 +183,29 @@ lint blocks a mismatch. A case that produced nothing is counted in
 
 ## Reading RAW plots and logs
 
-A RAW artifact can contain several plots. `plot_index` selects one independently
-of the job's case and the plot's step; omit it to read the first plot. When
-supplied, it must be a nonnegative integer. Page through the file's plots with
+A RAW artifact can contain several plots. `plot_index` selects one by its
+zero-based position in the file; omit it to read the first plot. It is
+separate from the case (`case_id` or `run_index`) and from `step`, which
+selects a step inside the plot. When supplied, it must be a nonnegative
+integer. Page through the file's plots with
 `inspect(queries=[{"kind": "results", "path": "run.raw", "view": "plots"}])`.
-Use `view:"signals"` for the selected trace descriptors or `view:"table"` for
-native quantities without a sampled axis. Tables keep their first quantity;
-complex values are `{real, imag}`, and units come from the selected descriptor.
-A read by job takes `job_id` plus `run_index` or `case_id` instead of `path`.
+Use `view:"signals"` to list the selected plot's traces with their declared
+type and unit. In a plot with a sampled axis, the first quantity is that axis
+(time, frequency or the swept value). `view:"table"` reads a plot without
+one, such as an `.op` or `.tf` result, and returns `no_table` for a plot that
+has one. Its rows are every value of every quantity, the first included;
+complex values are `{real, imag}`, and each row's `unit` is the one
+`view:"signals"` lists for its quantity. A read by job takes `job_id` plus
+`run_index` or `case_id` instead of `path`.
 
 Each `analyze_results` source, `plot_waveform` and `run_experiments.analyze`
-take the same plot selection. `dialect` is null or `ltspice`, `ngspice`,
-`qspice`, `xyce`; a `dialect` you name must agree with the producer and the
-captured header. Step metadata comes from that capture and is not re-read
-from a sibling log later. Guide section 'python' covers Python arrays and
-native tables.
+take the same `plot_index` and `dialect`. `dialect` is null or `ltspice`,
+`ngspice`, `qspice`, `xyce`, and names the simulator that wrote the RAW. Leave
+it null unless a read fails because the file's header does not name its
+simulator; a `dialect` that contradicts the job's simulator or the header is
+refused. Step parameters are read at the same time as the RAW, from the RAW
+itself or the `.log` beside it, and are not read again later. Guide section
+'python' covers Python arrays and tables.
 
 To read a log that has no RAW, use the `measurements` recipe:
 
@@ -178,29 +214,42 @@ To read a log that has no RAW, use the `measurements` recipe:
  "recipes": [{"metric": "measurements", "key": "meas"}]}
 ```
 
-The recipe reads measurements once over the whole log, with no plot or step
-identity. `step` and `all_steps` are refused for these facts, because a
-measurement vector's ordinal is not a RAW step. In a mixed request, a missing
-or malformed RAW fails the RAW recipes but keeps the valid measurements. A
-direct log import does not guess a sibling RAW file.
+The recipe reads every measurement in the log in one pass, so its rows name no
+plot or step. It refuses `step` and `all_steps`, because a measurement lists
+one value per `.step` iteration in the order the log prints them, and that
+position is not a RAW step index. In a request that also has RAW recipes, a
+missing or malformed RAW fails only those recipes, and the `measurements`
+recipe still returns its values. A `log_path` source does not look for a RAW
+beside the log. A `raw_path` source reads the RAW and the `.log` of the same
+name, so use it to read both from imported files.
 
-For pages of literal log facts, use
+For pages of log values as printed, use
 `inspect(queries=[{"kind": "results", "path": "result.log", "view": "measurements"}])`
-for values and range/AT metadata, or `view:"native_tables"` for printed entries
-and frequency rows. Omit `plot_index` on log views. Native rows keep physical
-section boundaries, closure facts and printed labels; complex values keep
-real/imaginary components, unknown units stay null, and no plot or step identity
-is invented. Reading the whole log does not prove that the solve completed. A
-read by job still requires a terminal job and a produced case.
+for each measurement's values with its `range_from` and `range_to` (a
+`FROM`/`TO` window) or its `at` point, or `view:"native_tables"` for the value
+blocks printed in the log, as `name = value` entries and `Index frequency`
+table rows. Omit `plot_index` on log views. Each native row includes its
+block's first and last line numbers (`line_start`, `line_end`), the reason
+the block ended (`closed_by`) and its printed title; complex values are given
+as `real` and `imag`, a unit the log does not print is null, and rows are not
+assigned to a plot or step. A log that reads without error does not show that
+the simulation finished. A read by `job_id` works once all the job's runs have
+finished, and only on a case that is `produced` or kept a partial raw
+(`execution.keep_partial_raw`).
 
-A cursor is bound to the source snapshot and the selection, including the RAW,
-log and console bytes and an explicit record of any that are absent. If a
-companion file changes, start a new read. Analysis captures source identities
-and diagnostics before resumable recipe work starts. An initialization timeout
-returns `analysis_deadline` without a result set or cursor; retry the original
-request with fewer sources or a larger configured analysis time budget. The
-timeout is not saved as a permanent fault of the source. After
-initialization, the existing minimum-work and continuation policy applies.
+A page cursor works only with the same query, and only while the RAW, its
+`.log` and the simulator's console log (`.exe.log`) are unchanged, including
+whether each of them exists. If any of these files changes, appears or is
+deleted, the next page is refused, so start a new read.
+
+`analyze_results` reads every source before it evaluates any recipe. If that
+first read runs out of time, the call returns `analysis_deadline` with no
+`result_set_id` or cursor; retry the original request with fewer sources or a
+larger configured analysis time budget. A retry reads the sources again,
+because the timeout is not recorded against them. After the first read, every
+call completes at least one recipe evaluation. Work left over when the time
+budget runs out continues when you pass the reply's `next` block
+(`result_set_id` and `cursor`) as `continue`.
 
 ## Recipes the schema lists by name only
 
@@ -208,7 +257,7 @@ Three recipes appear in the tool schema by name only, so their arguments are
 listed here. Every other recipe field (`key`, `sources`, `reduce`, `field`,
 `spec`) applies to them unchanged. As with any multi-field recipe, `spec` on
 `periodic` or `return_loss` needs `field`, and a `reduce` without `field`
-covers every field.
+reduces every field.
 
 - `periodic` — `{"metric": "periodic", "signal": …}` plus an optional
   `window` `{start, end}`; returns `period`, `frequency`, `duty_cycle`
@@ -230,7 +279,7 @@ in order until it fits:
 
 | rung | what is removed |
 |-|-|
-| 0 trim | empty presentation blocks and the per-run identity echo (`source_hashes`, an attached analysis's included) |
+| 0 trim | empty presentation blocks and `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included) |
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
 | 2 shrink | page size; cursors are created for the smaller page, so paging still reaches every row |
 
@@ -241,7 +290,7 @@ is over the budget, a `run_experiments` or `jobs` receipt contains no per-case
 rows at all, so its minimum size is the same for 4 cases or 400.
 `completeness` and `runs.total` still count the runs, `jobs(runs)` pages them
 from `runs.next_cursor`, and `analyze_results` over the `job_id` returns the
-attached analysis's rows. Reductions and verdicts are kept.
+attached analysis's rows. `reduce` results and spec verdicts are kept.
 
 `failures`, `observations`, `warnings`, `completeness` and spec verdicts are
 never cut. A budget too small for them still returns them in full, with an
@@ -249,5 +298,5 @@ observation that the reply is over the budget.
 
 If you omit `budget`, the server applies its own default
 (`[analysis] default_budget`, 4000 tokens) at rung 0 only, so a large response
-loses only its empty blocks and the identity echo. Set the config value to `0`
+loses only its empty blocks and `source_hashes`. Set the config value to `0`
 to turn that off.

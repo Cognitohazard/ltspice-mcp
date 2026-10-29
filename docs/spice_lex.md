@@ -41,16 +41,17 @@ physical lines so a multi-line `.MODEL` round-trips byte-for-byte.
 
 In:
 
-- `.MODEL <name> <type>(...)` — process variation, library indexing.
-- `.PARAM <name>=<value>` — `.PARAM` perturbation, following references
-  through expressions.
+- `.MODEL <name> <type>(...)` — Monte Carlo variation of model parameters,
+  library indexing.
+- `.PARAM <name>=<value>` — `.PARAM` perturbation.
 - Element instance lines — value editing, model rewriting, W/L
   extraction. Covered prefixes:
   - `Mxxx` / `Qxxx` / `Jxxx` — MOSFET / BJT / JFET, model-after-nodes shape.
   - `Rxxx` / `Cxxx` / `Lxxx` — passives, value-after-nodes shape.
   - `Vxxx` / `Ixxx` — independent sources.
   - `Bxxx` / `Exxx` / `Gxxx` — behavioural / VCVS / VCCS, value given as
-    a `V=` or `I=` `KEY_VALUE` token (typically a `{...}` expression).
+    a `V=`, `I=` or `VALUE=` `KEY_VALUE` token (typically a `{...}`
+    expression), or for `E`/`G` as a positional gain.
   - `Fxxx` / `Hxxx` — current-controlled sources, control by source name.
   - `Xxxx` — subcircuit calls, variable port count.
   - `Kxxx` — mutual inductance, references only (no nodes).
@@ -72,12 +73,12 @@ Out:
 - Semantic validation, such as whether a `.MODEL` matches a simulator.
   That is left to the simulator.
 
-spice_lex coexists with spicelib's `REPLACE_REGEXS`. spicelib's
-`SpiceEditor` still writes the `.cir` files on disk for the simulation
-pipeline, and spice_lex handles the lookup and edit paths. Every internal
-caller goes through `lex` and the typed views, and writes through
-spicelib only when the file must be written for the simulator.
-spicelib's element-line regex is not used on those paths.
+spicelib's own netlist editor (`SpiceEditor`, whose element-line
+patterns are `REPLACE_REGEXS`) is not used to read, edit or write decks.
+Every internal caller reads and edits through `lex` and the typed views
+and writes an edited deck's text with `emit`. spicelib's `SimRunner`
+only copies the finished deck into the run folder before it launches the
+simulator.
 
 ## Architecture
 
@@ -109,18 +110,23 @@ class SpiceCard:
 Atomic mutation primitives on `SpiceCard`:
 
 - `replace_span(body_start, body_end, new_text)` — replaces one slice of
-  the body and preserves the surrounding whitespace and continuation
-  structure.
-- `replace_body(new_body)` — replaces the whole body, for when the whole
-  card must be re-rendered.
+  the body inside one source line and rewrites only that slice of that
+  line in `raw_lines`, so the card's other lines, its whitespace and its
+  continuation structure stay byte-identical. A span that crosses into a
+  continuation line raises `SpiceLexError` (`INVALID_RANGE`); use
+  `replace_body` for that edit.
+- `replace_body(new_body)` — replaces the whole body and collapses the
+  card to one line in `raw_lines`, for when the whole card must be
+  re-rendered. Continuation lines are lost.
 
 Both set the card's `dirty` flag.
 
 ### Layer 2: typed views
 
-Typed views are short-lived wrappers re-derived via `from_card()`, and
-they never own state. Their setters change the underlying `SpiceCard`
-directly.
+Typed views are short-lived wrappers built from a card with
+`from_card()`. A view keeps no data the card does not hold, apart from a
+cache of the card's tokens and their body offsets. Its setters change the
+underlying `SpiceCard` directly.
 
 ```python
 class ModelCard:           # .MODEL <name> <type>(<params>)
@@ -136,7 +142,7 @@ class InstanceLine:        # element instance
     ref: str
     nodes: list[str]
     model: str | None      # for M/Q/J/X
-    value: str | None      # for R/C/L
+    value: str | None      # for R/C/L/V/I/E/F/G/H
     params: dict[str, str] # W=, L=, m=, etc.
     def set_model(self, name) -> None: ...
     def set_value(self, value) -> None: ...
@@ -166,15 +172,20 @@ class MeasCard:            # .MEAS — read/validated, rarely rewritten
     def set_analysis(self, kind) -> None: ...
 ```
 
-`MeasCard` lets `spice_validator` check whether a body contains a
-`vdb()` call, or references a signal not present in the `.raw` file,
+`MeasCard` gives `spice_validator` the function calls in a `.MEAS` body
+(`function_calls`, which its `vdb_in_meas` rule checks for `vdb()`) and
+the signals the body reads (`signal_refs`, which no rule reads),
 without substring matching. It walks Layer 3's classified tokens in
 `body_tokens`, where a `BARE` token immediately followed by a `PARENED`
 token is a function call.
 
-The `ELEMENT_SPECS` registry covers M/Q/J/X/F/H/R/C/L/V/I/B/E/G/K and
-classifies by context (E/G/F/H with a positional gain or in the
-`VALUE=` form).
+`ELEMENT_SPECS` has one entry for each of M/Q/J/X/F/H/R/C/L/V/I/B/E/G/K.
+Each entry gives the minimum node count and says how to read the last
+positional token: as a model or subcircuit name (M/Q/J/X), as a value
+(R/C/L/V/I, and E/G/F/H written with a positional gain), or not at all,
+because the value is a `KEY_VALUE` parameter (B always, and E/G/F/H when
+the line has any `KEY_VALUE` token, such as `VALUE=`). K has no value
+slot. A prefix not in the table is read as a model-bearing element.
 
 ### Layer 3: body tokenizer
 
@@ -186,17 +197,17 @@ character classes.
 ```python
 class TokenKind(Enum):
     BARE          # identifier or numeric literal (R1, NMOS_lvt, 10u, 0.7)
-    QUOTED        # "NMOS_lvt" — single token, quotes preserved in raw
+    QUOTED        # "NMOS_lvt" or 'NMOS_lvt' — single token, quotes preserved in raw
     BRACED        # {2*max(kp_n, kp_min)} — single token, balanced
     PARENED       # (VTO=0.7 KP=100u) — single token, balanced
     KEY_VALUE     # W=10u, KP={2*kp_n}, MODEL="NMOS_lvt" — split on first =
-    EQUALS        # standalone = (whitespace-around-equals form)
+    EQUALS        # standalone = as a comparison (.MEAS WHEN mag(V(out))=0.7)
     COMMENT_TRAIL # ;... or $... to end of body, preserved verbatim
 
 @dataclass(frozen=True)
 class Token:
     kind: TokenKind
-    text: str          # original substring, no normalization
+    text: str          # original substring; KEY_VALUE: canonical key=value (no surrounding whitespace)
     key: str | None    # for KEY_VALUE; original case preserved
     value: str | None  # for KEY_VALUE; may itself be BRACED/PARENED/QUOTED
     body_offset: int   # for replace_span surgery
@@ -204,35 +215,44 @@ class Token:
 ```
 
 **State machine.** The tokenizer makes a single forward walk over the
-body. Its state is `(brace_depth, paren_depth, in_quote)`, with these
-transitions:
+body. Its state is whether it is inside a quoted string and, inside a
+brace or paren group, that group's depth. A group counts only its own
+delimiter and skips a quoted string inside it whole, so a closer inside
+quotes does not end the group. The transitions are:
 
-| Char | Outside | In quote | brace_depth ≥ 1 | paren_depth ≥ 1, brace_depth = 0 |
+| Char | Outside | In quote | brace_depth ≥ 1 | paren_depth ≥ 1 |
 |-|-|-|-|-|
-| `"` | enter quote | exit quote | literal | literal |
-| `{` | enter brace, depth=1 | literal | depth++ | enter brace |
-| `}` | error (unbalanced) | literal | depth-- | error |
-| `(` | enter paren, depth=1 | literal | literal | depth++ |
-| `)` | error (unbalanced) | literal | literal | depth-- |
-| `=` | token boundary, mark KEY_VALUE | literal | literal | literal |
-| `,` | token boundary | literal | literal | token boundary |
-| whitespace | token boundary | literal | literal | token boundary |
+| `"` `'` | start QUOTED | the matching quote ends the token | skip the quoted string | skip the quoted string |
+| `{` | start BRACED, depth=1 | literal | depth++ | literal |
+| `}` | error (no opener) | literal | depth--, the token ends at 0 | literal |
+| `(` | start PARENED, depth=1 | literal | literal | depth++ |
+| `)` | error (no opener) | literal | literal | depth--, the token ends at 0 |
+| `=` | emit EQUALS | literal | literal | literal |
+| `,` | token boundary | literal | literal | literal |
+| whitespace | token boundary | literal | literal | literal |
 | `;` `$` | start COMMENT_TRAIL, consume to end | literal | literal | literal |
-| other | accumulate | literal | literal | literal |
+| other | accumulate BARE | literal | literal | literal |
 
 The transitions give these rules:
 
-- `(` inside `{...}` does not open a paren context, because braces take
-  precedence.
-- `;` and `$` start a comment only outside quotes and braces.
+- Inside a group only its own delimiter nests, so `(` inside `{...}` and
+  `{` inside `(...)` are ordinary characters.
+- `;` and `$` start a comment only outside quotes and groups.
 - `*` line comments are handled at Layer 1 and never reach Layer 3.
-- Unbalanced delimiters at body end raise `SpiceLexError` with the
-  position; recovery is not attempted at this layer.
-- `KEY_VALUE` is recognized when a `=` is seen at depth 0 outside a
-  quote; the preceding `BARE` token becomes `key`, the following token
-  (which may itself be `BRACED`/`PARENED`/`QUOTED`/`BARE`) becomes
-  `value`. Whitespace around `=` is allowed; it produces an `EQUALS`
-  token and adjacent tokens that later passes pair up.
+- An unclosed quote or group, or a stray `)` or `}`, raises
+  `SpiceLexError` with the position and a category
+  (`UNTERMINATED_QUOTE`, `UNBALANCED_BRACE`, `UNBALANCED_PAREN` or
+  `UNEXPECTED_CHAR`); recovery is not attempted at this layer.
+- After the walk, a second pass merges each `BARE` or `QUOTED` token
+  followed by `EQUALS` and a `BARE`, `QUOTED`, `BRACED` or `PARENED`
+  token into one `KEY_VALUE` token, with the first as `key` and the last
+  as `value`. Whitespace around `=` is allowed, because whitespace never
+  becomes a token. Tokens glued to the value with no whitespace, or
+  separated from it by one comma, join the value, so `V=V(in)*2` and
+  `IC=1,2,3` are one `KEY_VALUE` each; a glued `BARE` followed by `=`
+  starts the next pair instead. An `EQUALS` outside such a triple stays
+  a standalone token, as in `.MEAS ... WHEN mag(V(out))=0.7`, where `=`
+  is a comparison.
 
 `text`, `key` and `value` all preserve the original case. Identifier
 matching (model names, refs, param keys) folds to lower case at lookup
@@ -240,14 +260,14 @@ time.
 
 ### The model-position rule
 
-Once tokens are classified, one rule separates the nodes of an instance
-line from its model token.
+Once tokens are classified, `InstanceLine.from_card` separates the
+nodes of an instance line from its model or value. Its default rule is:
 
 > **Model/value position is the last `BARE`-or-`QUOTED` token before
 > any `KEY_VALUE` token** (or the last such token if the line has no
 > `KEY_VALUE` tokens). Tokens before that are nodes.
 
-The rule handles every hard case that the old heuristic missed:
+The rule handles these cases, which the per-caller regexes got wrong:
 
 - `M1 d g s b "NMOS_lvt" W=10u` — the quoted token is correctly
   identified as the model name.
@@ -257,64 +277,115 @@ The rule handles every hard case that the old heuristic missed:
 - `R1 n1 n2 1k TC=0.001` — `1k` is BARE (numeric literal), correctly
   picked as the value.
 
-The arity of each prefix is only a minimum node count, used as a sanity
-check. It is not used to find the model position:
+These exceptions change the default:
+
+- R, C, L, V, I, D, F and H have a fixed node count of two
+  (`_EXACT_NODE_COUNT`), so the first two positional tokens are the
+  nodes. For R/C/L/V/I/F/H every positional token after them is
+  the value, so `V1 a 0 PULSE(0 5 1n)` keeps `PULSE(0 5 1n)` whole; for
+  a diode the next token is the model and any after it is the value.
+  `set_nodes` edits only these prefixes.
+- `R1 a b R=1k` (and the `C=`/`L=` forms) gives the value as a parameter,
+  so every positional token is a node and `value` is the parameter's.
+- On Q/J/M lines, a trailing area factor or `OFF` after the model is
+  moved into `value` (`Q2 c b e QN 8`), as long as the minimum node count
+  and a model remain. On S/W lines, a trailing `ON`/`OFF` is moved into
+  `value`. On X lines, a trailing `params:` keyword is set aside and put
+  back when the card is re-rendered.
+
+`F1 a b Vsense 10` therefore has `nodes` `[a, b]`, `value`
+`"Vsense 10"` (the controlling source and the gain) and no `model`.
+
+The minimum node count of each prefix (`min_nodes` in `ELEMENT_SPECS`)
+is a sanity check. The linter (`spice_validator`) checks it, and
+`InstanceLine` uses it only to stop moving trailing tokens off a Q/J/M
+line; it does not otherwise locate the model:
 
 ```python
-MIN_NODES = {
-    "M": 3, "Q": 3, "J": 3,        # MOSFET / BJT / JFET
-    "R": 2, "C": 2, "L": 2,        # passives
-    "V": 2, "I": 2,                # sources
-    "B": 2,                        # behavioural
-    "E": 4, "G": 4,                # VCVS / VCCS (2 output + 2 control nodes)
-    "F": 2, "H": 2,                # CCCS / CCVS (control source ref is BARE)
-    "X": 1,                        # subckt call: at least one port
-    "K": 0,                        # mutual inductance: refs only, no nodes
+ELEMENT_SPECS: dict[str, ElementSpec] = {
+    # Model-bearing devices.
+    "M": ElementSpec(default_kind="model", min_nodes=3),
+    "Q": ElementSpec(default_kind="model", min_nodes=3),
+    "J": ElementSpec(default_kind="model", min_nodes=3),
+    "X": ElementSpec(default_kind="model", min_nodes=1),
+    # Passives and independent sources: positional value, never params-only.
+    "R": ElementSpec(default_kind="value", min_nodes=2),
+    "C": ElementSpec(default_kind="value", min_nodes=2),
+    "L": ElementSpec(default_kind="value", min_nodes=2),
+    "V": ElementSpec(default_kind="value", min_nodes=2),
+    "I": ElementSpec(default_kind="value", min_nodes=2),
+    # Behavioural source — always params-only.
+    "B": ElementSpec(default_kind="params_only", min_nodes=2),
+    # Controlled sources — positional gain by default; params-only when
+    # written with ``VALUE=``, ``POLY``, etc. (any KEY_VALUE present).
+    "E": ElementSpec(default_kind="value", min_nodes=4, kv_means_params_only=True),
+    "G": ElementSpec(default_kind="value", min_nodes=4, kv_means_params_only=True),
+    "F": ElementSpec(default_kind="value", min_nodes=2, kv_means_params_only=True),
+    "H": ElementSpec(default_kind="value", min_nodes=2, kv_means_params_only=True),
+    # Mutual inductance: refs only.
+    "K": ElementSpec(default_kind="none", min_nodes=0),
 }
 ```
 
-`Bxxx` / `Exxx` / `Gxxx` give their value as a `KEY_VALUE` token like
-`V={expression}` or `I={...}`; the tokenizer always emits the expression
-body as one `BRACED` token. These lines have no "model" position, so
-`InstanceLine` exposes the relevant `KEY_VALUE` (`V=` or `I=`) as
-`value`.
+`Bxxx` lines, and `Exxx` / `Gxxx` / `Fxxx` / `Hxxx` lines with any
+`KEY_VALUE` token, give their value as a parameter like `V={expression}`,
+`I={...}` or `VALUE={...}`. The expression is the `KEY_VALUE` token's
+`value`, whether it is braced or written unbraced (`V=V(in)*2`). These
+lines have no model or value position: every positional token is a
+node, `model` and `value` are None, and the expression is read from
+`params["V"]` or `params["I"]`.
 
-`Fxxx` / `Hxxx` reference a controlling source by name (a `BARE` token)
-and then take a gain, the same model-after-nodes shape as `M` lines.
+`Fxxx` / `Hxxx` written without a parameter name a controlling source (a
+`BARE` token) and then a gain, both of which `InstanceLine` returns as
+`value`, as in the `F1` example above.
 
 ## Ownership and emit invariants
 
-`lex()` returns a single flat `list[SpiceCard]` in source order, and
-that list is the canonical store. Typed views are short-lived wrappers
-and never own child cards. This has two consequences:
+`lex()` returns a `LexResult` whose `cards` is a single flat
+`list[SpiceCard]` in source order, and that list holds the only copy of
+the netlist's state. Typed views are short-lived wrappers, and a
+`SubcktCard` view does not hold the cards inside its block. This has two
+consequences:
 
 - A `.SUBCKT` block contributes one `kind="subckt"` card (opener), one
   `kind="ends"` card (closer), and the inner cards as flat-list entries
   with `scope=(name,)`. Mutating an inner card sets only that card's
   dirty flag. The opener and closer stay byte-identical unless they
-  themselves are mutated. `SubcktCard.dirty` does not propagate; it
-  marks the opener card and never the cards in its scope.
-- `emit(cards)` walks the flat list once and, for each card, copies
-  `raw_lines` if clean or re-renders from typed fields if dirty. Order
-  and surrounding whitespace are preserved.
+  themselves are mutated, and an edit through `SubcktCard` changes only
+  the opener card, never the cards in its scope.
+- `emit(cards)` concatenates every card's `raw_lines` in list order. It
+  does not check `dirty`, because the setters keep `raw_lines` current:
+  `replace_span` rewrites a slice of one line and `replace_body`
+  replaces the card's lines with one rendered line. Order and the
+  whitespace of untouched lines are preserved. No code reads `dirty`; it
+  records which cards a setter changed.
 
 The parser also maintains invariants that span two cards:
 
 - `.SUBCKT NAME ... .ENDS [NAME]`: the optional trailing name on `.ENDS`
-  must match the opener. Renames go through `rename_subckt`, which marks
-  both the opener and the matching ends card dirty in one transactional
-  operation. Plain field assignment on the typed view is not enough.
-- Nested `.SUBCKT`: scope is a tuple, so `.SUBCKT INNER` inside
-  `.SUBCKT OUTER` gets `scope=("OUTER", "INNER")`. Each inner subckt is
-  its own pair of subckt + ends cards in the flat list; `iter_body`
-  filters by scope prefix and recurses by extending the prefix.
+  should match the opener; `lex` closes the innermost open scope anyway
+  when it does not, and adds a warning. Renames go through
+  `rename_subckt`, which rewrites the opener's name, the matching
+  `.ENDS` name when it has one, the `scope` of every card inside the
+  block, and every `X` line that calls the subcircuit. It parses every
+  `X` line before changing any card, so a malformed call raises first,
+  but it does not roll back a failure during the changes (see Future
+  work). `SubcktCard.set_name_local` alone renames only the opener.
+- Nested `.SUBCKT`: scope is a tuple, so the cards inside `.SUBCKT
+  INNER`, itself inside `.SUBCKT OUTER`, get `scope=("OUTER", "INNER")`.
+  The `INNER` opener and closer carry the enclosing scope, `("OUTER",)`.
+  Each inner subckt is its own pair of subckt + ends cards in the flat
+  list. `iter_body(cards, scope)` yields every card whose scope starts
+  with `scope`, nested blocks included, or with `recursive=False` only
+  the cards whose scope equals it; it never yields the block's own
+  opener and closer.
 
 The byte-faithful round trip holds even for malformed input, under these
 recovery rules:
 
-- `.ENDS` without a matching opener: the closer card is emitted with
-  `scope=()`, and a warning is reported in `lex()` metadata. Subsequent
-  cards resume at the outermost still-open scope, or `()` if none.
+- `.ENDS` when no `.SUBCKT` is open: the card gets `scope=()`, a warning
+  is added to `LexResult.warnings`, and the cards after it stay at top
+  level.
 - EOF inside an open `.SUBCKT`: the cards are returned unchanged with
   the unclosed scope, plus a warning. `emit()` still round-trips
   byte-faithful.
@@ -335,11 +406,14 @@ deck would produce many spurious arity errors. Both delimiters are part
 of the region; a stray `.endc` with no opener stays an ordinary
 directive.
 
-Holding two typed views over the same card and mutating both is
-undefined, so re-derive the view after each mutation. The flat list is
-the only synchronization point. Sequential setters on
-the same view are safe, because `_shift_cached_param_tokens` /
-`_shift_single_token` shift the token caches on each mutation.
+Each view caches its tokens' offsets into the card's body, and one view
+does not see another's edits. Holding two typed views over the same card
+and mutating both is therefore undefined, so re-derive a view with
+`from_card()` after an edit through another view. Sequential setters on
+the same view are safe, because after each in-place edit the view moves
+the cached offsets that follow it (`_Params.shift`, `_shift_tokens`,
+`_shift_single_token`), and after a re-render it drops the cache so the
+next edit re-renders too.
 
 ## Public API surface
 
@@ -429,12 +503,12 @@ def rename_subckt(cards, old_name, new_name) -> int: ...
 def rename_model(cards, old_name, new_name, *, scope=()) -> int: ...
 def value_suffix_sites(cards) -> list[ValueSuffixSite]: ...  # non-ASCII at a scale-suffix position
 def fold_micro_suffix_cards(cards) -> tuple[ValueSuffixSite, ...]: ...  # µ/μ suffix -> u, in place
-def strip_instance_section_signs(cards) -> dict[str, str]: ...  # R§Load -> RLoad wherever named
+def strip_instance_section_signs(cards: list[SpiceCard]) -> None: ...  # R§Load -> RLoad wherever named
 
 # lib/encoding.py — shared text decoding
 def decode_spice_bytes(raw: bytes) -> str: ...
 def decode_spice_bytes_with_encoding(raw: bytes) -> tuple[str, str]: ...  # (text, codec)
-def rewrite_codec(raw: bytes) -> str: ...  # codec a rewritten copy keeps (UTF-16/32 -> utf-8)
+def rewrite_codec(encoding: str) -> str: ...  # codec a rewritten copy keeps (UTF-16/32 -> utf-8)
 def encode_spice_text(text: str, codec: str) -> bytes: ...  # UTF-8 where the codec cannot spell it
 def detect_utf16_endianness(probe: bytes) -> str | None: ...
 def read_spice_text(path: Path) -> str: ...
@@ -464,7 +538,9 @@ needs it. Do not leave stubs in the tree, because an importable
 - **`netlist_diff(a, b)`** — structural diff that ignores formatting.
   Compare card-by-card by `(kind, name, body)` after canonical
   normalization; report added / removed / modified cards. Useful for
-  regression tests that compare netlist structure.
+  regression tests that compare netlist structure. `lib/netlist_diff.py`
+  already compares two decks for `verify_circuit`, but only by component
+  and directive, and without nodes.
 - **`ChangeSet`** — atomic-commit primitive. Stage cross-card mutations
   as a list of `(card, replacement_raw_lines)` pairs; commit in one pass
   after validation; roll back via the captured original `raw_lines` if
@@ -474,7 +550,9 @@ needs it. Do not leave stubs in the tree, because an importable
 - **Static linters** — every `Mxxx` references a `.MODEL` in scope;
   every `.PARAM` is consumed somewhere; no duplicate refs; no dangling
   `.SUBCKT` calls. Each is a single-pass walk over cards using the typed
-  views.
+  views. The linter's `model-missing` rule already checks that each
+  D/M/Q/J/X/S/W line names a `.MODEL` or `.SUBCKT` declared in the deck
+  or its includes, but it ignores `.SUBCKT` scope.
 
 Design notes for implementing the deferred items:
 
@@ -488,8 +566,8 @@ Design notes for implementing the deferred items:
   `{Rnew*2}` needs a sub-tokenizer for expression bodies. It should only
   replace identifiers and should not parse full expressions.
 - **Scope manipulation**: `inline_subckt` and `extract_subckt` rewrite
-  `card.scope` tuples for spliced cards. Because the flat list is the
-  canonical store, this is mechanical. Detach a slice, rewrite its
+  `card.scope` tuples for spliced cards. Because the flat list holds all
+  of the netlist's state, this is mechanical. Detach a slice, rewrite its
   scopes, and splice it into the target position.
 - **Atomicity guarantees**: the current `rename_subckt` validates and
   then commits, with no rollback. Once `ChangeSet` exists, it should

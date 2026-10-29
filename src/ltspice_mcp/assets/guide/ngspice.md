@@ -8,7 +8,7 @@ description: >
 
 # ngspice-Specific
 
-ngspice follows guide section 'fundamentals', with these differences:
+Guide section 'fundamentals' applies to ngspice, with these differences:
 
 - A MOSFET line needs 4 nodes (`M1 d g s b`); ngspice never connects the bulk
   for you. (An LTspice netlist needs them too, except for a VDMOS; LTspice's
@@ -34,8 +34,9 @@ ngspice follows guide section 'fundamentals', with these differences:
 - ngspice run in batch mode with a raw output (`-b -r`, as the server runs it)
   does not evaluate a top-level `.meas`. `run_experiments` warns (lint
   `meas-ngspice-batch`) and runs the deck; the measurement is absent from the
-  result, and reading the run reports ngspice's notice of the skip. Read the
-  trace with a recipe instead (`waveform`, `value`, `operating_point`), or
+  result, and results read from the run include ngspice's notice
+  `No .measure possible in batch mode` in `warnings`. Read the trace with a
+  recipe instead (`waveform`, `value`, `operating_point`), or
   measure inside a `.control ... run ... .endc` block with the dot-less
   interactive `meas` command (`meas tran vmax MAX V(out)`), whose result prints
   to the run's log. A dotted `.meas` inside `.control` is not a command and
@@ -188,8 +189,8 @@ X1 input output myfilter rval=1k cval=1n
 - Resistor current is the internal vector `@r1[i]` (saved by `.save @r1[i]` or
   `.options savecurrents`). The `i(r1)` function does not resolve that vector,
   because `i()`/`I()` resolve only `name#branch` vectors (voltage sources, and
-  the sense source that a separate `.probe I(R1)` directive inserts). This
-  server reads the `@r1[i]` form.
+  the sense source that a separate `.probe I(R1)` directive inserts). In a
+  recipe, name the trace `@r1[i]`, as the raw file stores it.
 - Saved device operating-point parameters (`@m1[gm]`, `@m1[id]`, …) are read
   back by name, at one bias or across a `.dc` sweep (guide section
   'operating-points').
@@ -277,27 +278,37 @@ Set the seed with `.options seed=<value>` or `seed=random`.
 
 ## Seeded recovery
 
-To make the deck's static random functions repeatable through the server,
-submit with
+To make the values that `agauss`, `gauss`, `aunif`, `unif` and `limit` draw
+when ngspice parses the deck repeatable through the server, submit with
 `execution={"simulator": "ngspice", "recoverable": true, "simulator_seed": 17}`.
 The seed takes only integers `1..2147483646`; every case and retry starts from
-that same seed. The server's driver reseeds immediately before loading the
-captured electrical inputs, after simulator initialization. A seed in a startup
-file does not provide this ordering. Recovery supports Linux and native Windows
-and does not change the user's startup files or the configured compatibility
-mode.
+that same seed. For each case, the server starts ngspice on a short control
+script that runs `setseed <seed>` and then loads the deck, so the seed is set
+after ngspice's startup and immediately before the deck is parsed. Recovery
+runs ngspice without the user's `.spiceinit` and with an empty system `spinit`,
+so a seed set in a startup file has no effect. Recovery supports Linux and
+native Windows. It does not change the user's startup files, and it runs in the
+compatibility mode set by `[simulator] ngbehavior`.
 
-Seeded recovery admits static `agauss`, `gauss`, `aunif`, `unif`, and `limit`
-with exactly one `.op`, `.ac`, `.dc`, or `.tran`. Noise, stepped inputs and
-analysis combinations refuse before claim (`recovery_seed_analysis_unsupported`)
-because the driver writes one plot. Caller `.control` scripts, unknown functions,
-external modules and transient random functions remain unsupported. The `limit`
-syntax still follows the compatibility-mode rule above.
+A seeded deck must contain exactly one `.op`, `.ac`, `.dc` or `.tran`. A deck
+with `.noise`, `.step` or more than one analysis is refused at submission,
+before any job is recorded (`recovery_seed_analysis_unsupported`), because the
+seeded run writes only one plot (ngspice's current plot) to the `.raw` file and
+these decks produce more than one. With or without a seed, a recoverable deck
+is refused if it contains a `.control` block (`recovery_control_unsupported`),
+a function that is neither a recognized built-in nor defined by `.func`
+(`recovery_expression_unsupported`), or a `.load`, `.hdl`, `.verilog`, `.osdi`
+or `.pre_osdi` directive or an XSPICE `A` device (`recovery_external_module`).
+Any other random function, such as `trnoise`, `trrandom` or `sgauss`, is
+refused (`recovery_random_unsupported`), and without a seed the five functions
+above are refused too. `limit` takes the form that the configured
+compatibility mode defines (see Monte Carlo above).
 
-This seed is separate from a `random` variation's draws and from native PDK
-statistical sample seeds. It does not activate PDK statistics or define a
-sampling policy, and a request that mixes it with native statistical families
-is refused. For resume calls and saved tokens, see guide section 'tools'.
+This seed is separate from the `seed` of a `random` variation and from the
+`seed` of a `pdk_native` variation (guide section 'sky130'). It does not turn on
+the PDK's statistical models, and a request that combines it with a
+`pdk_native` variation is refused (`recovery_seed_unsupported`). For resume
+calls and saved tokens, see guide section 'tools'.
 
 ## .options Flags
 

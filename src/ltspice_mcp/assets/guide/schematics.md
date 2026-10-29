@@ -13,8 +13,9 @@ Settle the design as a netlist first, then build the sheet, which is for
 presentation and review. Edit `.asc` files only through `edit_schematic` (or
 LTspice's GUI), because it routes wires orthogonally and checks pin collisions
 and junctions. `edit_schematic(target=..., base="blank")` starts a new sheet;
-every mutation below is an entry in its `ops` list, applied as one guarded
-transaction, so batch a whole build into one call. Place components with the
+every mutation below is an entry in its `ops` list. The ops are applied
+together, and the first one that fails aborts the batch with nothing written,
+so batch a whole build into one call. Place components with the
 `add_component` op. The response's `touched` view lists their placed pins and
 nets, and `warnings` reports any overlap. A pin on a net that no label names
 has `net: null`; with a `compare`, it also has `net_export`, the name LTspice's
@@ -76,9 +77,11 @@ could not start or attach an LTspice instance, no LTspice window is open. Do
 not try its `start_headless`; show the user what they asked for with
 `in_ltspice`, which opens one.
 
-A sheet the user has open in LTspice (Windows, LTspice 26.1 or later) is kept
-in step with the file. A commit's reply lists the window under
-`open_in_ltspice`, and `shown: true` means the user already sees the edit.
+LTspice does not read an open file again, so when the user has a sheet open in
+LTspice (Windows, LTspice 26.1 or later), the server shows each commit to it
+in that window as one step of its undo history. A commit's reply lists the
+window under `open_in_ltspice`, and `shown: true` means the user already sees
+the edit.
 `shown: false` means the window still shows the old sheet and a save from it
 would overwrite yours, so tell the user to close it without saving and open it
 again. An edit that fails with `open_window_differs` wrote nothing, because the

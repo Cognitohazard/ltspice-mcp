@@ -142,9 +142,13 @@ swap models, and run Monte Carlo analyses with component tolerances,
 across the runs, and any single run can also be analyzed alone.
 
 **Jobs.** Each simulation runs as a job, which can be cancelled or given a
-time limit and which survives a server restart. A long run returns a job ID
-at once. The results list simulator warnings, missing measurements and
-extreme values, and the assistant decides whether they matter.
+time limit. A `run_experiments` call waits up to 60 seconds by default and
+then returns a receipt with the job ID while the job keeps running. Job
+records are saved in the working directory, so a restarted server can still
+read earlier jobs. A run still in progress when the server stopped is marked
+failed, and a job submitted with `execution.recoverable` set can run it again.
+The results list simulator warnings, missing measurements and extreme values,
+and the assistant decides whether they matter.
 
 ## Supported simulators
 
@@ -167,7 +171,7 @@ The server has 8 tools:
 | `edit_schematic` | Create and edit `.asc` schematics: place, move, wire, label |
 | `verify_circuit` | Check a circuit, compare a schematic with a netlist, draw a schematic |
 | `plot_waveform` | Interactive waveform chart, in the chat where the client supports it, otherwise in a browser |
-| `run_code` | Run a Python snippet against the engine, for loops and calculations |
+| `run_code` | Run a Python snippet that calls the server's Python API, for loops and calculations |
 
 The assistant learns to use the tools from `inspect(kind="guide")`, which
 covers the simulators and common tasks, and `inspect(kind="reference")`,

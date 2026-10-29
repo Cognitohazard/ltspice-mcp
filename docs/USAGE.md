@@ -34,9 +34,9 @@ assistant may run the simulator from the shell instead.
 **The server's name.** The assistant sees every tool prefixed with it, as in
 `mcp__spice__run_experiments`, so a name that includes SPICE helps. It is the
 key in your client's MCP config, or the word after `claude mcp add`. The plugin
-uses `spice`, and the Desktop extension is listed under its own name. If
-yours is something generic like `sim1`, rename it. Rename `ltspice` too,
-because LTspice's own MCP server uses that name.
+uses `spice`, and the Desktop extension uses its manifest name,
+`ltspice-mcp`. If yours is something generic like `sim1`, rename it. Rename
+`ltspice` too, because LTspice's own MCP server uses that name.
 
 **An instruction.** Put the rule from the README in your project's
 `CLAUDE.md`, or your client's equivalent file. The rule is absolute because
@@ -77,8 +77,9 @@ two requests only; `[schematic] start_ltspice = false` turns that off.
 
 When the run is of a schematic, clicking a net in the window plots it, as if
 you had run the schematic in LTspice. To make that work, the server copies
-the run's results next to the schematic as `<name>.raw`, replacing any file
-of that name, and opens them from the schematic. It doesn't simulate again.
+the run's results and log next to the schematic as `<name>.raw` and
+`<name>.log`, replacing any files of those names, and opens them from the
+schematic. It doesn't simulate again.
 
 **LTspice's documentation.** For questions about LTspice itself, such as a
 shortcut or a menu, the assistant reads the reference files LTspice 26.1 and
@@ -157,8 +158,9 @@ about 45% smaller. The tools accept the same calls either way. The assistant
 looks up an argument with `inspect(kind="reference", query="...")`, and a
 rejected call lists the fields it accepts. `full` sends every description.
 
-**`run_code`** runs a Python snippet in a worker process that holds the
-engine as `api`, for loops over runs and numpy on samples. The snippet runs
+**`run_code`** runs a Python snippet in a worker process where `api` is a
+[Python API](#python-api) `Api` open on the server's working directory and
+configuration, for loops over runs and numpy on samples. The snippet runs
 with the server's own file and process permissions, which `allowed_paths`
 does not confine. Approve `mcp__spice__run_code` in your client as you would a
 shell, and don't allow it as part of a blanket `mcp__spice__*` rule. Set
@@ -178,13 +180,14 @@ Beside your circuits, the server writes only files you ask for (an edited
 schematic, an exported netlist, a plot saved to a folder you name), plus:
 
 - the `<name>.net` that LTspice writes next to a schematic it runs;
-- the `<name>.raw` placed next to a schematic when you ask to see its run in
-  LTspice.
+- the `<name>.raw`, `<name>.log` and `<name>.plt` (the traces to plot)
+  placed next to a schematic when you ask to see its run in LTspice. A
+  `<name>.plt` saved from LTspice is left as it is.
 
 Everything else goes in two places:
 
 - **`.ltspice-mcp/` in the working directory:** job records, runs, results,
-  export snapshots and plots. Add it to `.gitignore`.
+  the netlists exported from schematics, and plots. Add it to `.gitignore`.
 - **A per-user folder:** the recent-circuits list, lock files that keep two
   sessions from editing one file at once, and the drawings `verify_circuit`
   renders, each deleted a week after it was made. It is
@@ -237,8 +240,9 @@ Restart the server afterwards. The image `plot_waveform` attaches with
 Without the extra, the server uses `cairosvg` if it is installed, together
 with the Cairo library it loads. If there is no rasterizer, a PNG request
 returns an SVG file instead, and the reply names what is missing and how to
-install it. A render asked for inline then contains the SVG markup, and a
-plot still returns its chart and trace summaries.
+install it. A `verify_circuit` render with `delivery` set to `"inline"` or
+`"both"` then returns the SVG markup in `render.svg`, and a plot still
+returns its chart and trace summaries.
 `inspect(kind="capabilities")` reports the same before anything is drawn:
 
 ```json
@@ -310,9 +314,10 @@ The `lp` measurement comes back as (abridged):
 
 If the result is off target, the assistant edits the netlist and runs it
 again. A long simulation returns a job ID instead of waiting, and
-`jobs(action="status" | "wait" | "cancel")` follows it. Jobs, signals,
-measurements and the configuration are also readable as MCP resources
-(`spice://results/...`, `spice://netlists/...`, `spice://config`).
+`jobs(action="status" | "wait" | "cancel")` checks on the job, waits for it
+or cancels it. Jobs, signals, measurements and the configuration are also
+readable as MCP resources (`spice://results/...`, `spice://netlists/...`,
+`spice://config`).
 
 Sweeps and Monte Carlo are set in the `variations` argument of
 `run_experiments` and have no tools of their own.
@@ -320,8 +325,9 @@ Sweeps and Monte Carlo are set in the `variations` argument of
 - `assign` sets a `.param`, a component's value (so a supply voltage is an
   assignment to its source), `REF@model` to swap one device's model, or
   `X1:delvto` for an offset on a transistor inside a subcircuit. Several
-  entries form a grid; lists within one entry step together. Corners are run
-  by swapping models.
+  entries run every combination, and so do the lists within one entry unless
+  it sets `combine: "zip"`, which steps them together. Corners are run by
+  swapping models.
 - `random` adds Monte Carlo runs with component tolerances, `.param` and
   `.MODEL` parameter spread, and Pelgrom W·L device mismatch.
 
@@ -363,17 +369,19 @@ script or the server.
 
 **Differences from the tools:**
 
-- Results are complete, because the API collects every page. It rejects
-  MCP-only controls such as response budgets, page cursors and wait times
-  instead of ignoring them, so the same call means the same thing through
-  both.
-- Each process has one engine, so creating an `Api` inside a running server
-  process raises an error. A new `Api` starts in well under a second.
+- Results are complete, because the API collects every page. It removes the
+  MCP-only `budget` and `execution.wait_s` and lists each in the result's
+  `warnings`. It rejects a page cursor or continuation field with
+  `ApiValidationError`; `raw_page=True` accepts them and returns one page, as
+  the tools do.
+- A process can have only one open `Api`, so creating a second one before
+  the first is closed, or one inside a running server process, raises
+  `ApiSessionError`. A new `Api` starts in well under a second.
 - `api.load_raw()` and `api.measurements()` return numpy data for your own
   processing.
 
 **Reference and guide.** `api.reference()` lists the six operations, and
-`api.reference("run_experiments")` prints the arguments of one operation.
+`api.reference("run_experiments")` returns the arguments of one operation.
 `api.guide()` returns the guide; pass a section name to get one section, as
 in `api.guide("python")` for the API. The shell commands are
 `python -m ltspice_mcp.api reference [op]` and
