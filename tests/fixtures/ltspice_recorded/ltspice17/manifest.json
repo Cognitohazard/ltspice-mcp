@@ -1400,6 +1400,33 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_bare": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_bare.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_bare.asc": "5cad42b6cfb2ebb12c38fe26567ef58179b9ff79d8bcf2291c165d197e9c2a7a"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_bare.net": {
+          "bytes": 75,
+          "sha256": "01472d1b97bfd523845794906c1d6070f772890dcf41da5f5f17e4e3494b468d"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_detour": {
       "behaviour": "same-instance-wire",
       "command": [

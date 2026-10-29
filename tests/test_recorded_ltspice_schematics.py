@@ -391,6 +391,31 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
         assert [(d["ref"], set(d["pins"])) for d in dropped] == [("R1", {"1", "2"})]
 
 
+#: ``connectivity/same_instance_bare``: the pins both builds leave unconnected,
+#: because the only wire on them runs straight between them and is dropped. The
+#: sheet rules call a pin floating when no wire, label or other pin is on it,
+#: and the dropped wire is still drawn on both.
+UNCONNECTED_IN_LTSPICE_ONLY = frozenset({"r1.1", "r1.2"})
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_dropped_wire_leaves_its_pins_unconnected_to_ltspice_and_wired_to_the_server(
+    build: str, tmp_path: Path
+):
+    case_id = "connectivity/same_instance_bare"
+    nodes = exported_card(build, case_id, "R1").nodes
+    assert nodes == ["NC_01", "NC_02"]
+    unconnected = {
+        f"r1.{order}" for order, node in enumerate(nodes, start=1) if node.startswith("NC_")
+    }
+    assert unconnected == UNCONNECTED_IN_LTSPICE_ONLY
+
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    assert not [one for one in sheet_findings(_editor(sheet)) if one.rule == "floating_pin"]
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    assert findings(sheet_view(scene), ["floating_pin"]) == []
+
+
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
 async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
     build: str, case_id: str, config, monkeypatch: pytest.MonkeyPatch, work_dir: Path
