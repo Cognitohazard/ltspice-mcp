@@ -76,11 +76,13 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
+from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
     NetPartition,
     build_on_wire_predicate,
+    fold_case,
     is_ground,
     label_folded_nets,
     name_key,
@@ -479,6 +481,61 @@ def _asc_component_value(editor, reference: str) -> str | None:
         return str(editor.get_component_value(reference))
     except Exception:
         return None
+
+
+def _reference_taken(
+    editor: AscEditor, reference: str, *, other_than: str | None = None
+) -> str | None:
+    """The reference of a part, other than ``other_than``, that ``reference``
+    names to LTspice; None when no part has it.
+
+    LTspice compares references without case: neither build netlists a sheet
+    with parts named ``R1`` and ``r1`` (recorded as
+    ``connectivity/shared_reference_case``).
+    """
+    key = fold_case(reference)
+    return next(
+        (name for name in editor.components if name != other_than and fold_case(name) == key),
+        None,
+    )
+
+
+def _same_reference_note(asked: str, taken: str) -> str:
+    """What to add when ``asked`` differs from ``taken`` only in case."""
+    if asked == taken:
+        return ""
+    return f" LTspice compares references without case, so '{asked}' names it too."
+
+
+def _rename_component(editor: AscEditor, reference: str, new: str) -> dict[str, object]:
+    """Give the part ``reference`` the name ``new``, in place.
+
+    spicelib keeps a part under its reference and writes that as its
+    ``InstName``, so setting the attribute alone would leave the part under
+    its old name and write both names (docs/spicelib_bugs.md, Bug 32).
+    """
+    result: dict[str, object] = {
+        "op": "set_component_attribute",
+        "reference": reference,
+        "attribute": "InstName",
+    }
+    if new == reference:
+        return result
+    if (taken := _reference_taken(editor, new, other_than=reference)) is not None:
+        raise NetlistError(
+            f"Refused to rename {reference} to {new}: '{taken}' already names a part."
+            + _same_reference_note(new, taken)
+        )
+    parts = list(editor.components.items())
+    editor.components.clear()
+    for name, part in parts:
+        if name == reference:
+            part.reference = new
+            part.attributes.pop("InstName", None)
+            name = new
+        editor.components[name] = part
+    result["changed"] = {"InstName": {"was": reference, "now": new}}
+    return result
 
 
 def _attributes_of(editor, reference: str) -> dict[str, str]:
@@ -973,7 +1030,8 @@ class _AscEditor(AscEditor):
     cell symbol with no library, and a sheet that is there opens as one of
     these, so a block nested further down is read the same way. A block symbol
     that gives a Prefix is the element it names, as a cell is, and LTspice
-    reads no sheet for it even beside it (``export-hierarchical-block``).
+    reads no sheet for it even beside it (``export-hierarchical-block``;
+    ``docs/spicelib_bugs.md``, Bug 33).
     """
 
     def __init__(
@@ -1005,11 +1063,39 @@ class _AscEditor(AscEditor):
         return None if sheet is None else type(self)(sheet, searched=self._searched)
 
 
+def _refuse_lost_parts(path: Path, editor: AscEditor) -> None:
+    """Refuse a sheet the editor holds fewer parts of than the file places.
+
+    spicelib keeps one part per reference (docs/spicelib_bugs.md, Bug 31), so
+    a sheet on which two parts share one opens with only the last of them, and
+    saving any edit deletes the others. Neither LTspice build netlists such a
+    sheet either (recorded as ``connectivity/shared_reference``).
+    """
+    placed = parse_asc(path.read_bytes()).symbols
+    if len(placed) == len(editor.components):
+        return
+    by_reference: dict[str, list[tuple[int, int]]] = {}
+    for symbol in placed:
+        by_reference.setdefault(symbol.reference, []).append((symbol.x, symbol.y))
+    shared = "; ".join(
+        f"'{reference}' at " + ", ".join(f"({x},{y})" for x, y in places)
+        for reference, places in by_reference.items()
+        if len(places) > 1
+    )
+    raise NetlistError(
+        f"Cannot open {path.name} for editing: parts share a reference ({shared}). "
+        "The schematic editor keeps one part per reference and would delete the "
+        "others on saving, and neither LTspice build netlists such a sheet. "
+        "Rename the repeated parts in LTspice, then edit the sheet here."
+    )
+
+
 def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
     Raises NetlistError if the file is not found, has no Version line the
-    schematic editor can find, or holds a line it cannot read, and
+    schematic editor can find, holds a line it cannot read, or places two
+    parts under one reference, and
     SymbolResolutionError if a file the schematic refers to (a symbol, a
     sub-sheet) is missing.
     """
@@ -1017,11 +1103,13 @@ def make_editor(path: Path) -> Editor:
         if path.suffix.lower() != ".asc":
             return SpiceEditor(str(path))
         try:
-            return _AscEditor(str(path))
+            editor = _AscEditor(str(path))
         except NotImplementedError as e:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
+        _refuse_lost_parts(path, editor)
+        return editor
     except FileNotFoundError as e:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
@@ -2321,8 +2409,11 @@ def apply_op_inplace(
                 f"Symbol '{op.symbol}' not found beside the schematic or in any "
                 "configured symbol library."
             )
-        if op.reference in editor.components:
-            raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
+        if (taken := _reference_taken(editor, op.reference)) is not None:
+            raise NetlistError(
+                f"Component '{taken}' already exists in {asc_path.name}."
+                + _same_reference_note(op.reference, taken)
+            )
         erot = _parse_rotation(op.rotation)
         _pins_on_crossings(
             editor,
@@ -2376,6 +2467,8 @@ def apply_op_inplace(
             # line is removed instead.
             _require_clearable_attr(op.reference, op.attribute)
             editor.get_component(op.reference).attributes.pop(op.attribute, None)
+        elif op.attribute == "InstName":
+            return _rename_component(editor, op.reference, op.value.strip())
         else:
             editor.set_component_attribute(
                 op.reference,

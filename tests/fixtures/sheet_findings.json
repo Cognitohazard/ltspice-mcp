@@ -15892,6 +15892,105 @@
   },
   "verify": []
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/shared_reference.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "shared_reference.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       400,
+       96
+      ]
+     ],
+     "detail": "2 parts share a reference (R1 at (96,96), R1 at (400,96)); LTspice compares references without case and does not netlist a sheet that repeats one",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "shared_reference",
+    "severity": "error",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/shared_reference_case.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "shared_reference",
+     "message": "2 parts share a reference (R1 at (96,96), r1 at (400,96)); LTspice compares references without case and does not netlist a sheet that repeats one",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 400,
+       "y": 96
+      }
+     ],
+     "ref": "R1",
+     "refs": [
+      "R1",
+      "r1"
+     ],
+     "x": 96,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "shared_reference_case.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       400,
+       96
+      ]
+     ],
+     "detail": "2 parts share a reference (R1 at (96,96), r1 at (400,96)); LTspice compares references without case and does not netlist a sheet that repeats one",
+     "refs": [
+      "R1",
+      "r1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "shared_reference",
+    "severity": "error",
+    "subject": "R1 & r1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/two_instance_wire.asc": {
   "dropped_wire": [],
   "edit": {

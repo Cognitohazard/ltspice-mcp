@@ -1643,6 +1643,62 @@
         ".net"
       ]
     },
+    "connectivity/shared_reference": {
+      "behaviour": "shared-reference",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/shared_reference.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nNetlist error: Duplicated Instance Name, \"R1\" in C:\\recording\\shared_reference.asc",
+      "exit_code": null,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/shared_reference.asc": "93061a8f4a577e0d461b6ddbf90f21e1653b396b2f2f5cf0425c8a17f3ab5184"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/shared_reference.net": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/shared_reference_case": {
+      "behaviour": "shared-reference",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/shared_reference_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "dialog": "LTspice XVII\nNetlist error: Duplicated Instance Name, \"r1\" in C:\\recording\\shared_reference_case.asc",
+      "exit_code": null,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/shared_reference_case.asc": "101fa37846440f36533735aac6e9bdb1aabc2d51c604b865c911c9a0fa031f53"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/shared_reference_case.net": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/two_instance_wire": {
       "behaviour": "wire-connectivity",
       "command": [
@@ -6725,15 +6781,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/compress_1mv.cir": "b723ffd9190e0fceacd5af047b04788cf183f9c7ea2893be7982d0247d0a87fe"
       },
       "kind": "run",
       "outputs": {
         "raw/compress_1mv.log": {
-          "bytes": 492,
-          "sha256": "e33f75a4eafb4c2f9a62864d99dcfc4348a0fc73720d4b70849dbfe0ccb327b4"
+          "bytes": 493,
+          "sha256": "7671fd0c445f01003fe503dbb66c0b4a8cfcfd481a12fbd437675759ba55ed48"
         },
         "raw/compress_1mv.raw": {
           "bytes": 1200,
@@ -6860,15 +6915,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/compress_1v.cir": "5ecbb03b03288336ab6b383692bff099010c77d3358d8603330a39ff9cd80aab"
       },
       "kind": "run",
       "outputs": {
         "raw/compress_1v.log": {
-          "bytes": 496,
-          "sha256": "44fdd817f71a88d8a37c24a40ce7f4100288be3b2d3b538a17b99a545b3557fc"
+          "bytes": 497,
+          "sha256": "dffeea073a5c7b3acb47db173893eeea748b624073d910e58820ad9635ce2dc5"
         },
         "raw/compress_1v.raw": {
           "bytes": 1526,
@@ -7147,15 +7201,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/save_subckt_names.cir": "8cce456c56f45e08586e8c1d758978ad4cb54e52249db680a8c043301d1be914"
       },
       "kind": "run",
       "outputs": {
         "raw/save_subckt_names.log": {
-          "bytes": 512,
-          "sha256": "610d494765f627cbbf848592180e566cb2f03e8fa6e2b9d90735970e35378bce"
+          "bytes": 513,
+          "sha256": "09a2d5ea0def820297a34747995f2c03008786e4043db88f1ec3584a2e976379"
         },
         "raw/save_subckt_names.raw": {
           "bytes": 1036,
@@ -7181,15 +7234,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/save_subckt_names_no_x.cir": "b4f051e791f0e02e1f22b65e922e5610377cebf21ed9543b5b7b261d56b90fd0"
       },
       "kind": "run",
       "outputs": {
         "raw/save_subckt_names_no_x.log": {
-          "bytes": 465,
-          "sha256": "88524b945579a71c3de82ebb805a177162748489e5e61361041a03ad43996e5a"
+          "bytes": 466,
+          "sha256": "1de5b9c29ecce95070b339b98e8a4d42f02261e3bb350ccfce9026447e2c8f44"
         },
         "raw/save_subckt_names_no_x.raw": {
           "bytes": 934,
@@ -7562,15 +7614,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/subckt_names_step.cir": "d76b21186c652c79d2275769b43027800a41c30bfed8292e08a4df72ab1f4cb9"
       },
       "kind": "run",
       "outputs": {
         "raw/subckt_names_step.log": {
-          "bytes": 728,
-          "sha256": "d201d15059029bf407ba5a4890bd10b7e5b421dd79ccca64fdd1b9c6fa9c2d05"
+          "bytes": 729,
+          "sha256": "da1a303bae4db4c7d6876c36a4229d5362a7b450dbef832e22fdc7104856ad43"
         },
         "raw/subckt_names_step.raw": {
           "bytes": 1274,
@@ -7596,15 +7647,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/subckt_names_tran.cir": "fae9edf14b2f489ad6fb5623a22ab5614405af979b1f50d58875fe0935d6e787"
       },
       "kind": "run",
       "outputs": {
         "raw/subckt_names_tran.log": {
-          "bytes": 756,
-          "sha256": "8ba8476618097083563ebd5133b5377d1675e893d027ffce6629b6b102d6e5e4"
+          "bytes": 757,
+          "sha256": "1d2f1d1f0f0cc5722b6fc8152801102885303fad57ce213edffb025fc2d80057"
         },
         "raw/subckt_names_tran.raw": {
           "bytes": 1214,
@@ -7630,15 +7680,14 @@
         "<settings>"
       ],
       "exit_code": 0,
-      "host": "Wine 11.0",
       "inputs": {
         "raw/subckt_names_tran.cir": "fae9edf14b2f489ad6fb5623a22ab5614405af979b1f50d58875fe0935d6e787"
       },
       "kind": "run",
       "outputs": {
         "raw/subckt_names_tran_saved.log": {
-          "bytes": 756,
-          "sha256": "8ba8476618097083563ebd5133b5377d1675e893d027ffce6629b6b102d6e5e4"
+          "bytes": 757,
+          "sha256": "1d2f1d1f0f0cc5722b6fc8152801102885303fad57ce213edffb025fc2d80057"
         },
         "raw/subckt_names_tran_saved.raw": {
           "bytes": 2902,

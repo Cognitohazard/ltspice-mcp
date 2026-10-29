@@ -1691,6 +1691,28 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/shared_reference_case.asc": {
+   "labels": {
+    "proposals": 54,
+    "sha256": "1ef75febce1a57c54b118a727b3af4bcb9d7085fc03b1c68d0cba0bcde3c4ea4",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
+     "placed [a name already here; 1 at the point, 1 named]": 8,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 8,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 24
+    }
+   },
+   "moves": {
+    "proposals": 30,
+    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "shapes": {
+     "moved": 30
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/two_instance_wire.asc": {
    "labels": {
     "proposals": 30,

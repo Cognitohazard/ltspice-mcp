@@ -87168,6 +87168,384 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/shared_reference.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 96
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 384,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 400,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 400,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 400,
+      "y": 96
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "2k"
+    }
+   ],
+   "total": 2
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "error": "error"
+   },
+   {
+    "at": "R1.2",
+    "error": "error"
+   },
+   {
+    "at": "R1.1",
+    "error": "error"
+   },
+   {
+    "at": "R1.2",
+    "error": "error"
+   },
+   {
+    "at": "net:a",
+    "coordinates_sha256": "687f611324b7c5b2",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:b",
+    "coordinates_sha256": "f39027c02757d165",
+    "is_shorted": false,
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:c",
+    "coordinates_sha256": "d1053ac32d7445d3",
+    "is_shorted": false,
+    "labels": [
+     "c"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 400,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:d",
+    "coordinates_sha256": "f9bc2b9b5f1adff3",
+    "is_shorted": false,
+    "labels": [
+     "d"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 400,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/shared_reference_case.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 96
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 384,
+      "y": 48
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 400,
+       "y": 48
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 400,
+       "y": 144
+      }
+     ],
+     "position": {
+      "x": 400,
+      "y": 96
+     },
+     "reference": "r1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "2k"
+    }
+   ],
+   "total": 2
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "687f611324b7c5b2",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "f39027c02757d165",
+    "is_shorted": false,
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "r1.1",
+    "coordinates_sha256": "d1053ac32d7445d3",
+    "is_shorted": false,
+    "labels": [
+     "c"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "r1",
+      "x": 400,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "r1.2",
+    "coordinates_sha256": "f9bc2b9b5f1adff3",
+    "is_shorted": false,
+    "labels": [
+     "d"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "r1",
+      "x": 400,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:a",
+    "coordinates_sha256": "687f611324b7c5b2",
+    "is_shorted": false,
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:b",
+    "coordinates_sha256": "f39027c02757d165",
+    "is_shorted": false,
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:c",
+    "coordinates_sha256": "d1053ac32d7445d3",
+    "is_shorted": false,
+    "labels": [
+     "c"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "r1",
+      "x": 400,
+      "y": 48
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   },
+   {
+    "at": "net:d",
+    "coordinates_sha256": "f9bc2b9b5f1adff3",
+    "is_shorted": false,
+    "labels": [
+     "d"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "r1",
+      "x": 400,
+      "y": 144
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/two_instance_wire.asc": {
   "components": {
    "rows": [

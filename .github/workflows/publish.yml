@@ -85,7 +85,7 @@ jobs:
       # (OIDC → PyPI Trusted Publishing), so it must not follow a mutable
       # ref like release/v1. Dependabot bumps this with an updated comment.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
         with:
           repository-url: ${{ github.event_name == 'workflow_dispatch' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
           # A tag re-pushed for the alias workflow's sake must not fail here on

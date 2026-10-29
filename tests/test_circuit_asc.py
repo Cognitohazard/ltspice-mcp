@@ -1699,6 +1699,49 @@ class TestInstancePrefix:
         assert bool(said) is warned
 
 
+class TestReferences:
+    """LTspice compares references without case, and neither build netlists a
+    sheet that repeats one (recorded: ``connectivity/shared_reference`` and
+    ``connectivity/shared_reference_case``)."""
+
+    async def test_no_part_is_added_under_another_parts_reference_in_any_case(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        before = asc_file.read_bytes()  # noqa: ASYNC240
+        add = {"op": "add_component", "reference": "r1", "symbol": "res", "x": 800, "y": 800}
+        with pytest.raises(
+            NetlistError,
+            match=r"Component 'R1' already exists in Draft1\.asc\. LTspice compares "
+            r"references without case, so 'r1' names it too\.",
+        ):
+            apply_one(asc_state, asc_file, add)
+        assert asc_file.read_bytes() == before  # noqa: ASYNC240
+
+    async def test_setting_a_parts_name_renames_it(self, asc_state: SessionState, asc_file: Path):
+        rename = {"op": "set_component_attribute", "reference": "R1", "attribute": "InstName"}
+        result = apply_one(asc_state, asc_file, {**rename, "value": "R9"})
+        assert result["changed"] == {"InstName": {"was": "R1", "now": "R9"}}
+        text = asc_file.read_bytes().decode("latin-1")  # noqa: ASYNC240
+        assert [line for line in text.splitlines() if "InstName" in line] == [
+            "SYMATTR InstName C1",
+            "SYMATTR InstName R9",
+            "SYMATTR InstName V1",
+        ]
+
+    async def test_no_part_is_renamed_to_another_parts_reference_in_any_case(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        before = asc_file.read_bytes()  # noqa: ASYNC240
+        rename = {"op": "set_component_attribute", "reference": "R1", "attribute": "InstName"}
+        with pytest.raises(
+            NetlistError,
+            match=r"Refused to rename R1 to c1: 'C1' already names a part\. LTspice "
+            r"compares references without case, so 'c1' names it too\.",
+        ):
+            apply_one(asc_state, asc_file, {**rename, "value": "c1"})
+        assert asc_file.read_bytes() == before  # noqa: ASYNC240
+
+
 @pytest.mark.asyncio
 class TestNetConflictInWirePins:
     """wire_pins detects shorts between two named nets."""

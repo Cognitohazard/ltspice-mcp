@@ -43,6 +43,7 @@ from ltspice_mcp.lib.connectivity import (
     build_on_wire_predicate,
     build_wire_counter,
     crossing_points,
+    fold_case,
     is_ground,
     label_folded_nets,
     name_key,
@@ -87,6 +88,16 @@ _RULES = (
         "A part whose symbol is not found, or has a pin line that does not read, "
         "so that it has no pins.",
         check="symbols",
+        severity="error",
+    ),
+    Rule(
+        "shared_reference",
+        "electrical",
+        "part",
+        "Two or more parts under one reference, compared without case, which "
+        "makes a sheet neither LTspice build netlists.",
+        check="quality",
+        provenance="shared-reference",
         severity="error",
     ),
     Rule(
@@ -435,6 +446,34 @@ def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
                 refs=(part.name,),
                 points=(part.at,) if part.at is not None else (),
                 facts=facts,
+            )
+        )
+    return found
+
+
+@_finds("shared_reference")
+def _shared_references(ix: _Index) -> list[Finding]:
+    # Neither build netlists a sheet that repeats a reference, in any case
+    # (shared_reference, shared_reference_case): one stops with "Duplicated
+    # Instance Name", the other writes no netlist.
+    by_key: dict[str, list[Part]] = {}
+    for part in ix.view.parts:
+        if part.name:
+            by_key.setdefault(fold_case(part.name), []).append(part)
+    found: list[Finding] = []
+    for parts in by_key.values():
+        if len(parts) < 2:
+            continue
+        placed = ", ".join(
+            part.name if part.at is None else f"{part.name} at {_at(part.at)}" for part in parts
+        )
+        found.append(
+            Finding(
+                "shared_reference",
+                f"{len(parts)} parts share a reference ({placed}); LTspice compares "
+                "references without case and does not netlist a sheet that repeats one",
+                refs=tuple(dict.fromkeys(part.name for part in parts)),
+                points=tuple(part.at for part in parts if part.at is not None),
             )
         )
     return found
@@ -1098,6 +1137,8 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
 
     - ``unresolved_symbol``: a part whose symbol was not found. No other rule
       says anything of its pins or its extent.
+    - ``shared_reference``: two or more parts under one reference, compared
+      without case. Neither LTspice build netlists such a sheet.
     - ``dropped_wire``: a wire LTspice leaves out of the netlist because its
       two ends land on pins of one part
       (``connectivity.same_instance_dropped_segments``).
