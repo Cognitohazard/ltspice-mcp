@@ -166,8 +166,6 @@ class ModelCard:
     #: Just inside the card's opening parenthesis, for a new parameter written
     #: in place: after the last one, or here when there is none.
     _in_parens: int | None = None
-    #: What rendering the card again would drop, when it would drop text.
-    _would_drop: str | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> ModelCard:
@@ -183,24 +181,15 @@ class ModelCard:
         # Params can come as a single PARENED group or as a sequence of
         # KEY_VALUE tokens after the type. A PARENED group's own tokens are
         # placed in the card by the group's offset, so they are edited where
-        # they stand. A comment ends the parameters this reads, but the card
-        # may go on past it on later lines, which may give more of them; such
-        # a card is neither edited, where a copy might be missed, nor
-        # rendered again, which would drop those lines (``_would_drop``).
+        # they stand. The body holds no comment: each line's ends at the end
+        # of the line, and the lexer leaves it out.
         found: list[Token] = []
         in_parens = None
-        would_drop = (
-            "its line ends in a comment, and the card goes on past it"
-            if card.goes_on_past_its_body()
-            else None
-        )
-        in_place = would_drop is None
+        in_place = True
         for tok in tokens[3:]:
             if tok.kind == TokenKind.PARENED:
                 inner = tokenize_body(tok.text[1:-1])
-                if any(t.kind == TokenKind.COMMENT_TRAIL for t in inner):
-                    would_drop = "it has a comment inside its parentheses"
-                in_place = tok.body_offset >= 0 and would_drop is None
+                in_place = tok.body_offset >= 0
                 start = tok.body_offset + 1
                 own = [t for t in inner if t.kind == TokenKind.KEY_VALUE]
                 if in_place:
@@ -228,7 +217,6 @@ class ModelCard:
             _params=params,
             _name_token=tokens[1] if tokens[1].body_offset >= 0 else None,
             _in_parens=in_parens,
-            _would_drop=would_drop,
         )
 
     @property
@@ -283,12 +271,17 @@ class ModelCard:
         self.card.name = new_name
 
     def _add_in_place(self, key: str, value: str) -> bool:
-        """Write a new ``key=value`` after the last parameter inside the
-        parentheses; False where it cannot go in place."""
+        """Write a new ``key=value`` after the last parameter, or just inside
+        empty parentheses; False where it cannot go in place."""
         tokens = self._params.tokens
-        if self._in_parens is None or tokens is None:
+        if tokens is None:
             return False
-        at = tokens[-1].body_end if tokens else self._in_parens
+        if tokens:
+            at = tokens[-1].body_end
+        elif self._in_parens is not None:
+            at = self._in_parens
+        else:
+            return False
         text = f" {key}={value}"
         try:
             self.card.replace_span(at, at, text)
@@ -308,12 +301,6 @@ class ModelCard:
         return True
 
     def _canonical_rerender(self) -> None:
-        if self._would_drop is not None:
-            raise NetlistError(
-                f".MODEL {self.name} cannot be edited: {self._would_drop}. What follows "
-                "the comment may give more of its parameters, and how LTspice reads a "
-                "card that goes on past a comment is not recorded. Edit it by hand."
-            )
         params_text = " ".join(self._params.rendered())
         body = f".MODEL {self.name} {self.type}({params_text})"
         self.card.replace_body(body)
@@ -1053,6 +1040,18 @@ class FunctionCall:
     args_text: str  # raw text inside the parens, no surrounding ()
 
 
+def _as_written(body: str, tokens: list[Token]) -> str:
+    """``tokens`` as ``body`` writes them, each run of whitespace between two
+    one space: ``V(out)`` stays together, and a ``+`` line's gap closes."""
+    out = ""
+    for i, tok in enumerate(tokens):
+        if i:
+            gap = body[tokens[i - 1].body_end : tok.body_offset]
+            out += " " if gap and not gap.strip() else gap.strip()
+        out += tok.text
+    return out
+
+
 @dataclass
 class MeasCard:
     """Typed view over a ``.MEAS [analysis] NAME ...`` directive.
@@ -1073,6 +1072,8 @@ class MeasCard:
     function_calls: list[FunctionCall]
     signal_refs: list[str]
     _directive_text: str = ".MEAS"  # ``.MEAS`` or ``.MEASURE``
+    #: The body after the label as written, which a rename keeps.
+    _rest: str = ""
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard:
@@ -1093,6 +1094,7 @@ class MeasCard:
             raise _malformed(card, ".MEAS missing label")
         meas_name = tokens[idx].text
         body_tokens = list(tokens[idx + 1 :])
+        rest = _as_written(card.body, body_tokens)
 
         # Function-call detection: BARE immediately followed by PARENED.
         # Recurses into PARENED args so nested calls are also surfaced
@@ -1109,6 +1111,7 @@ class MeasCard:
             function_calls=function_calls,
             signal_refs=signal_refs,
             _directive_text=directive,
+            _rest=rest,
         )
 
     def set_label(self, new_name: str) -> None:
@@ -1126,10 +1129,8 @@ class MeasCard:
         if self.analysis is not None:
             parts.append(self.analysis.upper())
         parts.append(self.name)
-        for tok in self.body_tokens:
-            if tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-            parts.append(tok.text)
+        if self._rest:
+            parts.append(self._rest)
         body = " ".join(parts)
         self.card.replace_body(body)
 

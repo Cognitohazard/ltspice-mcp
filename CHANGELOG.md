@@ -55,21 +55,22 @@ tool-surface changes.
   say) and made a job whose every case failed with `unsupported_variant`. It
   now refuses the call before a job exists, with `unsupported_file`, as it
   refuses a path outside the sandbox and as `inspect` refuses such a file.
+- The server read a `;` or `$` comment to the end of the whole card, where
+  both LTspice builds end it at the end of its line and read the card on
+  over its next `+` line. A parameter on a line after a comment, outside a
+  `.model` card's parentheses or inside them, was never seen by any check
+  or edit, and an edit that wrote the card again dropped it. The server
+  also read a `$` anywhere as a comment, where LTspice reads one inside or
+  at the start of a word as part of it, so a netlist with PSpice or OrCAD
+  net names (`N$1`, `$N_0001`) lost a node on every such card. Comments now
+  end at the end of their line, and only a `$` that stands alone begins
+  one.
 - A `.model` card edited by the server (a Monte Carlo or mismatch variant,
   a parameter set by a variation) was written again on one line in the
   server's spelling, so a card laid out over continuation lines lost its
-  layout and its comments. A card with a `;` comment on a line it goes on
-  past also lost every parameter after the comment, since the server reads
-  such a comment to the end of the card. A value is now set where it
-  stands, a new parameter is written after the last one inside the
-  parentheses, and a variant's new name replaces the name alone. A card
-  that goes on past a comment is refused by name, as how LTspice reads one
-  is not yet recorded.
-- Every other netlist edit that writes a whole card again (a new instance
-  parameter, a source's value, a subcircuit default, a `.meas` label) lost
-  the same lines: those of a card that goes on past a `;` or `$` comment at
-  the end of a line. Such an edit is now refused, naming the card and its
-  line, and the card is left as it was.
+  layout and its comments. A value is now set where it stands, a new
+  parameter is written after the last one, and a variant's new name
+  replaces the name alone.
 - The compressed-transient observation (`coarse_compressed_waveform`) reported
   a run whose deck asked for a maximum time step wider than a twentieth of the
   run, though a gap no wider than that step is what the deck asked for. A

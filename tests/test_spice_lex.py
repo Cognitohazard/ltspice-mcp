@@ -14,7 +14,6 @@ from collections.abc import Callable
 import pytest
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -604,47 +603,81 @@ class TestCanonicalThenSpanEdits:
         assert "Vdd=12.0" in out
 
 
-class TestARewriteThatWouldDropLines:
-    """A comment at the end of a line runs, as the lexer reads it, to the end
-    of the card, so the card's later ``+`` lines are not in its body. Rendered
-    again from its body, the card would lose them, so the rewrite is refused
-    and the card is left as it was."""
+class TestACardThatGoesOnPastAComment:
+    """A comment ends at the end of its line, and the card goes on on the next
+    ``+`` line (recorded: deck/comment_then_continuation). An edit keeps every
+    line's parameters: made in place it keeps the comment too, and a card
+    written again whole loses only the comment."""
 
     @pytest.mark.parametrize(
-        ("text", "edit"),
+        ("text", "edit", "written"),
         [
             (
                 "M1 d g s b nmos W=1u ; width\n+ L=1u\n",
-                lambda card: InstanceLine.from_card(card).set_param("AD", "1p"),
+                lambda card: InstanceLine.from_card(card).set_param("L", "2u"),
+                "M1 d g s b nmos W=1u ; width\n+ L=2u\n",
             ),
             (
-                "V1 in 0 PULSE(0 1 0 1n 1n 5u 10u) ; drive\n+ AC 1\n",
-                lambda card: apply_value_to_instance(card, "SINE(0 1 1k)"),
+                "M1 d g s b nmos W=1u ; width\n+ L=1u\n",
+                lambda card: InstanceLine.from_card(card).set_param("AD", "1p"),
+                "M1 d g s b nmos W=1u L=1u AD=1p\n",
             ),
             (
                 ".subckt amp in out ; pins\n+ params: gain=2\n",
                 lambda card: SubcktCard.from_card(card).set_param_default("gain", "3"),
+                ".SUBCKT amp in out PARAMS: gain=3\n",
             ),
             (
                 ".meas tran vmax max V(out) ; peak\n+ from=1m\n",
                 lambda card: MeasCard.from_card(card).set_label("vpeak"),
+                ".meas TRAN vpeak max V(out) from=1m\n",
             ),
         ],
-        ids=["instance", "source_value", "subckt", "meas"],
+        ids=["in_place", "written_again", "subckt", "meas"],
     )
-    def test_is_refused_and_leaves_the_card_as_it_was(
-        self, text: str, edit: Callable[[SpiceCard], object]
+    def test_an_edit_keeps_the_lines_past_the_comment(
+        self, text: str, edit: Callable[[SpiceCard], object], written: str
     ) -> None:
         cards = lex(text).cards
-        with pytest.raises(NetlistError, match="goes on past a comment"):
-            edit(cards[0])
-        assert emit(cards) == text
+        edit(cards[0])
+        assert emit(cards) == written
 
     def test_a_comment_on_a_line_of_its_own_does_not_stop_a_rewrite(self) -> None:
         """The ``+`` line after it is in the body, so a rewrite keeps it."""
         cards = lex("M1 d g s b nmos W=1u\n* width\n+ L=1u\n").cards
         InstanceLine.from_card(cards[0]).set_param("AD", "1p")
         assert emit(cards) == "M1 d g s b nmos W=1u L=1u AD=1p\n"
+
+    def test_a_continuation_that_is_only_a_comment_gives_nothing(self) -> None:
+        cards = lex("R1 a 0 1k\n+ ; only a comment\n").cards
+        assert cards[0].body == "R1 a 0 1k"
+        InstanceLine.from_card(cards[0]).set_param("tc1", "0.01")
+        assert emit(cards) == "R1 a 0 1k tc1=0.01\n"
+
+
+class TestADollarSign:
+    """A ``$`` that stands alone begins a comment; one inside a word or at its
+    start is part of it (recorded: deck/comment_dollar, deck/dollar_*)."""
+
+    @pytest.mark.parametrize(
+        ("text", "words", "comment"),
+        [
+            ("R1 a 0 1k $ 2k", ["R1", "a", "0", "1k"], "$ 2k"),
+            ("R1 a 0 1k $", ["R1", "a", "0", "1k"], "$"),
+            ("R1 N$1 0 1k", ["R1", "N$1", "0", "1k"], None),
+            ("R1 $N_0001 0 1k", ["R1", "$N_0001", "0", "1k"], None),
+            ("R1 $N_0001 0 1k $ load", ["R1", "$N_0001", "0", "1k"], "$ load"),
+        ],
+    )
+    def test_only_a_dollar_sign_that_stands_alone_begins_a_comment(
+        self, text: str, words: list[str], comment: str | None
+    ) -> None:
+        (card,) = lex(text + "\n").cards
+        assert card.body.split() == words
+        tokens = tokenize_body(text)
+        assert [t.text for t in tokens if t.kind != TokenKind.COMMENT_TRAIL] == words
+        trail = [t.text for t in tokens if t.kind == TokenKind.COMMENT_TRAIL]
+        assert trail == ([comment] if comment else [])
 
 
 class TestStructuredErrors:
@@ -1023,27 +1056,32 @@ class TestModelCard:
         assert cards[0].name == "nch_mc1"
 
     @pytest.mark.parametrize(
-        "text",
+        ("text", "edited"),
         [
-            ".model dx d(is=1e-14 ; saturation current\n+ n=2)\n",
-            ".model dx d is=1e-14 ; saturation current\n+ n=2\n",
+            (
+                ".model dx d(is=1e-14 ; saturation current\n+ n=2)\n",
+                ".model dx d(is=2e-14 ; saturation current\n+ n=3 rs=1)\n",
+            ),
+            (
+                ".model dx d is=1e-14 ; saturation current\n+ n=2\n",
+                ".model dx d is=2e-14 ; saturation current\n+ n=3 rs=1\n",
+            ),
         ],
         ids=["inside_the_parentheses", "at_the_end_of_a_line"],
     )
-    def test_a_card_that_goes_on_past_a_comment_is_not_edited(self, text: str) -> None:
-        """The parameters read stop at the comment, and the card goes on past
-        it. Edited, a copy past it could be missed, and rendered again the
-        card would lose those lines; how LTspice reads it is not recorded."""
+    def test_a_card_that_goes_on_past_a_comment_is_edited_where_it_stands(
+        self, text: str, edited: str
+    ) -> None:
+        """The comment ends at the end of its line and the card goes on
+        (recorded: deck/comment_*): every parameter is read, each is set where
+        it stands, a new one follows the last, and the comment stays."""
         cards = lex(text).cards
         view = ModelCard.from_card(cards[0])
-        for edit in (
-            lambda: view.set_param("n", "3"),
-            lambda: view.set_param("is", "2e-14"),
-            lambda: view.remove_param("is"),
-        ):
-            with pytest.raises(NetlistError, match="goes on past a comment"):
-                edit()
-        assert emit(cards) == text
+        assert view.params == {"is": "1e-14", "n": "2"}
+        view.set_param("n", "3")
+        view.set_param("is", "2e-14")
+        view.set_param("rs", "1")
+        assert emit(cards) == edited
 
     def test_clean_card_round_trips_byte_for_byte(self) -> None:
         text = ".MODEL NMOS1 NMOS  (VTO=0.7   KP=100u)\n"
@@ -1709,9 +1747,7 @@ class TestMeasCard:
         cards = lex(".MEAS TRAN vmax MAX V(out)\n").cards
         view = MeasCard.from_card(cards[0])
         view.set_label("peak_v")
-        out = emit(cards)
-        assert "peak_v" in out
-        assert "vmax" not in out
+        assert emit(cards) == ".MEAS TRAN peak_v MAX V(out)\n"
 
     def test_set_analysis_rerenders(self) -> None:
         cards = lex(".MEAS gain MAX V(out)\n").cards

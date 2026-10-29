@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ltspice_mcp.lib.encoding import read_spice_text as _read_library_text
+from ltspice_mcp.lib.spice_lex import line_comment_start
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,9 @@ def _merge_continuation_lines(lines: list[str]) -> list[str]:
         if not stripped:
             continue
 
-        stripped = re.sub(r"[;$].*$", "", stripped)  # remove inline comments
+        comment = line_comment_start(stripped)
+        if comment is not None:
+            stripped = stripped[:comment].rstrip()
 
         if stripped.startswith("+"):
             if current is not None:

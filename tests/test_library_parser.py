@@ -34,6 +34,12 @@ class TestMergeContinuationLines:
         assert "comment" not in result[0]
         assert "BF=200" in result[0]
 
+    def test_a_dollar_sign_in_a_word_is_kept(self):
+        """Only a ``$`` that stands alone begins a comment, as LTspice reads a
+        deck (recorded: deck/dollar_inside_a_name, deck/dollar_leading_a_name)."""
+        lines = [".SUBCKT X$AMP $N_IN OUT $ ports", "+ PARAMS: GAIN=2"]
+        assert _merge_continuation_lines(lines) == [".SUBCKT X$AMP $N_IN OUT PARAMS: GAIN=2"]
+
     def test_empty_input(self):
         assert _merge_continuation_lines([]) == []
 

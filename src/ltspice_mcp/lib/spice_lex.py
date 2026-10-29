@@ -30,8 +30,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeVar
 
-from ltspice_mcp.errors import NetlistError
-
 #: Directive heads whose first argument is a file path.
 INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
 
@@ -156,8 +154,9 @@ class Token:
         return self.body_offset + self.body_length
 
 
-# Characters that terminate a BARE token outside any nesting context.
-_BARE_TERMINATORS: frozenset[str] = frozenset(" \t\r\n={}(),\"';$")
+# Characters that terminate a BARE token outside any nesting context. A ``$``
+# inside a word is part of it (``N$1``); one that stands alone begins a comment.
+_BARE_TERMINATORS: frozenset[str] = frozenset(" \t\r\n={}(),\"';")
 
 
 _T = TypeVar("_T")
@@ -230,7 +229,7 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
         # Comment trail consumes the rest of the body. Layer 1 strips
         # trailing comments before they reach us, but tokenize_body is
         # also called directly on raw bodies (e.g. ad-hoc validation).
-        if c in (";", "$"):
+        if c == ";" or _lone_dollar(body, i):
             yield _Atom(TokenKind.COMMENT_TRAIL.value, body[i:], i)
             return
 
@@ -569,12 +568,6 @@ class SpiceCard:
         self.body_layout = _shift_segments_after(self.body_layout, seg, body_end, delta)
         self.dirty = True
 
-    def goes_on_past_its_body(self) -> bool:
-        """Whether a ``+`` line follows the line the body ends on: that line
-        ends in a comment, which the lexer reads to the end of the card."""
-        last = self.body_layout[-1].raw_line_idx if self.body_layout else 0
-        return any(line.lstrip().startswith("+") for line in self.raw_lines[last + 1 :])
-
     def replace_body(self, new_body: str) -> None:
         """Canonical-form rerender. Collapses to a single line.
 
@@ -582,17 +575,7 @@ class SpiceCard:
         replacement — typically when appending or inserting new tokens.
         Preserves the trailing line ending of the original last raw
         line. After this call, ``body_layout`` holds a single segment.
-
-        Raises ``NetlistError`` for a card that goes on past its body
-        (``goes_on_past_its_body``), which this would cut short.
         """
-        if self.goes_on_past_its_body():
-            raise NetlistError(
-                f"The card at line {self.line_start} ({self.body.split(maxsplit=1)[0]}) "
-                "cannot be rewritten: it goes on past a comment at the end of a line, "
-                "and a rewrite would drop what follows the comment. How LTspice reads "
-                "such a card is not recorded. Edit it by hand."
-            )
         eol = _trailing_newline_str(self.raw_lines)
         self.body = new_body
         self.raw_lines = [new_body + eol]
@@ -727,11 +710,14 @@ def _build_body_with_layout(
     replaced with a space in the body so the tokenizer doesn't see it;
     that space lives at the same column where the ``+`` sat in the
     raw line, so any token positioned at or after the ``+`` in the
-    raw line maps correctly to body offsets.
+    raw line maps correctly to body offsets. Each line's comment
+    (``_comment_column``) is left out of the body, the line's segment
+    ending before it.
     """
     parts: list[str] = []
     segments: list[BodySegment] = []
     body_offset = 0
+    brace = 0
     for j, raw_line in enumerate(raw_group):
         if j and _classify_line(raw_line.lstrip()) in ("comment", "blank"):
             continue
@@ -752,6 +738,14 @@ def _build_body_with_layout(
             assert stripped.startswith("+")
             plus_col = len(line_text) - len(stripped)
             piece = line_text[:plus_col] + " " + line_text[plus_col + 1 :]
+        # A comment ends at the end of its line; the card goes on on the next
+        # ``+`` line (recorded: deck/comment_then_continuation,
+        # deck/comment_in_model_parens).
+        comment, brace = _comment_column(piece, brace)
+        if comment is not None:
+            piece = piece[:comment].rstrip()
+            if j and not piece:
+                continue
         parts.append(piece)
         segments.append(
             BodySegment(
@@ -765,59 +759,47 @@ def _build_body_with_layout(
     return "".join(parts), segments
 
 
-def _truncate_segments(segments: list[BodySegment], new_body_len: int) -> list[BodySegment]:
-    """Drop or shorten segments past ``new_body_len`` (used by inline-comment strip)."""
-    out: list[BodySegment] = []
-    for seg in segments:
-        if seg.body_start >= new_body_len:
-            break
-        if seg.body_end > new_body_len:
-            out.append(
-                BodySegment(
-                    body_start=seg.body_start,
-                    body_end=new_body_len,
-                    raw_line_idx=seg.raw_line_idx,
-                    raw_col_start=seg.raw_col_start,
-                )
-            )
-        else:
-            out.append(seg)
-    return out
+def _lone_dollar(text: str, i: int) -> bool:
+    """Whether the ``$`` at ``text[i]`` stands alone, which makes it a comment:
+    at the start or after whitespace, and before whitespace or the end. Both
+    LTspice builds read ``1k $ 2k`` as ``1k`` and a comment, and ``N$1`` and
+    ``$N_0001`` as node names (deck/comment_dollar, deck/dollar_*)."""
+    return (
+        text[i] == "$"
+        and (i == 0 or text[i - 1].isspace())
+        and (i + 1 == len(text) or text[i + 1].isspace())
+    )
 
 
-def _strip_inline_comment(merged: str) -> str:
-    """Strip trailing ``;`` / ``$`` inline comment from a merged body.
+def _comment_column(line: str, brace: int = 0) -> tuple[int | None, int]:
+    """Where the comment on one line of a card starts, if it has one, and the
+    brace depth at the end of the line given the depth at its start.
 
-    Respects quoted strings and balanced ``{}`` / ``()`` so a comment
-    marker inside an expression isn't mistaken for the start of a
-    comment. Returns ``merged`` unchanged if no comment is present.
+    A ``;`` begins a comment anywhere outside a quoted string or braces, inside
+    parentheses too; a ``$`` begins one where it stands alone. Quotes do not
+    carry across lines; an expression in braces may.
     """
     quote: str | None = None
-    brace = 0
-    paren = 0
-    for i, c in enumerate(merged):
+    for i, c in enumerate(line):
         if quote is not None:
             if c == quote:
                 quote = None
             continue
         if c in ('"', "'"):
             quote = c
-            continue
-        if c == "{":
+        elif c == "{":
             brace += 1
-            continue
-        if c == "}":
+        elif c == "}":
             brace = max(0, brace - 1)
-            continue
-        if c == "(":
-            paren += 1
-            continue
-        if c == ")":
-            paren = max(0, paren - 1)
-            continue
-        if c in (";", "$") and brace == 0 and paren == 0:
-            return merged[:i].rstrip()
-    return merged
+        elif brace == 0 and (c == ";" or _lone_dollar(line, i)):
+            return i, brace
+    return None, brace
+
+
+def line_comment_start(line: str) -> int | None:
+    """Where the comment on one line of SPICE text starts, or ``None``: a
+    ``;`` outside quotes and braces, or a ``$`` that stands alone."""
+    return _comment_column(line)[0]
 
 
 def _classify_line(stripped: str) -> CardKind:
@@ -894,7 +876,7 @@ def _extract_ends_name(body: str) -> str | None:
     return parts[1]
 
 
-_PLAIN_MODEL_NAME = re.compile(r"(?i:\s*\.model)\s+([^\s={}(),\"';$]+)(?=\s|$)")
+_PLAIN_MODEL_NAME = re.compile(r"(?i:\s*\.model)\s+([^\s={}(),\"';]+)(?=\s|$)")
 
 
 def _extract_model_name(body: str) -> str | None:
@@ -1121,12 +1103,7 @@ def lex(netlist_text: str) -> LexResult:
         # replaced with a single space so tokenizer sees no leftover
         # syntax (the ``+`` itself never overlaps any token because
         # tokens never start at whitespace).
-        body_with_comment, segments = _build_body_with_layout(raw_group)
-        body = _strip_inline_comment(body_with_comment)
-        # If comment stripping shortened the body, truncate the last
-        # affected segment (keep the layout consistent with body).
-        if len(body) < len(body_with_comment):
-            segments = _truncate_segments(segments, len(body))
+        body, segments = _build_body_with_layout(raw_group)
 
         name_extractor = _NAME_EXTRACTORS.get(kind)
         name = name_extractor(body) if name_extractor else None

@@ -18,8 +18,11 @@ description: >
 
 - `.END` must be the last line; nothing after it is read.
 - `+` at the start of a line continues the previous statement.
-- `*` starts a full-line comment. The inline comment is `;` in LTspice and `$`
-  in ngspice (`;` is not an inline comment in ngspice).
+- `*` starts a full-line comment. The inline comment is `;` in LTspice, or a
+  `$` that stands alone; a `$` inside a name (`N$1`, `$N_0001`) is part of the
+  name. In ngspice it is `$` (`;` is not an inline comment in ngspice). An
+  inline comment ends at the end of its line, and a `+` line after it still
+  continues the statement.
 
 ## Component Syntax
 
