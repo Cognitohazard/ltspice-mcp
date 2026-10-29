@@ -1742,6 +1742,35 @@ class TestSchematicExportsLiveInTheStore:
 
 
 @pytest.mark.asyncio
+class TestAdmission:
+    async def test_a_file_that_is_no_circuit_is_refused_before_a_job_exists(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The request is the caller's to fix, so it is refused whole, naming
+        what a circuit is, rather than made into a job whose every case fails."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        notes = _deck(work_dir / "amp.txt", "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(notes, "not-a-circuit"), state_with_sim)
+        )
+
+        assert data["outcome"] == "failed", data
+        error = data["error"]
+        assert (error["code"], error["stage"], error["commit_state"]) == (
+            "unsupported_file",
+            "resolution",
+            "not_started",
+        )
+        assert "amp.txt" in error["message"] and ".asc" in error["message"]
+        assert submissions == []
+
+
+@pytest.mark.asyncio
 class TestLintModes:
     async def test_block_prevents_simulator_submission(
         self,

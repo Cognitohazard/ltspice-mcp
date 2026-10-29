@@ -28,6 +28,10 @@ tool-surface changes.
   read one copy without a word; which one the simulator uses is not known.
   Such a card is now refused, naming the copies; copies that agree read as
   their value.
+- `run_experiments` accepted a circuit whose file is no circuit (a `.txt`,
+  say) and made a job whose every case failed with `unsupported_variant`. It
+  now refuses the call before a job exists, with `unsupported_file`, as it
+  refuses a path outside the sandbox and as `inspect` refuses such a file.
 - A `.model` card edited by the server (a Monte Carlo or mismatch variant,
   a parameter set by a variation) was written again on one line in the
   server's spelling, so a card laid out over continuation lines lost its

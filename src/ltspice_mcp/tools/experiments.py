@@ -863,6 +863,16 @@ async def handle_run_experiments(
             budget=budget,
             hint=path_denied_text(exc, state),
         )
+    except NetlistError as exc:
+        return await _error_response(
+            args.request_id,
+            code=raise_site_code(exc) or exc.code,
+            message=str(exc),
+            stage="resolution",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+        )
     except RecoveryError as exc:
         return await _error_response(
             args.request_id,
@@ -919,13 +929,6 @@ async def _prepare_circuit(
     findings: list[dict[str, Any]] = []
     cases: list[ExperimentCase] = []
     try:
-        if source_path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
-            raise VariationError(
-                "unsupported_variant",
-                f"Circuit {circuit_id!r} uses unsupported extension "
-                f"{source_path.suffix or '<none>'!r}; supported extensions are "
-                f"{NETLIST_SUFFIX_TEXT} and .asc",
-            )
         if not await asyncio.to_thread(source_path.is_file):
             raise FileNotFoundError(f"Circuit file not found: {source_path}")
         await state.note_recent_circuit(source_path)
@@ -1271,8 +1274,9 @@ def _circuit_decks_for_validation(
     """The circuits as decks to validate, and an observation per derived id.
 
     Each deck's path is the circuit's, resolved here, once, before a job
-    exists: a path the sandbox refuses is the request's to fix, refused with
-    the allowed roots named, not a failure met again in each of its cases.
+    exists: a path the sandbox refuses, or a file that is no circuit, is the
+    request's to fix, refused with what would be taken, not a failure met
+    again in each of its cases.
 
     A circuit with no ``id`` takes its file stem, made valid and unique rather
     than refused (see ``derive_circuit_ids``); the observation, keyed by the id
@@ -1284,9 +1288,16 @@ def _circuit_decks_for_validation(
     decks: list[CircuitDeck] = []
     notes: dict[str, dict[str, Any]] = {}
     for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
-        decks.append(
-            CircuitDeck(circuit_id=circuit_id, path=safe_path(circuit.path, state), text="")
-        )
+        path = safe_path(circuit.path, state)
+        if path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
+            error = NetlistError(
+                f"Circuit {circuit_id!r} is {path.name}, which is no circuit file: "
+                f"run_experiments takes {NETLIST_SUFFIX_TEXT} or an .asc.",
+                show_hint=False,
+            )
+            error.code = "unsupported_file"
+            raise error
+        decks.append(CircuitDeck(circuit_id=circuit_id, path=path, text=""))
         if note is not None:
             notes[circuit_id] = {
                 "code": "circuit_id_derived",

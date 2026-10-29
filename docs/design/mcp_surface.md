@@ -209,8 +209,9 @@ are. Cancelling the transport ends only the dwell, never the job.
 
 **Circuit paths are resolved at submission.** Each circuit's path is resolved
 before a job exists. A path a sandbox refuses fails the call with `path_denied`
-and the sandbox guidance, and no job is made, even when other circuits of the
-call are allowed. A circuit that fails after that (a file that is gone, an
+and the sandbox guidance, and a file that is no circuit (by its extension)
+fails it with `unsupported_file`; either way no job is made, even when other
+circuits of the call are allowed. A circuit that fails after that (a file that is gone, an
 export LTspice refuses, an include that cannot be staged) fails its own cases
 and leaves the call's other circuits to run. A read of a case with no raw
 names that case's failure as its receipt row does.
