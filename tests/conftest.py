@@ -750,7 +750,8 @@ def make_raw_mock(
     """
     import numpy as np
 
-    from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, plot_analysis
+    from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
+    from ltspice_mcp.lib.result_kinds import plot_analysis
 
     if waves is None:
         t = np.linspace(0, 1, 100)

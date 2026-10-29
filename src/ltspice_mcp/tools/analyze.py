@@ -43,7 +43,7 @@ from ltspice_mcp.lib import (
     services,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED, PlotDescriptor
+from ltspice_mcp.lib.decoded_raw import PlotDescriptor
 from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -75,6 +75,7 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,
 )
+from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
 )

@@ -1366,7 +1366,10 @@ cursors where listed:
  view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
     one admitted RAW path or one finished experiment case; other_raw reads
     the case's raw of that kind in place of its raw, RAW views only. plots returns
-    the complete plot inventory in artifact order; signals returns the
+    the complete plot inventory in artifact order, a stepped LTspice plot
+    with its kind (stepped_kind: stepped_sweep, stepped_op, stepped_tf,
+    stepped_ac_one_frequency, stepped_noise_one_frequency, stepped_run_op)
+    and the variables that hold its step values (step_variables); signals returns the
     selected trace descriptors, marking the axis; table returns plain
     native quantities from a plot with no sampled axis, keeping the first
     table quantity, with complex values as {real, imag}. prefix filters

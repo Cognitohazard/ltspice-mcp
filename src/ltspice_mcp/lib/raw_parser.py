@@ -30,17 +30,11 @@ from spicelib.raw.raw_read import RawRead
 from ltspice_mcp.errors import NoAxisError
 from ltspice_mcp.lib import atomic_write
 from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
-from ltspice_mcp.lib.decoded_raw import (
-    AC_SHAPED,
-    DecodedPlot,
-    DecodedRaw,
-    RawData,
-    plot_analysis,
-    sampled_axis,
-)
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
+from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
 
 # What a raw accessor raises when the thing being asked for is not there: a
@@ -1269,7 +1263,7 @@ def _progress_of_plot(
     fields = header.fields
     plot = fields.get("plotname") or None
     flags = fields.get("flags", "").lower().split()
-    # Read as a full read reads the plot (decoded_raw.sampled_axis): a stepped
+    # Read as a full read reads the plot (result_kinds.sampled_axis): a stepped
     # one-frequency .ac stores a step's parameter first, not a frequency.
     analysis = plot_analysis(plot or "", header.first_type)
     has_axis = bool(header.variables) and sampled_axis(analysis, header.first_type) is not None

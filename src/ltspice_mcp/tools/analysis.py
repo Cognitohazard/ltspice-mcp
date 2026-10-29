@@ -52,7 +52,6 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -80,6 +79,7 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import StepSelector
+from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.signal_analysis import (
     TraceStats,
     downsample_minmax,

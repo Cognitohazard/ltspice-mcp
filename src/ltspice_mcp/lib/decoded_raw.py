@@ -20,30 +20,19 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ltspice_mcp.errors import NoAxisError, ResultError
-from ltspice_mcp.lib.raw_header import RawPlotHeader
+from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
+from ltspice_mcp.lib.result_kinds import (
+    STEPPED_RUN_OP,
+    Analysis,
+    header_analysis,
+    sampled_axis,
+    stepped_kind,
+)
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
 
 StepValue = str | int | float
-Analysis = Literal[
-    "op",
-    "transient",
-    "ac",
-    "fra",
-    "dc",
-    "noise",
-    "tf",
-    "pz",
-    "sens_dc",
-    "sens_ac",
-    "disto",
-    "unknown",
-]
-#: The analyses whose results are complex values over frequency: an .AC sweep,
-#: and the results file of an LTspice frequency response analysis, which is
-#: written in the same layout.
-AC_SHAPED: frozenset[Analysis] = frozenset({"ac", "fra"})
 Representation = Literal["real", "complex"]
 StepStatus = Literal["unstepped", "matched", "unresolved", "mismatch"]
 Monotonicity = Literal["nondecreasing", "nonincreasing", "constant", "nonmonotonic", "unknown"]
@@ -134,6 +123,11 @@ class PlotDescriptor:
     dialect: str
     dialect_evidence: tuple[str, ...]
     step_status: StepStatus = "unstepped"
+    #: The kind of stepped result the plot is (``result_kinds``), None for an
+    #: unstepped plot or one no kind describes.
+    stepped_kind: str | None = None
+    #: The variables that hold each step's stepped values rather than a signal.
+    step_variables: tuple[str, ...] = ()
 
 
 _UNITS = {
@@ -150,35 +144,6 @@ _UNITS = {
     "current-density": "A/√Hz",
 }
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
-_ANALYSIS_NAMES: dict[str, Analysis] = {
-    "operating point": "op",
-    "transfer function": "tf",
-    "pole-zero analysis": "pz",
-    "transient analysis": "transient",
-    "ac analysis": "ac",
-    "frequency response analysis": "fra",
-    "dc transfer characteristic": "dc",
-    "integrated noise": "noise",
-}
-
-
-def plot_analysis(plot_name: str, first_type: str) -> Analysis:
-    """The analysis a plot holds, from its name and its first variable's
-    declared type: the one reading of a plot's kind, header in hand or not."""
-    label = plot_name.strip().lower()
-    if label == "sensitivity analysis":
-        return "sens_ac" if first_type.lower() in ("frequency", "hertz") else "sens_dc"
-    if label.startswith("distortion -"):
-        return "disto"
-    if label.startswith("noise spectral density"):
-        return "noise"
-    return _ANALYSIS_NAMES.get(label, "unknown")
-
-
-def header_analysis(header: RawPlotHeader) -> Analysis:
-    """The analysis a decoded header's plot holds (:func:`plot_analysis`)."""
-    first = header.variables[0].declared_type if header.variables else ""
-    return plot_analysis(header.plot_name, first)
 
 
 def _trace_descriptor(
@@ -266,24 +231,6 @@ def _step_descriptors(
     return tuple(descriptors), (*starts, points)
 
 
-def sampled_axis(analysis: Analysis, first_type: str) -> tuple[str, str] | None:
-    """The quantity and kind of a plot's sampled axis, from its analysis and
-    its first variable's declared type; None for a plot with no sampled axis,
-    such as an operating point or a stepped one-frequency .ac, whose first
-    variable is a step's parameter."""
-    declared = first_type.lower()
-    if analysis == "transient" and declared == "time":
-        return "time", "deck_time"
-    if (analysis in AC_SHAPED or analysis in ("sens_ac", "disto", "noise")) and declared in (
-        "frequency",
-        "hertz",
-    ):
-        return "frequency", "swept_f1" if analysis == "disto" else "frequency"
-    if analysis == "dc":
-        return "swept_variable", "sweep"
-    return None
-
-
 def transient_time_offset(header: RawPlotHeader) -> float:
     """Validate the time offset using header facts before numeric allocation."""
     analysis = header_analysis(header)
@@ -327,11 +274,10 @@ def unresolved_steps_reason(header: RawPlotHeader) -> str:
     """Why a stepped plot's steps cannot be read one at a time, and what to
     read instead, where the plot shows it.
 
-    LTspice 26 writes the operating-point raw of a stepped ``.tran`` or ``.ac``
-    as one point with no step variable (``raw/step_tran_op_raw``,
-    ``raw/step_ac_op_raw``), so nothing says whose step it is.
+    The operating-point raw of a stepped ``.tran`` or ``.ac`` on LTspice 26
+    is one point that does not say whose step it is (``STEPPED_RUN_OP``).
     """
-    if header.dialect == "ltspice" and header_analysis(header) == "op" and header.point_count == 1:
+    if stepped_kind(header) is STEPPED_RUN_OP:
         return (
             "This operating-point raw of a stepped run holds one point and does not say "
             "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
@@ -426,10 +372,11 @@ class DecodedPlot:
                 raise ValueError("Step metadata cannot be associated without validated boundaries")
             descriptors = ()
         analysis = header_analysis(header)
-        kind = sampled_axis(analysis, header.variables[0].declared_type)
+        kind = stepped_kind(header)
+        sampled = sampled_axis(analysis, header.variables[0].declared_type)
         arrays = list(waves)
         offset = transient_time_offset(header)
-        if kind is not None and analysis == "transient":
+        if sampled is not None and analysis == "transient":
             if np.iscomplexobj(arrays[0]):
                 raise ValueError("Transient time must be real and its offset finite")
             if offset or np.any(arrays[0] < 0):
@@ -440,13 +387,20 @@ class DecodedPlot:
             _trace_descriptor(header, i, wave, analysis) for i, wave in enumerate(arrays)
         )
         axis = None
-        if kind is not None:
+        if sampled is not None:
             real, monotonicity = _coordinate_facts(arrays[0], boundaries)
             if unresolved_boundaries:
                 monotonicity = "unknown"
             first = traces[0]
             axis = AxisDescriptor(
-                0, first.name, first.declared_type, first.unit, *kind, real, monotonicity, offset
+                0,
+                first.name,
+                first.declared_type,
+                first.unit,
+                *sampled,
+                real,
+                monotonicity,
+                offset,
             )
         missing_steps = steps is None and step_status != "unstepped"
         descriptor = PlotDescriptor(
@@ -462,6 +416,10 @@ class DecodedPlot:
             header.dialect,
             header.dialect_evidence,
             step_status,
+            None if kind is None else kind.name,
+            tuple(header.variables[index].name for index in leading_parameters(header))
+            if kind is not None and kind.step_values == "raw"
+            else (),
         )
         for wave in waves:
             wave.setflags(write=False)

@@ -66,7 +66,8 @@ from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 
 if TYPE_CHECKING:
-    from ltspice_mcp.lib.decoded_raw import Analysis, DecodedRaw
+    from ltspice_mcp.lib.decoded_raw import DecodedRaw
+    from ltspice_mcp.lib.result_kinds import Analysis
 
 # Salience threshold for lifting a node value into view. The gmin/floating-node
 # artifact lands at ~1e30, so 1e8 has enormous headroom; a legitimate HV design

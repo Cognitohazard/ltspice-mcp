@@ -23,7 +23,6 @@ from typing import Any, BinaryIO
 import numpy as np
 from spicelib.raw.plot_data import PlotData
 
-from ltspice_mcp.lib.decoded_raw import Analysis, header_analysis, sampled_axis
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
 from ltspice_mcp.lib.parser_capture import CapturedFile, CapturedInputs
 from ltspice_mcp.lib.raw_header import (
@@ -34,6 +33,7 @@ from ltspice_mcp.lib.raw_header import (
     leading_parameters,
     preflight_raw,
 )
+from ltspice_mcp.lib.result_kinds import STEPPED_SWEEP, Analysis, header_analysis, stepped_kind
 from ltspice_mcp.lib.store import parser_file_in
 
 _CHUNK_BYTES = 64 * 1024
@@ -41,16 +41,6 @@ _INPUT_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.lo
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
 _STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.I)
 _STEP_PARAMETER = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
-#: The LTspice analyses whose stepped plot is split where its axis restarts,
-#: a frequency response analysis's results file among them (``raw/fra_step``).
-_SAMPLED_LT_ANALYSES: frozenset[Analysis] = frozenset({"transient", "ac", "dc", "noise", "fra"})
-#: The LTspice analyses that, stepped, may open with the stepped parameters and
-#: then hold one point a step, with no step named in the log: a stepped .op
-#: always (``raw/step_op``, and ``raw/step_temp_op`` over temperature), a
-#: stepped .tf (``raw/tf_step``), and a stepped .ac or .noise at one frequency,
-#: which then stores no frequency at all (``raw/step_ac_one_freq``,
-#: ``raw/step_noise_one_freq``). Both builds alike.
-_PARAMETERS_FIRST_LT_ANALYSES: frozenset[Analysis] = frozenset({"op", "ac", "tf", "noise"})
 
 
 class RawDecodeError(ValueError):
@@ -379,27 +369,21 @@ def _step_facts(
         return result
     result["step_status"] = "unresolved"
     result["step_ranges"] = None
-    analysis = header_analysis(header)
-    parameters = leading_parameters(header)
-    if header.dialect == "ltspice" and analysis in _PARAMETERS_FIRST_LT_ANALYSES and parameters:
-        # See _PARAMETERS_FIRST_LT_ANALYSES: the raw's own step values are the record.
+    kind = stepped_kind(header)
+    if kind is not None and kind.stepping == "point_a_step":
+        # The raw's own step values are the record (result_kinds).
         result["step_status"] = "matched"
         result["step_ranges"] = [
             {"step_index": index, "offset": index, "length": 1, "log_row": None}
             for index in range(header.point_count)
         ]
-        result["step_parameters"] = parameters
+        result["step_parameters"] = leading_parameters(header)
         return result
-    if not has_axis or analysis not in _SAMPLED_LT_ANALYSES:
+    if kind is not STEPPED_SWEEP or not has_axis:
         if header.point_count == 1 and log["status"] == "parsed" and len(log["rows"]) > 1:
             result["step_status"] = "mismatch"
         return result
-    if header.dialect != "ltspice":
-        return result
-    # Its first variable is the axis as a decoded plot reads it.
-    if sampled_axis(analysis, header.variables[0].declared_type) is None:
-        return result
-    starts = _validated_step_starts(header, analysis, data, row_limit)
+    starts = _validated_step_starts(header, header_analysis(header), data, row_limit)
     if starts is None or log["status"] != "parsed" or not log["rows"] or plot_count != 1:
         return result
     for row in log["rows"]:

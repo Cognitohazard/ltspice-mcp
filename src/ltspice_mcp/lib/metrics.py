@@ -50,7 +50,7 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.lib.device_names import (
     current_device,
     device_names,
@@ -111,6 +111,7 @@ from ltspice_mcp.lib.recipes import (
     Window,
     quantile_row,
 )
+from ltspice_mcp.lib.result_kinds import AC_SHAPED, STEPPED_AC_ONE_FREQUENCY
 from ltspice_mcp.lib.result_observations import (
     deck_observation_inputs,
     relay_observations,
@@ -244,26 +245,21 @@ def reject_non_transient(raw) -> None:
         )
 
 
-def _ac_point_a_step(raw: DecodedRaw | DecodedPlot, step: int) -> bool:
-    """Whether an AC plot with no sampled axis holds one point at ``step``, as
-    a stepped ``.ac`` at one frequency does: it stores no frequency at all.
+def _one_frequency_ac(raw: DecodedRaw | DecodedPlot) -> bool:
+    """Whether the plot is a stepped ``.ac`` at one frequency, which holds one
+    point a step and stores no frequency (``result_kinds``).
 
     Another analysis's table (``.tf``, ``.pz``) stays a table even at one
     point, because its traces' declared types do not name what they hold.
     """
-    if raw.descriptor.analysis not in AC_SHAPED:
-        return False
-    try:
-        return len(raw.get_wave(0, step=step)) == 1
-    except (ResultError, IndexError):
-        return False
+    return raw.descriptor.stepped_kind == STEPPED_AC_ONE_FREQUENCY.name
 
 
-def _no_axis_error(raw: DecodedRaw | DecodedPlot, step: int) -> NoAxisError:
+def _no_axis_error(raw: DecodedRaw | DecodedPlot) -> NoAxisError:
     """Why a plot with no sampled axis cannot be read along one, and what reads it."""
     if raw.descriptor.analysis == "op":
         hint = "Use operating_point to read this bias point."
-    elif _ac_point_a_step(raw, step):
+    elif _one_frequency_ac(raw):
         hint = (
             "It holds one point a step: read it with the value recipe and no 'at', "
             "or api.load_raw(...).value(name, step=k)."
@@ -283,7 +279,7 @@ def guarded_axis(raw: DecodedRaw | DecodedPlot, step: int) -> np.ndarray:
     """Real-valued sweep axis for ``step``, or a clean error for a plot with
     no sampled axis (an operating point, a table) naming what reads it."""
     if raw.descriptor.axis is None:
-        raise _no_axis_error(raw, step)
+        raise _no_axis_error(raw)
     axis = np.asarray(raw.get_axis(step=step))
     if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
         raise ResultError(
@@ -1110,7 +1106,7 @@ async def value(
         except NoAxisError:
             if raw.descriptor.analysis == "op":
                 return await _value_from_operating_point(source, recipe, raw, step, state)
-            if not _ac_point_a_step(raw, step):
+            if not _one_frequency_ac(raw):
                 raise
             return await point_value(source, recipe.expr, None, step, state)
         if len(axis) != 1:
@@ -1220,7 +1216,7 @@ async def point_value(
                 raw, sig.name, target_x, step, read_wave=lambda: sig.wave(raw, step)
             )
         except NoAxisError as e:
-            raise _no_axis_error(raw, step) from e
+            raise _no_axis_error(raw) from e
         except Exception as e:
             raise ResultError(f"Failed to query value: {e}") from e
 
@@ -1281,7 +1277,7 @@ async def signal_stats(
     if raw.descriptor.axis is None:
         # Nothing to take statistics along; the refusal names what reads it,
         # the value recipe for a point a step.
-        raise _no_axis_error(raw, step)
+        raise _no_axis_error(raw)
     if analysis not in _STATS_ANALYSES:
         raise ResultError(
             f"signal_stats does not define statistics for {analysis!r}. "
