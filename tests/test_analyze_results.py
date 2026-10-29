@@ -406,6 +406,13 @@ async def test_spec_verdict_incomplete_matrix(
     assert verdict["fail_count"] == 0
 
 
+def test_a_null_include_reads_as_omitted(work_dir: Path):
+    # Null, as the attached run_experiments.analyze block takes it.
+    raw = work_dir / "any.raw"
+    recipes = [{"key": "s", "metric": "summary"}]
+    assert _args(raw, recipes, include=None).include == _args(raw, recipes).include
+
+
 @pytest.mark.asyncio
 async def test_spec_fail_counts_and_pages_cases(
     state_no_sim: SessionState,

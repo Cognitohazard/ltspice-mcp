@@ -63,17 +63,6 @@ class RawDialectFields(StrictModel):
     )
 
 
-class RawSelectionFields(RawDialectFields):
-    """Select one RAW plot independently of case and step selection."""
-
-    plot_index: int = Field(
-        default=0,
-        strict=True,
-        ge=0,
-        description="Zero-based plot in the result artifact; distinct from run and step index.",
-    )
-
-
 class OtherRawFields(StrictModel):
     """Read a job case's other raw in place of its raw."""
 
@@ -93,7 +82,7 @@ class OptionalRawSelectionFields(RawDialectFields):
         default=None,
         strict=True,
         ge=0,
-        description="Zero-based RAW plot; omitted selects the first plot for RAW reads. Log views require omission.",
+        description="Zero-based RAW plot; omitted reads the first. A log source takes none.",
     )
 
 

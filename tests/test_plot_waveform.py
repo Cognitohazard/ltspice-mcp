@@ -391,6 +391,10 @@ class TestInputModel:
         with pytest.raises(ValidationError):
             PlotWaveformInput(panels=[["V(out)"], []])
 
+    def test_a_negative_run_index_is_refused(self):
+        with pytest.raises(ValidationError, match="run_index"):
+            PlotWaveformInput(job_id="job", run_index=-1)
+
 
 # --- handler error paths ---------------------------------------------------
 
@@ -572,6 +576,14 @@ class TestRender:
         data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], step=1)
         assert data["steps_plotted"] == 1
         assert data["series_count"] == 1
+
+    async def test_a_null_plot_index_reads_the_first_plot(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Null, as analyze_results and inspect take it.
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], plot_index=None)
+        assert data["plot_index"] == 0
 
     async def test_max_points_downsamples_and_observes(
         self, state_no_sim: SessionState, work_dir: Path
@@ -916,6 +928,20 @@ class TestTraceSummary:
         _, y1 = await _raw_series(state_no_sim, raw, "V(out)", step=1)
         assert data["traces"][1]["final"] == pytest.approx(float(y1[-1]))
         assert data["traces"][1]["max"] == pytest.approx(float(np.max(y1)))
+
+    async def test_a_step_is_chosen_by_its_axis_value(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The run steps r over 1, 22 and 680 (its log lists them). The selector
+        # analyze_results takes picks the step whose r is nearest the value.
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        data = await _plot(
+            state_no_sim, raw_file=str(raw), signals=["V(out)"], step={"axis": "r", "value": "25"}
+        )
+        (trace,) = data["traces"]
+        assert trace["step"] == 1
+        _, y1 = await _raw_series(state_no_sim, raw, "V(out)", step=1)
+        assert trace["final"] == pytest.approx(float(y1[-1]))
 
     async def test_summary_is_capped_and_says_so(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch

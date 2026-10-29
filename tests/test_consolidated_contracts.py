@@ -830,7 +830,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # may have added traces to. Measured 4,451.
     # Raised by about 190 characters for other_raw, which plots a case's FRA
     # results by job and case, where only their path could. Measured 4,656.
-    "plot_waveform": 4660,
+    # Raised by about 320 characters so step takes the {axis, value} selector
+    # analyze_results takes, and plot_index takes null, as in every other
+    # tool. Measured 4,977.
+    "plot_waveform": 4980,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

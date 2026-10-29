@@ -726,8 +726,9 @@ first plot is selected only if a RAW recipe reads one. A `log_path` source
 refuses plot selection. `dialect` is null or one of `ltspice`, `ngspice`,
 `qspice`, `xyce`; an explicit dialect must agree with the captured header and
 the producing run. `plot_waveform` and the attached `run_experiments.analyze`
-block accept the same selectors. Analysis type, axis and units come from the
-selected plot's decoded descriptor. A table plot stays a table: read plain
+block accept the same selectors, and the same `{axis, value}` step selector;
+`plot_waveform`'s `step` also takes a 0-based index. Analysis type, axis and
+units come from the selected plot's decoded descriptor. A table plot stays a table: read plain
 native quantities through the API or `inspect`, and CSV export writes them
 without an invented axis. Complex values outside an AC analysis keep their
 real and imaginary parts rather than being read as AC gain and phase.

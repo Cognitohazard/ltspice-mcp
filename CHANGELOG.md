@@ -145,6 +145,13 @@ tool-surface changes.
   `analyze_results` does, and `analyze_results` reports it for a call whose
   only recipe is `measurements`, since XVII computes its `.meas` results from
   the few points it keeps.
+- `plot_waveform`'s `step` takes the `{axis, value}` selector
+  `analyze_results` takes, as well as a step's 0-based index, and plots the
+  step whose axis value is nearest.
+- An argument several tools take has one schema in all of them:
+  `plot_waveform` takes `plot_index: null` (the first plot) and refuses a
+  negative `run_index`, as `inspect` does, and `analyze_results` takes
+  `include: null`, as the attached `run_experiments.analyze` block does.
 - The Python API's `measurements` and `device_op_points` return a `LogResult`,
   a `dict` with `observations`, so a stopped case's log says, as `load_raw`
   does, that its results end where the run was stopped (`partial_raw`).

@@ -569,7 +569,13 @@ def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
     return coerce
 
 
-coerce_include_flags = include_flag_coercer(AnalyzeInclude)
+_include_flags = include_flag_coercer(AnalyzeInclude)
+
+
+def coerce_include_flags(value: Any) -> Any:
+    """The include reader, with null read as omitted, as the attached analyze
+    block reads it."""
+    return AnalyzeInclude() if value is None else _include_flags(value)
 
 
 class ContinueInput(StrictModel):
@@ -617,7 +623,7 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
         AnalyzeInclude,
         BeforeValidator(
             coerce_include_flags,
-            json_schema_input_type=AnalyzeInclude | list[str],
+            json_schema_input_type=AnalyzeInclude | list[str] | None,
         ),
     ] = Field(
         default_factory=AnalyzeInclude,
@@ -1606,29 +1612,8 @@ async def _build_step_plan(
     elif steps.step is None:
         plan = [(0, step_values[0] if step_values else {})]
     else:
-        step_sel = steps.step
-        candidates = [
-            (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
-        ]
-        if not candidates:
-            raise ResultError(
-                f"step axis {step_sel.axis!r} is not present in the captured step metadata"
-            )
-        try:
-            target = float(format_spice_value(step_sel.value))
-            index, values = min(
-                candidates, key=lambda pair: abs(float(pair[1][step_sel.axis]) - target)
-            )
-        except (TypeError, ValueError):
-            index, values = next(
-                (
-                    pair
-                    for pair in candidates
-                    if str(pair[1][step_sel.axis]) == str(step_sel.value)
-                ),
-                candidates[0],
-            )
-        plan = [(index, values)]
+        index = steps.step.pick(step_values)
+        plan = [(index, step_values[index])]
     return _RawStepPlan(plan, raw.descriptor)
 
 
