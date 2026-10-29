@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib.netlist_graph import canon_net, canon_ref, compare_graphs, parse_netlist_graph
-from ltspice_mcp.lib.sheet import Sheet, editor_symbol_resolver, read_sheet
+from ltspice_mcp.lib.sheet import Sheet, read_sheet
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -52,7 +52,7 @@ from tests._build_benchmark import (
     run_build,
 )
 from tests._proposal_record import write_record
-from tests._schematic_fixtures import TESTS
+from tests._schematic_fixtures import TESTS, suite_resolver
 from tests.ltspice_recorder import INPUTS
 from tests.test_circuit_asc import BUILD_ARCHETYPES
 
@@ -68,7 +68,7 @@ pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 def score(built: Built, working_dir: Path) -> dict[str, Any]:
     """Everything the record keeps of one build."""
-    sheet = read_sheet(built.path.read_bytes(), editor_symbol_resolver(built.path))
+    sheet = read_sheet(built.path.read_bytes(), suite_resolver(built.path))
     return {
         "cost": cost(built, working_dir),
         "digests": built.digests,
@@ -93,7 +93,7 @@ def _assert_built(built: Built, said: dict[str, Any]) -> None:
     # Every pin of every part is on a wire or a label, as the editor counts
     # them and as the sheet places them.
     wiring = built.replies[-1]["wiring"]
-    sheet = read_sheet(built.path.read_bytes(), editor_symbol_resolver(built.path))
+    sheet = read_sheet(built.path.read_bytes(), suite_resolver(built.path))
     assert wiring["pins_total"] == sum(len(part.pins) for part in sheet.parts), wiring
     assert wiring["pins_wired"] + wiring["pins_label_only"] == wiring["pins_total"], wiring
     if build.expected_findings is not None:

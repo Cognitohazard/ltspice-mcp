@@ -28,7 +28,7 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 import ltspice_mcp.lib.wsl as wsl_mod
 from ltspice_mcp.config import ServerConfig, generate_default_config
-from ltspice_mcp.engine import bootstrap_library_engine
+from ltspice_mcp.engine import bootstrap_library_engine, configure_asc_editor
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib import proc_kill, store
 from ltspice_mcp.lib.ltspice_wsl import LTspiceWSL
@@ -42,6 +42,7 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import resolve_run_simulator
 from ltspice_mcp.tools.experiments import RunExperimentsInput
+from tests._schematic_fixtures import BOX2_ASY, write_file
 from tests.conftest import (
     capabilities_report,
     stand_in_program,
@@ -746,3 +747,23 @@ class TestLibraryRoots:
             (profile / "Documents" / "LTspiceXVII" / "lib").resolve()
         ]
         assert simulator_library_roots(lt24) == [(local / "LTspice" / "lib").resolve()]
+
+    def test_each_build_reads_its_own_symbols(
+        self, home: Path, builds: dict[str, Path], work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A session running XVII edits with XVII's symbols, though a later
+        build's library sits beside it, as it stages with XVII's models."""
+        from spicelib.editor.asc_editor import AscEditor
+
+        xvii_lib = (home / "Documents" / "LTspiceXVII" / "lib").resolve()
+        for lib in (xvii_lib, home / "AppData" / "Local" / "LTspice" / "lib"):
+            write_file(lib / "sym" / "res.asy", BOX2_ASY)
+        monkeypatch.setattr(AscEditor, "custom_lib_paths", [])
+        monkeypatch.setattr(AscEditor, "simulator_lib_paths", [])
+        config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir])
+        xvii = bind_named_executable(LTspice, "ltspice:xvii", builds["xvii"])
+
+        library = configure_asc_editor(config, {"ltspice": xvii})
+
+        assert AscEditor.simulator_lib_paths == [str(xvii_lib)]
+        assert library.for_sheet(None).resolve("res") == xvii_lib / "sym" / "res.asy"

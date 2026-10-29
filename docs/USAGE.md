@@ -215,10 +215,11 @@ path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
 Simulation output goes to a Windows temp folder automatically, because
 LTspice loses `.MEAS` results when it writes to the Linux file system.
 
-LTspice's symbol libraries, needed for `.asc` editing, are found
-automatically on Windows and WSL. To use others, set
-`[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS`. A symbol saved in
-the same folder as the schematic is always found first, as in LTspice.
+`.asc` editing reads symbols from the library of the LTspice build the
+server runs, which it finds automatically on Windows, under Wine and on WSL.
+Folders in `[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS` are
+searched before that library. A symbol saved in the same folder as the
+schematic is always found first, as in LTspice.
 
 ## PNG rendering
 

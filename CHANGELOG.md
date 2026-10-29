@@ -10,6 +10,29 @@ tool-surface changes.
 
 ### Fixed
 
+- `edit_schematic` read each library symbol once per session. A symbol
+  redrawn in a library while the server ran kept its old pins in every later
+  edit, and a symbol not found stayed not found after it was added, until the
+  server restarted. Every tool now reads a symbol again after its file
+  changes, and looks again beside the sheet and in the configured folders for
+  one it did not find. LTspice's own library, which does not change while the
+  server runs, is searched once per name.
+- With LTspice XVII and a later LTspice both installed, a server running XVII
+  read the later build's symbols when it edited and checked sheets. On
+  Windows and under Wine it searched them before XVII's own, and on WSL it
+  used them instead. On WSL, with XVII the only build installed, it found no
+  symbols at all. It now reads the symbols of the build it runs, as it
+  already did for model libraries.
+
+### Changed
+
+- `inspect(kind="symbols")` lists the LTspice build's `sym` folder as the
+  `stock` library, instead of the `lib` folder that contains it.
+
+## [0.7.0] - 2026-10-22
+
+### Fixed
+
 - `plot_waveform` and the `ac_structure` recipe could fail on a frequency
   sweep whose points lie more than a quarter decade apart (`.ac dec 3` or
   sparser, an `.ac oct 1` sweep, or FRA results at one point per octave). No
@@ -1902,6 +1925,22 @@ against the recording that showed it.
   `pyjwt` 2.13.0 → 2.15.1 (CVE-2026-102274). It is a transitive dependency of
   the MCP SDK, whose only use of it is client-side OAuth credentials, which
   this server does not import.
+
+### Known issues
+
+- With LTspice XVII as the simulator and LTspice 26 also installed, `.asc`
+  editing and rendering read symbols from LTspice 26's library, where some
+  symbols place their pins differently. On WSL with only XVII installed, no
+  symbols are found. Set `[schematic] symbol_paths` to XVII's `lib/sym`
+  folder to use its symbols.
+- A rendered schematic draws no junction dots, so wires that cross and wires
+  that join at the same point look alike.
+- A symbol file with a blank line between a `PIN` line and its `PINATTR`
+  lines loses that pin's name and order. One symbol LTspice XVII ships,
+  `DAC/AD5679R`, has such a line.
+- `edit_schematic` keeps each library symbol it has read for the life of the
+  server, so a symbol file changed while the server runs is seen by
+  `verify_circuit` but not by an edit until the server restarts.
 
 ## [0.6.1] - 2026-09-08
 

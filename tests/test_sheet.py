@@ -8,28 +8,34 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.schematic_ops import make_editor, net_partition, placed_geometry
+from ltspice_mcp.lib.schematic_ops import net_partition, placed_geometry
 from ltspice_mcp.lib.schematic_scene import build_scene
-from ltspice_mcp.lib.sheet import Sheet, editor_symbol_resolver, read_sheet
+from ltspice_mcp.lib.sheet import Sheet, read_sheet
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests._proposal_record import stage
-from tests._schematic_fixtures import BOX2_ASY, SUITE_SHEETS, suite_name, write_file
+from tests._schematic_fixtures import (
+    BOX2_ASY,
+    SUITE_SHEETS,
+    open_editor,
+    suite_name,
+    suite_resolver,
+    write_file,
+)
 
 pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 
 def _staged(sheet: Path, tmp_path: Path) -> tuple[Path, Sheet]:
     staged = stage(sheet, tmp_path)
-    return staged, read_sheet(staged.read_bytes(), editor_symbol_resolver(staged))
+    return staged, read_sheet(staged.read_bytes(), suite_resolver(staged))
 
 
 @pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=suite_name)
 def test_it_places_what_the_scene_places(sheet: Path, tmp_path: Path) -> None:
     staged, read = _staged(sheet, tmp_path)
-    scene = build_scene(staged, editor_symbol_resolver(staged))
+    scene = build_scene(staged, suite_resolver(staged))
     assert len(read.parts) == len(scene.symbols)
     for part, drawn in zip(read.parts, scene.symbols, strict=True):
         assert (part.reference, part.symbol_name, part.at, part.rotation) == (
@@ -52,10 +58,9 @@ def test_it_places_what_the_scene_places(sheet: Path, tmp_path: Path) -> None:
 def test_it_places_what_the_editor_places(sheet: Path, tmp_path: Path) -> None:
     staged, read = _staged(sheet, tmp_path)
     try:
-        editor = make_editor(staged)
+        editor = open_editor(staged)
     except Exception:
         pytest.skip("the editor cannot open this sheet")
-    assert isinstance(editor, AscEditor)
     named = Counter(part.reference for part in read.parts)
     once = [part for part in read.parts if part.reference and named[part.reference] == 1]
     for part in once:

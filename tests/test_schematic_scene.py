@@ -7,14 +7,17 @@ requires a stock LTspice symbol library to be installed.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 from spicelib import AscEditor
 
-from ltspice_mcp.lib import symbol_geometry
+from ltspice_mcp.lib import symbol_library
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.schematic_ops import make_editor, symbol_info_for
 from ltspice_mcp.lib.schematic_scene import (
     DrawEllipse,
     DrawLine,
@@ -26,7 +29,6 @@ from ltspice_mcp.lib.schematic_scene import (
     Wire,
     build_scene,
     decode_text_lines,
-    default_stock_paths,
     drawn_text_extent,
     flag_label_bbox,
     flag_label_layout,
@@ -41,17 +43,17 @@ from ltspice_mcp.lib.schematic_scene import (
     text_width,
     wire_directions_at,
 )
-from ltspice_mcp.lib.sheet import editor_symbol_resolver
 from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_file import read_symbol
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
 )
-from ltspice_mcp.lib.symbol_library import SymbolResolver
+from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver
 from tests._schematic_fixtures import (
     BOX2_ALT_ASY,
     BOX2_ASY,
     STACKED_ATTRS_ASY,
+    open_editor,
 )
 from tests._schematic_fixtures import (
     asc_with_box2 as _asc_with_box2,
@@ -387,15 +389,15 @@ class TestSymbolResolution:
         assert SymbolResolver(local_dir=a, project_paths=[b]).resolve("box2") == a / "box2.asy"
         assert SymbolResolver(local_dir=b, project_paths=[a]).resolve("box2") == b / "box2.asy"
 
-    def test_cache_invalidates_on_rewrite(self, tmp_path: Path) -> None:
+    def test_a_rewritten_file_is_read_again_by_the_next_request(self, tmp_path: Path) -> None:
         asy = _write(tmp_path / "box2.asy", BOX2_ASY)
-        r = SymbolResolver(local_dir=tmp_path)
-        first = r.load("box2")
+        library = SymbolLibrary()
+        first = library.for_sheet(tmp_path / "s.asc").load("box2")
         assert first is not None and len(first.file.rects) == 1
         # Rewrite the same path with different content (and different size, so
         # the content stamp changes even on a coarse-mtime filesystem).
         _write(asy, BOX2_ALT_ASY)
-        second = r.load("box2")
+        second = library.for_sheet(tmp_path / "s.asc").load("box2")
         assert second is not None
         assert len(second.file.rects) == 0 and len(second.file.circles) == 1
 
@@ -408,19 +410,16 @@ class TestSymbolResolution:
         b = r1.load("box2")
         assert a is not None and a is b  # served from r1's cache
         r2 = SymbolResolver(local_dir=tmp_path, project_paths=[tmp_path / "extra"])
-        assert r1.active_set != r2.active_set
+        assert r1.roots != r2.roots
         c = r2.load("box2")
-        assert c is not None and c is not a  # r2 parsed independently
+        assert c is not None and c.file is not a.file  # r2 parsed independently
 
-    def test_active_set_is_part_of_parse_key(self, tmp_path: Path) -> None:
-        # The parse-cache key must carry the active set, not just (path, stamp).
-        _write(tmp_path / "box2.asy", BOX2_ASY)
-        r = SymbolResolver(local_dir=tmp_path)
-        r.load("box2")
-        (key,) = r._parse_cache.keys()  # type: ignore[attr-defined]
-        _path_key, stamp_key, active_key = key
-        assert active_key == r.active_set
-        assert isinstance(stamp_key, tuple) and len(stamp_key) == 2
+    def test_one_file_is_read_once_for_every_sheet_that_uses_it(self, tmp_path: Path) -> None:
+        _write(tmp_path / "lib" / "box2.asy", BOX2_ASY)
+        library = SymbolLibrary([tmp_path / "lib"])
+        first = library.for_sheet(tmp_path / "a" / "s.asc").load("box2")
+        second = library.for_sheet(tmp_path / "b" / "s.asc").load("box2")
+        assert first is not None and second is not None and second.file is first.file
 
     def test_unresolved_returns_none(self, tmp_path: Path) -> None:
         r = SymbolResolver(local_dir=tmp_path)
@@ -765,20 +764,22 @@ class TestAPinInsideWhatItsPartDraws:
         assert self.through(tmp_path, "WIRE 96 112 224 112\n") == [((96, 112), (224, 112))]
 
 
-class TestEditorSymbolResolver:
-    """The scene an edit is checked by finds a symbol where the editor's own pin
-    geometry finds it, and nowhere else."""
+class TestSessionSymbolLibrary:
+    """Every reader of a sheet's symbols asks the session's library: the edit's pin
+    geometry, the check, the inspection and the drawing find the same file."""
 
     @pytest.fixture
-    def libraries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    def libraries(self, tmp_path: Path) -> Path:
         _write(tmp_path / "sheet" / "local.asy", BOX2_ASY)
         _write(tmp_path / "configured" / "folder" / "shelved.asy", BOX2_ASY)
-        _write(tmp_path / "simulator" / "stock.asy", BOX2_ASY)
+        _write(tmp_path / "build" / "sym" / "stock.asy", BOX2_ASY)
         _write(tmp_path / "elsewhere" / "only_there.asy", BOX2_ASY)
-        monkeypatch.setattr(AscEditor, "custom_lib_paths", [str(tmp_path / "configured")])
-        monkeypatch.setattr(AscEditor, "simulator_lib_paths", [str(tmp_path / "simulator")])
-        monkeypatch.setattr(symbol_geometry, "_symbol_cache", {})
+        _write(tmp_path / "sheet" / "s.asc", "Version 4\nSHEET 1 880 680\n")
         return tmp_path
+
+    @staticmethod
+    def library(libraries: Path) -> SymbolLibrary:
+        return SymbolLibrary([libraries / "configured"], [libraries / "build"])
 
     @pytest.mark.parametrize(
         ("symbol", "found_in"),
@@ -786,41 +787,83 @@ class TestEditorSymbolResolver:
             ("local", "sheet"),
             ("shelved", "configured"),
             ("folder\\shelved", "configured"),
-            ("stock", "simulator"),
+            ("stock", "build"),
             ("only_there", None),
             ("absent", None),
         ],
     )
-    def test_it_finds_what_the_editors_geometry_finds(
+    def test_the_edit_finds_what_the_library_finds(
         self, symbol: str, found_in: str | None, libraries: Path
     ) -> None:
         sheet = libraries / "sheet" / "s.asc"
-        found = editor_symbol_resolver(sheet).resolve(symbol)
-        assert (found is not None) == (symbol_geometry.get_symbol_info(symbol, sheet) is not None)
+        resolver = self.library(libraries).for_sheet(sheet)
+        found = resolver.resolve(symbol)
+        editor = open_editor(sheet, resolver)
+        assert (found is not None) == (symbol_info_for(editor, symbol) is not None)
         if found_in is None:
             assert found is None
         else:
             assert found is not None and (libraries / found_in) in found.parents
 
-    def test_its_roots_are_the_sheets_folder_and_the_editors_libraries(
+    def test_the_search_order_is_the_sheet_the_configured_folders_then_the_build(
         self, libraries: Path
     ) -> None:
-        assert symbol_geometry.library_roots() == [
+        library = self.library(libraries)
+        sheet = libraries / "sheet" / "s.asc"
+        assert library.for_sheet(sheet).roots == (
+            libraries / "sheet",
             libraries / "configured",
-            libraries / "simulator",
-        ]
-        resolver = editor_symbol_resolver(libraries / "sheet" / "s.asc")
-        assert resolver.active_set == {
-            str(libraries / name) for name in ("sheet", "configured", "simulator")
-        }
+            libraries / "build" / "sym",
+        )
+        assert library.for_sheet(sheet).precedence == (
+            (libraries / "sheet", "schematic-local"),
+            (libraries / "configured", "configured"),
+            (libraries / "build" / "sym", "stock"),
+        )
 
-    def test_a_stock_path_the_editor_does_not_search_is_left_out(
+    def test_the_build_library_is_searched_once_per_session(
         self, libraries: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The checker's resolver also searches these; one built for an edit
-        must not, or it would see pins the editor's counts leave out."""
-        monkeypatch.setenv("LTSPICE_MCP_SYMBOL_PATHS", str(libraries / "elsewhere"))
-        assert libraries / "elsewhere" in default_stock_paths()
+        """The build's library is the LTspice install, which does not change while
+        the server runs; the sheet's folder and the configured ones are searched
+        again by each request."""
+        library = self.library(libraries)
         sheet = libraries / "sheet" / "s.asc"
-        assert editor_symbol_resolver(sheet).resolve("only_there") is None
-        assert symbol_geometry.get_symbol_info("only_there", sheet) is None
+        stock = libraries / "build" / "sym"
+        searched: Counter[bool] = Counter()
+        real_find = symbol_library.find_symbol
+
+        def counting(symbol: str, sheet_folder: Path | None, roots: Sequence[Path]):
+            searched[stock in roots] += 1
+            return real_find(symbol, sheet_folder, roots)
+
+        monkeypatch.setattr(symbol_library, "find_symbol", counting)
+        for _ in range(3):
+            assert library.for_sheet(sheet).resolve("stock") is not None
+            assert library.for_sheet(sheet).resolve("absent") is None
+        assert searched == {False: 6, True: 2}
+
+    def test_an_editor_with_no_library_does_not_look_anywhere(self, libraries: Path) -> None:
+        editor = make_editor(libraries / "sheet" / "s.asc")
+        assert isinstance(editor, AscEditor)
+        with pytest.raises(RuntimeError, match="no symbol library attached"):
+            symbol_info_for(editor, "local")
+
+    def test_a_symbol_added_to_a_library_is_found_by_the_next_request(
+        self, libraries: Path
+    ) -> None:
+        library = self.library(libraries)
+        sheet = libraries / "sheet" / "s.asc"
+        assert library.for_sheet(sheet).load("late") is None
+        _write(libraries / "configured" / "late.asy", BOX2_ASY)
+        assert library.for_sheet(sheet).load("late") is not None
+
+    def test_a_symbol_redrawn_in_a_library_is_read_again(self, libraries: Path) -> None:
+        library = self.library(libraries)
+        sheet = libraries / "sheet" / "s.asc"
+        first = library.for_sheet(sheet).load("stock")
+        assert first is not None and len(first.file.pins) == 2
+        one_pin = BOX2_ASY[: BOX2_ASY.index("PIN ", BOX2_ASY.index("PIN ") + 1)]
+        (libraries / "build" / "sym" / "stock.asy").write_text(one_pin, encoding="utf-8")
+        again = library.for_sheet(sheet).load("stock")
+        assert again is not None and len(again.file.pins) == 1

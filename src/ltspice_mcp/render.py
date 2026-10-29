@@ -15,6 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from ltspice_mcp.engine import local_symbol_library
 from ltspice_mcp.lib.schematic_renderer import render_to_file
 from ltspice_mcp.lib.schematic_scene import build_scene
 
@@ -37,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     out_path: Path = args.output or asc_path.with_suffix(".svg")
 
     try:
-        scene = build_scene(asc_path)
+        scene = build_scene(asc_path, local_symbol_library().for_sheet(asc_path))
         render_to_file(scene, out_path, margin=args.margin)
     except (OSError, UnicodeError, ValueError) as exc:
         # Unreadable/undecodable source or a malformed record that slipped past

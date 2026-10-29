@@ -27,6 +27,7 @@ from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 
 if TYPE_CHECKING:
     from mcp import types
@@ -66,6 +67,7 @@ class SessionState:
         editors: Cache of parsed SpiceEditor instances
         results: Bounded content cache of resident decoded results
         libraries: Loaded component libraries
+        symbols: The symbol libraries every reader of a sheet's symbols asks
         runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
         tool_defs / tool_dispatch / field_owners: Profile-filtered MCP tool exposure
@@ -119,6 +121,10 @@ class SessionState:
     background: BackgroundTasks = field(default_factory=BackgroundTasks, repr=False)
     """Tasks this session started without awaiting them, such as recording a
     circuit in the recent index. ``settled`` waits for them."""
+    symbols: SymbolLibrary = field(default_factory=SymbolLibrary, repr=False)
+    """The symbol libraries of this session: the configured folders, then the
+    library of the LTspice it runs. The edit, the check, the inspection and the
+    drawing of a sheet all find its symbols here (``symbols.for_sheet``)."""
 
     @property
     def store(self) -> Store:
@@ -278,6 +284,7 @@ class SessionState:
         *,
         named: dict[str, type] | None = None,
         sandbox_pinned: bool = False,
+        symbols: SymbolLibrary | None = None,
     ) -> "SessionState":
         """Factory method to create session state at server startup.
 
@@ -287,8 +294,14 @@ class SessionState:
         on the session and logged at startup. ``named`` is the named
         executables ``detect_named_simulators`` bound. ``sandbox_pinned`` says
         the caller gave ``allowed_paths`` explicitly (see the field).
+        ``symbols`` is the session's symbol library. The server passes the one
+        ``engine.configure_asc_editor`` built, which falls back to the library
+        of an LTspice that was not detected. Without one, it is the configured
+        folders and only a detected LTspice's library
+        (``simulator.symbol_library_for``), so a session built here, as a test
+        builds one, reads no LTspice library the machine merely has installed.
         """
-        from ltspice_mcp.lib.simulator import select_default_simulator
+        from ltspice_mcp.lib.simulator import select_default_simulator, symbol_library_for
         from ltspice_mcp.lib.simulator_build import executable_path
 
         diagnostics = diagnostics if diagnostics is not None else []
@@ -307,6 +320,9 @@ class SessionState:
             editors=FileCache(),
             results=ResultCache(),
             libraries=LibraryManager(available),
+            symbols=symbols
+            if symbols is not None
+            else symbol_library_for(config.symbol_paths, available.get("ltspice")),
             runners=RunnerManager(),
             working_dir=config.working_dir,
             job_registry=registry,

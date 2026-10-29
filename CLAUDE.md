@@ -121,7 +121,7 @@ The server reads `ltspice-mcp.toml` from the working directory and, if it is mis
 
 - **Sandbox**: paths are unrestricted unless `[security] allowed_paths` (or `LTSPICE_MCP_ALLOWED_PATHS`) is set; then a path outside the list raises `PathSecurityError`.
 - **Named executables**: `[simulator.executables]` (or `LTSPICE_MCP_SIMULATOR_EXECUTABLES`) adds more builds of a simulator, selected per run as `execution.simulator = "ltspice:xvii"`. Each keeps its family's class name, so code that identifies a build reads the executable (`simulator_build.executable_identity`) instead of the class name.
-- **Symbol libraries**: `.asc` editing needs LTspice's `.asy` symbol files. spicelib locates them on Windows and under Wine; `wsl.get_ltspice_lib_paths()` locates them on WSL. `[schematic] symbol_paths` (or `LTSPICE_MCP_SYMBOL_PATHS`) overrides both. Without LTspice there is no `.asc` support.
+- **Symbol libraries**: `.asc` editing needs LTspice's `.asy` symbol files. A session reads them through one `SymbolLibrary` (`state.symbols`, built by `simulator.symbol_library_for`), which searches the sheet's own folder, then the folders in `[schematic] symbol_paths` (or `LTSPICE_MCP_SYMBOL_PATHS`), then the `sym` folder of the LTspice build the session runs. `simulator_library_roots` finds that build's library on Windows, under Wine and on WSL (`wsl.get_ltspice_lib_paths()`). Without LTspice there is no `.asc` support.
 - **ngspice mode**: spicelib runs ngspice in `kiltpsa` mode by default, which reads a sectioned `.lib <file> <section>` as plain includes and drops the section, so `run_experiments` refuses such a deck (lint rule `lib-section-ngspice`). `[simulator] ngbehavior` (or `LTSPICE_MCP_NGBEHAVIOR`) sets another mode, such as `"hsa"`.
 
 ## WSL

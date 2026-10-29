@@ -1593,8 +1593,8 @@ limitation, and we ship no workaround.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.symbol_cache` and `_asy_file_find`).
 **Our workaround:** none for spicelib's own loading. Our pin geometry does not
-read this cache: `lib/symbol_geometry.py` `get_symbol_info(symbol, asc_path)`
-looks for a symbol beside the sheet itself and caches it by file.
+read this cache: the session's `lib/symbol_library.py` `SymbolLibrary` looks
+for a symbol beside the sheet itself and caches what it reads by file.
 
 ### Summary
 
