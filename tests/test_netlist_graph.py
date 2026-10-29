@@ -211,7 +211,13 @@ def test_a_parameter_given_twice_alike_is_equivalent_and_reported() -> None:
         ("A1", "candidate", "vt", ("4.15", "4.150"))
     ]
     assert result.as_dict()["duplicate_params"] == [
-        {"ref": "A1", "side": "candidate", "key": "vt", "values": ["4.15", "4.150"]}
+        {
+            "ref": "A1",
+            "subckt": None,
+            "side": "candidate",
+            "key": "vt",
+            "values": ["4.15", "4.150"],
+        }
     ]
 
 
@@ -225,6 +231,24 @@ def test_a_parameter_given_twice_differently_is_a_mismatch() -> None:
     (param,) = result.param_mismatches
     assert (param.key, param.reference_value, param.candidate_value) == ("vt", "4.15", "3")
     assert [d.values for d in result.duplicate_params] == [("4.15", "3")]
+
+
+def test_a_card_inside_a_subcircuit_is_reported_once_however_often_it_is_used() -> None:
+    """The copies are on one card, so one row names it, by the subcircuit it is
+    in and its own reference, not one row for each instance of the subcircuit."""
+    deck = (
+        "V1 in 0 5\nX1 in a stage\nX2 a 0 stage\n"
+        ".subckt stage p n\nM1 p p n n nmos W=1u w=2u\n.ends\n.end\n"
+    )
+    result = compare_graphs(deck, deck)
+    assert [(d.side, d.subckt, d.ref, d.key) for d in result.duplicate_params] == [
+        ("reference", "stage", "M1", "w"),
+        ("candidate", "stage", "M1", "w"),
+    ]
+    assert result.as_dict()["duplicate_params"] == [
+        {"ref": "M1", "subckt": "stage", "side": side, "key": "w", "values": ["1u", "2u"]}
+        for side in ("reference", "candidate")
+    ]
 
 
 def test_the_same_copies_in_the_same_order_are_equivalent() -> None:

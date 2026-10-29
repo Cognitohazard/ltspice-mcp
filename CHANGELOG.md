@@ -44,6 +44,10 @@ tool-surface changes.
 
 - `inspect(kind="symbols")` lists the LTspice build's `sym` folder as the
   `stock` library, where it listed the `lib` folder above it.
+- The equivalence compare's `duplicate_params` names a card that gives a
+  parameter twice once, by its reference and the subcircuit it is in
+  (`subckt`, null at the top level), where it listed one row for each
+  instance of that subcircuit, by the instance's path.
 - `inspect` reports a failed query by its failure's own error code, as every
   other tool does, where every one read `error`: `netlist_invalid` for a
   netlist or sheet it cannot read, `symbol_unresolved`, `library_error`,

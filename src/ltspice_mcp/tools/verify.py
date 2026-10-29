@@ -556,11 +556,16 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
 _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
-        "An instance that gives one parameter more than once. A fact, not a "
-        "difference: 'equivalent' holds only if it holds whichever copy is read."
+        "A card that gives one parameter more than once, named once however many "
+        "instances use it. A fact, not a difference: 'equivalent' holds only if it "
+        "holds whichever copy is read."
     ),
     "properties": {
-        "ref": _REF,
+        "ref": {"type": "string", "description": "The card's reference as written ('M1')."},
+        "subckt": {
+            "type": ["string", "null"],
+            "description": "The subcircuit the card is in; null at the top level.",
+        },
         "side": {"type": "string", "description": "'reference' or 'candidate'."},
         "key": {"type": "string", "description": "The parameter, case-folded."},
         "values": {
@@ -669,7 +674,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "duplicate_params": {
             "type": "array",
             "items": _DUPLICATE_PARAM_SCHEMA,
-            "description": "equivalence: instances that give a parameter more than once.",
+            "description": "equivalence: cards that give a parameter more than once.",
         },
         **STRUCTURAL_DELTA_PROPS,
     },

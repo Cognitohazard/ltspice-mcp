@@ -1229,9 +1229,10 @@ and directives. The modes handle a deck they cannot read differently:
 `equivalent` is null, and a warning names the deck that failed. In both cases
 the call's outcome is `partial` and the response gives the reason.
 
-When an instance gives a parameter more than once, `equivalence` reports it
-in `duplicate_params` (the instance, the side, the key and every copy in card
-order). The comparison does not model which copy a simulator reads, so the
+When a card gives a parameter more than once, `equivalence` reports it in
+`duplicate_params` once, however many instances use the card: its reference
+and the subcircuit it is in (null at the top level), the side, the key and
+every copy in card order. The comparison does not model which copy a simulator reads, so the
 parameter compares equal only when the result is the same whichever copy is
 read: the same copies in the same order on both sides, or one value in every
 copy. Otherwise a `param_mismatches` row names a reference copy and a
