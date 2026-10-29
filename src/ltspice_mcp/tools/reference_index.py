@@ -904,7 +904,14 @@ def validation_error_detail(
     of each branch the error names, so a caller corrects the call from the
     error instead of looking the branch up first. A tagged-union error's
     location carries the tag, which is the branch's name in the index."""
-    detail = compact_validation_error(exc, field_owners=field_owners)
+    # A tool's own call (field_owners given) is told where inside its
+    # arguments an unknown top-level field goes; a nested block validated
+    # under another tool's name is not.
+    detail = compact_validation_error(
+        exc,
+        field_owners=field_owners,
+        nested=None if field_owners is None else _nested_fields(tool),
+    )
     if not isinstance(exc, ValidationError):
         return detail
     branches = {
@@ -925,6 +932,19 @@ def validation_error_detail(
             + "."
         )
     return detail
+
+
+@functools.cache
+def _nested_fields(tool: str) -> dict[str, tuple[str, ...]]:
+    """Each nested argument of ``tool`` by its last name: ``path`` to
+    ``("circuits[].path",)`` for run_experiments."""
+    nested: dict[str, list[str]] = {}
+    for entry in build_index():
+        if entry.tool == tool and entry.family == "argument":
+            for field in entry.fields:
+                if "." in field.name:
+                    nested.setdefault(field.name.rsplit(".", 1)[-1], []).append(field.name)
+    return {name: tuple(paths) for name, paths in nested.items()}
 
 
 def _field_line(field: FieldEntry) -> str:

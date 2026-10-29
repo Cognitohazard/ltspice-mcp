@@ -1180,6 +1180,8 @@ class ApiMethodsMixin(ABC):
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
+        The :class:`RawResult` it returns names its members in its docstring:
+        ``r.signals``, ``r.steps``, ``r.trace(name, step=k)`` and the rest.
         ``other_raw`` reads the case's other raw of that kind, as its run row's
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
         response analysis's results, ``"op"`` a transient's operating point."""

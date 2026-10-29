@@ -93,6 +93,20 @@ class TestAssignExpansion:
             {"R1": "2k", "C1": "2n"},
         ]
 
+    def test_a_one_value_entry_holds_its_targets_in_every_case(self, tmp_path: Path):
+        # The idiom guide section 'variations' gives for a value held fixed
+        # across a sweep: it multiplies the grid by one.
+        circuit = _deck(tmp_path / "dut.cir")
+        sweep = AssignVariation(kind="assign", assign={"R1": ["1k", "2k"]})
+        held = AssignVariation(kind="assign", assign={"gain": [3], "C1": ["2n"]})
+
+        cases = expand_variations([circuit], [sweep, held])
+
+        assert [case.assignments for case in cases] == [
+            {"R1": "1k", "gain": 3, "C1": "2n"},
+            {"R1": "2k", "gain": 3, "C1": "2n"},
+        ]
+
     def test_zip_rejects_unequal_lengths(self):
         with pytest.raises(ValidationError, match="equal lengths"):
             AssignVariation(

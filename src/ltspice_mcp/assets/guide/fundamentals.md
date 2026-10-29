@@ -126,6 +126,11 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
   complex voltage, and it reads back as that number's magnitude: 7.46 where
   the gain is -3.01 dB. Write `db(mag(V(out)))`. A `WHEN db(V(out))=-3`
   crossing is found either way.
+- On LTspice, the log prints every AC `.meas` result as dB and angle, a real
+  one included: `db(mag(V(out)))` of −3.01 prints as `(9.5722dB,180°)`, the
+  dB of its absolute value with its sign as the angle. Read results through
+  the `measurements` recipe or `api.measurements`, which decode them, not
+  from the log text.
 - `MAX` returns the largest signed value. On a trace that stays negative, such
   as a PMOS drain current from −3 mA to −1 mA, `.meas TRAN imax MAX I(V1)`
   returns −1 mA. For the peak magnitude, measure `MAX abs(I(V1))`.

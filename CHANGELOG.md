@@ -92,6 +92,23 @@ tool-surface changes.
 
 ### Changed
 
+- Refusals and help say where the answer is:
+  - a `run_code` NameError hint says each call starts from a fresh
+    namespace, so a name an earlier call set is gone;
+  - an unknown top-level field this tool takes further down is named
+    there first (`run_experiments` takes `path` as `circuits[].path`),
+    before the tools that take it at their top level;
+  - a sandbox refusal names the directory a relative path is taken from;
+  - a `jobs` resume refused for a reused `resume_request_id`, a stale
+    parent, a running parent or a case selection names the jobs and cases
+    involved and what to do instead;
+  - `RawResult`'s docstring, `load_raw`'s and `api.reference()` name its
+    members (`signals`, `steps`, `trace(name, step=k)` and the rest);
+  - the `variations` description and guide section 'variations' give the
+    one-value `assign` list that holds a target fixed in every case;
+  - guide section 'fundamentals' says LTspice prints every AC `.meas`
+    result in its log as dB and angle, a real one included, and that
+    `measurements` decodes them.
 - `inspect(kind="symbols")` lists the LTspice build's `sym` folder as the
   `stock` library, where it listed the `lib` folder above it.
 - The equivalence compare's `duplicate_params` names a card that gives a

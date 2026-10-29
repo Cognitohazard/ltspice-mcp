@@ -411,6 +411,9 @@ def index() -> str:
             "Also on the object: wait(job_id), load_raw(...) for numpy arrays,",
             "measurements(job_id=...) for parsed .meas data, and",
             "device_op_points(job_id=...) for an .op run's device table (3 digits).",
+            "load_raw returns a RawResult r: r.signals, r.steps, r.step_count,",
+            "r.axis(step=k), r.trace(name, step=k), r.value(name, step=k),",
+            "r.table(step=k), r.compare(other); help(r) lists the rest.",
         ]
     )
     return "\n".join(lines)

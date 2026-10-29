@@ -520,7 +520,8 @@ class RunExperimentsInput(ToolInput):
         default_factory=list,
         description=(
             "The sweep. 'assign' entries build the case grid (cartesian across "
-            "entries, lock-step within one via combine:'zip'); at most one "
+            "entries, lock-step within one via combine:'zip'); a one-value list "
+            "holds a target fixed. At most one "
             "'random' entry adds Monte Carlo runs. Cases run in parallel — ask "
             "for the whole grid in one call. Empty runs each circuit as "
             "authored."

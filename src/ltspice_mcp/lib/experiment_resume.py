@@ -72,6 +72,7 @@ if TYPE_CHECKING:
         ExperimentReceipt,
         ExperimentRunner,
         ExperimentRunRequest,
+        IdempotencyConflictError,
         SubmissionCommitted,
     )
     from ltspice_mcp.state import SessionState
@@ -155,6 +156,40 @@ def _required_journal(store: Store, root_request_id: str) -> RecoveryJournal:
             "recovery_journal_missing", "Authoritative recovery journal is missing"
         )
     return journal
+
+
+def _resume_conflict(resume_request_id: str, entry: JournalEntry) -> IdempotencyConflictError:
+    """The refusal of ``resume_request_id`` reused for a different resume: it
+    names the job that resume addressed and the job it made, and how to send
+    this one instead."""
+    from ltspice_mcp.lib.experiment_runner import IdempotencyConflictError
+
+    made = (
+        f" and made job {entry.job_id}: read that job by its job_id, or"
+        if entry.job_id
+        else ", which had nothing to rerun:"
+    )
+    return IdempotencyConflictError(
+        f"resume_request_id {resume_request_id!r} was already used to resume job "
+        f"{entry.parent_job_id} with a different payload{made} send this resume "
+        "under a new resume_request_id"
+    )
+
+
+def _refuse_case_selection(parent: ExperimentJob, requested: set[str]) -> None:
+    """Refuse case_ids the parent does not have, or that it produced."""
+    unknown = sorted(requested - {case.case_id for case in parent.cases})
+    produced = sorted(
+        case.case_id
+        for case in parent.cases
+        if case.case_id in requested and case.status == "produced"
+    )
+    reasons = [
+        *([f"not cases of job {parent.job_id}: {', '.join(unknown)}"] if unknown else []),
+        *([f"produced already, so not rerun: {', '.join(produced)}"] if produced else []),
+    ]
+    if reasons:
+        raise RecoveryError("recovery_case_selection", f"case_ids {'; '.join(reasons)}")
 
 
 def _entry_for(journal: RecoveryJournal, job_id: str) -> JournalEntry:
@@ -613,7 +648,6 @@ async def resume_experiment(
     """Append one authorized attempt, retaining the original successful cases."""
     from ltspice_mcp.lib.experiment_runner import (
         AdmissionResult,
-        IdempotencyConflictError,
         canonical_fingerprint,
     )
 
@@ -647,9 +681,7 @@ async def resume_experiment(
         entry = journal.resumes.get(path_digest(resume_request_id))
         if entry is not None:
             if entry.fingerprint != fingerprint:
-                raise IdempotencyConflictError(
-                    "resume_request_id already names a different payload"
-                )
+                raise _resume_conflict(resume_request_id, entry)
             if entry.phase == "noop":
                 return ResumeReceipt(parent, True, None, False)
             simulator = await asyncio.to_thread(_simulator_for, parent, state)
@@ -658,24 +690,20 @@ async def resume_experiment(
             simulator = await asyncio.to_thread(_simulator_for, parent, state)
             if journal.head_job_id != parent.job_id:
                 raise RecoveryError(
-                    "recovery_stale_parent", "Resume must address the current lineage head"
+                    "recovery_stale_parent",
+                    f"Job {parent.job_id} was resumed already: resume the newest attempt, "
+                    f"job {journal.head_job_id}",
                 )
             if not finished(parent) or state.runners.get_experiment_runner_for(parent) is not None:
-                raise RecoveryError("recovery_owner_active", "The prior attempt is still active")
+                raise RecoveryError(
+                    "recovery_owner_active",
+                    f"Job {parent.job_id} is still running: resume it once it has finished",
+                )
             await asyncio.to_thread(_verify_absence, parent, simulator)
             await asyncio.to_thread(_verify_execution, parent, store, simulator)
             requested = set(case_ids) if case_ids is not None else None
-            known = {case.case_id for case in parent.cases}
-            if requested is not None and (
-                requested - known
-                or any(
-                    case.case_id in requested and case.status == "produced"
-                    for case in parent.cases
-                )
-            ):
-                raise RecoveryError(
-                    "recovery_case_selection", "Selection contains unknown or produced cases"
-                )
+            if requested is not None:
+                _refuse_case_selection(parent, requested)
             selected = {
                 case.case_id
                 for case in parent.cases

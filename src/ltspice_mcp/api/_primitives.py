@@ -29,7 +29,16 @@ from ltspice_mcp.state import SessionState
 
 
 class RawResult:
-    """Public, detached-array view over one cached SPICE raw result."""
+    """Public, detached-array view over one cached SPICE raw result.
+
+    ``signals`` names its traces, ``steps`` holds one parameter dict a
+    ``.step`` iteration and ``step_count`` counts them. ``axis(step=k)``,
+    ``trace(name, step=k)`` and ``value(name, step=k)`` read samples,
+    ``table(step=k)`` a plot with no sampled axis, and ``compare(other)`` how
+    far another run's traces are from these. ``analysis_type``, ``dialect``,
+    ``descriptor``, ``plots``, ``plot_index``, ``source`` and ``observations``
+    say what was read.
+    """
 
     def __init__(
         self,
