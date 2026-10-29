@@ -87241,19 +87241,19 @@
   "nets": [
    {
     "at": "R1.1",
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": "R1.1",
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": "R1.2",
-    "error": "error"
+    "error": "netlist_invalid"
    },
    {
     "at": "net:a",
