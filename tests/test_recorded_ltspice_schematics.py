@@ -59,6 +59,7 @@ ORIENTATION = rec.cases_of("symbol-orientation") + rec.cases_of("stock-symbol-or
 CONNECTIVITY = rec.cases_of("wire-connectivity") + rec.cases_of("net-naming")
 SAME_INSTANCE = rec.cases_of("same-instance-wire")
 SHARED_POINT = rec.cases_of("pins-of-one-part-on-one-point")
+SHARED_REFERENCE = rec.cases_of("shared-reference")
 PLACEMENTS = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
 
 
@@ -436,6 +437,74 @@ def test_the_signature_is_the_circuit_ltspice_netlists(build: str, case_id: str,
     one part that share a point."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
     assert netlisted_groups(sheet) == exported_groups(build, case_id)
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SHARED_REFERENCE)))
+def test_neither_build_netlists_a_sheet_on_which_two_parts_share_a_reference(
+    build: str, case_id: str
+):
+    """Spelled the same (``R1``, ``R1``) or in another case (``R1``, ``r1``):
+    references are compared without case. XVII puts up a message box naming
+    the second part's spelling and leaves the netlist empty; LTspice 26 exits
+    as if it had succeeded, having written nothing."""
+    entry = rec.entry(build, case_id)
+    if rec.generation(build) == "xvii":
+        second = "r1" if case_id.endswith("_case") else "R1"
+        assert entry["stopped"]
+        assert entry["dialog"].startswith(
+            f'LTspice XVII\nNetlist error: Duplicated Instance Name, "{second}" in '
+        )
+        assert entry["outputs"][f"{case_id}.net"]["bytes"] == 0
+    else:
+        assert (entry["exit_code"], entry["stopped"]) == (0, False)
+        assert (entry["outputs"], entry["written"]) == ({}, [])
+        assert "dialog" not in entry
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SHARED_REFERENCE)))
+async def test_verify_reports_a_reference_two_parts_share(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Without LTspice too: what the export would refuse is read off the sheet."""
+    staged = rec.stage_sheet(build, case_id, work_dir)
+    data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
+    (found,) = [f for f in data["findings"] if f["rule_id"] == "shared_reference"]
+    assert found["severity"] == "error"
+    assert found["evidence"]["coords"] == [[96, 96], [400, 96]]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_an_edit_refuses_a_sheet_whose_parts_share_a_name_and_keeps_both(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The schematic editor keeps one part per name, so saving any edit of the
+    sheet would delete the other."""
+    from ltspice_mcp.errors import NetlistError
+
+    staged = rec.stage_sheet(build, "connectivity/shared_reference", work_dir)
+    before = staged.read_bytes()
+    with pytest.raises(
+        NetlistError, match=r"parts share a reference \('R1' at \(96,96\), \(400,96\)\)"
+    ):
+        await apply_ops(
+            state_no_sim, staged.name, [{"op": "add_net_label", "net": "x", "x": 700, "y": 400}]
+        )
+    assert staged.read_bytes() == before
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_rename_ends_a_reference_two_parts_share_in_another_case(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The editor opens ``R1`` and ``r1`` as two parts, so the sheet can be fixed here."""
+    staged = rec.stage_sheet(build, "connectivity/shared_reference_case", work_dir)
+    rename = {"op": "set_component_attribute", "reference": "r1", "attribute": "InstName"}
+    data = await apply_ops(state_no_sim, staged.name, [{**rename, "value": "R2"}])
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    names = [line for line in staged.read_text().splitlines() if "InstName" in line]
+    assert names == ["SYMATTR InstName R1", "SYMATTR InstName R2"]
+    checked = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
+    assert not [f for f in checked["findings"] if f["rule_id"] == "shared_reference"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

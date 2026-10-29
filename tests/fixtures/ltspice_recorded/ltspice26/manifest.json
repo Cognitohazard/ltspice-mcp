@@ -1643,6 +1643,46 @@
         ".net"
       ]
     },
+    "connectivity/shared_reference": {
+      "behaviour": "shared-reference",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/shared_reference.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/shared_reference.asc": "93061a8f4a577e0d461b6ddbf90f21e1653b396b2f2f5cf0425c8a17f3ab5184"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": false,
+      "written": []
+    },
+    "connectivity/shared_reference_case": {
+      "behaviour": "shared-reference",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/shared_reference_case.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/shared_reference_case.asc": "101fa37846440f36533735aac6e9bdb1aabc2d51c604b865c911c9a0fa031f53"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "stopped": false,
+      "written": []
+    },
     "connectivity/two_instance_wire": {
       "behaviour": "wire-connectivity",
       "command": [

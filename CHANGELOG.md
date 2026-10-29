@@ -23,6 +23,26 @@ tool-surface changes.
   used them instead. On WSL, with XVII the only build installed, it found no
   symbols at all. It now reads the symbols of the build it runs, as it
   already did for model libraries.
+- An edit of a sheet on which two parts share a reference deleted all but the
+  last of those parts from the file, whatever the edit was. `edit_schematic`
+  now refuses to edit such a sheet and names each shared reference and where
+  its parts are. Neither LTspice build netlists such a sheet (recorded:
+  `connectivity/shared_reference`).
+- `add_component` accepted a reference that differs from another part's only
+  in case, such as `r1` beside `R1`. LTspice compares references without case
+  and netlists neither part (recorded: `connectivity/shared_reference_case`),
+  so `add_component` now refuses it.
+- `set_component_attribute` with `InstName` did not rename the part. It wrote
+  the old name and the new one into the file, kept the part under the old
+  name, and reported that the part had no name before. It now renames the
+  part, and refuses a name that another part has in any case.
+
+### Added
+
+- The sheet rule `shared_reference`, an error for two or more parts under one
+  reference, compared without case. `verify_circuit` reports it under the
+  `quality` check, so it needs no LTspice, and `edit_schematic` reports it
+  with its other findings.
 
 ### Changed
 
