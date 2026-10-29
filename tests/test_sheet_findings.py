@@ -53,6 +53,7 @@ class TestTheRegistry:
             == tuple(RULES)
             == (
                 "unresolved_symbol",
+                "shared_reference",
                 "dropped_wire",
                 "duplicate_parameter",
                 "net_with_two_names",
@@ -98,6 +99,7 @@ class TestTheRegistry:
                 "attribute_text_overlap",
             },
             "quality": {
+                "shared_reference",
                 "duplicate_parameter",
                 "label_over_component",
                 "text_in_symbol_body",
@@ -110,6 +112,7 @@ class TestTheRegistry:
         called = {rule.rule_id: rule.severity for rule in RULES.values()}
         assert called.pop("dropped_wire") == "warning"
         assert called.pop("unresolved_symbol") == "error"
+        assert called.pop("shared_reference") == "error"
         assert set(called.values()) == {"observation"}
 
     def test_an_electrical_rule_rests_on_a_recording_and_no_other_rule_claims_one(self) -> None:

@@ -461,6 +461,52 @@ def test_neither_build_netlists_a_sheet_on_which_two_parts_share_a_reference(
         assert "dialog" not in entry
 
 
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SHARED_REFERENCE)))
+async def test_verify_reports_a_reference_two_parts_share(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Without LTspice too: what the export would refuse is read off the sheet."""
+    staged = rec.stage_sheet(build, case_id, work_dir)
+    data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
+    (found,) = [f for f in data["findings"] if f["rule_id"] == "shared_reference"]
+    assert found["severity"] == "error"
+    assert found["evidence"]["coords"] == [[96, 96], [400, 96]]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_an_edit_refuses_a_sheet_whose_parts_share_a_name_and_keeps_both(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The schematic editor keeps one part per name, so saving any edit of the
+    sheet would delete the other."""
+    from ltspice_mcp.errors import NetlistError
+
+    staged = rec.stage_sheet(build, "connectivity/shared_reference", work_dir)
+    before = staged.read_bytes()
+    with pytest.raises(
+        NetlistError, match=r"parts share a reference \('R1' at \(96,96\), \(400,96\)\)"
+    ):
+        await apply_ops(
+            state_no_sim, staged.name, [{"op": "add_net_label", "net": "x", "x": 700, "y": 400}]
+        )
+    assert staged.read_bytes() == before
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_rename_ends_a_reference_two_parts_share_in_another_case(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The editor opens ``R1`` and ``r1`` as two parts, so the sheet can be fixed here."""
+    staged = rec.stage_sheet(build, "connectivity/shared_reference_case", work_dir)
+    rename = {"op": "set_component_attribute", "reference": "r1", "attribute": "InstName"}
+    data = await apply_ops(state_no_sim, staged.name, [{**rename, "value": "R2"}])
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    names = [line for line in staged.read_text().splitlines() if "InstName" in line]
+    assert names == ["SYMATTR InstName R1", "SYMATTR InstName R2"]
+    checked = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
+    assert not [f for f in checked["findings"] if f["rule_id"] == "shared_reference"]
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_a_parts_pins_on_one_point_are_joined_only_by_what_else_is_there(build: str):
     """What the recording says, read off the export itself."""

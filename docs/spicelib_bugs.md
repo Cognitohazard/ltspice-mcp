@@ -3237,3 +3237,148 @@ def test_a_resistor_named_x_is_not_a_subcircuit(tmp_path):
 `tests/test_circuit_asc.py::TestInstancePrefix::test_the_level_label_check_reads_the_parts_element_letter`
 pins that the check gives no warning for a resistor named `X9` with the value
 `Level.2`, and warns for the same part with its own `Prefix X`.
+
+---
+
+## Bug 31 — `AscEditor` keeps one component per reference, and saving deletes the others
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-29.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor._load_asc_file` and `save_netlist`).
+**Our workaround:** `lib/schematic_ops.py:_refuse_lost_parts` refuses to open a
+sheet when the editor holds fewer components than the file has `SYMBOL`
+records, naming each shared reference and where its parts are.
+
+### Summary
+
+The reader stores each component as `self.components[component.reference] =
+component`. A second `SYMBOL` with the same `InstName` replaces the first, and
+`save_netlist` writes `self.components.values()`, so saving the sheet deletes
+every part but the last of each name. Neither LTspice build netlists such a
+sheet (XVII stops with "Duplicated Instance Name"; LTspice 26 writes no
+netlist), but a sheet can hold one, written by hand or by a tool.
+
+### Affected code
+
+```python
+if line.startswith("SYMBOL"):
+    if component is not None:
+        self.components[component.reference] = component
+    component = SchematicComponent(self, line)
+```
+
+### Reproduction
+
+```
+Version 4
+SHEET 1 880 680
+SYMBOL res 96 96 R0
+SYMATTR InstName R1
+SYMATTR Value 1k
+SYMBOL res 400 96 R0
+SYMATTR InstName R1
+SYMATTR Value 2k
+```
+
+```python
+editor = AscEditor("shared.asc")
+len(editor.components)  # 1
+editor.save_netlist("shared.asc")  # the 1k resistor is gone
+```
+
+### Impact
+
+Any edit saved through spicelib silently deletes a part. In this server,
+adding one net label to such a sheet committed a file without the first `R1`.
+
+### Proposed fix
+
+Raise on a second component with a reference already read, naming both
+positions, or keep components in a list and index them by reference
+separately, so nothing is lost on save.
+
+### Suggested upstream test
+
+```python
+def test_a_repeated_reference_is_not_lost(tmp_path):
+    asc = tmp_path / "shared.asc"
+    asc.write_text(
+        "Version 4\nSHEET 1 880 680\n"
+        "SYMBOL res 96 96 R0\nSYMATTR InstName R1\nSYMATTR Value 1k\n"
+        "SYMBOL res 400 96 R0\nSYMATTR InstName R1\nSYMATTR Value 2k\n"
+    )
+    editor = AscEditor(asc)
+    editor.save_netlist(asc)
+    assert asc.read_text().count("SYMBOL res") == 2
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_sheet_whose_parts_share_a_name_and_keeps_both`
+pins the workaround against the `connectivity/shared_reference` recording.
+
+---
+
+## Bug 32 — Setting a component's `InstName` attribute writes its old name and its new one
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-29.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/base_editor.py`,
+`set_component_attribute`; `spicelib/editor/asc_editor.py`, `save_netlist`).
+**Our workaround:** `lib/schematic_ops.py:_rename_component` renames the part
+itself. It re-keys `components` under the new name, in place, and sets the
+component's `reference`, without an `InstName` attribute.
+
+### Summary
+
+`set_component_attribute(reference, "InstName", new)` stores `new` in the
+component's `attributes` and leaves the component keyed, and its `reference`
+set, as before. `save_netlist` writes `SYMATTR InstName <reference>` and then
+every attribute, so the saved part has two `InstName` lines, the old name
+first.
+
+### Affected code
+
+```python
+asc.write(f"SYMATTR InstName {component.reference}" + END_LINE_TERM)
+...
+for attr, value in component.attributes.items():
+    if not attr.startswith('_'):
+        asc.write(f"SYMATTR {attr} {value}" + END_LINE_TERM)
+```
+
+### Reproduction
+
+```python
+editor = AscEditor("draft.asc")  # holds R1
+editor.set_component_attribute("R1", "InstName", "R9")
+editor.save_netlist("draft.asc")
+# the file has "SYMATTR InstName R1" followed by "SYMATTR InstName R9"
+```
+
+### Impact
+
+spicelib still finds a renamed part under its old name. What LTspice makes
+of two `InstName` lines is not recorded here. In this server,
+`set_component_attribute` with `InstName` committed such a file and reported
+the old name as absent.
+
+### Proposed fix
+
+Treat `InstName` as the reference, so that setting it re-keys `components`,
+sets `reference`, and stores nothing in `attributes`.
+
+### Suggested upstream test
+
+```python
+def test_setting_instname_renames(tmp_path):
+    editor = AscEditor(sheet_with_r1(tmp_path))
+    editor.set_component_attribute("R1", "InstName", "R9")
+    editor.save_netlist(editor.asc_file_path)
+    text = editor.asc_file_path.read_text()
+    assert "SYMATTR InstName R9" in text and "SYMATTR InstName R1" not in text
+```
+
+### Cross-reference
+
+`tests/test_circuit_asc.py::TestReferences::test_setting_a_parts_name_renames_it`
+pins the workaround.

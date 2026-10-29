@@ -1048,6 +1048,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
 
     assert data["rules_run"] == {
         "unresolved_symbol": 0,
+        "shared_reference": 0,
         "dropped_wire": 0,
         "duplicate_parameter": 0,
         "net_with_two_names": 0,
