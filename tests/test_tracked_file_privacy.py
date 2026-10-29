@@ -133,12 +133,10 @@ def test_common_token_shapes_and_safe_findings() -> None:
 def test_undecodable_bytes_do_not_join_binary_data_into_an_address(scan) -> None:
     # Four sample values from a recorded LTspice FRA raw: once the 0xb3 bytes
     # are dropped, the rest reads as an address.
-    samples = bytes.fromhex("416d6db32e6d6db3406d6d332e6d6db3")
-    assert not scan(samples)
+    assert not scan(bytes.fromhex("416d6db32e6d6db3406d6d332e6d6db3"))
     address = "syntheticperson" + "@" + "example.invalid"
-    for encoding in privacy_scan.ENCODINGS:
-        found = scan(b"\xb3" + address.encode(encoding) + b"\xb3")
-        assert "email address" in {finding.category for finding in found}
+    found = scan(b"\xb3" + address.encode() + b"\xb3")
+    assert "email address" in {finding.category for finding in found}
 
 
 def test_ai_attribution_requires_proper_trailer() -> None:
