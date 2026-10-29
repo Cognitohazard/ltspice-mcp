@@ -24,10 +24,10 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     ResultError,
     SimulationError,
+    UnsupportedFileError,
     raise_site_code,
 )
 from ltspice_mcp.lib import (
-    CIRCUIT_EXTENSIONS,
     NETLIST_SUFFIX_TEXT,
     experiment_store,
     now,
@@ -52,6 +52,7 @@ from ltspice_mcp.lib.experiment_runner import (
     SubmissionCommitted,
     canonical_fingerprint,
     refuse_another_request,
+    refuse_inconsistent_record,
     verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -73,6 +74,7 @@ from ltspice_mcp.lib.pdk_native import (
     validate_family_ownership,
     validate_request,
 )
+from ltspice_mcp.lib.recent import is_circuit_file
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
     Recipe,
@@ -518,7 +520,8 @@ class RunExperimentsInput(ToolInput):
         default_factory=list,
         description=(
             "The sweep. 'assign' entries build the case grid (cartesian across "
-            "entries, lock-step within one via combine:'zip'); at most one "
+            "entries, lock-step within one via combine:'zip'); a one-value list "
+            "holds a target fixed. At most one "
             "'random' entry adds Monte Carlo runs. Cases run in parallel — ask "
             "for the whole grid in one call. Empty runs each circuit as "
             "authored."
@@ -863,6 +866,16 @@ async def handle_run_experiments(
             budget=budget,
             hint=path_denied_text(exc, state),
         )
+    except UnsupportedFileError as exc:
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="resolution",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+        )
     except RecoveryError as exc:
         return await _error_response(
             args.request_id,
@@ -919,13 +932,6 @@ async def _prepare_circuit(
     findings: list[dict[str, Any]] = []
     cases: list[ExperimentCase] = []
     try:
-        if source_path.suffix.casefold() not in CIRCUIT_EXTENSIONS:
-            raise VariationError(
-                "unsupported_variant",
-                f"Circuit {circuit_id!r} uses unsupported extension "
-                f"{source_path.suffix or '<none>'!r}; supported extensions are "
-                f"{NETLIST_SUFFIX_TEXT} and .asc",
-            )
         if not await asyncio.to_thread(source_path.is_file):
             raise FileNotFoundError(f"Circuit file not found: {source_path}")
         await state.note_recent_circuit(source_path)
@@ -1271,8 +1277,9 @@ def _circuit_decks_for_validation(
     """The circuits as decks to validate, and an observation per derived id.
 
     Each deck's path is the circuit's, resolved here, once, before a job
-    exists: a path the sandbox refuses is the request's to fix, refused with
-    the allowed roots named, not a failure met again in each of its cases.
+    exists: a path the sandbox refuses, or a file that is no circuit, is the
+    request's to fix, refused with what would be taken, not a failure met
+    again in each of its cases.
 
     A circuit with no ``id`` takes its file stem, made valid and unique rather
     than refused (see ``derive_circuit_ids``); the observation, keyed by the id
@@ -1284,9 +1291,14 @@ def _circuit_decks_for_validation(
     decks: list[CircuitDeck] = []
     notes: dict[str, dict[str, Any]] = {}
     for circuit, (circuit_id, note) in zip(circuits, derived, strict=True):
-        decks.append(
-            CircuitDeck(circuit_id=circuit_id, path=safe_path(circuit.path, state), text="")
-        )
+        path = safe_path(circuit.path, state)
+        if not is_circuit_file(path):
+            raise UnsupportedFileError(
+                f"Circuit {circuit_id!r} is {path.name}, which is no circuit file: "
+                f"run_experiments takes {NETLIST_SUFFIX_TEXT} or an .asc.",
+                show_hint=False,
+            )
+        decks.append(CircuitDeck(circuit_id=circuit_id, path=path, text=""))
         if note is not None:
             notes[circuit_id] = {
                 "code": "circuit_id_derived",
@@ -1344,14 +1356,7 @@ async def _load_matching_replay(
         if job is None:
             return None
         state.add_experiment_job(job, already_persisted=True)
-    if (
-        job.request_id != args.request_id
-        or job.fingerprint != fingerprint
-        or job.canonicalizer_version != CANONICALIZER_VERSION
-    ):
-        raise IdempotencyConflictError(
-            f"request_id {args.request_id!r} points to an inconsistent coordinator record"
-        )
+    refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
     await asyncio.to_thread(
@@ -1364,13 +1369,11 @@ async def _load_matching_replay(
 
 def _argument_warnings(args: RunExperimentsInput, wait_note: str | None) -> list[str]:
     """What this call asked for that is served differently: a value held to its
-    cap, and a repeat in the attached analysis read once."""
+    cap, and a repeat in the attached analysis read once. Whether the job runs
+    on past a held dwell is the receipt's to say (``_dwell_and_respond``)."""
     notes: list[str] = []
     if wait_note is not None:
-        notes.append(
-            f"{wait_note} The job keeps running; continue with "
-            f"jobs(action='wait', timeout_s<={JOBS_WAIT_CAP_S:g})."
-        )
+        notes.append(wait_note)
     if args.analyze is not None:
         notes.extend(f"analyze.{note}" for note in args.analyze.argument_notes())
         per_run = args.analyze.include.per_run if args.analyze.include else None
@@ -1392,6 +1395,8 @@ async def _dwell_and_respond(
     budget: ResponseBudget,
     warnings: list[str] | None = None,
 ) -> types.CallToolResult:
+    """Wait up to ``wait_s`` for the job, then return its receipt. A job still
+    running when the dwell ends is said to be by the receipt's ``hint``."""
     job = receipt.job
     if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
         job, _ = await state.job_registry.wait(job, wait_s)

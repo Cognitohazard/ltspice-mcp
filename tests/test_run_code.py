@@ -204,6 +204,8 @@ class TestExecution:
         reply = await run(state, "leftover")
         assert reply["status"] == "error"
         assert reply["error"]["type"] == "NameError"
+        # The NameError alone does not say why the name is gone.
+        assert "fresh namespace" in reply["hint"]
 
     async def test_stdout_keeps_head_and_tail_and_counts_the_rest(self, state: SessionState):
         reply = await run(state, "print('x' * 30000)")

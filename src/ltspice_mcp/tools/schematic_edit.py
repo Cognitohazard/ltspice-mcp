@@ -34,10 +34,10 @@ import shutil
 import stat
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
+from typing import Annotated, Any, Literal, NamedTuple, TypeVar, cast, get_args
 
 from mcp import types
 from pydantic import Field
@@ -81,7 +81,6 @@ from ltspice_mcp.lib.schematic_ops import (
     SheetPlotSettings,
     attach_symbols,
     blank_sheet,
-    collapse_result_warnings,
     collect_component_geometry,
     edit_guard,
     export_parts,
@@ -376,9 +375,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "preexisting": {
             "type": "object",
             "description": (
-                "What the sheet already reported before this batch and that involves "
-                "no reference or coordinate the batch named: counted here, left out "
-                "of 'warnings' and wiring.label_only_pins. count = findings + "
+                "What the sheet already had that this batch left as it was: findings "
+                "it neither made nor changed, and label-only pins of parts it did not "
+                "rewire or name. Counted here, left out of 'warnings' and "
+                "wiring.label_only_pins. count = findings + "
                 "label_only_pins. Echo cursor as view_cursors.preexisting, or ask "
                 "return_views ['preexisting'], to list them."
             ),
@@ -419,15 +419,23 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 ),
             },
         },
+        "applied": {
+            "type": "integer",
+            "description": (
+                "How many ops applied, in order: every op of a committed batch. An "
+                "op with nothing to report has no results entry; this counts it."
+            ),
+        },
         "results": {
             "type": "array",
             "description": (
                 "What each op found on the sheet, by op index; an op with nothing "
-                "to report has no entry. wire_pins reports already_present "
+                "to report has no entry, and 'applied' counts it. wire_pins reports already_present "
                 "(requested segments already on the sheet, not redrawn) and "
                 "junctions (where the route joined existing wiring off its "
                 "endpoints, or an endpoint ended on a wire's interior). Removals "
-                "report how much they took. set_component_value and "
+                "report how much they took; remove_directive names each text it "
+                "removed in removed_texts, with its kind and place. set_component_value and "
                 "set_component_attribute report each attribute they changed, with "
                 "what it was and what it is now (null where absent). set_plot_panes "
                 "reports the plot_settings file it writes and the replaced_panes it "
@@ -455,6 +463,19 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                         },
                     },
                     "removed": {"type": "integer"},
+                    "removed_texts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["directive", "comment"]},
+                                "text": {"type": "string"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                            "required": ["kind", "text", "x", "y"],
+                        },
+                    },
                     "deleted_wires": {"type": "integer"},
                     "changed": {
                         "type": "object",
@@ -637,10 +658,10 @@ def _commit_asc(
 async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
     """Export a committed-sheet COPY to a netlist and return its text (seam).
 
-    Uses ``export_netlist_text`` — which takes its own asc_export_lock on the
-    copy's path, so there is no reentrancy with the guard-held target lock, and
-    keeps no snapshot: the copy and its export are removed with the build's
-    export directory. Isolated as its own function so tests can substitute a
+    Uses ``export_netlist_text``, which takes no lock (the copy is in the
+    build's own folder, so there is no reentrancy with the guard-held target
+    lock) and keeps no snapshot: the copy and its export are removed with the
+    build's export directory. Isolated as its own function so tests can substitute a
     netlist without a real LTspice binary.
     """
     return await export_netlist_text(asc_copy, state)
@@ -765,31 +786,30 @@ def finding_row(finding: Finding) -> dict[str, Any]:
     return row
 
 
-def _split_findings(
-    after: Sequence[Finding],
-    before: Sequence[Finding],
-    refs: set[str],
-    coords: set[tuple[int, int]],
-) -> tuple[list[Finding], list[Finding]]:
-    """``(reported, preexisting)``: the findings of ``after`` this batch accounts for, and the rest.
+_Item = TypeVar("_Item")
 
-    A finding is reported when the sheet did not have it before the batch, or
-    when any part it names is in ``refs`` (casefolded) or any point it names is
-    in ``coords``. Every other finding was already there and involves nothing
-    the batch named. Being there before is by ``Finding.identity`` and is
-    counted, so a second finding like one that was there once is new.
+
+def _split(
+    after: Sequence[_Item],
+    before: Sequence[_Item],
+    key: Callable[[_Item], Hashable],
+    named: Callable[[_Item], bool] = lambda _item: False,
+) -> tuple[list[_Item], list[_Item]]:
+    """``(reported, preexisting)``: the items of ``after`` this batch accounts for, and the rest.
+
+    An item is reported when ``before`` had none of its ``key`` left to match,
+    or when ``named`` says the batch named it. Keys are counted, not merely
+    matched, so a second copy of an item that was there once is new.
     """
-    remaining = Counter(found.identity for found in before)
-    reported: list[Finding] = []
-    preexisting: list[Finding] = []
-    for found in after:
-        was_there = remaining[found.identity] > 0
+    remaining = Counter(map(key, before))
+    reported: list[_Item] = []
+    preexisting: list[_Item] = []
+    for item in after:
+        found = key(item)
+        was_there = remaining[found] > 0
         if was_there:
-            remaining[found.identity] -= 1
-        named = any(ref.casefold() in refs for ref in found.refs) or any(
-            point in coords for point in found.points
-        )
-        (preexisting if was_there and not named else reported).append(found)
+            remaining[found] -= 1
+        (preexisting if was_there and not named(item) else reported).append(item)
     return reported, preexisting
 
 
@@ -811,41 +831,13 @@ def _row_coords(row: dict[str, Any]) -> list[tuple[int, int]]:
     return coords
 
 
-def _split_by_edit(
-    after: Sequence[dict[str, Any]],
-    before: Sequence[dict[str, Any]],
-    refs: set[str],
-    coords: set[tuple[int, int]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """``(reported, preexisting)``: the rows of ``after`` this batch accounts for, and the rest.
-
-    A row is reported when the sheet did not have it before the batch — any
-    change to it counts, since its identity is every field — or when it names a
-    reference in ``refs`` (casefolded) or a coordinate in ``coords``. Every
-    other row was already there and involves nothing the batch named. Identity
-    is counted, not merely matched, so a second copy of a row that was there
-    once is new.
-    """
-    remaining = Counter(map(canonical_json, before))
-    reported: list[dict[str, Any]] = []
-    preexisting: list[dict[str, Any]] = []
-    for row in after:
-        key = canonical_json(row)
-        was_there = remaining[key] > 0
-        if was_there:
-            remaining[key] -= 1
-        named = _names_ref(row, refs) or any(coord in coords for coord in _row_coords(row))
-        (preexisting if was_there and not named else reported).append(row)
-    return reported, preexisting
-
-
 @dataclass(frozen=True)
 class EditSchematicViews:
     """Complete pin/net views tied to the bytes produced by one transaction.
 
     ``label_only_pins`` holds the label-only pins this batch introduced or
     named; ``preexisting`` holds the sheet findings and label-only pins it left
-    out (see ``_split_by_edit``), each row tagged with its ``kind``.
+    out (see ``_split``), each row tagged with its ``kind``.
 
     Drawing the sheet is not among them: ``verify_circuit`` owns rendering, and
     its policy is the more capable one (a pixel cap, inline delivery, and
@@ -919,7 +911,7 @@ def _preexisting_hint(block: dict[str, Any], *, listed: bool) -> str | None:
     )
     return (
         f"{block['findings']} sheet finding(s) and {block['label_only_pins']} label-only "
-        f"pin(s) predate this batch and involve nothing it named, so they are {where}."
+        f"pin(s) predate this batch, which left them as they were, so they are {where}."
     )
 
 
@@ -948,20 +940,26 @@ def touched_refs(ops: Sequence[ConsolidatedOp]) -> set[str]:
     return refs
 
 
+def rewiring_ops(ops: Sequence[ConsolidatedOp]) -> list[ConsolidatedOp]:
+    """The ops that may rewire what they name: all but ``KEEPS_WIRING``'s, after
+    which every pin is where it was and joined as it was."""
+    return [op for op in ops if op.op not in KEEPS_WIRING]
+
+
 def rewired_refs(ops: Sequence[ConsolidatedOp]) -> set[str]:
-    """The references of ``touched_refs`` that an op which may rewire them
-    names: a part whose value or attributes alone changed (``KEEPS_WIRING``)
-    has its pins where they were and joined as they were."""
-    return touched_refs([op for op in ops if op.op not in KEEPS_WIRING])
+    """The references of ``touched_refs`` that a rewiring op names: a part whose
+    value or attributes alone changed is joined as it was."""
+    return touched_refs(rewiring_ops(ops))
 
 
 def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
     """Sheet coordinates this op batch named.
 
     An op's own ``x``/``y`` (a label, a directive anchor, a component origin,
-    a wire's incident point), both ends of an exact wire segment, and every
-    routing waypoint and ``{x, y}`` endpoint. A pin endpoint names a component,
-    not a coordinate; see ``touched_refs``.
+    a wire's incident point), both ends of an exact wire segment, every
+    routing waypoint and ``{x, y}`` endpoint, and the labels and wire ends a
+    ``move`` names, where they were and where they went. A pin endpoint names
+    a component, not a coordinate; see ``touched_refs``.
     """
     coords: set[tuple[int, int]] = set()
     for op in ops:
@@ -972,6 +970,11 @@ def touched_coords(ops: list[ConsolidatedOp]) -> set[tuple[int, int]]:
         points = [*(getattr(op, "waypoints", None) or ())]
         points += [getattr(op, "from_pin", None), getattr(op, "to_pin", None)]
         coords.update((point.x, point.y) for point in points if isinstance(point, GridPoint))
+        if isinstance(op, OpMove):
+            moved = [(label.x, label.y) for label in op.labels]
+            moved += [end for w in op.wires for end in ((w.x1, w.y1), (w.x2, w.y2))]
+            coords.update(moved)
+            coords.update((x + op.dx, y + op.dy) for x, y in moved)
     return coords
 
 
@@ -1063,9 +1066,9 @@ async def _run_reference_stage(
 ) -> dict:
     """Export a copy of the committed sheet and compare it to ``ref`` (a path or netlist text).
 
-    Runs entirely on a COPY under a managed temp dir, so the exporter's own
-    asc_export_lock keys on the copy's path (no reentrancy with the guard-held
-    target lock). Each copy is staged with the symbols and model files of its
+    Runs entirely on a COPY under the build's own export directory, so the
+    export takes no lock (no reentrancy with the guard-held target lock). Each
+    copy is staged with the symbols and model files of its
     original's folder, so it exports as the file would where it stands. The
     reference path is already resolved — the handler validates it in
     pre-flight, so no path rejection can land here, after the commit. An
@@ -1163,12 +1166,10 @@ def _apply_ops(
 
     Delegates the loop to the shared ``run_op_batch`` runner (abort-on-first-
     failure unless ``dry_run``), then splits its unified entries into this
-    surface's separate success/failure lists. Identical advisories across the
-    batch are collapsed on the way out — see ``_op_warnings``. ``plot`` takes
-    the batch's plot panes, for the commit to write beside the sheet.
+    surface's separate success/failure lists. ``plot`` takes the batch's plot
+    panes, for the commit to write beside the sheet.
     """
     entries, abort_reason = run_op_batch(editor, ops, target, stop_on_error=not dry_run, plot=plot)
-    collapse_result_warnings(entries)
     results = [e for e in entries if e["ok"]]
     failures = [
         {"index": e["index"], "op": e["op"], "error": e["error"]} for e in entries if not e["ok"]
@@ -1179,8 +1180,8 @@ def _apply_ops(
 def _op_results(results: list[dict]) -> list[dict]:
     """What each op found on the sheet: its result's ``OP_RESULT_FACTS`` keys.
 
-    The rest of a runner entry restates the op or rides on ``warnings`` and
-    the views. An op with no fact to report has no entry, so a large build
+    The rest of a runner entry restates the op or rides on the views. An op
+    with no fact to report has no entry, so a large build
     pays for what its ops found, not a line per op.
     """
     relayed: list[dict] = []
@@ -1189,24 +1190,6 @@ def _op_results(results: list[dict]) -> list[dict]:
         if facts:
             relayed.append({"index": entry["index"], "op": entry["op"], **facts})
     return relayed
-
-
-def _op_warnings(results: list[dict]) -> list[str]:
-    """The batch's per-op advisories, attributed to the op that raised them.
-
-    An op can succeed and still have something to say of what it did itself —
-    a subcircuit value LTspice would write as a stray token, a route that
-    passes over a pin already on its net. What the finished sheet holds is the sheet
-    rules' to say, not an op's. The envelope carries one flat ``warnings`` list,
-    so each is prefixed with its op; the repeats are already collapsed by
-    ``collapse_result_warnings``, which keeps the first occurrence and
-    annotates it with how many ops it covers.
-    """
-    return [
-        f"op {entry['index']} ({entry['op']}): {message}"
-        for entry in results
-        for message in entry.get("warnings", ())
-    ]
 
 
 def _mirror_commit_state(commit_state: str) -> Literal["not_started", "committed", "unknown"]:
@@ -1237,6 +1220,7 @@ def _envelope(
     verification: dict | None = None,
     netlist: str | None = None,
     results: list[dict] | None = None,
+    applied: int | None = None,
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
@@ -1265,6 +1249,8 @@ def _envelope(
         "failures": failures or [],
         "observations": observations or [],
     }
+    if applied is not None:
+        data["applied"] = applied
     if error is not None:
         # Mirror the top-level commit_state into the error object so a failure
         # envelope is self-describing without cross-referencing the top level.
@@ -1557,13 +1543,16 @@ async def _evaluate_edit_schematic(
             # keeps the sheet changes nothing in it, so its "before" is its
             # "after". A sheet the editor cannot render yet has no "before" to
             # read either: everything said of it then counts as the batch's, and
-            # the render after the ops raises what there is to raise.
+            # the render after the ops raises what there is to raise. A batch
+            # that rewires nothing (``KEEPS_WIRING``) has the same pins before
+            # and after, so it reads them once, after the ops.
             before_text: str | None = None
             before_pins: list[dict] | None = [] if use_template else None
             if not use_template and not sheet_kept:
                 with contextlib.suppress(NetlistError):
                     before_text = _render_editor_text(editor, data_flags)
-                before_pins = _pin_tables(editor, include_legend=False)[1]
+                if rewiring_ops(args.ops):
+                    before_pins = _pin_tables(editor, include_legend=False)[1]
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, dry_run, plot)
 
             # --- op failure → transactional abort (nothing written)
@@ -1611,19 +1600,25 @@ async def _evaluate_edit_schematic(
                 target,
                 symbols_of(editor),
             )
-            refs, coords = touched_refs(args.ops), touched_coords(args.ops)
-            findings_reported, findings_left_out = _split_findings(
-                found, found_before, refs, coords
+            # A finding is the batch's when the batch made or changed it: the same
+            # ``Finding.identity`` before and after, which a part moved or given a
+            # new value keeps where the rule says what it is about apart from
+            # where, is the sheet's, whichever part or point the batch named.
+            findings_reported, findings_left_out = _split(
+                found, found_before, key=lambda finding: finding.identity
             )
-            # A pin is listed for the parts the batch rewired; one whose value
-            # alone changed is joined as it was, and is counted, not listed.
-            # Findings stay the batch's for every part it named: a value can
-            # be what a finding is about (a parameter given twice).
-            pins_reported, pins_left_out = _split_by_edit(
+            # A pin is listed when it changed, or for the parts the batch rewired
+            # and the points it named; one whose value alone changed is joined as
+            # it was, and is counted, not listed.
+            rewired = rewired_refs(args.ops)
+            coords = touched_coords(args.ops)
+            pins_reported, pins_left_out = _split(
                 label_only,
                 label_only if before_pins is None else before_pins,
-                rewired_refs(args.ops),
-                coords,
+                key=canonical_json,
+                named=lambda row: (
+                    _names_ref(row, rewired) or any(coord in coords for coord in _row_coords(row))
+                ),
             )
             preexisting_rows = [finding_row(one) for one in findings_left_out] + [
                 {"kind": _LABEL_ONLY_KIND, **row} for row in pins_left_out
@@ -1633,10 +1628,10 @@ async def _evaluate_edit_schematic(
             # the batch is told of and what is counted as there before.
             rules_run = dict.fromkeys(RULES, 0) | Counter(one.rule for one in found)
             left_out_hint = _preexisting_hint(preexisting, listed="preexisting" in views)
-            # Two sources, one channel: what the ops themselves reported, then
-            # what the finished sheet reports about itself that this batch
-            # accounts for. The rest is counted under preexisting.
-            warnings = _op_warnings(results) + [one.detail for one in findings_reported]
+            # What the finished sheet reports about itself that this batch
+            # accounts for; the rest is counted under preexisting. An op says
+            # what it did in ``results``, and judges nothing.
+            warnings = [one.detail for one in findings_reported]
             op_results = _op_results(results)
             encoding = _commit_codec(loaded_as, original, committed_text)
 
@@ -1671,6 +1666,7 @@ async def _evaluate_edit_schematic(
                             preexisting=preexisting,
                             rules_run=rules_run,
                             results=op_results,
+                            applied=len(results),
                             warnings=warnings,
                             failures=failures,
                             observations=revision_notes + window_notes,
@@ -1799,6 +1795,7 @@ async def _evaluate_edit_schematic(
                         verification=verification,
                         netlist=netlist,
                         results=op_results,
+                        applied=len(results),
                         warnings=warnings,
                         observations=window_notes,
                         open_in_ltspice=shown,

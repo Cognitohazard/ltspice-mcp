@@ -360,7 +360,7 @@ Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
 
 | Aspect | LTspice | ngspice |
 |-|-|-|
-| Inline comment | `;` | `$` |
+| Inline comment | `;`, or a `$` standing alone | `$` |
 | B-source conditional | `IF(c,a,b)` | ternary `c ? a : b` |
 | `^` operator | XOR (power is `**`) | power |
 | MOSFET bulk | 4th node in a netlist (VDMOS: 3); the 3-pin schematic symbols tie it to source | always a 4th node |

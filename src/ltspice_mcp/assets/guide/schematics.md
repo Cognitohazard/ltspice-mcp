@@ -204,10 +204,10 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   that only cross are not joined. A waypoint that touches another net's wiring
   is refused rather than silently merging it; `inspect(kind="net")` at a point
   on a wire traces that wire (`snapped_to_wire`).
-- **Heed the `wire_pins` op's warnings and errors**: it refuses diagonal wires,
-  pin collisions, and wire junction overlaps. Read its warnings too (a crossed
-  wire, a junction made along the route). It does not report a route through
-  a part; the sheet findings below report that.
+- **Heed the `wire_pins` op's errors and junctions**: it refuses diagonal
+  wires, pin collisions, and wire junction overlaps. Where the route joins its
+  own net on the way, its `results` entry lists the point under `junctions`.
+  The sheet findings below report a crossed wire or a route through a part.
 - **Keep wires short; nothing reports wire length.** In LTspice's own example
   schematics 50% of wire segments are 32 units or shorter, 90% are 192 or
   shorter, and about 3% exceed 400. A long wire is not an error, but if it
@@ -224,14 +224,17 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   loose wire end, parts that overlap, a wire through a part, a label or text
   inside one, a part's name or value drawn across a wire, another part or
   other text, a wire LTspice leaves out of the netlist), returned by the edit
-  that caused them. A part's text moves with the part, so move the part or the
+  that caused them. A part's text moves with the part and no op moves the text
+  alone, so move the part (`move_component`, or `move` for a region) or the
   item its text crosses.
 - **On an existing sheet, the reply lists only your edit's findings.**
-  `warnings` and `wiring.label_only_pins` list only the findings your ops
-  introduced or named; older ones are only counted, in `preexisting`. A batch
-  that only sets values or attributes lists no pins at all, since it leaves
-  every pin joined as it was. Before calling a sheet done, list the older
-  findings with `return_views: ["preexisting"]` (on an op-less read,
+  `warnings` lists only the findings your ops made or changed, and
+  `wiring.label_only_pins` only the pins of parts they rewired or named. A
+  part that is moved or given a new value keeps the findings it had. Older
+  findings are only counted, in `preexisting`. A batch that only sets values
+  or attributes lists no pins at all, since it leaves every pin joined as it
+  was. Before calling a sheet done, list the older findings with
+  `return_views: ["preexisting"]` (on an op-less read,
   `ops: []`, that is the whole sheet) or run `verify_circuit`.
 
 **Moving what is drawn:** the `move` op shifts parts, wires, labels and

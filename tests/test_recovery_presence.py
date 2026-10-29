@@ -21,7 +21,7 @@ def _entry(name=None, command=None, *, pid=77):
 )
 def test_independent_windows_name_preserves_candidate_guard(monkeypatch, fallback, expected):
     monkeypatch.setattr(proc_kill, "sys", SimpleNamespace(platform="win32"))
-    monkeypatch.setattr(psutil, "process_iter", lambda *a, **kw: iter([_entry()]))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter([_entry()]))
     query = Mock(return_value=fallback)
     monkeypatch.setattr(proc_kill, "_windows_process_name", query, raising=False)
     assert proc_kill.simulator_presence("exp_case_1", {"ngspice.exe"}).value == expected
@@ -31,7 +31,7 @@ def test_independent_windows_name_preserves_candidate_guard(monkeypatch, fallbac
 def test_independent_name_cannot_hide_another_unknown_entry(monkeypatch):
     monkeypatch.setattr(proc_kill, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(
-        psutil, "process_iter", lambda *a, **kw: iter([_entry(pid=77), _entry(pid=78)])
+        proc_kill, "_running_processes", lambda *a, **kw: iter([_entry(pid=77), _entry(pid=78)])
     )
     monkeypatch.setattr(
         proc_kill,
@@ -45,7 +45,7 @@ def test_independent_name_cannot_hide_another_unknown_entry(monkeypatch):
 def test_independent_name_cannot_hide_a_matching_simulator(monkeypatch):
     monkeypatch.setattr(proc_kill, "sys", SimpleNamespace(platform="win32"))
     entries = [_entry(), _entry("ngspice.exe", ["ngspice.exe", "exp_case_1.cir"], pid=78)]
-    monkeypatch.setattr(psutil, "process_iter", lambda *a, **kw: iter(entries))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter(entries))
     monkeypatch.setattr(
         proc_kill, "_windows_process_name", Mock(return_value="Secure System"), raising=False
     )
@@ -55,7 +55,7 @@ def test_independent_name_cannot_hide_a_matching_simulator(monkeypatch):
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
 def test_non_windows_unknown_entries_keep_the_existing_guard(monkeypatch, platform):
     monkeypatch.setattr(proc_kill, "sys", SimpleNamespace(platform=platform))
-    monkeypatch.setattr(psutil, "process_iter", lambda *a, **kw: iter([_entry()]))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter([_entry()]))
     query = Mock(side_effect=AssertionError("Windows lookup on another platform"))
     monkeypatch.setattr(proc_kill, "_windows_process_name", query, raising=False)
     assert proc_kill.simulator_presence("exp_case_1", {"ngspice.exe"}).value == "unknown"
@@ -64,7 +64,7 @@ def test_non_windows_unknown_entries_keep_the_existing_guard(monkeypatch, platfo
 
 def test_readable_name_never_uses_windows_fallback(monkeypatch):
     monkeypatch.setattr(proc_kill, "sys", SimpleNamespace(platform="win32"))
-    monkeypatch.setattr(psutil, "process_iter", lambda *a, **kw: iter([_entry("editor")]))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter([_entry("editor")]))
     query = Mock(side_effect=AssertionError("Known name must use existing classification"))
     monkeypatch.setattr(proc_kill, "_windows_process_name", query, raising=False)
     assert proc_kill.simulator_presence("exp_case_1", {"ngspice.exe"}).value == "absent"

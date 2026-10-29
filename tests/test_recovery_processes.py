@@ -36,7 +36,7 @@ def test_local_simulator_presence(monkeypatch, processes, expected, platform):
         SimpleNamespace(pid=1000 + index, info={"name": name, "cmdline": cmd})
         for index, (name, cmd) in enumerate(processes)
     ]
-    monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda *a, **kw: iter(entries))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter(entries))
     result = proc_kill.simulator_presence("exp_case_1", {"ngspice", "ltspice.exe"})
     assert result.value == expected
 
@@ -63,7 +63,7 @@ def test_windows_names_a_nameless_process_by_pid(monkeypatch, platform, image_na
 
     monkeypatch.setattr(proc_kill, "_windows_process_name", image)
     nameless = SimpleNamespace(pid=4242, info={"name": None, "cmdline": None})
-    monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda *a, **kw: iter([nameless]))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter([nameless]))
 
     result = proc_kill.simulator_presence("exp_case_1", {"ngspice", "ltspice.exe"})
 
@@ -75,7 +75,7 @@ def test_presence_query_failure_is_not_absence(monkeypatch):
     def denied(*args, **kwargs):
         raise psutil.AccessDenied()
 
-    monkeypatch.setattr(proc_kill.psutil, "process_iter", denied)
+    monkeypatch.setattr(proc_kill, "_running_processes", denied)
     assert proc_kill.simulator_presence("exp_case_1", {"ngspice"}).value == "unknown"
 
 
@@ -83,7 +83,7 @@ def test_exited_zombie_simulator_cannot_hold_recovery(monkeypatch):
     zombie = SimpleNamespace(
         info={"name": "ngspice", "cmdline": None, "status": psutil.STATUS_ZOMBIE}
     )
-    monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda *a, **kw: iter([zombie]))
+    monkeypatch.setattr(proc_kill, "_running_processes", lambda *a, **kw: iter([zombie]))
     assert proc_kill.simulator_presence("exp_case_1", {"ngspice"}).value == "absent"
 
 

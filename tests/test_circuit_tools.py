@@ -9,7 +9,6 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.component_value import apply_value_to_instance
-from ltspice_mcp.lib.schematic_ops import level_label_lint
 from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
 
 
@@ -156,56 +155,3 @@ class TestModelNameElementsEditable:
         o1 = _instance(cards, "O1")
         with pytest.raises(NetlistError, match="Edit the card directly"):
             apply_value_to_instance(o1, "TLINE2")
-
-
-class _FakeComp:
-    def __init__(self, attributes: dict):
-        self.attributes = attributes
-
-
-class _FakeEditor:
-    """Minimal stand-in exposing the ``.components`` mapping the lint reads."""
-
-    def __init__(self, components: dict):
-        self.components = components
-
-
-class TestLevelLabelLint:
-    """A GUI opamp complexity label (Level.N) written to a subcircuit's Value
-    becomes a stray positional token → 'sub-circuit name is not defined'. Warn
-    at edit time; fire only on the dotted-level pattern AND a subcircuit signal."""
-
-    def test_x_prefix_reference_warns(self):
-        ed = _FakeEditor({"X1": _FakeComp({})})
-        assert level_label_lint(ed, "X1", "Level.2") is not None
-
-    def test_spicemodel_attr_on_u_prefix_warns(self):
-        # InstName is U1 but the .asy Prefix makes it an X device → SpiceModel
-        # attribute is the tell.
-        ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
-        assert level_label_lint(ed, "U1", "level.1") is not None
-
-    def test_plain_resistor_value_not_flagged(self):
-        ed = _FakeEditor({"R1": _FakeComp({})})
-        assert level_label_lint(ed, "R1", "10k") is None
-
-    def test_level_label_on_non_subckt_not_flagged(self):
-        # The label pattern alone isn't enough — no subcircuit signal, no warning.
-        ed = _FakeEditor({"R1": _FakeComp({})})
-        assert level_label_lint(ed, "R1", "Level.2") is None
-
-    def test_any_value_on_spicemodel_symbol_warns(self):
-        # The general case: ANY value on a SpiceModel-selected symbol (not just
-        # Level.N) becomes a stray positional token and corrupts the netlist.
-        ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
-        assert level_label_lint(ed, "U1", "10k") is not None
-
-    def test_subckt_by_value_without_spicemodel_not_flagged(self):
-        # A library part that carries its subckt name IN Value (no SpiceModel)
-        # is the normal case — it must stay quiet.
-        ed = _FakeEditor({"X1": _FakeComp({})})
-        assert level_label_lint(ed, "X1", "LT1013") is None
-
-    def test_empty_value_not_flagged(self):
-        ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
-        assert level_label_lint(ed, "U1", "") is None

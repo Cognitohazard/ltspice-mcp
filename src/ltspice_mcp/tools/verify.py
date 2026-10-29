@@ -78,9 +78,8 @@ from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
-from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet
+from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
-from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
@@ -556,11 +555,16 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
 _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
-        "An instance that gives one parameter more than once. A fact, not a "
-        "difference: 'equivalent' holds only if it holds whichever copy is read."
+        "A card that gives one parameter more than once, named once however many "
+        "instances use it. A fact, not a difference: 'equivalent' holds only if it "
+        "holds whichever copy is read."
     ),
     "properties": {
-        "ref": _REF,
+        "ref": {"type": "string", "description": "The card's reference as written ('M1')."},
+        "subckt": {
+            "type": ["string", "null"],
+            "description": "The subcircuit the card is in; null at the top level.",
+        },
         "side": {"type": "string", "description": "'reference' or 'candidate'."},
         "key": {"type": "string", "description": "The parameter, case-folded."},
         "values": {
@@ -669,7 +673,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "duplicate_params": {
             "type": "array",
             "items": _DUPLICATE_PARAM_SCHEMA,
-            "description": "equivalence: instances that give a parameter more than once.",
+            "description": "equivalence: cards that give a parameter more than once.",
         },
         **STRUCTURAL_DELTA_PROPS,
     },
@@ -1012,13 +1016,13 @@ async def _export_reference(
             "as its LTspice netlist export, and LTspice is not detected",
             remedy="pass the reference's exported netlist (.net) or its netlist text",
         )
-    staged_asc, note = await _stage_for_export(reference, staging)
+    staged_asc, note = await stage_sheet_copy(reference, staging)
     observations = (note,) if note else ()
     try:
-        async with asc_export_lock(staged_asc):
-            net_path = await asyncio.to_thread(
-                _export_if_written, simulator_cls, staged_asc, state.config.default_timeout
-            )
+        # The staging folder is this call's alone, so no export lock is needed.
+        net_path = await asyncio.to_thread(
+            _export_if_written, simulator_cls, staged_asc, state.config.default_timeout
+        )
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         error = f"LTspice netlist export of the reference {reference.name} failed: {exc}"
         return ReferenceNetlist(None, error, observations=observations)
@@ -1455,16 +1459,6 @@ def _byte_order_mark_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-async def _stage_for_export(asc_path: Path, dest: Path) -> tuple[Path, str | None]:
-    """Stage ``asc_path`` in ``dest`` under its circuit lock, for a managed export.
-
-    Returns the staged ``.asc`` and, when the file cap was hit, the observation
-    saying so.
-    """
-    async with circuit_file_lock(asc_path):
-        return await asyncio.to_thread(stage_sheet, asc_path, dest)
-
-
 def _create_netlist(simulator_cls: Any, asc_path: Path, timeout: float) -> Path:
     """Drive LTspice to export ``asc_path`` to a sibling ``.net``."""
     return Path(simulator_cls.create_netlist(str(asc_path), timeout=timeout))
@@ -1632,7 +1626,7 @@ async def _run_export(
             scratch = (
                 _scratch_dir(state, "export") / f"{asc_path.stem}.{_file_digest(asc_path, 8)}"
             )
-            staged_asc, note = await _stage_for_export(asc_path, scratch)
+            staged_asc, note = await stage_sheet_copy(asc_path, scratch)
             if note:
                 observations.append(note)
             async with asc_export_lock(staged_asc):

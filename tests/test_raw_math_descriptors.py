@@ -15,7 +15,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_ac_analysis,
     trace_unit,
 )
-from tests.test_decoded_raw import header
+from tests.conftest import header
 
 
 def selected(plot: DecodedPlot, wrapped: bool):
@@ -102,7 +102,7 @@ def test_unknown_descriptor_does_not_promote_header_words_or_voltage_labels(wrap
     )
     raw = selected(plot, wrapped)
     assert detect_sim_type(raw) == "Unknown"
-    assert not is_ac_analysis(detect_sim_type(raw))
+    assert not is_ac_analysis(raw)
     assert dc_axis_name(raw) == (None, None)
     assert trace_unit(raw, "V(out)") is None
 

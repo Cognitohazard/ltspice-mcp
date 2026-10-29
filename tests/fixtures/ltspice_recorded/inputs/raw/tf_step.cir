@@ -1,0 +1,7 @@
+* divider transfer function over three resistances
+V1 in 0 5
+R1 in out {r}
+R2 out 0 4k
+.step param r list 1k 2k 4k
+.tf V(out) V1
+.end

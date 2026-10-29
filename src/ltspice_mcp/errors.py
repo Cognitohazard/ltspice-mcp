@@ -12,10 +12,18 @@ def compact_validation_error(
     exc: ValidationError | ValueError | TypeError,
     *,
     field_owners: Mapping[str, Sequence[str]] | None = None,
+    nested: Mapping[str, Sequence[str]] | None = None,
 ) -> str:
-    """Render validation failures without input echoes or documentation URLs."""
+    """Render validation failures without input echoes or documentation URLs.
+
+    An unknown top-level field is referred to where it is taken: ``nested``
+    maps a field to its place inside this tool's own arguments (``path`` to
+    ``circuits[].path``), named first, and ``field_owners`` to the tools
+    that take it at their top level.
+    """
     if not isinstance(exc, ValidationError):
         return str(exc)
+    referrable = {*(field_owners or ()), *(nested or ())}
 
     entries: list[tuple[tuple[object, ...], str, str]] = []
     seen: set[tuple[tuple[object, ...], str, str]] = set()
@@ -30,11 +38,10 @@ def compact_validation_error(
         seen.add(key)
         entries.append(key)
         if (
-            field_owners is not None
-            and error_type == "extra_forbidden"
+            error_type == "extra_forbidden"
             and len(loc) == 1
             and isinstance(loc[0], str)
-            and loc[0] in field_owners
+            and loc[0] in referrable
             and loc[0] not in referral_fields
         ):
             referral_fields.append(loc[0])
@@ -48,11 +55,12 @@ def compact_validation_error(
         rendered.append(f"… and {remaining} more")
     text = "; ".join(rendered) or "Validation failed"
 
-    if field_owners is not None:
-        for field in referral_fields:
-            owners = tuple(dict.fromkeys(field_owners[field]))
-            if owners:
-                text += f" Field {field!r} is accepted by {', '.join(owners)}."
+    for field in referral_fields:
+        if nested and nested.get(field):
+            text += f" This tool takes {field!r} as {' or '.join(nested[field])}."
+        owners = tuple(dict.fromkeys((field_owners or {}).get(field, ())))
+        if owners:
+            text += f" Field {field!r} is accepted by {', '.join(owners)}."
     return text
 
 
@@ -112,6 +120,13 @@ class NetlistError(LTSpiceMCPError):
     """Invalid netlist or component reference."""
 
     code = "netlist_invalid"
+
+
+class UnsupportedFileError(NetlistError):
+    """A file of a kind the call does not take: one that is no circuit where a
+    circuit is needed."""
+
+    code = "unsupported_file"
 
 
 class SymbolResolutionError(NetlistError):

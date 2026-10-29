@@ -423,6 +423,18 @@ async def test_analyze_source_refusal_is_path_denied_with_the_guidance(
     assert "missing_cases" in data["hint"]
 
 
+def test_guidance_says_where_a_relative_path_lands(tmp_path: Path, monkeypatch):
+    """A caller refused for a scratch file elsewhere can name it relatively:
+    it is taken from the sandbox's first entry, and admitted there."""
+    box = _Sandbox(tmp_path, monkeypatch)
+    state = box.state()
+
+    guidance = state.sandbox_guidance()
+
+    assert f"A relative path is taken from {box.work.resolve()}" in guidance
+    assert safe_path("scratch/try.asc", state) == box.work.resolve() / "scratch" / "try.asc"
+
+
 def test_guidance_says_when_the_environment_overrides_the_file(tmp_path: Path, monkeypatch):
     """With LTSPICE_MCP_ALLOWED_PATHS set, the variable replaces the file's list,
     so pointing the agent at the file would send it to edit a line that has no

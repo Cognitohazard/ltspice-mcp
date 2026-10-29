@@ -1400,12 +1400,9 @@ class TestSetComponentValueParameterSlots:
             *(f"SYMATTR {name} {text}" for name, text in attributes.items()),
         )
 
-        result = apply_one(
-            asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value}
-        )
+        apply_one(asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value})
 
         assert _attributes(asc, ref) == expected
-        assert "warnings" not in result
 
     async def test_an_edit_of_a_part_giving_a_key_twice_sets_both_and_says_so(
         self, asc_state: SessionState, work_dir: Path
@@ -1616,8 +1613,6 @@ class TestInstancePrefix:
     async def test_a_prefix_is_written_upper_case_and_names_the_element(
         self, asc_state: SessionState, asc_file: Path
     ):
-        from spicelib import AscEditor
-
         from ltspice_mcp.lib.schematic_ops import element_class
 
         result = apply_one(
@@ -1632,7 +1627,7 @@ class TestInstancePrefix:
         )
         assert result["changed"] == {"Prefix": {"was": None, "now": "X"}}
         assert b"SYMATTR Prefix X" in asc_file.read_bytes()  # noqa: ASYNC240
-        editor = AscEditor(str(asc_file))
+        editor = open_editor(asc_file, asc_state.symbols.for_sheet(asc_file))
         assert editor.get_component("R1").attributes["Prefix"] == "X"
         assert element_class(editor, "R1") == "X"
 
@@ -1668,8 +1663,6 @@ class TestInstancePrefix:
     async def test_a_part_placed_with_a_prefix_netlists_as_that_element(
         self, asc_state: SessionState, asc_file: Path
     ):
-        from spicelib import AscEditor
-
         from ltspice_mcp.lib.schematic_ops import element_class
 
         add_component(
@@ -1682,7 +1675,7 @@ class TestInstancePrefix:
             value="mysub",
             attributes={"Prefix": "X"},
         )
-        editor = AscEditor(str(asc_file))
+        editor = open_editor(asc_file, asc_state.symbols.for_sheet(asc_file))
         assert element_class(editor, "R9") == "X"
 
     @pytest.mark.parametrize(("prefix", "warned"), [(None, False), ("X", True)])
@@ -1691,15 +1684,19 @@ class TestInstancePrefix:
     ):
         """A resistor named X9 netlists as R§X9, no subcircuit, so a Value of
         Level.2 is a resistor's value; with its own Prefix X it is a
-        subcircuit call, and the complexity label is warned of."""
+        subcircuit call, and the sheet says the complexity label is no value."""
         attributes = {"Prefix": prefix} if prefix else None
         add_component(asc_state, asc_file, "X9", "res", 600, 600, attributes=attributes)
-        result = apply_one(
+        apply_one(
             asc_state,
             asc_file,
             {"op": "set_component_value", "reference": "X9", "value": "Level.2"},
         )
-        assert bool(result.get("warnings")) is warned
+        data = await run_verify_circuit(
+            asc_state, path=str(asc_file), checks=["quality"], render=False
+        )
+        said = [f for f in data["findings"] if f["rule_id"] == "subcircuit_value_slot"]
+        assert bool(said) is warned
 
 
 class TestReferences:
@@ -1794,8 +1791,7 @@ class TestAddNetLabelJoins:
     ):
         asc = _write_sheet(work_dir / "alias.asc", *_RAIL)
         add_net_label(asc_state, asc, "rail", x=96, y=196)
-        result = add_net_label(asc_state, asc, "vdd_alias", x=288, y=196)
-        assert "warnings" not in result
+        add_net_label(asc_state, asc, "vdd_alias", x=288, y=196)
         (found,) = _found(asc_state, asc, "net_with_two_names")
         assert found.facts == {"names": ("rail", "vdd_alias")}
         assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
@@ -1978,7 +1974,6 @@ class TestRemoveComponentNoFalseOrphans:
         alone = await apply_ops(asc_state, "orphans.asc", [{**remove, "reference": "R1"}])
         assert alone["commit_state"] == "committed"
         assert loose in alone["warnings"]
-        assert not [w for w in alone["warnings"] if w.startswith("op ")]
 
 
 @pytest.mark.asyncio
@@ -2283,7 +2278,9 @@ class TestRemoveWireAndNetLabelOps:
         )
         assert data["saved"] is True
         assert data["failed_count"] == 0
-        assert data["results"][0]["removed"] == "directive"
+        assert data["results"][0]["removed_texts"] == [
+            {"kind": "directive", "text": ".tran 1m", "x": 16, "y": 16}
+        ]
 
         read2 = _sheet_facts(asc_state, "rm_dir.asc")
         assert not any(".tran 1m" in d for d in read2["directives"])
@@ -2427,7 +2424,6 @@ class TestAddNetLabelOpValidation:
         assert results[4]["ok"] is False  # "b" on R1's net "a" would short — refused
         assert "short" in results[4]["error"].lower()
         assert results[5]["ok"] is True  # "c" names nothing else — a second name
-        assert "warnings" not in results[5]
         assert any(w["kind"] == "net_with_two_names" for w in res["validation_warnings"])
 
     async def test_a_label_on_nothing_is_the_sheets_to_say(self, asc_state: SessionState):
@@ -2789,7 +2785,6 @@ class TestWirePinsTJunction:
                 "wire": {"from": {"x": 96, "y": 96}, "to": {"x": 288, "y": 96}},
             }
         ]
-        assert "warnings" not in result
 
         def unordered(segments):
             return {tuple(sorted(seg)) for seg in segments}
@@ -2934,7 +2929,6 @@ class TestWirePinsTJunction:
             work_dir / "plain_cross.asc", *_RAIL, _res("R3", 240, 100), _res("R6", 240, 388)
         )
         result = wire_pins(asc_state, asc, "R3.2", "R6.1")
-        assert "warnings" not in result
         assert [f.points for f in _found(asc_state, asc, "unjoined_crossing")] == [((240, 196),)]
         assert "junctions" not in result
         assert await _net_pins(asc_state, asc, "R3.2") == {"R3.2", "R6.1"}
@@ -2965,7 +2959,7 @@ class TestWirePinsTJunction:
         self, asc_state: SessionState, work_dir: Path
     ):
         # R1.1 is on the rail, so passing through the stub's end joins the net
-        # the route already joins: allowed, and said.
+        # the route already joins: allowed, and listed as a junction it made.
         asc = _write_sheet(work_dir / "own_net.asc", *_RAIL, _res("R4", 400, 308))
         result = wire_pins(asc_state, asc, "R4.1", "R1.1", waypoints=[{"x": 96, "y": 260}])
         assert result["junctions"] == [
@@ -2976,7 +2970,6 @@ class TestWirePinsTJunction:
                 "wire": {"from": {"x": 192, "y": 196}, "to": {"x": 192, "y": 260}},
             }
         ]
-        assert any("(192,260)" in w and "LTspice joins them" in w for w in result["warnings"])
         assert await _net_pins(asc_state, asc, "R4.1") == {"R1.1", "R2.1", "R4.1"}
 
     async def test_passing_over_a_pin_already_on_the_net_is_reported(
@@ -2991,7 +2984,6 @@ class TestWirePinsTJunction:
         add_component(asc_state, asc, "R7", "res", 0, 244)
         result = wire_pins(asc_state, asc, "R2.1", "R7.1")
         assert {"x": 96, "y": 196, "via": "pin", "pin": "R1.1"} in result["junctions"]
-        assert any("R1.1" in w and "already wired" in w for w in result["warnings"])
 
     async def test_a_crossing_a_route_makes_reaches_the_edit_response(
         self, asc_state: SessionState, work_dir: Path
@@ -3010,7 +3002,6 @@ class TestWirePinsTJunction:
             ],
         )
         assert envelope["outcome"] == "complete"
-        assert [w for w in envelope["warnings"] if w.startswith("op ")] == []
         assert (
             "Wires cross at (320,52) without joining: neither ends there and nothing sits "
             "on the crossing"
@@ -3340,11 +3331,12 @@ class TestAddComponentRealSymbols:
 
 
 @pytest.mark.asyncio
-class TestDuplicateLabelAdvisory:
-    """The documented per-pin-label style repeats one identical duplicate-label
-    advisory on every add_net_label op of a net, so each op must report it."""
+class TestRepeatedLabels:
+    """The documented per-pin-label style labels a net several times under one
+    name. Each label ties its point to that net, as meant, and nothing is said
+    of it: a build that labelled every pin was once told so on each one."""
 
-    async def test_each_repeat_label_op_reports_the_duplicate(
+    async def test_labels_of_a_name_already_on_the_sheet_are_said_nothing_of(
         self, asc_state: SessionState, work_dir: Path
     ):
         # 'vin' is already on the sheet; ops 0 and 2 land on wires that carry
@@ -3373,10 +3365,7 @@ class TestDuplicateLabelAdvisory:
             ],
         )
         assert data["commit_state"] == "committed"
-        # Three more labels of a name the sheet already has: each ties its
-        # point to that net, as meant, and an op says nothing of it. A build
-        # that labelled every pin was told so on each one.
-        assert not [w for w in data["warnings"] if w.startswith("op ")], data["warnings"]
+        assert data["warnings"] == []
 
 
 @pytest.mark.asyncio
@@ -3461,11 +3450,6 @@ _CROSSED = (
 )
 
 
-def _op_said(data: dict) -> list[str]:
-    """What the ops of a batch said for themselves, apart from the sheet's findings."""
-    return [w for w in data["warnings"] if w.startswith("op ")]
-
-
 @pytest.mark.asyncio
 class TestJudgedOnTheFinishedSheet:
     """What an edit says of the sheet is judged once, on the sheet the batch
@@ -3504,7 +3488,6 @@ class TestJudgedOnTheFinishedSheet:
             "label_cross.asc",
             [{"op": "add_net_label", "net": "OUT", "x": 192, "y": 196}],
         )
-        assert _op_said(data) == []
         assert (
             "label 'OUT' at (192,196) sits where 2 wires cross, and joins 2 nets there "
             "that are apart without it"
@@ -3520,7 +3503,6 @@ class TestJudgedOnTheFinishedSheet:
         ):
             _write_sheet(work_dir / f"{name}.asc", *_CROSSED, _res("R3", 400, 244))
             data = await apply_ops(asc_state, f"{name}.asc", [op])
-            assert _op_said(data) == [], name
             said.append([w for w in data["warnings"] if "wires cross" in w])
         assert said[0] == said[1]
         (sentence,) = said[0]
@@ -3535,7 +3517,6 @@ class TestJudgedOnTheFinishedSheet:
             "drag_diag.asc",
             [{"op": "move", "dx": 0, "dy": 64, "references": ["R2"], "drag": True}],
         )
-        assert _op_said(data) == []
         assert (
             "Wire (96,196)->(288,260) is diagonal; LTspice joins anything on it, along its "
             "length as at its ends"
@@ -3555,7 +3536,6 @@ class TestJudgedOnTheFinishedSheet:
             "route_cross.asc",
             [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"}],
         )
-        assert _op_said(data) == []
         assert (
             "Wires cross at (192,196) without joining: neither ends there and nothing sits "
             "on the crossing"
@@ -3581,7 +3561,6 @@ class TestMoveOp:
             "texts": 0,
             "dragged_wire_ends": 1,
         }
-        assert "warnings" not in result
         assert "WIRE 96 196 352 196" in _records(asc)
         assert await _net_pins(asc_state, asc, "R2.1") == {"R1.1", "R2.1"}
 
@@ -3697,12 +3676,11 @@ class TestMoveOp:
         self, asc_state: SessionState, work_dir: Path
     ):
         asc = _write_sheet(work_dir / "mv_diag.asc", *_PAIR)
-        result = apply_one(
+        apply_one(
             asc_state,
             asc,
             {"op": "move", "dx": 0, "dy": 64, "references": ["R2"], "drag": True},
         )
-        assert "warnings" not in result
         assert [f.points for f in _found(asc_state, asc, "diagonal_wire")] == [
             ((96, 196), (288, 260))
         ]

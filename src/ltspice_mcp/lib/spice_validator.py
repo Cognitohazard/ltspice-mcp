@@ -143,7 +143,7 @@ def meas_name_refused(card: SpiceCard, simulator: str = "LTspice") -> Validation
     )
 
 
-def _leading_numeric_tokens(tokens: list[str]) -> list[float]:
+def leading_numeric_tokens(tokens: list[str]) -> list[float]:
     """Parse leading tokens as SPICE values, stopping at the first non-numeric.
 
     A directive's numeric arguments precede any trailing modifier keywords
@@ -171,7 +171,7 @@ def _finite_point_count(span: float) -> int | None:
 def _estimate_tran_points(line: str) -> int | None:
     # .tran <Tstep> <Tstop> [<Tstart> [<Tmax>]] — points ≈ (Tstop-Tstart)/Tstep.
     # A bare Tstop or Tstep=0 is auto-timestep: unknowable up front → None.
-    nums = _leading_numeric_tokens(line.split()[1:])
+    nums = leading_numeric_tokens(line.split()[1:])
     if len(nums) < 2:
         return None
     tstep, tstop = nums[0], nums[1]
@@ -187,7 +187,7 @@ def _estimate_ac_points(line: str) -> int | None:
     if len(tokens) < 5:
         return None
     kind = tokens[1].lower()
-    nums = _leading_numeric_tokens(tokens[2:5])
+    nums = leading_numeric_tokens(tokens[2:5])
     if len(nums) < 3:
         return None
     n, fstart, fstop = nums
@@ -210,7 +210,7 @@ def _estimate_dc_points(line: str) -> int | None:
     found = False
     i = 0
     while i + 4 <= len(tokens):
-        nums = _leading_numeric_tokens(tokens[i + 1 : i + 4])
+        nums = leading_numeric_tokens(tokens[i + 1 : i + 4])
         if len(nums) < 3:
             break
         start, stop, incr = nums

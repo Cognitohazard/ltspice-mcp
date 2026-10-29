@@ -14,8 +14,7 @@ from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_capture import CapturedInputs
 from ltspice_mcp.lib.result_cache import ResultCache, resident_size
-from tests.conftest import LIVENESS_S
-from tests.test_decoded_raw import header
+from tests.conftest import LIVENESS_S, header
 
 
 def raw(values, *, offset="0"):

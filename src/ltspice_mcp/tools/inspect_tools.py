@@ -2291,10 +2291,12 @@ async def _log_results_page(
     return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
 
 
-def _with_observations(page: dict[str, Any], source: services.AnalysisSource) -> dict[str, Any]:
-    """A results page carrying what its source says of its results, if anything."""
-    if source.observations:
-        page["data"]["observations"] = list(source.observations)
+def _with_observations(
+    page: dict[str, Any], observations: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """A results page carrying what its read says of its results, if anything."""
+    if observations:
+        page["data"]["observations"] = list(observations)
     return page
 
 
@@ -2323,13 +2325,15 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
             run, plot_index=query.plot_index or 0, dialect=query.dialect
         )
     if log_view:
-        return _with_observations(await _log_results_page(query, source, state, view), source)
+        return _with_observations(
+            await _log_results_page(query, source, state, view), source.observations
+        )
     raw = await services.load_raw(source, state)
     descriptor = raw.descriptor
     prefix = _check_prefix(query.prefix)
     traces = [
         trace
-        for trace in descriptor.traces
+        for trace in descriptor.signals()
         if prefix is None or matches_prefix(trace.name, prefix)
     ]
     rows: Sequence[dict[str, Any]]
@@ -2348,6 +2352,7 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
             raise _QueryError("no_table", "table view requires a plot with no sampled axis")
 
         rows = await asyncio.to_thread(_TableRows, raw, traces)
+    observations = await asyncio.to_thread(services.read_observations, source, raw)
     identity = {
         **query.model_dump(exclude={"cursor", "limit"}),
         "snapshot_id": descriptor.snapshot_id,
@@ -2372,7 +2377,7 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
     metadata = _page_meta(page, "results")
     metadata["collections"] = {query.view: dict(metadata)}
     return _with_observations(
-        {"data": data, "next_cursor": page["next_cursor"], "page": metadata}, source
+        {"data": data, "next_cursor": page["next_cursor"], "page": metadata}, observations
     )
 
 
@@ -2791,7 +2796,9 @@ async def _run_queries(
             )
             continue
         except LTSpiceMCPError as exc:
-            results.append(_failure_item(index, raw, {"code": "error", "message": str(exc)}))
+            # The error's own code (errors.py), as every other tool reports it.
+            code = exc.code
+            results.append(_failure_item(index, raw, {"code": code, "message": str(exc)}))
             continue
         except Exception as exc:
             # Last-resort isolation: an unexpected fault in one query must not

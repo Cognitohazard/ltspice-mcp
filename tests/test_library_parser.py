@@ -1,11 +1,9 @@
-"""Tests for library_parser: continuation merging, param extraction, model/subckt parsing."""
+"""Tests for library_parser: model and subcircuit parsing."""
 
 from pathlib import Path
 
 from ltspice_mcp.lib.library_parser import (
     ENCRYPTED_MODEL_TYPE,
-    _extract_parameters,
-    _merge_continuation_lines,
     parse_library_file,
 )
 
@@ -13,43 +11,6 @@ from ltspice_mcp.lib.library_parser import (
 def _model(index, name: str):
     """The entry named ``name``, case-insensitively, or ``None``."""
     return next((m for m in index.models if m.name_lower == name.lower()), None)
-
-
-class TestMergeContinuationLines:
-    def test_basic(self):
-        lines = [".MODEL Q1 NPN", "+ BF=200 IS=1e-14"]
-        result = _merge_continuation_lines(lines)
-        assert len(result) == 1
-        assert "BF=200" in result[0]
-        assert result[0].startswith(".MODEL")
-
-    def test_strips_comments(self):
-        lines = [
-            "* This is a comment",
-            ".MODEL Q1 NPN ; inline comment",
-            "+ BF=200 $ another comment",
-        ]
-        result = _merge_continuation_lines(lines)
-        assert len(result) == 1
-        assert "comment" not in result[0]
-        assert "BF=200" in result[0]
-
-    def test_empty_input(self):
-        assert _merge_continuation_lines([]) == []
-
-
-class TestExtractParameters:
-    def test_basic(self):
-        params = _extract_parameters("BF=200 IS=1e-14")
-        assert params == {"BF": "200", "IS": "1e-14"}
-
-    def test_limit(self):
-        text = "A=1 B=2 C=3 D=4 E=5 F=6 G=7"
-        params = _extract_parameters(text, limit=5)
-        assert len(params) == 5
-
-    def test_empty(self):
-        assert _extract_parameters("") == {}
 
 
 class TestParseLibraryFile:

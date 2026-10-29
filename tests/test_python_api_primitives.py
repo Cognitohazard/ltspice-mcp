@@ -18,15 +18,16 @@ from ltspice_mcp.state import SessionState
 from tests.conftest import (
     LTSPICE_TRAN_RC_VFINAL,
     SyncApi,
+    header,
     make_experiment_job,
     patch_stub_bootstrap,
     stage_recorded_fixture,
 )
-from tests.test_decoded_raw import header
 
 EXPECTED_ALL = [
     "Api",
     "RawResult",
+    "LogResult",
     "ApiError",
     "ApiCallError",
     "ApiSessionError",
@@ -96,12 +97,12 @@ EXPECTED_ALL = [
     "Observation",
 ]
 
-METRIC_NAMES = EXPECTED_ALL[9:35]
+METRIC_NAMES = EXPECTED_ALL[10:36]
 # Not a metric: a value reader, published because SPICE literals cross the
 # boundary in both directions and nothing else on the facade parses one.
-VALUE_HELPER_NAMES = EXPECTED_ALL[35:36]
-ALIAS_NAMES = EXPECTED_ALL[36:42]
-OUTPUT_TYPE_NAMES = EXPECTED_ALL[42:]
+VALUE_HELPER_NAMES = EXPECTED_ALL[36:37]
+ALIAS_NAMES = EXPECTED_ALL[37:43]
+OUTPUT_TYPE_NAMES = EXPECTED_ALL[43:]
 
 
 def test_raw_result_xor_step_slicing_and_mutation_isolation(

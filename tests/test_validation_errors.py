@@ -118,6 +118,23 @@ async def test_top_level_continue_alias_refers_to_analyze_results(config):
 
 
 @pytest.mark.asyncio
+async def test_a_top_level_field_this_tool_takes_nested_is_placed_first(config):
+    # run_experiments takes path inside each circuits entry; verify_circuit
+    # takes it at its top level, which alone read as "wrong tool".
+    state = _consolidated_state(config)
+    arguments = {"request_id": "path-referral", "path": "amp.cir"}
+
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("run_experiments", arguments)
+    )
+
+    assert result.is_error
+    message = tool_text(result)
+    assert "This tool takes 'path' as circuits[].path." in message
+    assert message.index("circuits[].path") < message.index("verify_circuit")
+
+
+@pytest.mark.asyncio
 async def test_nested_extra_field_has_no_cross_tool_referral(config):
     state = _consolidated_state(config)
     arguments = {

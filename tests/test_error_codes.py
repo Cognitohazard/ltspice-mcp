@@ -453,7 +453,6 @@ FROZEN_ERROR_CODES = (
     "duplicate_assignment_target",
     "duplicate_circuit_id",
     "duplicate_native_family",
-    "error",
     "execution_failed",
     "expected_sha256_required",
     "experiment_index_invalid",

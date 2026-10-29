@@ -194,7 +194,8 @@ compression changed its own `.meas` results. LTspice 26 stored every point of
 the same run. When a recipe reads a compressed transient's samples,
 `analyze_results` reports it in `observations` (`coarse_compressed_waveform`)
 if the widest gap between stored points spans more than 5% of the transient's
-duration. Add `.options plotwinsize=0` before measuring a small or slow signal.
+duration and is wider than the maximum step a job's deck gives `.tran`. Add
+`.options plotwinsize=0` before measuring a small or slow signal.
 
 ## Subcircuits
 
@@ -260,13 +261,13 @@ C1 out 0 {C}
   beside `other_raws.op`, the transient's operating point. `other_raw: "fra_1"`
   reads it by job and case in `analyze_results` (on a job source),
   `run_experiments`' attached `analyze` block, `plot_waveform`,
-  `inspect(kind="results")` and `api.load_raw`; its path reads it too. The
-  server does not split a stepped FRA run's results file into steps, because
-  it has not been checked against stepped FRA output. The results' `gain_N`
-  is the negative of the loop gain the `stability` recipe takes, so
-  `stability` on `-gain_1` gives the crossover and phase margin LTspice prints
-  at the end of the log. LTspice XVII 17.0 has no FRA and refuses the
-  analyzer.
+  `inspect(kind="results")` and `api.load_raw`; its path reads it too. A
+  stepped FRA run's results file holds each step's sweep in turn, and the
+  server reads it one step at a time, as it reads a stepped `.ac`. The
+  results' `gain_N` is the negative of the loop gain the `stability` recipe
+  takes, so `stability` on `-gain_1` gives the crossover and phase margin
+  LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
+  refuses the analyzer.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
   `\n`. On export, both builds write a comment of several lines as one netlist
   comment with the `\n` kept as it is, and split a directive at each `\n` into

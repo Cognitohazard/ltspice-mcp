@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 
@@ -17,18 +18,27 @@ from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     TraceKey,
+    parse_device_param,
     path_text,
     table_device_path,
     trace_key,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.log_parser import split_device_key
 from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.state import SessionState
 
 
 class RawResult:
-    """Public, detached-array view over one cached SPICE raw result."""
+    """Public, detached-array view over one cached SPICE raw result.
+
+    ``signals`` names its traces, ``steps`` holds one parameter dict a
+    ``.step`` iteration and ``step_count`` counts them. ``axis(step=k)``,
+    ``trace(name, step=k)`` and ``value(name, step=k)`` read samples,
+    ``table(step=k)`` a plot with no sampled axis, and ``compare(other)`` how
+    far another run's traces are from these. ``analysis_type``, ``dialect``,
+    ``descriptor``, ``plots``, ``plot_index``, ``source`` and ``observations``
+    say what was read.
+    """
 
     def __init__(
         self,
@@ -97,8 +107,8 @@ class RawResult:
         return axis
 
     def _validate_step(self, step: int) -> None:
-        if not self._raw.descriptor.steps:
-            raise ResultError("Step boundaries are unresolved; this plot supports inventory only.")
+        # Refused, with why, when the plot's steps cannot be told apart.
+        self._raw.get_steps()
         if step < 0 or step >= self._step_count:
             raise ResultError(
                 f"Step {step} out of range. Valid range: 0 to {self._step_count - 1}"
@@ -129,7 +139,8 @@ class RawResult:
     def observations(self) -> list[dict[str, Any]]:
         """What this result says of itself as it was read: ``partial_raw`` when
         it is a stopped case's kept raw, whose values end where the run was
-        stopped. Empty for a whole result."""
+        stopped, and ``coarse_compressed_waveform`` when waveform compression
+        left a transient with few points. Empty when neither applies."""
         return copy.deepcopy(list(self._observations))
 
     @property
@@ -152,7 +163,7 @@ class RawResult:
             raise ResultError("table() requires a plot with no sampled axis")
         self._validate_step(step)
         rows: list[dict[str, Any]] = []
-        for trace in self._raw.descriptor.traces:
+        for trace in self._raw.descriptor.signals():
             for index, sample in enumerate(self._raw.get_wave(trace.name, step=step)):
                 value: float | dict[str, float] = (
                     {"real": float(np.real(sample)), "imag": float(np.imag(sample))}
@@ -171,14 +182,16 @@ class RawResult:
         return rows
 
     def _keyed_traces(self) -> dict[TraceKey, int]:
-        """This plot's traces but its axis, by ``trace_key``, each to its index;
-        a key two traces share is left out, never guessed between."""
+        """This plot's signals but its axis, by ``trace_key``, each to its
+        index; a key two traces share is left out, never guessed between."""
         xvii = writes_xvii_names(self._raw)
-        axis = self._raw.descriptor.axis
+        descriptor = self._raw.descriptor
         keyed: dict[TraceKey, int] = {}
         shared: set[TraceKey] = set()
-        for index, trace in enumerate(self._raw.descriptor.traces):
-            if axis is not None and trace.name == axis.name:
+        for index, trace in enumerate(descriptor.traces):
+            if trace.name in descriptor.step_variables or (
+                descriptor.axis is not None and trace.name == descriptor.axis.name
+            ):
                 continue
             key = trace_key(trace.name, xvii=xvii)
             shared.update([key] if key in keyed else [])
@@ -302,7 +315,7 @@ class RawResult:
         """The trace ``signal`` names in this result, found as :meth:`trace`
         finds one."""
         return services.find_trace(
-            [trace.name for trace in self._raw.descriptor.traces],
+            list(self._signals),
             signal,
             xvii=writes_xvii_names(self._raw),
         )
@@ -355,6 +368,7 @@ async def load_raw_result(
         resolved = source.raw
 
     raw = await services.load_raw(source, state)
+    observations = await asyncio.to_thread(services.read_observations, source, raw)
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
     steps = [dict(step.parameters) for step in raw.descriptor.steps]
@@ -364,8 +378,29 @@ async def load_raw_result(
         dialect=raw.descriptor.dialect,
         step_count=step_count,
         steps=steps,
-        observations=source.observations,
+        observations=observations,
     )
+
+
+_V = TypeVar("_V")
+
+
+class LogResult(dict[str, _V]):
+    """A section of a log as the Python API returns it: a plain ``dict``, and
+    what the read says of it, as ``RawResult.observations`` says of a raw."""
+
+    def __init__(
+        self, data: Mapping[str, _V], *, observations: tuple[dict[str, Any], ...] = ()
+    ) -> None:
+        super().__init__(data)
+        self._observations = observations
+
+    @property
+    def observations(self) -> list[dict[str, Any]]:
+        """What this log says of itself as it was read: ``partial_raw`` when it
+        is the log of a stopped case whose raw was kept, whose results end
+        where the run was stopped. Empty for a whole run's log."""
+        return copy.deepcopy(list(self._observations))
 
 
 async def load_log_section(
@@ -376,10 +411,11 @@ async def load_log_section(
     run_index: int,
     case_id: str | None,
     log_path: str | Path | None,
-) -> Any:
+) -> tuple[Any, tuple[dict[str, Any], ...]]:
     """One section of a log, read through the shared log capture: of the log at
-    ``log_path``, or of one experiment case's. None when the log has no such
-    section."""
+    ``log_path``, or of one experiment case's, and what the read says of it
+    (``AnalysisSource.observations``). The section is None when the log has no
+    such section."""
     if log_path is not None:
         source = services.resolve_analysis_source(state, log_file=str(log_path))
     else:
@@ -392,23 +428,27 @@ async def load_log_section(
             raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
         source = services.source_for_run(context)
     logs = await services.load_logs(source, state)
-    return logs.value(name)
+    return logs.value(name), source.observations
 
 
-def measurements_of(section: Any) -> dict[str, Any]:
+def measurements_of(section: Any, observations: tuple[dict[str, Any], ...]) -> LogResult[Any]:
     """The ``measurements`` section as ``Api.measurements`` returns it."""
     if section is None:
         raise ResultError("The log holds no measurements")
-    return dict(section)
+    return LogResult(section, observations=observations)
 
 
-def device_op_points_of(section: Any) -> dict[str, dict[str, float | None]]:
+def device_op_points_of(
+    section: Any, observations: tuple[dict[str, Any], ...] = ()
+) -> LogResult[dict[str, float | None]]:
     """The ``device_op`` section by device and parameter, as
     ``Api.device_op_points`` returns it: a device inside a subcircuit by its
     path (``xa.xin.mtail``), however the build that wrote the table names it.
     A value the log printed as not a finite number is None."""
     by_device: dict[str, dict[str, float | None]] = {}
     for key, number in (section or {}).items():
-        device, param = split_device_key(key)
+        if (parsed := parse_device_param(key)) is None:
+            continue
+        device, param = parsed
         by_device.setdefault(path_text(table_device_path(device)), {})[param] = number
-    return by_device
+    return LogResult(by_device, observations=observations)

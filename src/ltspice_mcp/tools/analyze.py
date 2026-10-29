@@ -43,7 +43,7 @@ from ltspice_mcp.lib import (
     services,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED, PlotDescriptor
+from ltspice_mcp.lib.decoded_raw import PlotDescriptor
 from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -59,6 +59,7 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import (
     get_step_count,
+    may_hold_compressed_transient,
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import (
@@ -74,7 +75,10 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,
 )
-from ltspice_mcp.lib.result_observations import coarse_compressed_waveform
+from ltspice_mcp.lib.result_kinds import AC_SHAPED
+from ltspice_mcp.lib.result_observations import (
+    coarse_waveform_observation,
+)
 from ltspice_mcp.lib.signal_analysis import downsample_minmax
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -566,7 +570,13 @@ def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
     return coerce
 
 
-coerce_include_flags = include_flag_coercer(AnalyzeInclude)
+_include_flags = include_flag_coercer(AnalyzeInclude)
+
+
+def coerce_include_flags(value: Any) -> Any:
+    """The include reader, with null read as omitted, as the attached analyze
+    block reads it."""
+    return AnalyzeInclude() if value is None else _include_flags(value)
 
 
 class ContinueInput(StrictModel):
@@ -614,7 +624,7 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
         AnalyzeInclude,
         BeforeValidator(
             coerce_include_flags,
-            json_schema_input_type=AnalyzeInclude | list[str],
+            json_schema_input_type=AnalyzeInclude | list[str] | None,
         ),
     ] = Field(
         default_factory=AnalyzeInclude,
@@ -1123,10 +1133,10 @@ async def _resolve_sources(
                 )
                 continue
             try:
-                ctx = services.experiment_run_context(
+                ctx = services.case_run_context(
                     job,
+                    case,
                     state,
-                    case_id=case.case_id,
                     require_raw=False,
                     other_raw=source_input.other_raw,
                 )
@@ -1169,6 +1179,32 @@ _SOLVE_FAILURE_RUN_CAP = 10
 """How many run labels a relayed solve failure names before deferring to ``runs``."""
 
 
+async def _capture_ltspice_raws(
+    runs: list[_ResolvedRun],
+    state: SessionState,
+    captures: MutableMapping[_CaptureKey, ParsedArtifacts],
+    deadline: float | None,
+) -> None:
+    """Read the raw of each run that may be LTspice's compressed transient,
+    for a recipe that reads only the log. LTspice computes its own .meas
+    results from the waveform it stores, and XVII's move with compression
+    (``raw/compress_*``), so whether the run was left coarse is a fact about
+    those results too. Read before the log is, the capture serves both. A raw
+    whose header says it is no compressed transient is not read, and one that
+    is absent or cannot be read is not this recipe's failure."""
+    for run in runs:
+        raw = run.source.raw
+        dialect = run.source.explicit_dialect or run.source.dialect
+        if raw is None or dialect not in (None, "ltspice"):
+            continue
+        if run.source.plot_index == 0 and not await asyncio.to_thread(
+            may_hold_compressed_transient, raw
+        ):
+            continue
+        with contextlib.suppress(ResultError), services.analysis_deadline(deadline):
+            await _captured_source(run.source, state, captures, require_raw=True)
+
+
 def _coarse_waveform_observations(
     runs: list[_ResolvedRun], captures: Mapping[_CaptureKey, ParsedArtifacts]
 ) -> list[Observation]:
@@ -1185,36 +1221,11 @@ def _coarse_waveform_observations(
             continue
         with contextlib.suppress(ResultError):
             raw = services.select_raw(artifacts, run.source.plot_index)
-            if (found := coarse_compressed_waveform(raw)) is not None:
+            if (found := services.coarse_waveform(run.source, raw)) is not None:
                 coarse.append((run.label, found))
     if not coarse:
         return []
-    label, first = coarse[0]
-    span = first["span_s"]
-    gap = first["gap_to_s"] - first["gap_from_s"]
-    labels = [label for label, _ in coarse]
-    return [
-        Observation(
-            code="coarse_compressed_waveform",
-            kind="value",
-            detail=(
-                f"{len(labels)} LTspice transient run(s) read here were saved with "
-                f"waveform compression on and store few points. In {label}, "
-                f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
-                f"between two, from {first['gap_from_s']:.3g} s to "
-                f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
-                "read between stored points is interpolated across the gap, and "
-                "LTspice's own .meas results can differ from an uncompressed run's "
-                "too. '.options plotwinsize=0' stores every point."
-            ),
-            evidence={
-                "run": label,
-                **first,
-                "runs": labels[:_SOLVE_FAILURE_RUN_CAP],
-                "run_count": len(labels),
-            },
-        )
-    ]
+    return [Observation.of(coarse_waveform_observation(coarse, run_cap=_SOLVE_FAILURE_RUN_CAP))]
 
 
 def _relay_solve_failures(
@@ -1602,29 +1613,8 @@ async def _build_step_plan(
     elif steps.step is None:
         plan = [(0, step_values[0] if step_values else {})]
     else:
-        step_sel = steps.step
-        candidates = [
-            (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
-        ]
-        if not candidates:
-            raise ResultError(
-                f"step axis {step_sel.axis!r} is not present in the captured step metadata"
-            )
-        try:
-            target = float(format_spice_value(step_sel.value))
-            index, values = min(
-                candidates, key=lambda pair: abs(float(pair[1][step_sel.axis]) - target)
-            )
-        except (TypeError, ValueError):
-            index, values = next(
-                (
-                    pair
-                    for pair in candidates
-                    if str(pair[1][step_sel.axis]) == str(step_sel.value)
-                ),
-                candidates[0],
-            )
-        plan = [(index, values)]
+        index = steps.step.pick(step_values)
+        plan = [(index, step_values[index])]
     return _RawStepPlan(plan, raw.descriptor)
 
 
@@ -1774,7 +1764,7 @@ async def _waveform(
         point_limit = min(recipe.max_points, state.config.max_points_returned)
         for signal_input in recipe.signals:
             signal = services.resolve_signal(raw, signal_input)
-            axis = metrics.guarded_axis(raw, step, run.source.raw)
+            axis = metrics.guarded_axis(raw, step)
             wave = signal.wave(raw, step)
             if start is not None or end is not None:
                 lo, hi = metrics.window_indices(
@@ -3774,6 +3764,8 @@ async def _evaluate_unit(
             )
         )
 
+    if isinstance(recipe, MeasurementsRecipe):
+        await _capture_ltspice_raws(eligible_runs, state, captures, item_deadline)
     records, item_failures, pending = await _evaluate_item(
         recipe,
         eligible_runs,

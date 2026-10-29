@@ -1,0 +1,25 @@
+Circuit: * a 1 mV RC charge, compressed, with a maximum time step of a fifth of the run
+
+.OP point found by inspection.
+
+vavg: AVG(v(out))=0.000792774 FROM 0 TO 0.005
+vat: v(out)=0.000612062 at 0.001
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 128
+traniter = 128
+tranpoints = 65
+accept = 65
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

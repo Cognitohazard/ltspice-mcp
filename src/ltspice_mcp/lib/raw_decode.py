@@ -33,6 +33,7 @@ from ltspice_mcp.lib.raw_header import (
     leading_parameters,
     preflight_raw,
 )
+from ltspice_mcp.lib.result_kinds import STEPPED_SWEEP, Analysis, header_analysis, stepped_kind
 from ltspice_mcp.lib.store import parser_file_in
 
 _CHUNK_BYTES = 64 * 1024
@@ -40,17 +41,6 @@ _INPUT_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.lo
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
 _STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.I)
 _STEP_PARAMETER = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
-_SAMPLED_LT_PLOTS = {
-    "transient analysis",
-    "ac analysis",
-    "dc transfer characteristic",
-    "noise spectral density - (v/hz½ or a/hz½)",
-}
-#: The LTspice plots that, stepped, may open with the stepped parameters and
-#: then hold one point a step, with no step named in the log: a stepped .op
-#: always (``raw/step_op``), and a stepped .ac at one frequency, which then
-#: stores no frequency at all (``raw/step_ac_one_freq``). Both builds alike.
-_PARAMETERS_FIRST_LT_PLOTS = {"operating point", "ac analysis"}
 
 
 class RawDecodeError(ValueError):
@@ -308,7 +298,7 @@ def _prepared_plot(
 
 
 def _validated_step_starts(
-    header: RawPlotHeader, data: np.ndarray, row_limit: int
+    header: RawPlotHeader, analysis: Analysis, data: np.ndarray, row_limit: int
 ) -> list[int] | None:
     """Admit the native restart convention only for unambiguous ordered runs."""
     if not np.isfinite(data[0]):
@@ -320,8 +310,8 @@ def _validated_step_starts(
             raise RawLimitError("step_rows limit exceeded in RAW ranges")
         starts.extend(offset + int(index) for index in matches)
     ends = [*starts[1:], header.point_count]
-    direction = 0 if header.plot_name.lower() == "dc transfer characteristic" else 1
-    time_signs = header.plot_name.lower() == "transient analysis"
+    direction = 0 if analysis == "dc" else 1
+    time_signs = analysis == "transient"
     for start, end in zip(starts, ends, strict=True):
         # A singleton cannot distinguish a real step from a repeated start
         # coordinate. Refuse instead of assigning the plateau to a log row.
@@ -375,39 +365,25 @@ def _step_facts(
             {"step_index": 0, "offset": 0, "length": header.point_count, "log_row": None}
         ],
     }
-    if "stepped" not in {flag.lower() for flag in header.flags}:
+    if not header.stepped:
         return result
     result["step_status"] = "unresolved"
     result["step_ranges"] = None
-    plot_name = header.plot_name.lower()
-    parameters = leading_parameters(header)
-    if header.dialect == "ltspice" and plot_name in _PARAMETERS_FIRST_LT_PLOTS and parameters:
-        # See _PARAMETERS_FIRST_LT_PLOTS: the raw's own step values are the record.
+    kind = stepped_kind(header)
+    if kind is not None and kind.stepping == "point_a_step":
+        # The raw's own step values are the record (result_kinds).
         result["step_status"] = "matched"
         result["step_ranges"] = [
             {"step_index": index, "offset": index, "length": 1, "log_row": None}
             for index in range(header.point_count)
         ]
-        result["step_parameters"] = parameters
+        result["step_parameters"] = leading_parameters(header)
         return result
-    if not has_axis or plot_name not in _SAMPLED_LT_PLOTS:
+    if kind is not STEPPED_SWEEP or not has_axis:
         if header.point_count == 1 and log["status"] == "parsed" and len(log["rows"]) > 1:
             result["step_status"] = "mismatch"
         return result
-    if header.dialect != "ltspice":
-        return result
-    first = header.variables[0]
-    if plot_name == "transient analysis":
-        expected_axis = "time"
-    elif plot_name == "dc transfer characteristic":
-        expected_axis = None
-    else:
-        expected_axis = "frequency"
-    if expected_axis is not None and (
-        first.name.lower() != expected_axis or first.declared_type.lower() != expected_axis
-    ):
-        return result
-    starts = _validated_step_starts(header, data, row_limit)
+    starts = _validated_step_starts(header, header_analysis(header), data, row_limit)
     if starts is None or log["status"] != "parsed" or not log["rows"] or plot_count != 1:
         return result
     for row in log["rows"]:

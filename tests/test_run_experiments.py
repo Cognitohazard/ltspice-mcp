@@ -154,27 +154,6 @@ def test_wait_caps_are_held_not_advertised_as_a_maximum():
     assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
 
-@pytest.mark.asyncio
-async def test_a_dwell_past_its_cap_is_held_and_names_the_continuation(
-    state_with_sim: SessionState,
-    work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    submissions: list[str] = []
-    fake_simulator(monkeypatch, submissions)
-    deck = _deck(work_dir / "dwell.cir")
-
-    data = _assert_schema(
-        await handle_run_experiments(_args(deck, "dwell-past-cap", wait_s=900), state_with_sim)
-    )
-
-    assert "error" not in data, data.get("error")
-    assert len(submissions) == 1
-    (note,) = [w for w in data["warnings"] if "execution.wait_s" in w]
-    assert "execution.wait_s=900s" in note and "120s was used" in note
-    assert "jobs(action='wait', timeout_s<=300)" in note
-
-
 def test_variation_schema_keeps_discriminated_union_through_defs():
     """Schemas keep $defs instead of inlining: the variation discriminated
     union must stay fully resolvable through local refs, so a client sees the
@@ -286,6 +265,16 @@ def _args(
     }
     payload.update(overrides)
     return RunExperimentsInput.model_validate(payload)
+
+
+def _export_snapshots(data: dict, work_dir: Path) -> list[Path]:
+    """The schematic exports in the store that a receipt's manifest names."""
+    exports = Store(work_dir).exports_dir
+    return [
+        Path(entry["path"])
+        for entry in data["source"][0]["manifest"]
+        if Path(entry["path"]).parent == exports
+    ]
 
 
 def _observation_code(data: dict, code: str) -> dict | None:
@@ -450,6 +439,44 @@ class TestReceiptThenDwell:
             log.write_text("ok")
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         assert await job_done(state_with_sim, state_with_sim.all_jobs[data["job_id"]])
+
+    async def test_a_held_dwell_says_the_job_runs_on_only_while_it_does(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A wait_s above the cap is served at the cap and said so. That the job
+        runs on is the receipt's hint, said of the receipt returned, so a job
+        that finished inside the dwell is not said to run on."""
+        fake_simulator(monkeypatch)
+        finished = _assert_schema(
+            await handle_run_experiments(
+                _args(_deck(work_dir / "quick.cir"), "held-quick", wait_s=300), state_with_sim
+            )
+        )
+        assert finished["outcome"] == "complete", finished
+        assert (
+            "execution.wait_s=300s is above its cap of 120s; 120s was used."
+            in (finished["warnings"])
+        )
+        assert not any("running" in text for text in [*finished["warnings"], finished["hint"]])
+
+        held: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=held)
+        monkeypatch.setattr(experiments_mod, "SUBMISSION_DWELL_CAP_S", 0.0)
+        running = _assert_schema(
+            await handle_run_experiments(
+                _args(_deck(work_dir / "slow.cir"), "held-slow", wait_s=300), state_with_sim
+            )
+        )
+        assert running["outcome"] == "in_progress", running
+        assert "execution.wait_s=300s is above its cap of 0s; 0s was used." in running["warnings"]
+        assert "still running; use jobs(wait)" in running["hint"], running
+        await await_until(lambda: bool(held))
+        for finish in held:
+            finish()
+        assert await job_done(state_with_sim, state_with_sim.all_jobs[running["job_id"]])
 
     async def test_failure_after_submit_reports_committed_with_handles(
         self,
@@ -1478,7 +1505,7 @@ class TestReplayRejectsChangedSources:
         """The .asc is the file the author edits, and nothing else moves with it.
 
         A schematic runs through an exported netlist, and a replay skips the
-        export — so the netlist the manifest recorded is still on disk, still
+        export — so the snapshot the manifest recorded is still on disk, still
         byte-identical, and still describes the circuit as it was. Checking only
         that export is checking the one file an edit cannot reach.
         """
@@ -1488,7 +1515,7 @@ class TestReplayRejectsChangedSources:
         _asc_exporter(state_with_sim)
         args = _args(schematic, "edited-schematic", provenance=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        exported = work_dir / "amp.net"
+        (exported,) = _export_snapshots(first, work_dir)
         exported_bytes = exported.read_bytes()
         _schematic(schematic, "2k")
 
@@ -1629,21 +1656,24 @@ def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Pat
 class TestSchematicExportsLiveInTheStore:
     """The netlist a schematic runs as is kept in the store, not in the author's folder.
 
-    LTspice writes ``<name>.net`` beside the schematic; that one is its choice.
-    What the server kept besides — a ``.ltspice-mcp/exports/`` snapshot, or a
-    ``<name>.run-<hash>.net`` sibling whenever the export had a relative
-    include — is bookkeeping, and lives beside the job records that name it.
+    LTspice writes ``<name>.net`` beside the sheet it exports, so a run exports
+    a copy of the sheet staged in the store, and the snapshot it runs lives
+    beside the job records that name it. Nothing is written beside the sheet.
     """
 
-    async def test_a_schematic_run_leaves_only_ltspices_own_export_beside_it(
+    async def test_a_schematic_run_writes_nothing_beside_it(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        """A hand-written netlist of the sheet's name beside it keeps its bytes."""
         fake_simulator(monkeypatch)
         schematic = _schematic(project_dir / "amp.asc", "1k")
+        hand_written = project_dir / "amp.net"
+        by_hand = b"* written by hand\nV1 in 0 1\nR1 in 0 5k\n.op\n.end\n"
+        hand_written.write_bytes(by_hand)
         _asc_exporter(state_with_sim)
 
         data = _assert_schema(
@@ -1654,12 +1684,8 @@ class TestSchematicExportsLiveInTheStore:
 
         assert data["outcome"] == "complete"
         assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "amp.net"]  # noqa: ASYNC240
-        exports = Store(work_dir).exports_dir
-        snapshots = [
-            Path(entry["path"])
-            for entry in data["source"][0]["manifest"]
-            if Path(entry["path"]).parent == exports
-        ]
+        assert hand_written.read_bytes() == by_hand
+        snapshots = _export_snapshots(data, work_dir)
         assert [p.name.split(".run-")[0] for p in snapshots] == ["amp"]
         assert snapshots[0].is_file()
 
@@ -1686,7 +1712,6 @@ class TestSchematicExportsLiveInTheStore:
         assert data["outcome"] == "complete", data
         assert sorted(p.name for p in project_dir.iterdir()) == [  # noqa: ASYNC240
             "amp.asc",
-            "amp.net",
             "models.inc",
         ]
         (entry,) = [e for e in data["source"][0]["manifest"] if e["path"] == str(models)]
@@ -1739,6 +1764,35 @@ class TestSchematicExportsLiveInTheStore:
 
         assert data["outcome"] == "complete", data
         assert not Store(work_dir).root.is_relative_to(project_dir)
+
+
+@pytest.mark.asyncio
+class TestAdmission:
+    async def test_a_file_that_is_no_circuit_is_refused_before_a_job_exists(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The request is the caller's to fix, so it is refused whole, naming
+        what a circuit is, rather than made into a job whose every case fails."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        notes = _deck(work_dir / "amp.txt", "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(notes, "not-a-circuit"), state_with_sim)
+        )
+
+        assert data["outcome"] == "failed", data
+        error = data["error"]
+        assert (error["code"], error["stage"], error["commit_state"]) == (
+            "unsupported_file",
+            "resolution",
+            "not_started",
+        )
+        assert "amp.txt" in error["message"] and ".asc" in error["message"]
+        assert submissions == []
 
 
 @pytest.mark.asyncio

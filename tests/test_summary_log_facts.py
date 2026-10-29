@@ -4,13 +4,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from spicelib import RawRead
 
 from ltspice_mcp.lib import log_parser
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
+from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR, LTSPICE_TRAN_RC_VFINAL, make_raw_mock
 from tests.test_log_decode import fourier_text
 
@@ -51,20 +51,17 @@ def captured_log_facts(
 def _raw(*, operating=False, values=None, steps=None):
     values = np.array([1.0, 1.0, 1.0]) if values is None else np.array(values)
     axis = np.arange(len(values), dtype=float)
-    raw = make_raw_mock(
+    return make_raw_mock(
         ["V(out)"] if operating else ["time", "V(out)"],
         axis,
         {"time": axis, "V(out)": values},
         plotname="Operating Point" if operating else "Transient Analysis",
         steps=steps,
     )
-    if operating:
-        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
-    return raw
 
 
 def test_recorded_summary_uses_facts_after_all_files_removed(tmp_path, monkeypatch):
-    raw = RawRead(str(FIXTURES_DIR / "ltspice_tran_rc.raw"), dialect="ltspice")
+    raw = rec.decode_file(FIXTURES_DIR / "ltspice_tran_rc.raw", tmp_path).raw
     source = tmp_path / "recorded.log"
     source.write_bytes((FIXTURES_DIR / "ltspice_tran_rc.log").read_bytes())
     log = captured_log_facts(tmp_path, source)
@@ -93,7 +90,7 @@ def test_recorded_summary_uses_facts_after_all_files_removed(tmp_path, monkeypat
 
 @pytest.mark.parametrize("name", ["ltspice_ac_rc", "ltspice_dc_div", "op_extreme_node"])
 def test_recorded_summary_log_facts_have_no_invented_results(tmp_path, name):
-    raw = RawRead(str(FIXTURES_DIR / f"{name}.raw"), dialect="ltspice")
+    raw = rec.decode_file(FIXTURES_DIR / f"{name}.raw", tmp_path).raw
     source = FIXTURES_DIR / f"{name}.log"
     log = captured_log_facts(tmp_path, source if source.exists() else None)
     summary = build_simulation_summary(raw, log)

@@ -10,7 +10,7 @@ import sys
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.api import _reference
+from ltspice_mcp.api import RawResult, _reference
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib.model_fields import field_name
@@ -64,6 +64,20 @@ class TestIndex:
 
     def test_index_says_how_to_drill_in(self):
         assert "api.reference(" in _reference.reference()
+
+    def test_index_names_what_load_raw_returns_and_how_to_read_it(self):
+        text = _reference.reference()
+        for member in ("RawResult", "r.signals", "r.steps", "r.trace(", "r.axis("):
+            assert member in text, member
+
+
+def test_raw_result_names_every_public_member_in_its_docstring():
+    # help(r) is where a caller holding one looks first; a member added
+    # later must be named there too.
+    doc = RawResult.__doc__ or ""
+    members = [name for name in vars(RawResult) if not name.startswith("_")]
+    assert members
+    assert [name for name in members if f"``{name}" not in doc] == []
 
 
 class TestPerOperationTree:

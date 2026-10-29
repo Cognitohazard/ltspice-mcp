@@ -25,6 +25,7 @@ from ltspice_mcp.api._exceptions import (
     ApiValidationError,
 )
 from ltspice_mcp.api._primitives import (
+    LogResult,
     RawResult,
     device_op_points_of,
     load_log_section,
@@ -1179,6 +1180,8 @@ class ApiMethodsMixin(ABC):
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
+        The :class:`RawResult` it returns lists its members in its docstring
+        (``help(r)``).
         ``other_raw`` reads the case's other raw of that kind, as its run row's
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
         response analysis's results, ``"op"`` a transient's operating point."""
@@ -1212,10 +1215,12 @@ class ApiMethodsMixin(ABC):
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Return detached ``.meas`` facts from a log or one experiment case."""
-        section = self._log_section("measurements", log_path, job_id, run_index, case_id)
-        return measurements_of(section)
+    ) -> LogResult[Any]:
+        """Return detached ``.meas`` facts from a log or one experiment case,
+        with what the read says of them in ``.observations``."""
+        return measurements_of(
+            *self._log_section("measurements", log_path, job_id, run_index, case_id)
+        )
 
     def device_op_points(
         self,
@@ -1224,9 +1229,10 @@ class ApiMethodsMixin(ABC):
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
-    ) -> dict[str, dict[str, float | None]]:
+    ) -> LogResult[dict[str, float | None]]:
         """Return the semiconductor operating points of a log or one experiment
-        case, by device and parameter: ``ops["m1"]["gm"]``.
+        case, by device and parameter: ``ops["m1"]["gm"]``, with what the read
+        says of them in ``ops.observations``.
 
         LTspice prints them in the log of an ``.op`` run, to three significant
         digits whatever ``.options numdgt`` says: LTspice 26 under ``.options
@@ -1236,8 +1242,9 @@ class ApiMethodsMixin(ABC):
         does: ngspice's are traces of its raw, read with
         ``load_raw(...).value("@m1[gm]")``.
         """
-        section = self._log_section("device_op", log_path, job_id, run_index, case_id)
-        return device_op_points_of(section)
+        return device_op_points_of(
+            *self._log_section("device_op", log_path, job_id, run_index, case_id)
+        )
 
     def _log_section(
         self,
@@ -1246,7 +1253,7 @@ class ApiMethodsMixin(ABC):
         job_id: str | None,
         run_index: int,
         case_id: str | None,
-    ) -> Any:
+    ) -> tuple[Any, tuple[dict[str, Any], ...]]:
         self._check_process_and_thread()
         _one_source("log_path", log_path, job_id, run_index, case_id)
         return self._marshal(

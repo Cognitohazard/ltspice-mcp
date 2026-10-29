@@ -18,17 +18,22 @@ here with what LTspice's reader says:
   LTspice's reader, and as plain time from the server's;
 - a transient saved from a later start comes back starting at zero from
   LTspice's reader, and at its real start from the server's;
-- a file of one point (an operating point, a transfer function) is refused by
-  LTspice's reader, and read by the server's;
+- a file of one point (an operating point, a transfer function, a noise
+  analysis at one frequency) is refused by LTspice's reader, and read by the
+  server's;
 - a file that holds only its axis, a run whose ``.save`` named nothing it
   stored, is refused by LTspice's reader, which reads signals by name, and
   read by the server's;
-- a stepped operating point, and a stepped AC analysis at one frequency, is
+- a stepped operating point (over a parameter or over temperature), a stepped
+  transfer function, and a stepped AC or noise analysis at one frequency, is
   one sweep to LTspice's reader, along the stepped parameter, and a point a
   step to the server's;
 - a run stopped part way is read as far as its header says by LTspice's
   reader, and refused by the server's decoder when the header and the samples
   disagree.
+
+One kind of file both refuse: the ``.op.raw`` of a stepped run as LTspice 26
+writes it, one point with nothing that says which step's it is.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from ltspice_mcp.errors import NoAxisError
+from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.raw_header import RawHeaderError
 from ltspice_mcp.lib.raw_parser import cut_partial_raw
 from tests import _ltspice_recorded as rec
@@ -66,13 +71,38 @@ SUBJECTS: list[Subject] = [
 ]
 READ = [subject for subject in SUBJECTS if "read" in reader_reply(*subject)]
 REFUSED = [subject for subject in SUBJECTS if "refused" in reader_reply(*subject)]
-#: Files of one point: no axis to read along.
-ONE_POINT = {"op", "op_one_subckt", "op_save_device", "op_subckt", "tf", "tran_op_raw.op"}
+#: Files of one point: no axis to read along, or an axis of one point (a
+#: noise analysis at one frequency). A stepped run's ``.op.raw`` is one such:
+#: it holds one point, however many steps the run took.
+ONE_POINT = {
+    "noise_one_freq",
+    "op",
+    "op_one_subckt",
+    "op_save_device",
+    "op_subckt",
+    "step_ac_op_raw.op",
+    "step_tran_op_raw.op",
+    "tf",
+    "tran_op_raw.op",
+}
+#: Files of one point on an axis, which the server keeps.
+ONE_POINT_ON_AN_AXIS = {"noise_one_freq"}
+#: A stepped run's ``.op.raw`` as LTspice 26 writes it: one point, and no
+#: variable that says which step it is (XVII's opens with the step's ``param``).
+#: Both readers refuse it.
+STEP_UNSAID = {("ltspice26", "step_tran_op_raw.op"), ("ltspice26", "step_ac_op_raw.op")}
 #: Files of the axis alone: LTspice 26 stored nothing a ``.save`` named.
 AXIS_ONLY = {("ltspice26", "save_subckt_names_no_x")}
 #: Stepped runs stored a point a step, the stepped parameter first, and the
 #: analysis LTspice's reader names each.
-PARAMETERS_FIRST = {"step_op": "Operating Point", "step_ac_one_freq": "AC Analysis"}
+PARAMETERS_FIRST = {
+    "step_op": "Operating Point",
+    "step_temp_op": "Operating Point",
+    "step_ac_one_freq": "AC Analysis",
+    "step_ac_one_freq_numdgt7": "AC Analysis",
+    "step_noise_one_freq": "Noise Spectral Density - (V/Hz½ or A/Hz½)",
+    "tf_step": "Transfer Function",
+}
 STOPPED_PART_WAY = "tran_killed"
 
 
@@ -205,7 +235,8 @@ def test_only_xvii_marks_time_points_by_their_sign_and_ltspices_reader_leaves_th
     marked = {
         (written_by, name)
         for reader, written_by, name in READ
-        if any(
+        if reader_reply(reader, written_by, name)["info"]["x_name"].lower() == "time"
+        and any(
             float(x) < 0
             for block in blocks(reader_reply(reader, written_by, name)["read"])
             for x in block["data"]["x"]
@@ -214,6 +245,7 @@ def test_only_xvii_marks_time_points_by_their_sign_and_ltspices_reader_leaves_th
     assert marked == {
         ("ltspice17", "compress_1mv"),
         ("ltspice17", "compress_1mv_maxstep"),
+        ("ltspice17", "compress_1mv_wide_maxstep"),
         ("ltspice17", "compress_1v"),
         ("ltspice17", "tran"),
         ("ltspice17", "tran_double"),
@@ -240,7 +272,8 @@ def test_a_transient_saved_from_a_later_start_begins_at_zero_for_ltspices_reader
 
 
 @pytest.mark.parametrize(
-    ("reader", "written_by", "name"), [s for s in REFUSED if (s[1], s[2]) not in AXIS_ONLY]
+    ("reader", "written_by", "name"),
+    [s for s in REFUSED if (s[1], s[2]) not in AXIS_ONLY | STEP_UNSAID],
 )
 def test_ltspices_reader_refuses_a_file_of_one_point_which_the_server_reads(
     reader: str, written_by: str, name: str, tmp_path: Path
@@ -248,11 +281,33 @@ def test_ltspices_reader_refuses_a_file_of_one_point_which_the_server_reads(
     assert reader_reply(reader, written_by, name) == {"refused": "failed to open raw file"}
     assert name in ONE_POINT
     raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
-    with pytest.raises(NoAxisError):
-        raw.get_axis(0)
+    if name in ONE_POINT_ON_AN_AXIS:
+        assert len(raw.get_axis(0)) == 1
+    else:
+        with pytest.raises(NoAxisError):
+            raw.get_axis(0)
     assert [len(raw.get_wave(trace, 0)) for trace in raw.get_trace_names()] == [1] * len(
         raw.get_trace_names()
     )
+
+
+@pytest.mark.parametrize(
+    ("reader", "written_by", "name"), [s for s in REFUSED if (s[1], s[2]) in STEP_UNSAID]
+)
+def test_a_stepped_runs_op_raw_that_does_not_say_its_step_is_refused_by_both(
+    reader: str, written_by: str, name: str, tmp_path: Path
+):
+    """The run took three steps and the file holds one point, with nothing
+    that says which step's it is, so neither reader gives its values."""
+    assert reader_reply(reader, written_by, name) == {"refused": "failed to open raw file"}
+    assert declared_points(written_by, f"raw/{name}") == 1
+    assert "stepped" in header_fields(written_by, f"raw/{name}")["Flags"][0].split()
+    raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
+    # The refusal says why, and where an operating point a step is read.
+    for read in (lambda: raw.get_wave(raw.get_trace_names()[0], 0), raw.get_steps):
+        with pytest.raises(ResultError, match="does not say which step") as refused:
+            read()
+        assert "run .op under the same .step" in str(refused.value)
 
 
 def test_every_file_of_one_point_or_of_the_axis_alone_is_refused_and_no_other():
@@ -287,15 +342,18 @@ def test_a_run_stored_a_point_a_step_is_one_sweep_to_ltspices_reader_and_steps_h
     reader: str, written_by: str, name: str, tmp_path: Path
 ):
     """One point is stored a step, with the stepped parameter as the first
-    variable: a stepped operating point, and a stepped AC analysis at one
+    variable: a stepped operating point (over a parameter or a temperature), a
+    stepped transfer function, and a stepped AC or noise analysis at one
     frequency, which stores no frequency. LTspice's reader calls that an
     unstepped run with the parameter for its axis; the server's keeps the
-    steps, and the values are the same."""
+    steps, with the parameter as their values and not a signal, and the values
+    are the same."""
     said = reader_reply(reader, written_by, name)
     info, read = said["info"], said["read"]
     assert (read["stepped"], read["analysis"]) == ("false", PARAMETERS_FIRST[name])
     raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
-    stepped_parameter, *traces = raw.get_trace_names()
+    (stepped_parameter,) = raw.descriptor.step_variables
+    traces = raw.get_trace_names()
     assert (info["x_name"], info["signals"]) == (stepped_parameter, traces)
     steps = raw.get_steps()
     assert len(steps) == int(read["n_points"]) == 3

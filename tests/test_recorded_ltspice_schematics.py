@@ -24,6 +24,7 @@ from ltspice_mcp.lib.connectivity import (
     same_instance_dropped_segments,
     signature,
 )
+from ltspice_mcp.lib.deck_prep import stage_sheet
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
 from ltspice_mcp.lib.export_nets import exported_pin_nodes
@@ -1310,8 +1311,16 @@ class TestExportedNames:
         monkeypatch.setattr(schematic_ops, "search_file_in_containers", search)
         editor = _editor(sheet)
         assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
-        # A search walks every folder it is given, so the block the sheet
-        # places three times is searched for once.
+        # Its symbol gives Prefix X, for which LTspice reads no sheet.
+        assert searched == []
+        # A block that gives none is looked for. A search walks every folder
+        # it is given, so the block the sheet places three times is searched
+        # for once.
+        symbol = sheet.parent / "probe4.asy"
+        symbol.write_text(
+            "".join(line for line in symbol.read_text().splitlines(True) if "Prefix" not in line)
+        )
+        _editor(sheet)
         assert searched == ["probe4.asc"]
 
     async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
@@ -1462,3 +1471,59 @@ def test_sheet_directives_reach_the_netlist_as_the_cards_staging_reads(build: st
         ("mylib.lib", None),
         ("corners.lib", "tt"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# A hierarchical block: its symbol and its own sheet beside the top sheet
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_block_symbol_is_a_hierarchy_only_without_a_prefix(build: str):
+    """Both builds export the block whose symbol carries no attribute from the
+    sheet of its name beside it, as a .subckt, and run it. The same block with
+    SYMATTR Prefix X is a call to the subcircuit its Value names, here none:
+    no .subckt is exported and the run stops on the undefined call."""
+    plain = rec.export_text(build, "export/hier_plain_top")
+    assert ".subckt hier_plain IN OUT" in plain and ".ends hier_plain" in plain
+    assert rec.export_instances(build, "export/hier_plain_top")["xx1"].model == "hier_plain"
+    assert ".subckt" not in rec.export_text(build, "export/hier_top")
+    assert ".subckt hier_plain" in rec.export_text(build, "export/hier_plain_top_run")
+
+
+def test_a_runs_staged_copy_carries_the_blocks_own_sheet(tmp_path: Path):
+    """A run exports a copy of the sheet staged in the store, so the copy
+    needs the block's sheet beside its symbol, as LTspice reads it above. A
+    sheet with no symbol of its name is no block's and is left, and the top
+    sheet's own copy is the one given, even beside a symbol of its name."""
+    project = tmp_path / "project"
+    project.mkdir()
+    for name in ("hier_plain_top.asc", "hier_plain.asc", "hier_plain.asy", "hier_amp.asc"):
+        (project / name).write_bytes((INPUTS / "export" / name).read_bytes())
+    (project / "hier_plain_top.asy").write_bytes((INPUTS / "export/hier_plain.asy").read_bytes())
+
+    staged, note = stage_sheet(project / "hier_plain_top.asc", tmp_path / "staged", b"edited")
+
+    assert note is None
+    assert sorted(path.name for path in staged.parent.iterdir()) == [
+        "hier_plain.asc",
+        "hier_plain.asy",
+        "hier_plain_top.asc",
+        "hier_plain_top.asy",
+    ]
+    assert staged.read_bytes() == b"edited"
+
+
+@pytest.mark.parametrize(
+    ("case_id", "inside"),
+    [("export/hier_plain_top", ["R1", "R2"]), ("export/hier_top", None)],
+)
+def test_the_editor_opens_a_blocks_sheet_where_ltspice_reads_it(
+    case_id: str, inside: list[str] | None, tmp_path: Path
+):
+    """The block whose symbol gives no Prefix is read from its own sheet, and
+    the one whose symbol gives Prefix X is not, though its sheet is beside it,
+    as both builds export them."""
+    editor = _editor(rec.stage_sheet("ltspice26", case_id, tmp_path))
+    block = editor.get_subcircuit("X1")
+    assert (None if block is None else sorted(block.get_components())) == inside

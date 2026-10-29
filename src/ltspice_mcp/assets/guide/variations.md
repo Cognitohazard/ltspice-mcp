@@ -36,6 +36,11 @@ combine as a cartesian product.
 
 runs two cases (1k/1.8 and 10k/3.3), where `"grid"` would run four.
 
+To hold a value fixed in every case, give it a list of one value in an entry
+of its own: `{"kind": "assign", "assign": {"SU": [0], "TLON": ["1n"]}}`
+multiplies the grid by one, and every case records the value in its
+assignments.
+
 ## Monte Carlo: `random` rules
 
 A `random` variation draws values without editing the deck. Its `rules` list

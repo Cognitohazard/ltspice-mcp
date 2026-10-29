@@ -191,6 +191,22 @@ def refuse_another_request(
         raise payload_conflict(request_id, index.get("job_id"))
 
 
+def refuse_inconsistent_record(
+    job: ExperimentJob, request_id: str, fingerprint: str, canonicalizer_version: int
+) -> None:
+    """Refuse when ``job``, the record the request index names, is not this
+    request's record: the two disagree about what the request was. Both the
+    tool's lookup before the request gate and the gate itself ask it."""
+    if (
+        job.request_id != request_id
+        or job.fingerprint != fingerprint
+        or job.canonicalizer_version != canonicalizer_version
+    ):
+        raise IdempotencyConflictError(
+            f"request_id {request_id!r} points to an inconsistent coordinator record"
+        )
+
+
 class RequestGateBusy(SimulationError):
     """Another submission held this request id's gate for the whole wait.
 
@@ -864,14 +880,9 @@ class ExperimentRunner(RunnerBase):
         if existing is None:
             # The index names a record that is gone; this submission recreates it.
             return _IndexLookup(existing=None, dangling=True)
-        if (
-            existing.request_id != request.request_id
-            or existing.fingerprint != request.fingerprint
-            or existing.canonicalizer_version != request.canonicalizer_version
-        ):
-            raise IdempotencyConflictError(
-                f"request_id {request.request_id!r} points to an inconsistent coordinator record"
-            )
+        refuse_inconsistent_record(
+            existing, request.request_id, request.fingerprint, request.canonicalizer_version
+        )
         # The cheap pre-staging replay check the caller may have run cannot see
         # a record written after it looked, so the same drift is re-checked
         # here, under the gate.

@@ -56,14 +56,14 @@ def route(
     )
 
 
-def rules(found: Judgement) -> tuple[list[str], list[str]]:
-    return [one.rule for one in found.refusals], [one.rule for one in found.advisories]
+def rules(found: Judgement) -> list[str]:
+    """The rules that refused the route, in the order they were made."""
+    return [one.rule for one in found.refusals]
 
 
 class TestTheRegistry:
-    def test_a_rule_blocks_or_advises_and_says_what_it_is(self) -> None:
-        assert [rule.on_a_proposal for rule in RULES.values()].count("blocks") == 5
-        assert {rule.on_a_proposal for rule in RULES.values()} == {"blocks", "advises"}
+    def test_a_rule_says_what_it_is(self) -> None:
+        assert len(RULES) == 5
         for rule in RULES.values():
             assert rule.rule_id.startswith("route_")
             assert rule.summary.endswith(".") and len(rule.summary) > 20
@@ -78,7 +78,7 @@ class TestARouteThatMayBeDrawn:
     def test_between_two_pins_with_nothing_in_the_way(self) -> None:
         view, nets = sheet(parts=(resistor("R1", 100, 300), resistor("R2", 300, 300)))
         found = judge(view, nets, route((100, 252), (300, 252)))
-        assert rules(found) == ([], [])
+        assert rules(found) == []
         assert found.junctions == []
 
     def test_a_crossing_where_neither_wire_ends_is_not_the_routes_to_say(self) -> None:
@@ -86,40 +86,39 @@ class TestARouteThatMayBeDrawn:
         ``unjoined_crossing`` sheet rule): a later op may yet put a label on it."""
         view, nets = sheet(wires=((0, 100, 400, 100),))
         found = judge(view, nets, route((200, 0), (200, 200)))
-        assert rules(found) == ([], [])
+        assert rules(found) == []
 
     def test_a_pin_already_wired_to_one_of_its_ends_is_a_junction(self) -> None:
         # A wire runs from the route's own start to R2's pin; the route goes on past it.
         parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
         view, nets = sheet(parts=parts, wires=((0, 0, 200, 0),))
         found = judge(view, nets, route((0, 0), (400, 0)))
-        assert rules(found) == ([], ["route_passes_own_pin"])
+        assert rules(found) == []
         assert found.junctions == [{"x": 200, "y": 0, "via": "pin", "pin": "R2.1"}]
-        assert found.advisories[0].refs == ("R2",)
 
     def test_a_part_it_crosses_is_not_its_to_say(self) -> None:
         """That is the sheet rule's, of the sheet once the route is drawn."""
         view, nets = sheet(parts=(resistor("R1", 200, 100),))
-        assert rules(judge(view, nets, route((0, 100), (400, 100)))) == ([], [])
+        assert rules(judge(view, nets, route((0, 100), (400, 100)))) == []
 
     def test_how_long_it_is_is_not_its_to_say(self) -> None:
         """The caller gave the points, and no length is a fault."""
         view, nets = sheet()
-        assert rules(judge(view, nets, route((0, 0), (0, 3000), (2000, 3000)))) == ([], [])
+        assert rules(judge(view, nets, route((0, 0), (0, 3000), (2000, 3000)))) == []
 
 
 class TestARouteThatIsRefused:
     def test_a_diagonal(self) -> None:
         view, nets = sheet()
         found = judge(view, nets, route((0, 0), (64, 64)))
-        assert rules(found) == (["route_diagonal"], [])
+        assert rules(found) == ["route_diagonal"]
         assert found.refusals[0].detail == "Diagonal wire (0,0)->(64,64): not orthogonal"
 
     def test_over_a_pin_of_another_net(self) -> None:
         parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
         view, nets = sheet(parts=parts)
         found = judge(view, nets, route((0, 0), (400, 0)))
-        assert rules(found) == (["route_through_pin"], [])
+        assert rules(found) == ["route_through_pin"]
         refusal = found.refusals[0]
         assert (refusal.refs, refusal.points, refusal.facts) == (
             ("R2",),
@@ -132,18 +131,18 @@ class TestARouteThatIsRefused:
         # would report, had the wire not already refused the route.
         view, nets = sheet(wires=((100, 0, 300, 0),))
         found = judge(view, nets, route((0, 0), (400, 0)))
-        assert rules(found) == (["route_over_wire"], [])
+        assert rules(found) == ["route_over_wire"]
         assert found.refusals[0].points == ((100, 0), (300, 0))
 
     def test_an_end_whose_leg_runs_along_the_wire_it_is_on(self) -> None:
         view, nets = sheet(wires=((0, 0, 400, 0),))
         along = route((200, 0), (500, 0), by_coordinate=(True, False), anchors=((0, 0), (500, 0)))
-        assert rules(judge(view, nets, along))[0] == ["route_along_its_end"]
+        assert rules(judge(view, nets, along)) == ["route_along_its_end"]
         away = route(
             (200, 0), (200, 200), by_coordinate=(True, False), anchors=((0, 0), (200, 200))
         )
         found = judge(view, nets, away)
-        assert rules(found) == ([], [])
+        assert rules(found) == []
         assert found.junctions == [
             {
                 "x": 200,
@@ -156,7 +155,7 @@ class TestARouteThatIsRefused:
     def test_through_the_end_of_a_wire_of_another_net(self) -> None:
         view, nets = sheet(wires=((200, 0, 200, 100),))
         found = judge(view, nets, route((0, 0), (400, 0)))
-        assert rules(found) == (["route_touches_net"], [])
+        assert rules(found) == ["route_touches_net"]
         assert found.refusals[0].facts == {"via": "wire_end"}
         assert "Reroute around it." in found.refusals[0].detail
 
@@ -165,7 +164,7 @@ class TestARouteThatIsRefused:
         the route touches the wire there as an end would."""
         view, nets = sheet(wires=((0, 100, 400, 100),))
         found = judge(view, nets, route((200, 0), (200, 100), (200, 200)))
-        assert rules(found) == (["route_touches_net"], [])
+        assert rules(found) == ["route_touches_net"]
         assert found.refusals[0].facts == {"via": "waypoint"}
         assert 'end a route there with {"x": 200, "y": 100}' in found.refusals[0].detail
 
@@ -173,7 +172,7 @@ class TestARouteThatIsRefused:
         """A label where two wires cross joins them, so this is no plain crossing."""
         view, nets = sheet(wires=((0, 100, 400, 100),), labels=((200, 100, "SIG"),))
         found = judge(view, nets, route((200, 0), (200, 200)))
-        assert rules(found) == (["route_touches_net"], [])
+        assert rules(found) == ["route_touches_net"]
         refusal = found.refusals[0]
         assert (refusal.points, refusal.facts) == (((200, 100),), {"via": "label"})
         assert "the net label 'SIG' at (200,100), on net 'SIG'" in refusal.detail
@@ -181,23 +180,5 @@ class TestARouteThatIsRefused:
     def test_onto_its_own_net_the_same_contact_is_a_junction(self) -> None:
         view, nets = sheet(wires=((0, 100, 400, 100),), labels=((200, 100, "SIG"),))
         found = judge(view, nets, route((200, 0), (200, 200), anchors=((0, 100), (200, 200))))
-        assert rules(found) == ([], ["route_touches_own_net"])
+        assert rules(found) == []
         assert found.junctions == [{"x": 200, "y": 100, "via": "label", "label": "SIG"}]
-
-    def test_every_finding_is_of_a_rule_that_does_what_was_done_with_it(self) -> None:
-        view, nets = sheet(
-            parts=(resistor("R1", 200, 248),),
-            wires=((0, 100, 400, 100), (300, 0, 300, 50), (50, 300, 150, 300)),
-            labels=((100, 100, "SIG"),),
-        )
-        found = judge(
-            view, nets, route((0, 0), (0, 400), (100, 400), (100, 0), (400, 0), (500, 64))
-        )
-        # A route over a pin already wired to its start is drawn, and said.
-        parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
-        over_own_pin = judge(*sheet(parts=parts, wires=((0, 0, 200, 0),)), route((0, 0), (400, 0)))
-        assert found.refusals and over_own_pin.advisories
-        assert {RULES[one.rule].on_a_proposal for one in found.refusals} == {"blocks"}
-        assert {
-            RULES[one.rule].on_a_proposal for one in found.advisories + over_own_pin.advisories
-        } == {"advises"}

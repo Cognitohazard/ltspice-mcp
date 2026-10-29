@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\hier_top_run.net
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\hier_top_run.net(4): This sub-circuit name is not defined.
+X§X1 N001 out ;§pnba IN)OUT
+          ^^^

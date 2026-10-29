@@ -233,12 +233,13 @@ cancels a `run_experiments` request while the call waits for results
 
 **Circuit paths are resolved at submission.** Each circuit's path is resolved
 before a job exists. A path a sandbox refuses fails the call with `path_denied`
-and the sandbox guidance, and no job is made, even when other circuits of the
-call are allowed. A circuit that fails after that (a file that is gone, an
-export LTspice refuses, an include that cannot be staged, that is, copied into
-the job's folder) fails its own cases and leaves the call's other circuits to
-run. Reading a case that has no raw reports the same failure as the case's
-receipt row.
+and the sandbox guidance, and a file that is no circuit (by its extension)
+fails it with `unsupported_file`. Either way no job is made, even when other
+circuits of the call are allowed. A circuit that fails after that (a file that
+is gone, an export LTspice refuses, an include that cannot be staged, that is,
+copied into the job's folder) fails its own cases and leaves the call's other
+circuits to run. Reading a case that has no raw reports the same failure as
+the case's receipt row.
 
 **Lock the id, then stage.** A submission takes the gate for its
 `request_id` (a file lock, so it works across processes sharing the working
@@ -645,8 +646,9 @@ complete record. The `partial_progress` observation then reports
 `raw_kept: true`, the failure row's `evidence` adds
 `partial_raw: {points, axis, last_axis_value}` describing the kept raw, and
 the run row's `raw` is its path. Reads of that case (`analyze_results`,
-`plot_waveform`, `inspect(kind="results")`, the Python API's `load_raw`) read
-it as they read a produced case's raw. Each read also returns a `partial_raw`
+`plot_waveform`, `inspect(kind="results")`, the Python API's `load_raw`, and
+its `measurements` and `device_op_points` of the case's log) read it as they
+read a produced case's raw. Each read also returns a `partial_raw`
 observation, `{case_id, stop, points, axis, last_axis_value}`, and every value
 it reads ends at the last kept point. A raw with no point to keep, a text
 (`Values:`) raw and an LTspice Fast Access raw are deleted even with the flag.
@@ -825,12 +827,14 @@ first plot is selected only if a RAW recipe reads one. A `log_path` source
 refuses plot selection. `dialect` is null or one of `ltspice`, `ngspice`,
 `qspice`, `xyce`; an explicit dialect must agree with the raw file's header
 and with the simulator the job recorded. `plot_waveform` and the attached
-`run_experiments.analyze` block accept the same selectors. Analysis type, axis
-and units come from the selected plot's header. A recipe never gives a table
-plot an axis, so read its quantities through the API (`RawResult.table()`) or
-`inspect(kind="results", view="table")`. CSV export writes them without an
-axis column. Complex values outside an AC analysis keep their real
-and imaginary parts rather than being read as AC gain and phase.
+`run_experiments.analyze` block accept the same selectors and the same
+`{axis, value}` step selector; `plot_waveform`'s `step` also takes a 0-based
+index. Analysis type, axis and units come from the selected plot's header. A
+recipe never gives a table plot an axis, so read its quantities through the
+API (`RawResult.table()`) or `inspect(kind="results", view="table")`. CSV
+export writes them without an axis column. Complex values outside an AC
+analysis keep their real and imaginary parts rather than being read as AC
+gain and phase.
 
 A result set stores the request, each source's file hashes and the selected
 plot, so a continuation reads the same plot. Each row of a RAW recipe reports
@@ -1056,12 +1060,17 @@ text it is about to write. The findings and the label-only-pin list describe
 the whole sheet, and on an existing sheet most of them predate the call. The
 transaction therefore computes both before and after the ops, each on the
 sheet as the server writes it out (so the server's own formatting of the file
-raises no new finding), and reports a finding only if it is new (no finding
-with the same rule, parts, points and facts existed before; any change makes
-it new) or if it names a part or point the batch named. An op names a
-reference through its `reference` or a `REF.PIN` endpoint, and a coordinate
-through its `x`/`y`, a segment's two ends, a waypoint or an `{x, y}` endpoint.
-All other findings are listed in the `preexisting` block:
+raises no new finding), and reports a finding only if the batch made or
+changed it, that is, if no finding with the same rule, parts and subject
+existed before. A finding's subject is what it is about apart from where it
+is, for a rule whose places move with the parts it names or whose facts hold
+an attribute's words: which attribute's text, and what it is drawn across;
+which pin floats; the parameter and its copies. So a part that is moved or
+given a new value keeps the findings it had, and a finding the batch left as
+it was is not the batch's, whichever part it names. For any other rule the
+subject is the finding's points and facts, and any change makes it new. All
+other findings are listed in the `preexisting` block, with the label-only pins
+of the parts the batch did not rewire or name:
 
 ```
 preexisting {count, findings, label_only_pins, cursor}
@@ -1086,10 +1095,9 @@ new, its pages cover the whole sheet. Either way the reply has
 pins, with `kind: "label_only_pin"`. Each finding is a row with its `kind`,
 its sentence, every part (`ref`, and `refs` when there are several) and point
 (`x`/`y` and `points`, or a wire's `from`/`to`) it names, and the rule's
-facts. A `base: "blank"` build starts from an
-empty sheet, so nothing is preexisting. The op advisories in `warnings`,
-prefixed with the op that raised them, describe the batch and are never
-scoped.
+facts. A `base: "blank"` build starts from an empty sheet, so nothing is
+preexisting. An op judges nothing itself. What it did is in `results`, and
+`warnings` holds only the sheet findings.
 
 The op union is discriminated on `op`, so an unknown op fails with one error
 listing every op kind, and a bad field on a known op is reported against that
@@ -1164,10 +1172,13 @@ reports that the window could not be checked.
 **Per-op facts.** `results` has one entry per op that found something on the
 sheet, keyed by `index` and `op` as a `failures` entry is. A `wire_pins` entry
 lists the segments it found `already_present` and the `junctions` it made,
-and a removal's entry reports how much it removed. Everything else an op
-reports is in `warnings` and the views. `results` is not a page because, like
-`failures`, its length is bounded by the batch the caller sent. The Python
-API returns the same list.
+and a removal's entry reports how much it removed; `remove_directive`'s
+entry names each text it removed, with its kind and place (`removed_texts`).
+Everything else an op reports is in the views. `applied` counts the ops the
+batch applied, every op of a committed batch, so an op with nothing to report
+is counted though it has no `results` entry. `results` is not a page because,
+like `failures`, its length is bounded by the batch the caller sent. The
+Python API returns the same list.
 
 **Wire ops.** A routed segment identical to one already on the sheet is not
 drawn again; the op's `results` entry lists it under `already_present`, and
@@ -1193,17 +1204,15 @@ Wherever else the route touches existing wiring (a waypoint on a wire, a
 segment through another wire's end or a lone label, or a segment over a pin
 already wired to an endpoint), it connects to that wiring, so the op checks
 the touch against the nets the two endpoints already join. A touch on
-one of those nets is a redundant junction. It is drawn and reported with a
-warning and a `junctions` entry in the op's `results` entry, whose `via` gives
+one of those nets is a redundant junction. It is drawn and reported as a
+`junctions` entry in the op's `results` entry, whose `via` gives
 what it touched (`waypoint`, `wire_end`, `label` or `pin`) and whose `wire`,
 `label` or `pin` identifies it. A touch on any other net is refused, and the
 error names the wire and the `{x, y}` endpoint that would make the same T
 deliberately, because the op does not join a net no argument asked for. A
 route crossing a wire where neither ends is drawn; LTspice does not connect
 the crossing, so the nets stay separate, and the finished sheet reports it
-(`unjoined_crossing`). The op's advisories about the route itself (a
-junction made on the way) also appear in `warnings`. Route length is not
-reported.
+(`unjoined_crossing`). Route length is not reported.
 
 Ops do not repeat sheet findings. A route through a part, a part placed or
 moved over another, a part's text drawn across a wire, a part or other text, a
@@ -1276,7 +1285,7 @@ complete; empty on success), netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
 rules_run {rule: count}, preexisting {count, findings, label_only_pins, cursor},
-views {touched?: Page, pin_legend?: Page, preexisting?: Page}, results[],
+views {touched?: Page, pin_legend?: Page, preexisting?: Page}, applied, results[],
 open_in_ltspice? (one entry per LTspice window that had the sheet open),
 warnings, failures, observations, hint`.
 
@@ -1314,9 +1323,10 @@ results are still returned. `in_ltspice` never fails the call.
 
 `sidecar`, the default `export_to`, overwrites the schematic's `<name>.net`
 under lock and returns `{path, sha256, diff_vs_prior?}`. LTspice writes the
-same file beside a schematic it runs, and `run_experiments` exports through
-it, so the default export writes nothing a run would not; it does make the
-call destructive, as the annotation table shows. `managed` leaves the
+same file beside a schematic it runs from its own window, so the default
+export writes nothing such a run would not; it does make the call
+destructive, as the annotation table shows. `run_experiments` exports a
+schematic the managed way and writes nothing beside it. `managed` leaves the
 caller's files alone. It copies the schematic and the project-local
 `.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under its folder into a scratch
 directory in the store, exports there, and writes nothing beside the caller's
@@ -1355,9 +1365,10 @@ read.
 `equivalent` is null, and a warning names the deck that failed. In both cases
 the call's outcome is `partial` and the response gives the reason.
 
-When an instance gives a parameter more than once, `equivalence` reports it
-in `duplicate_params` (the instance, the side, the key and every copy in card
-order). The comparison does not model which copy a simulator reads, so the
+When a card gives a parameter more than once, `equivalence` reports it in
+`duplicate_params` once, however many instances use the card: its reference
+and the subcircuit it is in (null at the top level), the side, the key and
+every copy in card order. The comparison does not model which copy a simulator reads, so the
 parameter compares equal only when the result is the same whichever copy is
 read, which holds when both sides have the same copies in the same order or
 every copy has one value. Otherwise a `param_mismatches` row names a
@@ -1395,7 +1406,11 @@ glyphs. `attribute_text_overlap` reports text that a wire or a line another
 part draws passes through, or that lies over a rectangle or circle another
 part draws or over other text, by more than the estimate's slack. Comments,
 directives and labels are checked only where attribute text crosses them, and
-the layout check reports this limit in `observations`.
+the layout check reports this limit in `observations`. No op moves a part's
+text apart from the part, so the remedy is to move the part or the item its
+text crosses. `wire_through_symbol` and `text_in_symbol_body` likewise test
+what a part draws, not its box, so a wire or a text anchor in the empty corner
+beside an amplifier's triangle is not in the part.
 
 A cap of 25 findings per rule applies to the layout and quality rules, to the
 value-suffix rules (`value_suffix_micro_sign`, `value_suffix_mojibake`,
@@ -1457,7 +1472,12 @@ cursors where listed:
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
     but not L1. It is plain text; a wildcard is refused with the plain
-    spelling to use
+    spelling to use. On a netlist, `detail: "full"` adds each card's
+    `nodes`, `model` and `params`, keyed as written (a key given twice in
+    one spelling reads as its last copy), and `repeated_params` for a
+    parameter the card gives more than once, compared without case: every
+    copy as `key=value`, in card order. Which copy a simulator reads is not
+    established
 {kind: "hierarchy", path, simulator: "ltspice"|"ngspice"|"ltspice:<name>", ngbehavior?, instance?, prefix?, cursor?}
     expanded netlist instances; `instance` is an exact reference-segment list
     selecting a subtree, and `prefix` is the `components` rule applied to
@@ -1480,26 +1500,30 @@ cursors where listed:
  view?: "plots"|"signals"|"table"|"measurements"|"native_tables", prefix?, limit?, cursor?}
     one RAW path the sandbox allows or one finished experiment case;
     other_raw reads the case's raw of that kind in place of its raw, RAW
-    views only. plots returns the complete plot inventory in file order;
-    signals returns the selected trace descriptors, marking the axis; table
-    returns the quantities of a table plot (no sampled axis), the first one
-    included rather than taken as an axis, with complex values as
-    {real, imag}. prefix filters signals and table by name. Each view is
-    paged, and its cursor works only for the same file contents
-    (snapshot_id), view and selection. For measurements and native_tables,
-    path is a log path, the RAW is optional, and plot_index must be
-    omitted. measurements pages the recorded values, range and AT points by
-    value_index (not by step). native_tables pages the value blocks
-    ngspice prints in the log, as `name = value` entries and
-    `Index frequency` rows, each with its block's first and last line
-    (`line_start`, `line_end`), what ended the block (`closed_by`) and its
-    printed labels; a unit the log does not print is null. Neither adds plot
-    or step identifiers or inferred formulas, and prefix filters literal
-    measurement or quantity labels. The page includes `capture_facts`
-    (whether each file was present, and its digest), `scan` (whether the
-    whole log was read) and `section` (`parsed`, `absent` or `error` for
-    this part of the log); a section that fails to decode is a query
-    error, never an empty successful result.
+    views only. plots returns the complete plot inventory in file order,
+    with a stepped LTspice plot's kind (stepped_kind: stepped_sweep,
+    stepped_op, stepped_tf, stepped_ac_one_frequency,
+    stepped_noise_one_frequency, stepped_run_op) and the variables that
+    hold its step values (step_variables); signals returns the selected
+    trace descriptors, marking the axis; table returns the quantities of a
+    table plot (no sampled axis), the first one included rather than taken
+    as an axis, with complex values as {real, imag}. prefix filters
+    signals and table by name. Each view is paged, and its cursor works
+    only for the same file contents (snapshot_id), view and selection. For
+    measurements and native_tables, path is a log path, the RAW is
+    optional, and plot_index must be omitted. measurements pages the
+    recorded values, range and AT points by value_index (not by step).
+    native_tables pages the value blocks ngspice prints in the log, as
+    `name = value` entries and `Index frequency` rows, each with its
+    block's first and last line (`line_start`, `line_end`), what ended the
+    block (`closed_by`) and its printed labels; a unit the log does not
+    print is null. Neither adds plot or step identifiers or inferred
+    formulas, and prefix filters literal measurement or quantity labels.
+    The page includes `capture_facts` (whether each file was present, and
+    its digest), `scan` (whether the whole log was read) and `section`
+    (`parsed`, `absent` or `error` for this part of the log); a section
+    that fails to decode is a query error, never an empty successful
+    result.
 {kind: "reference", query?, limit? (default 5, cap 20)}
     the tools' vocabulary: each tool's top-level arguments, plus the
     branches — recipes, ops, variation kinds, query kinds, checks and job
@@ -1665,6 +1689,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `suffix-mega-milli` | warning | a number followed by an upper-case `M` that does not start `Meg` or `Mil`, which SPICE reads as milli |
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
+| `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
 

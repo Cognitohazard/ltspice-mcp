@@ -50,6 +50,7 @@ from tests._asc_ops import apply_ops, file_at, sheet_findings
 from tests._schematic_fixtures import BOX2_ASY, write_file
 from tests.ltspice_recorder import INPUTS
 from tests.test_api_reference import _op_kinds
+from tests.test_verify_circuit import ACROSS_WIRE_SHEET
 from tests.test_verify_circuit import _run as run_verify_circuit
 
 # Validates a raw op dict into the tool's own op union, so the control path
@@ -197,15 +198,10 @@ def test_every_op_said_to_keep_wiring_is_an_op_this_tool_takes():
     assert _op_kinds() >= KEEPS_WIRING
 
 
-async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
-    """A batch is where the same advisory repeats.
-
-    Listing it once per op spends a line on each saying one thing, and
-    dropping them all instead (what this surface did) means the caller never
-    learns the ops warned at all. One entry, with how many ops it covers. A
-    subcircuit given an opamp's complexity label is warned of on every op that
-    sets it.
-    """
+async def test_a_value_set_on_several_ops_is_said_once_of_the_sheet(asc_state):
+    """A subcircuit given an opamp's complexity label by three ops holds it
+    once when the batch ends, and the sheet says so once, of the part, not of
+    each op that set it."""
     level = {"op": "set_component_value", "reference": "X1", "value": "Level.2"}
     # Its own Prefix makes the part a subcircuit call.
     place = {"op": "add_component", "reference": "X1", "symbol": "res", "x": 400, "y": 300}
@@ -214,10 +210,9 @@ async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
 
     data = await _build_blank(asc_state, "dupwarn", ops)
 
-    repeated = [w for w in data["warnings"] if "complexity-level label" in w]
-    assert len(repeated) == 1, data["warnings"]
-    assert repeated[0].startswith("op 1 (set_component_value): X1: Value 'Level.2'")
-    assert repeated[0].endswith("(identical warning on 3 ops in this batch; collapsed)")
+    said = [w for w in data["warnings"] if "complexity-level label" in w]
+    assert len(said) == 1
+    assert said[0].startswith("X1: Value 'Level.2'")
 
 
 async def test_committed_sha_matches_file(asc_state, work_dir):
@@ -847,12 +842,6 @@ _UNTIDY_FINDINGS = 7
 _UNTIDY_LABEL_ONLY = 2
 
 
-def _sheet_findings(data: dict) -> list[str]:
-    """The sheet's own findings in the warnings channel; op advisories are
-    attributed to their op and prefixed with it."""
-    return [w for w in data["warnings"] if not w.startswith("op ")]
-
-
 def _whole_sheet(state: SessionState, path: Path) -> tuple[list[str], list[str]]:
     """Every finding message and label-only pin on the sheet as committed.
 
@@ -883,7 +872,7 @@ async def _untidy_sheet(state: SessionState, name: str) -> Path:
 async def test_a_blank_build_withholds_nothing(asc_state):
     """Everything on a sheet built from blank is new, so everything is reported."""
     data = await _build_blank(asc_state, "untidy-blank", _UNTIDY_OPS)
-    assert len(_sheet_findings(data)) == _UNTIDY_FINDINGS
+    assert len(data["warnings"]) == _UNTIDY_FINDINGS
     assert data["wiring"]["label_only_pins"]["total"] == _UNTIDY_LABEL_ONLY
     assert data["preexisting"] == {
         "count": 0,
@@ -905,7 +894,7 @@ async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state)
     )
 
     assert data["commit_state"] == "committed"
-    assert _sheet_findings(data) == [
+    assert data["warnings"] == [
         "Floating pin: R5.1 at (1100,252)",
         "Floating pin: R5.2 at (1100,348)",
     ]
@@ -919,41 +908,47 @@ async def test_an_edit_reports_what_it_introduced_and_counts_the_rest(asc_state)
     assert "view_cursors.preexisting" in data["hint"]
     # Reported plus withheld is the whole sheet: nothing was dropped.
     whole, _ = _whole_sheet(asc_state, sheet)
-    assert len(whole) == len(_sheet_findings(data)) + data["preexisting"]["findings"]
+    assert len(whole) == len(data["warnings"]) + data["preexisting"]["findings"]
 
 
-async def test_a_finding_on_a_reference_the_batch_named_is_reported(asc_state):
-    """R1's floating pins predate the edit, but the edit is about R1."""
-    sheet = await _untidy_sheet(asc_state, "untidy-touch")
+@pytest.mark.parametrize(
+    "ops",
+    [
+        pytest.param(
+            [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
+            id="a_new_value_on_the_part_with_floating_pins",
+        ),
+        pytest.param(
+            [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
+            id="a_directive_on_the_dangling_labels_point",
+        ),
+        pytest.param(
+            [
+                {"op": "move", "dx": 16, "dy": 0, "labels": [{"x": 900, "y": 900}]},
+                {"op": "move", "dx": -16, "dy": 0, "labels": [{"x": 916, "y": 900}]},
+            ],
+            id="the_dangling_label_moved_away_and_back",
+        ),
+    ],
+)
+async def test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets(
+    asc_state, ops: list[dict]
+):
+    """R1's floating pins and the orphan label at (900,900) predate the edit.
+    A batch that gives R1 a new value, puts a directive on the label's point,
+    or moves the label away and back names them but leaves each as it was: the
+    finding is the sheet's, counted with the sheet's."""
+    sheet = await _untidy_sheet(asc_state, "untidy-named")
 
-    data = await apply_ops(
-        asc_state, sheet, [{"op": "set_component_value", "reference": "R1", "value": "2k"}]
-    )
+    data = await apply_ops(asc_state, sheet, ops)
 
-    assert _sheet_findings(data) == [
-        "Floating pin: R1.1 at (100,252)",
-        "Floating pin: R1.2 at (100,348)",
-    ]
-    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 2
+    assert data["warnings"] == []
+    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS
 
 
-async def test_a_finding_at_a_coordinate_the_batch_named_is_reported(asc_state):
-    """The orphan label predates the edit; the directive is placed on it."""
-    sheet = await _untidy_sheet(asc_state, "untidy-coord")
-
-    data = await apply_ops(
-        asc_state,
-        sheet,
-        [{"op": "add_directive", "instruction": ".op", "x": 900, "y": 900}],
-    )
-
-    assert _sheet_findings(data) == ["Dangling label 'orphan' at (900,900)"]
-    assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS - 1
-
-
-async def test_a_finding_at_a_routes_coordinate_endpoint_is_reported(asc_state, work_dir):
-    """The duplicated stub predates the edit; the route ends on its free end,
-    naming that point as surely as a waypoint or a label's x, y would."""
+async def test_a_finding_at_a_routes_coordinate_endpoint_is_still_the_sheets(asc_state, work_dir):
+    """The duplicated stub predates the edit; a route ending on its free end
+    leaves it duplicated as it was, so it is counted with the sheet's."""
     await _build_blank(
         asc_state,
         "dup-stub",
@@ -980,7 +975,8 @@ async def test_a_finding_at_a_routes_coordinate_endpoint_is_reported(asc_state, 
     )
 
     assert data["commit_state"] == "committed"
-    assert any(w.startswith("Duplicate wire (2×)") for w in _sheet_findings(data))
+    assert not any(w.startswith("Duplicate wire") for w in data["warnings"])
+    assert data["preexisting"]["findings"] >= 1
 
 
 # Two resistors drawn over one another, a comment inside them, and (written
@@ -1051,6 +1047,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "shared_reference": 0,
         "dropped_wire": 0,
         "duplicate_parameter": 0,
+        "subcircuit_value_slot": 0,
         "net_with_two_names": 0,
         "joined_at_crossing": 0,
         "unjoined_crossing": 0,
@@ -1069,7 +1066,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
     }
     assert list(data["rules_run"]) == list(se.RULES)
     assert sum(data["rules_run"].values()) == (
-        len(_sheet_findings(data)) + data["preexisting"]["findings"]
+        len(data["warnings"]) + data["preexisting"]["findings"]
     )
     # A check of the same sheet ran all of them but the one its export check holds.
     assert checked["rules_run"] == {
@@ -1099,12 +1096,15 @@ async def test_an_edit_reports_what_it_drew_badly(asc_state):
     )
 
     assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
-    said = _sheet_findings(data)
+    said = data["warnings"]
     assert _OVERLAP in said
     assert "Wire end at (500,252) meets no pin, net label, or other wire" in said
-    # R1's free pin was there before, and the batch did not name R1.
+    # R1's free pin was there before, and R3's free pin moved with R3, free as
+    # it was: neither is the batch's. R3.1, wired before the move, is.
     assert "Floating pin: R1.2 at (100,348)" not in said
-    assert data["preexisting"]["findings"] == 1
+    assert not any(line.startswith("Floating pin: R3.2") for line in said)
+    assert any(line.startswith("Floating pin: R3.1") for line in said)
+    assert data["preexisting"]["findings"] == 2
 
 
 @pytest.mark.parametrize("op", ["remove_component", "move_component"])
@@ -1202,26 +1202,83 @@ async def test_a_route_already_drawn_through_a_part_is_not_the_batchs(asc_state)
     (drawn,) = data["results"]
     assert drawn["already_present"] == [{"from": {"x": 100, "y": 252}, "to": {"x": 500, "y": 252}}]
     assert _THROUGH_R4 not in data["warnings"]
-    assert [w for w in data["warnings"] if w.startswith("op ")] == []
     assert _THROUGH_R4 in [row["message"] for row in data["views"]["preexisting"]["items"]]
 
 
-async def test_a_finding_is_the_batchs_by_any_part_it_names(asc_state):
-    """The overlap of R1 and R2 predates the edit and names R2 second."""
+async def test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs(asc_state):
+    """The overlap of R1 and R2 and R3's floating pins predate the edit. A new
+    value on a part they name leaves each as it was, so none is the batch's:
+    they are counted with what the sheet already had."""
     sheet = await _crowded_sheet(asc_state, "crowded-named")
 
     about_r2 = await apply_ops(
-        asc_state, sheet, [{"op": "set_component_value", "reference": "R2", "value": "2k"}]
+        asc_state,
+        sheet,
+        [{"op": "set_component_value", "reference": "R2", "value": "2k"}],
+        return_views=["preexisting"],
     )
     about_r3 = await apply_ops(
         asc_state, sheet, [{"op": "set_component_value", "reference": "R3", "value": "2k"}]
     )
 
-    assert _OVERLAP in _sheet_findings(about_r2)
-    assert _OVERLAP not in _sheet_findings(about_r3)
-    assert _sheet_findings(about_r3) == [
-        "Floating pin: R3.1 at (500,252)",
-        "Floating pin: R3.2 at (500,348)",
+    assert _OVERLAP not in about_r2["warnings"]
+    assert _OVERLAP in [row["message"] for row in about_r2["views"]["preexisting"]["items"]]
+    assert about_r3["warnings"] == []
+
+
+_ACROSS = "is drawn across wire (100,120)->(100,220)"
+
+
+def _across_sheet(state: SessionState, name: str, value: str) -> Path:
+    sheet = Path(state.working_dir) / f"{name}.asc"
+    write_file(sheet, ACROSS_WIRE_SHEET.replace("{value}", value))
+    return sheet
+
+
+async def test_a_new_value_on_a_text_that_overlapped_before_is_not_the_batchs(asc_state):
+    """The value's text crossed the wire before and crosses it after: the same
+    finding, though its words changed."""
+    sheet = _across_sheet(asc_state, "across-value", "{Rload*2}")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "set_component_value", "reference": "R1", "value": "{Rload*3}"}],
+        return_views=["preexisting"],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert data["warnings"] == []
+    left = [row["message"] for row in data["views"]["preexisting"]["items"]]
+    assert any(_ACROSS in message for message in left), left
+
+
+async def test_what_a_moved_part_had_moves_with_it_and_is_not_the_batchs(asc_state):
+    """Moved along the wire, the part keeps its text across it and its two pins
+    on nothing: each finding is where the part took it, and none is new."""
+    sheet = _across_sheet(asc_state, "across-move", "{Rload*2}")
+
+    data = await apply_ops(
+        asc_state, sheet, [{"op": "move", "dx": 0, "dy": 16, "references": ["R1"]}]
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert data["warnings"] == []
+
+
+async def test_a_value_that_makes_an_overlap_is_the_batchs(asc_state):
+    """A short value stops short of the wire; the long one the batch sets
+    crosses it, which the batch made."""
+    sheet = _across_sheet(asc_state, "across-made", "1k")
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [{"op": "set_component_value", "reference": "R1", "value": "{Rload*2}"}],
+    )
+
+    assert [w for w in data["warnings"] if _ACROSS in w] == [
+        f"R1's text '{{Rload*2}}' at (168,168) {_ACROSS}"
     ]
 
 
@@ -1285,7 +1342,7 @@ async def test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs(asc_st
     )
 
     assert data["commit_state"] == "committed"
-    assert _sheet_findings(data) == [
+    assert data["warnings"] == [
         "Floating pin: R9.1 at (500,252)",
         "Floating pin: R9.2 at (500,348)",
     ]
@@ -1402,7 +1459,7 @@ async def test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call
     pins = [row["pin"] for row in page["items"] if row["kind"] == "label_only_pin"]
     assert sorted(pins) == ["R3.1", "R4.1"]
     whole, _ = _whole_sheet(asc_state, sheet)
-    assert sorted(findings + _sheet_findings(data)) == sorted(whole)
+    assert sorted(findings + data["warnings"]) == sorted(whole)
 
 
 async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
@@ -1516,7 +1573,7 @@ async def test_the_python_seam_scopes_the_same_way_and_completes_the_view(asc_st
 
     complete = complete_edit_schematic_data(await evaluate_edit_schematic(args, asc_state), args)
 
-    assert _sheet_findings(complete) == [
+    assert complete["warnings"] == [
         "Floating pin: R5.1 at (1100,252)",
         "Floating pin: R5.2 at (1100,348)",
     ]
@@ -2632,6 +2689,43 @@ class TestPathsThatLeaveTheSheetAsItIs:
         assert data["sha256"] == _sha(path)
 
 
+async def test_a_reply_counts_every_op_and_says_what_a_removal_matched(asc_state):
+    """An op with nothing to report has no entry in results, so the count says
+    the batch applied every op; a removal names each text it matched, which a
+    regex would otherwise leave unknown."""
+    await _build_blank(
+        asc_state,
+        "directives",
+        [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 200, "y": 200},
+            {"op": "add_directive", "instruction": ".tran 1m", "x": 0, "y": 400},
+            {"op": "add_directive", "instruction": ".tran 2m", "x": 0, "y": 432},
+            {"op": "add_directive", "instruction": "a note", "kind": "comment", "x": 0, "y": 464},
+        ],
+    )
+
+    data = await apply_ops(
+        asc_state,
+        "directives.asc",
+        [
+            {"op": "set_component_value", "reference": "R1", "value": "2k"},
+            {"op": "remove_directive", "instruction": r"regex:\.tran"},
+            {"op": "add_directive", "instruction": ".op", "x": 0, "y": 496},
+        ],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert data["applied"] == 3
+    assert [entry["op"] for entry in data["results"]] == [
+        "set_component_value",
+        "remove_directive",
+    ]
+    assert data["results"][1]["removed_texts"] == [
+        {"kind": "directive", "text": ".tran 1m", "x": 0, "y": 400},
+        {"kind": "directive", "text": ".tran 2m", "x": 0, "y": 432},
+    ]
+
+
 async def test_a_move_reply_says_what_moved(asc_state):
     """The reply relays what a move selected, so a region's catch can be checked."""
     await _build_blank(
@@ -2663,8 +2757,8 @@ async def test_a_move_reply_says_what_moved(asc_state):
             },
         }
     ]
-    # Dragged along its own axis, the wire stays straight: the op says nothing.
-    assert [w for w in data["warnings"] if w.startswith("op ")] == []
+    # Dragged along its own axis, the wire stays straight.
+    assert data["rules_run"]["diagonal_wire"] == 0
 
 
 # ---------------------------------------------------------------------------

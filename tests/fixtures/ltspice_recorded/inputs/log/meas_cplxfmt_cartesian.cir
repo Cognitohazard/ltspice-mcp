@@ -1,0 +1,13 @@
+* .options meascplxfmt=cartesian: how the log prints AC .meas results
+* At 1 kHz V(out) is 1/(1+j): 0.5-0.5j, magnitude 0.70711, phase -45 degrees.
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.options meascplxfmt=cartesian
+.ac dec 10 10 100k
+.meas ac g FIND V(out) AT 1k
+.meas ac g_mag FIND mag(V(out)) AT 1k
+.meas ac g_neg FIND -mag(V(out)) AT 1k
+.meas ac g_ph FIND ph(V(out)) AT 1k
+.meas ac g_re FIND re(V(out)) AT 1k
+.end

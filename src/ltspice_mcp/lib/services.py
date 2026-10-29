@@ -15,7 +15,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -30,10 +30,11 @@ from ltspice_mcp.errors import (
 )
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import (
-    find_device_param,
+    device_param_name,
     find_trace_by_path,
+    parse_shorthand,
     writes_xvii_names,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -44,7 +45,7 @@ from ltspice_mcp.lib.experiment_types import (
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
-from ltspice_mcp.lib.log_parser import LogDiagnostics
+from ltspice_mcp.lib.log_parser import LogDiagnostics, device_key
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
@@ -57,6 +58,11 @@ from ltspice_mcp.lib.raw_parser import (
     is_noise_analysis,
     other_raw_path,
     points_reached,
+)
+from ltspice_mcp.lib.result_observations import (
+    coarse_compressed_waveform,
+    coarse_waveform_observation,
+    deck_tran_max_step,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
@@ -185,27 +191,6 @@ class AnalysisSource:
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
-    @classmethod
-    def for_raw(cls, raw_path: Path) -> AnalysisSource:
-        """The candidate log and console companions of a bare ``.raw`` path.
-
-        For a read that has only a path to go on. ``log`` is always a concrete
-        path (existence not guaranteed); ``netlist``, ``dialect`` and
-        ``identity`` are null because a bare path names no producing run. A read
-        that DOES know the run gets its source from ``source_for_run`` or
-        ``resolve_analysis_source`` instead — those carry the deck and identity
-        this cannot.
-        """
-        return cls(
-            raw=raw_path,
-            log=raw_path.with_suffix(".log"),
-            netlist=None,
-            dialect=None,
-            identity=None,
-            trusted_job_artifact=False,
-            console=raw_path.with_suffix(".exe.log"),
-        )
-
 
 def source_for_raw_path(
     raw: Path, state: SessionState, *, plot_index: int = 0, dialect: str | None = None
@@ -253,6 +238,31 @@ def source_for_run(
         simulator_version=run.simulator_version,
         observations=run.observations,
     )
+
+
+def coarse_waveform(source: AnalysisSource, raw: DecodedRaw) -> dict[str, float] | None:
+    """Whether waveform compression left ``raw``'s transient coarse
+    (``coarse_compressed_waveform``), judged against the maximum step of the
+    deck ``source`` names. The deck is read only for a plot already coarse by
+    its run's share alone, since the deck's step can only raise the bar.
+    Blocking: it may read the deck."""
+    found = coarse_compressed_waveform(raw)
+    if found is None or source.netlist is None:
+        return found
+    return coarse_compressed_waveform(raw, max_step=deck_tran_max_step(source.netlist))
+
+
+def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str, Any], ...]:
+    """What a read of ``raw`` from ``source`` says of the results it read: the
+    source's own (a stopped case's ``partial_raw``), and whether waveform
+    compression left a transient coarse (:func:`coarse_waveform`). Blocking:
+    it may read the deck."""
+    found = coarse_waveform(source, raw)
+    if found is None:
+        return source.observations
+    case_id = (source.identity or {}).get("case_id")
+    label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
+    return (*source.observations, dict(coarse_waveform_observation([(label, found)], run_cap=1)))
 
 
 _analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
@@ -357,7 +367,21 @@ def experiment_run_context(
     if not matches:
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
-    case = matches[0]
+    return case_run_context(job, matches[0], state, require_raw=require_raw, other_raw=other_raw)
+
+
+def case_run_context(
+    job: ExperimentJob,
+    case: ExperimentCase,
+    state: SessionState,
+    *,
+    require_raw: bool = True,
+    other_raw: OtherRawKind | None = None,
+) -> RunContext:
+    """``experiment_run_context`` for a caller already holding the case, of a
+    job whose runs it has checked are terminal. A caller reading every case of
+    a job takes each this way rather than finding it again by its id."""
+    job_id = job.job_id
     if not has_readable_raw(case) or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
     raw = case.raw_file
@@ -673,50 +697,6 @@ def load_logs_sync(source: AnalysisSource, state: SessionState) -> DecodedLog:
     return _parse_logs_sync(source, state, deadline=deadline)
 
 
-# A ``dev.param`` operating-point shorthand: everything before the LAST dot is
-# the device, so a flattened subcircuit path ('m.x1.mn.gm') parses too.
-DEV_PARAM_RE = re.compile(r"([a-z][\w.]*)\.([a-z]\w*)")
-
-
-def device_param_forms(signal: str) -> list[str]:
-    """The result names a ``dev.param`` operating-point shorthand can address.
-
-    ngspice writes a device parameter bare (``@m1[gm]``), v-wrapped
-    (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``) depending on the quantity,
-    and LTspice's ``.log`` block is folded into ``device_op_points`` under the
-    bare form. Empty when the name is not a shorthand.
-
-    Public because two readers resolve the shorthand the docs promise —
-    ``resolve_signal`` against a raw's trace list, ``analyze_results``
-    against an operating-point result — and a second copy of the rule is how
-    one of them ends up rejecting a name the other accepts.
-    """
-    match = DEV_PARAM_RE.fullmatch(signal.lower())
-    if match is None:
-        return []
-    dev, param = match.group(1), match.group(2)
-    return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
-
-
-def device_param_name(names: Iterable[str], signal: str) -> str | None:
-    """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
-
-    Its literal forms (``device_param_forms``) first, then the device by the
-    end of its path (``x1.mn.gm`` for ngspice's ``@m.x1.mn[gm]``, LTspice 26's
-    ``@x1:mn[gm]`` or XVII's ``@m:1:n[gm]``), refused when more than one
-    matches: never a guess.
-    The one rule behind both readers of the shorthand.
-    """
-    match = DEV_PARAM_RE.fullmatch(signal.lower())
-    if match is None:
-        return None
-    by_lower = {name.lower(): name for name in names}
-    for form in device_param_forms(signal):
-        if form in by_lower:
-            return by_lower[form]
-    return find_device_param(by_lower.values(), *match.groups())
-
-
 #: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
 #: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
 #: no comma, parenthesis or space, which keeps the split unambiguous.
@@ -856,9 +836,15 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
         )
     hint = ""
     sig_lo = signal.lower()
-    dev_param = DEV_PARAM_RE.fullmatch(sig_lo)
+    dev_param = parse_shorthand(sig_lo)
     trace_lo = {t.lower() for t in trace_names}
-    if sig_lo in ("v(onoise)", "v(inoise)") and (
+    descriptor = getattr(raw, "descriptor", None)
+    if sig_lo in {name.lower() for name in getattr(descriptor, "step_variables", ())}:
+        hint = (
+            f" '{signal}' holds each step's stepped value, not a signal: read it from "
+            "the steps (each row's step_values, or RawResult.steps)."
+        )
+    elif sig_lo in ("v(onoise)", "v(inoise)") and (
         "onoise_spectrum" in trace_lo or "inoise_spectrum" in trace_lo
     ):
         hint = " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
@@ -867,7 +853,7 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
     elif dev_param or "@" in sig_lo:
-        save_target = f"@{dev_param.group(1)}[{dev_param.group(2)}]" if dev_param else signal
+        save_target = device_key(*dev_param) if dev_param else signal
         hint = (
             f" Per-device small-signal params (gm/gds/vth/...) come back from "
             f"operating_point(device=...). As a raw trace (for a sweep/plot), ngspice "
@@ -877,7 +863,9 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
     return ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 
 
-def _node_pair(raw: RawData, signal: str, plus_node: str, minus_node: str) -> Signal:
+def _node_pair(
+    raw: DecodedRaw | DecodedPlot, signal: str, plus_node: str, minus_node: str
+) -> Signal:
     """``V(plus_node, minus_node)`` read from the two node voltages of ``raw``.
 
     A ground alias (``0``, ``gnd``) that the raw carries no voltage for is
@@ -917,7 +905,7 @@ def _node_spelling(trace: str | None, node: str) -> str:
     return match.group(1) if match else node
 
 
-def resolve_signal(raw: RawData, signal: str) -> Signal:
+def resolve_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> Signal:
     """Resolve ``signal`` against ``raw``: one trace, or a node pair ``V(a,b)``.
 
     A trace the raw actually carries wins, including one literally named

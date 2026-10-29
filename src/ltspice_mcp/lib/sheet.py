@@ -61,6 +61,22 @@ class PlacedPin:
         }
 
 
+#: An instance's own ``Prefix`` overrides its symbol's: both builds write the
+#: part's card with that element letter, in either case of the letter, on a
+#: library, stock or block symbol (recorded: ``export/instance_prefix``).
+#: spicelib reads the attribute back in upper case.
+INSTANCE_PREFIX = "Prefix"
+
+
+def element_letter(own_prefix: str | None, symbol_prefix: str | None, reference: str) -> str:
+    """The element letter a placed part netlists as: from its own ``Prefix``
+    when it has one, else from its symbol's (``QN`` is ``Q``), else its
+    reference's first letter. LTspice puts that letter in front of a name that
+    does not already start with it, so a part named ``Vin`` on a resistor
+    symbol is a resistor."""
+    return (own_prefix or symbol_prefix or reference)[:1].upper()
+
+
 #: The attributes whose text LTspice writes onto a part's netlist line, in the
 #: order it writes them, after the nodes and any SpiceModel (recorded:
 #: ``export-attributes``). A ``KEY=VALUE`` in any of them is a parameter of
@@ -110,6 +126,21 @@ class SheetPart:
     def attribute(self, name: str) -> str | None:
         """The value of attribute ``name``; the last one when the part repeats it."""
         return self.record.attr(name)
+
+    @property
+    def element(self) -> str:
+        """The element letter the part netlists as (:func:`element_letter`)."""
+        found = self.symbol if self.usable else None
+        return element_letter(
+            self.attribute(INSTANCE_PREFIX),
+            found.file.prefix if found is not None else None,
+            self.reference,
+        )
+
+    @property
+    def spice_model(self) -> str:
+        """The model the part's ``SpiceModel`` attribute selects, or ``""``."""
+        return self.attribute("SpiceModel") or ""
 
     @property
     def parameters(self) -> tuple[tuple[str, str], ...]:

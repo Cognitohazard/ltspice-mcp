@@ -33,6 +33,7 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -116,6 +117,17 @@ _RULES = (
         "SpiceLine and SpiceLine2, which LTspice writes onto one netlist line.",
         check="quality",
         provenance="export-attributes",
+    ),
+    Rule(
+        "subcircuit_value_slot",
+        "electrical",
+        "part",
+        "A Value on a subcircuit call that LTspice writes last on its line, where the "
+        "subcircuit is named: an opamp's complexity level (Level.2), or any Value on a "
+        "part whose model its SpiceModel attribute selects.",
+        check="quality",
+        provenance="export-attributes",
+        severity="warning",
     ),
     Rule(
         "net_with_two_names",
@@ -249,12 +261,20 @@ class Finding:
     refs: tuple[str, ...] = ()
     points: tuple[Point, ...] = ()
     facts: Mapping[str, Any] = field(default_factory=dict)
+    #: What the finding is about in place of its facts, where they hold an
+    #: attribute's words: so a part given a new value keeps the finding it
+    #: had. Said by the other fields already, so two findings equal without it.
+    about: tuple[Any, ...] | None = field(default=None, compare=False)
 
     @property
     def identity(self) -> tuple[Any, ...]:
-        """What makes this the same finding as another: its rule and what it is
-        about. The sentence says no more than these do."""
-        return (self.rule, self.refs, self.points, tuple(sorted(self.facts.items())))
+        """What makes this the same finding as another, before and after an
+        edit: its rule, its parts, its places and its facts. A rule whose
+        findings move with the parts they name (``_finds(placeless=True)``)
+        leaves the places out, as does a finding with an ``about``."""
+        what = self.about if self.about is not None else tuple(sorted(self.facts.items()))
+        placeless = self.about is not None or self.rule in _PLACELESS
+        return (self.rule, self.refs, () if placeless else self.points, what)
 
 
 @dataclass(frozen=True)
@@ -290,11 +310,21 @@ class Part:
     #: The attributes whose text LTspice writes onto the part's netlist line,
     #: as ``(name, text)`` in that order (``sheet.PARAMETER_ATTRIBUTES``).
     parameters: tuple[tuple[str, str], ...] = ()
+    #: The element letter the part netlists as (``sheet.SheetPart.element``),
+    #: and the model its ``SpiceModel`` attribute selects, if any.
+    element: str = ""
+    spice_model: str = ""
 
     @property
     def name(self) -> str:
         """What to call the part in a finding: its reference, else its symbol."""
         return self.ref or self.symbol or "<unnamed>"
+
+    @property
+    def draws_known(self) -> bool:
+        """Whether the lines, rectangles or circles it draws are known; a part
+        drawn without them counts as drawing its whole body."""
+        return bool(self.strokes or self.areas)
 
     @property
     def drawn(self) -> BBox | None:
@@ -372,11 +402,19 @@ _Finder = Callable[[_Index], list[Finding]]
 _FINDERS: dict[str, _Finder] = {}
 
 
-def _finds(rule_id: str) -> Callable[[_Finder], _Finder]:
-    """Register the function that finds ``rule_id``."""
+#: The rules whose findings move with the parts they name.
+_PLACELESS: set[str] = set()
+
+
+def _finds(rule_id: str, *, placeless: bool = False) -> Callable[[_Finder], _Finder]:
+    """Register the function that finds ``rule_id``. A ``placeless`` rule's
+    findings move with the parts they name, so a part moved keeps the finding
+    it had (``Finding.identity``)."""
 
     def register(finder: _Finder) -> _Finder:
         _FINDERS[rule_id] = finder
+        if placeless:
+            _PLACELESS.add(rule_id)
         return finder
 
     return register
@@ -390,7 +428,7 @@ def _wire(a: Point, b: Point) -> str:
     return f"{_at(a)}->{_at(b)}"
 
 
-@_finds("unresolved_symbol")
+@_finds("unresolved_symbol", placeless=True)
 def _parts_without_a_symbol(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for part in ix.view.parts:
@@ -468,7 +506,7 @@ def _dropped_wires(ix: _Index) -> list[Finding]:
     return found
 
 
-@_finds("duplicate_parameter")
+@_finds("duplicate_parameter", placeless=True)
 def _duplicate_parameters(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for part in ix.view.parts:
@@ -527,6 +565,44 @@ def floating_pins(view: SheetView) -> list[tuple[Part, tuple[str, int, int]]]:
     A wire of no length connects nothing.
     """
     return _floating(_Index(view))
+
+
+#: An opamp's complexity level as LTspice's symbol dialog names it.
+_LEVEL_LABEL = re.compile(r"\s*level\.\d+\s*", re.IGNORECASE)
+
+
+@_finds("subcircuit_value_slot")
+def _subcircuit_value_slots(ix: _Index) -> list[Finding]:
+    # A part that netlists as a subcircuit call (element letter X) writes its
+    # Value last, after its nodes and any SpiceModel (export-attributes). A
+    # library part that names its subcircuit in Value, with no SpiceModel, is
+    # the ordinary case and is not said; on a transistor or diode a Value after
+    # its SpiceModel is an area factor.
+    found: list[Finding] = []
+    for part in ix.view.parts:
+        value = dict(part.parameters).get("Value", "")
+        if part.element != "X" or not value.strip():
+            continue
+        if _LEVEL_LABEL.fullmatch(value):
+            detail = (
+                f"{part.name}: Value {value!r} is an opamp's complexity-level label, but "
+                "LTspice writes a subcircuit call's Value last on its X line, where the "
+                f"subcircuit it calls is named, so it calls one named {value!r}. Select "
+                "the level through the SpiceModel attribute (or the symbol's default)"
+            )
+        elif part.spice_model:
+            detail = (
+                f"{part.name}: its model is selected by its SpiceModel attribute "
+                f"({part.spice_model!r}), and LTspice writes Value {value!r} after it on "
+                f"the X line, so {value!r} is named as the subcircuit and "
+                f"{part.spice_model!r} as one more node. Clear the Value"
+            )
+        else:
+            continue
+        found.append(
+            Finding("subcircuit_value_slot", detail, refs=(part.name,), facts={"value": value})
+        )
+    return found
 
 
 @_finds("net_with_two_names")
@@ -635,7 +711,7 @@ def _diagonal_wires(ix: _Index) -> list[Finding]:
     ]
 
 
-@_finds("floating_pin")
+@_finds("floating_pin", placeless=True)
 def _floating_pins(ix: _Index) -> list[Finding]:
     return [
         Finding(
@@ -705,7 +781,7 @@ def _duplicate_wires(ix: _Index) -> list[Finding]:
     ]
 
 
-@_finds("symbol_overlap")
+@_finds("symbol_overlap", placeless=True)
 def _symbol_overlaps(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for position, (_index, part_a, box_a) in enumerate(ix.boxed):
@@ -823,8 +899,53 @@ def _wires_through_symbols(ix: _Index) -> list[Finding]:
         )
         for a, b in ix.wires
         for _index, part, box in ix.drawn
-        if _through(a, b, box) and not _way_out_from_own_pin(a, b, part, box)
+        if _through(a, b, box)
+        and not _way_out_from_own_pin(a, b, part, box)
+        and _meets_drawing(part, a, b)
     ]
+
+
+def _side(p: Point, q: Point, r: Point) -> int:
+    """Which side of the line ``p``-``q`` the point ``r`` lies on: 1, -1, or
+    0 on the line."""
+    cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    return (cross > 0) - (cross < 0)
+
+
+def _meet(a: Point, b: Point, c: Point, d: Point) -> bool:
+    """True if segments ``a``-``b`` and ``c``-``d`` share a point, crossing or
+    touching."""
+    if _side(a, b, c) * _side(a, b, d) < 0 and _side(c, d, a) * _side(c, d, b) < 0:
+        return True
+    return (
+        point_on_segment(c, a, b)
+        or point_on_segment(d, a, b)
+        or point_on_segment(a, c, d)
+        or point_on_segment(b, c, d)
+    )
+
+
+def _meets_drawing(part: Part, a: Point, b: Point) -> bool:
+    """True if segment ``a``-``b`` meets what ``part`` draws: crosses or
+    touches one of its lines, or passes through one of its rectangles or
+    circles. A part drawn without those is met anywhere."""
+    if not part.draws_known:
+        return True
+    return any(_meet(a, b, c, d) for c, d in part.strokes) or any(
+        _through(a, b, area) for area in part.areas
+    )
+
+
+def _encloses(part: Part, body: BBox, x: int, y: int) -> bool:
+    """True if ``(x, y)`` lies within what ``part`` draws: inside one of its
+    rectangles or circles, or closed in by what it draws to the left, right,
+    above and below, as a point inside an amplifier's triangle or on one of
+    its lines is and one in the empty corner of its body beside the triangle
+    is not. A part drawn without lines or areas encloses its whole body."""
+    if any(area.strictly_contains(x, y) for area in part.areas):
+        return True
+    beyond = ((body.x1 - 1, y), (body.x2 + 1, y), (x, body.y1 - 1), (x, body.y2 + 1))
+    return all(_meets_drawing(part, (x, y), edge) for edge in beyond)
 
 
 def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
@@ -834,7 +955,7 @@ def _draws_over(part: Part, body: BBox, box: BBox) -> bool:
     those reaches wherever its body does."""
     if not body.overlaps(box):
         return False
-    if not (part.strokes or part.areas):
+    if not part.draws_known:
         return True
     return any(_through(a, b, box) for a, b in part.strokes) or any(
         area.overlaps(box) for area in part.areas
@@ -867,14 +988,17 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for n, (index, part, at, text, core) in enumerate(drawn):
         # What the text is drawn across: words for it, the parts and the
-        # points it names, and its own facts.
-        across: list[tuple[str, tuple[str, ...], tuple[Point, ...], dict[str, str]]] = [
-            (f"wire {_wire(a, b)}", (), (a, b), {"across": "wire"})
+        # points it names, its own facts, and what it is by name, which a move
+        # of the parts it names or a new value leaves as it was.
+        across: list[
+            tuple[str, tuple[str, ...], tuple[Point, ...], dict[str, str], tuple[Any, ...]]
+        ] = [
+            (f"wire {_wire(a, b)}", (), (a, b), {"across": "wire"}, ("wire", a, b))
             for a, b in ix.wires
             if _through(a, b, core)
         ]
         across += [
-            (f"{other.name}'s body", (other.name,), (), {"across": "body"})
+            (f"{other.name}'s body", (other.name,), (), {"across": "body"}, ("body",))
             for other_index, other, body in ix.drawn
             if other_index != index and _draws_over(other, body, core)
         ]
@@ -885,6 +1009,9 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
                 (owner.name,) if owner else (),
                 (other_at,),
                 {"across": "text", "other_text": other_text},
+                ("text", _attribute_of(owner, other_text))
+                if owner
+                else ("text", other_text, other_at),
             )
             for owner, other_at, other_text, other_core in texts[n + 1 :]
             if other_core.overlaps(core)
@@ -896,10 +1023,17 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
                 refs=(part.name, *others),
                 points=(at, *points),
                 facts={"text": text, **facts},
+                about=(_attribute_of(part, text), *of),
             )
-            for what, others, points, facts in across
+            for what, others, points, facts, of in across
         ]
     return found
+
+
+def _attribute_of(part: Part, text: str) -> str:
+    """Which of a part's two drawn attributes ``text`` is: its reference, which
+    the InstName window shows, or else its value."""
+    return "InstName" if text == part.ref else "Value"
 
 
 @_finds("label_over_component")
@@ -941,7 +1075,7 @@ def _texts_in_symbol_bodies(ix: _Index) -> list[Finding]:
         )
         for x, y, text, owner in anchors
         for index, part, box in ix.drawn
-        if owner != index and box.strictly_contains(x, y)
+        if owner != index and box.strictly_contains(x, y) and _encloses(part, box, x, y)
     ]
 
 
@@ -1010,6 +1144,9 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       (``connectivity.same_instance_dropped_segments``).
     - ``duplicate_parameter``: a part giving one parameter, in any case, more
       than once across the attributes LTspice writes onto its line.
+    - ``subcircuit_value_slot``: a Value on a part that netlists as a
+      subcircuit call (element letter X), where it is an opamp's complexity
+      level or the part's model comes from SpiceModel.
     - ``net_with_two_names``: a net, labels of one name being one node, whose
       labels carry two or more names, compared as LTspice compares them, ground
       no name. LTspice gives the node one of them.
@@ -1025,9 +1162,11 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``duplicate_wire``: two wires with the same two ends, in either order.
     - ``symbol_overlap``: two parts whose boxes share an area, each box with
       its pins: the box ``inspect`` and ``add_component`` report.
-    - ``wire_through_symbol``: a wire through what a part draws, without its
-      pins. A pin drawn apart from the body leaves room between them that an
-      ordinary wire to a nearer pin crosses.
+    - ``wire_through_symbol``: a wire through a part's body that meets what
+      the part draws: one of its lines, rectangles or circles, not an empty
+      corner such as the space beside an amplifier's triangle. The body is
+      without its pins: a pin drawn apart from the body leaves room between
+      them that an ordinary wire to a nearer pin crosses.
     - ``attribute_text_overlap``: a part's attribute text, laid out as
       LTspice lays it out with its extent estimated from LTspice's font,
       that a wire or a line another part draws passes through, or that shares
@@ -1035,9 +1174,11 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       text, by more than the estimate's slack (:func:`_core`).
     - ``label_over_component``: a label strictly inside a part's box and on no
       pin. A label on a pin, any part's, is the ordinary flag.
-    - ``text_in_symbol_body``: text anchored inside what another part draws.
-      Only the anchor is tested, so the later lines of a directive that runs
-      down into a part are not reported.
+    - ``text_in_symbol_body``: text anchored inside what another part draws:
+      in one of its rectangles or circles, or closed in by its lines on every
+      side, not in an empty corner of its body. Only the anchor is tested, so
+      the later lines of a directive that runs down into a part are not
+      reported.
     - ``stacked_directive``: two or more directives or comments at exactly one
       anchor, with no guess at how far text reaches.
     - ``label_island``: a net joined only by labels of one name, with no wire

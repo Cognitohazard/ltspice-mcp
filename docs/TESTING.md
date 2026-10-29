@@ -466,19 +466,24 @@ differently, and the tests pin LTspice's reading of each:
 - A transient saved from a later start time (`.tran 0 2m 1m`) starts at zero in
   LTspice's reader; the server adds the header's `Offset`.
 - LTspice's reader refuses a file of one point (an operating point, a transfer
-  function); the server reads it.
+  function, a noise analysis at one frequency); the server reads it.
 - LTspice's reader refuses a file that holds only its axis, a run whose
   `.save` named nothing it stored, since it reads signals by name; the server
   reads its axis.
-- LTspice's reader reads a stepped operating point, and a stepped AC analysis
-  at one frequency, as one sweep with the stepped parameter as its axis; the
-  server keeps one point per step. Both files store one point a step with the
-  stepped parameter first and no frequency.
+- LTspice's reader reads a stepped operating point (over a parameter or over
+  temperature), a stepped transfer function, and a stepped AC or noise
+  analysis at one frequency, as one sweep with the stepped parameter as its
+  axis; the server keeps one point per step. These files store one point a
+  step with the stepped parameter first and no frequency.
 - LTspice's reader reads a run stopped part way up to its header's point count,
   which can lag the samples; the server's decoder refuses a file whose header
   and samples disagree, and the server instead reports how far the run got by
   counting the complete points in the file (`PartialRawProgress` in
   `lib/raw_parser.py`).
+
+Both readers refuse the `.op.raw` of a stepped run as LTspice 26 writes it: one
+point, with nothing that says which step's it is. XVII's opens with the step's
+parameter and reads as that one step.
 
 Other bridges may be running on the machine, each with its own hidden LTspice
 that starts and exits as windows open and close (an assistant session with

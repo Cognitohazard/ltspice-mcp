@@ -9,9 +9,13 @@ Three layers of coverage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
     SpiceLexError,
     SpiceLexErrorCategory,
     Token,
@@ -599,6 +603,77 @@ class TestCanonicalThenSpanEdits:
         assert "Vdd=12.0" in out
 
 
+class TestACardThatGoesOnPastAComment:
+    """A comment ends at the end of its line, and the card goes on on the next
+    ``+`` line (recorded: deck/comment_then_continuation). An edit keeps every
+    line's parameters: made in place it keeps the comment too, and a card
+    written again whole loses only the comment."""
+
+    @pytest.mark.parametrize(
+        ("text", "edit", "written"),
+        [
+            (
+                "M1 d g s b nmos W=1u ; width\n+ L=1u\n",
+                lambda card: InstanceLine.from_card(card).set_param("L", "2u"),
+                "M1 d g s b nmos W=1u ; width\n+ L=2u\n",
+            ),
+            (
+                "M1 d g s b nmos W=1u ; width\n+ L=1u\n",
+                lambda card: InstanceLine.from_card(card).set_param("AD", "1p"),
+                "M1 d g s b nmos W=1u L=1u AD=1p\n",
+            ),
+            (
+                ".subckt amp in out ; pins\n+ params: gain=2\n",
+                lambda card: SubcktCard.from_card(card).set_param_default("gain", "3"),
+                ".SUBCKT amp in out PARAMS: gain=3\n",
+            ),
+            (
+                "M1 d g s b nmos W=1u\n* width\n+ L=1u\n",
+                lambda card: InstanceLine.from_card(card).set_param("AD", "1p"),
+                "M1 d g s b nmos W=1u L=1u AD=1p\n",
+            ),
+        ],
+        ids=["in_place", "written_again", "subckt", "comment_on_a_line_of_its_own"],
+    )
+    def test_an_edit_keeps_the_lines_past_the_comment(
+        self, text: str, edit: Callable[[SpiceCard], object], written: str
+    ) -> None:
+        cards = lex(text).cards
+        edit(cards[0])
+        assert emit(cards) == written
+
+    def test_a_continuation_that_is_only_a_comment_gives_nothing(self) -> None:
+        cards = lex("R1 a 0 1k\n+ ; only a comment\n").cards
+        assert cards[0].body == "R1 a 0 1k"
+        InstanceLine.from_card(cards[0]).set_param("tc1", "0.01")
+        assert emit(cards) == "R1 a 0 1k tc1=0.01\n"
+
+
+class TestADollarSign:
+    """A ``$`` that stands alone begins a comment; one inside a word or at its
+    start is part of it (recorded: deck/comment_dollar, deck/dollar_*)."""
+
+    @pytest.mark.parametrize(
+        ("text", "words", "comment"),
+        [
+            ("R1 a 0 1k $ 2k", ["R1", "a", "0", "1k"], "$ 2k"),
+            ("R1 a 0 1k $", ["R1", "a", "0", "1k"], "$"),
+            ("R1 N$1 0 1k", ["R1", "N$1", "0", "1k"], None),
+            ("R1 $N_0001 0 1k", ["R1", "$N_0001", "0", "1k"], None),
+            ("R1 $N_0001 0 1k $ load", ["R1", "$N_0001", "0", "1k"], "$ load"),
+        ],
+    )
+    def test_only_a_dollar_sign_that_stands_alone_begins_a_comment(
+        self, text: str, words: list[str], comment: str | None
+    ) -> None:
+        (card,) = lex(text + "\n").cards
+        assert card.body.split() == words
+        tokens = tokenize_body(text)
+        assert [t.text for t in tokens if t.kind != TokenKind.COMMENT_TRAIL] == words
+        trail = [t.text for t in tokens if t.kind == TokenKind.COMMENT_TRAIL]
+        assert trail == ([comment] if comment else [])
+
+
 class TestStructuredErrors:
     def test_unbalanced_brace_carries_category_and_position(self) -> None:
         with pytest.raises(SpiceLexError) as ei:
@@ -936,6 +1011,72 @@ class TestModelCard:
         assert "KP" not in view.params
         assert "KP" not in emit(cards)
 
+    def test_a_value_in_parentheses_is_replaced_where_it_stands(self) -> None:
+        """A model card as a PDK writes one, over continuation lines: every
+        copy of a value is set where it stands, a new parameter goes after the
+        last, and the rest of the card keeps every character, where the card
+        was rendered again on one line."""
+        text = (
+            ".model nch  nmos ( level=54  version=4.5\n+ vth0 = 0.4\n+ toxe=1.8e-9  vth0=0.41 )\n"
+        )
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        view.set_param("VTH0", "0.45")
+        view.set_param("toxe", "2e-9")
+        view.set_param("k1", "0.5")
+        assert emit(cards) == (
+            ".model nch  nmos ( level=54  version=4.5\n"
+            "+ vth0=0.45\n"
+            "+ toxe=2e-9  vth0=0.45 k1=0.5 )\n"
+        )
+        assert ModelCard.from_card(lex(emit(cards)).cards[0]).param_pairs() == [
+            ("level", "54"),
+            ("version", "4.5"),
+            ("vth0", "0.45"),
+            ("toxe", "2e-9"),
+            ("vth0", "0.45"),
+            ("k1", "0.5"),
+        ]
+
+    def test_a_rename_changes_the_name_alone(self) -> None:
+        """What a Monte Carlo variant does to a model card: renamed, then a
+        value set, each in place."""
+        text = ".model nch nmos (level=54\n+ vth0=0.4 )\n"
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        view.set_name("nch_mc1")
+        view.set_param("vth0", "0.42")
+        assert emit(cards) == ".model nch_mc1 nmos (level=54\n+ vth0=0.42 )\n"
+        assert cards[0].name == "nch_mc1"
+
+    @pytest.mark.parametrize(
+        ("text", "edited"),
+        [
+            (
+                ".model dx d(is=1e-14 ; saturation current\n+ n=2)\n",
+                ".model dx d(is=2e-14 ; saturation current\n+ n=3 rs=1)\n",
+            ),
+            (
+                ".model dx d is=1e-14 ; saturation current\n+ n=2\n",
+                ".model dx d is=2e-14 ; saturation current\n+ n=3 rs=1\n",
+            ),
+        ],
+        ids=["inside_the_parentheses", "at_the_end_of_a_line"],
+    )
+    def test_a_card_that_goes_on_past_a_comment_is_edited_where_it_stands(
+        self, text: str, edited: str
+    ) -> None:
+        """The comment ends at the end of its line and the card goes on
+        (recorded: deck/comment_*): every parameter is read, each is set where
+        it stands, a new one follows the last, and the comment stays."""
+        cards = lex(text).cards
+        view = ModelCard.from_card(cards[0])
+        assert view.params == {"is": "1e-14", "n": "2"}
+        view.set_param("n", "3")
+        view.set_param("is", "2e-14")
+        view.set_param("rs", "1")
+        assert emit(cards) == edited
+
     def test_clean_card_round_trips_byte_for_byte(self) -> None:
         text = ".MODEL NMOS1 NMOS  (VTO=0.7   KP=100u)\n"
         cards = lex(text).cards
@@ -1127,6 +1268,25 @@ class TestInstanceLineRepeatedParameter:
             view.set_param(key, value)
         assert emit(cards) == expected
         assert view.param_pairs() == InstanceLine.from_card(cards[0]).param_pairs()
+
+    @pytest.mark.parametrize(
+        "deck",
+        ["M1 d g s b NMOS w=1u W=1u\n", "M1 d g s b NMOS w=1u w=1u\n", "M1 d g s b NMOS W=1u\n"],
+        ids=["two_spellings", "same_spelling", "once"],
+    )
+    def test_copies_that_agree_read_as_their_value(self, deck: str) -> None:
+        view = InstanceLine.from_card(lex(deck).cards[0])
+        assert view.get_param("w") == "1u"
+
+    @pytest.mark.parametrize(
+        "deck", ["M1 d g s b NMOS w=1u W=2u\n", "M1 d g s b NMOS w=1u w=2u\n"]
+    )
+    def test_copies_that_disagree_are_not_read_as_either(self, deck: str) -> None:
+        """Which copy a simulator reads is not recorded here, so a reader
+        such as a Monte Carlo mismatch, which sizes a shift by W, is told."""
+        view = InstanceLine.from_card(lex(deck).cards[0])
+        with pytest.raises(NetlistError, match=r"M1 gives W 2 times.*w=1u.*[wW]=2u"):
+            view.get_param("W")
 
     def test_removing_a_parameter_removes_every_copy(self) -> None:
         cards = lex("M1 d g s b NMOS w=1u l=1u W=2u\n").cards
@@ -1574,21 +1734,6 @@ class TestMeasCard:
     def test_a_call_inside_an_expression_is_named(self, directive: str, names: list[str]) -> None:
         view = MeasCard.from_card(lex(directive + "\n").cards[0])
         assert [fc.name for fc in view.function_calls] == names
-
-    def test_set_label_rerenders(self) -> None:
-        cards = lex(".MEAS TRAN vmax MAX V(out)\n").cards
-        view = MeasCard.from_card(cards[0])
-        view.set_label("peak_v")
-        out = emit(cards)
-        assert "peak_v" in out
-        assert "vmax" not in out
-
-    def test_set_analysis_rerenders(self) -> None:
-        cards = lex(".MEAS gain MAX V(out)\n").cards
-        view = MeasCard.from_card(cards[0])
-        view.set_analysis("tran")
-        out = emit(cards)
-        assert "TRAN" in out
 
 
 # ---------------------------------------------------------------------------

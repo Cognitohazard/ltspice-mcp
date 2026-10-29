@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ltspice_mcp.config import SANDBOX_ENV, SANDBOX_KEY, SANDBOX_SECTION, ServerConfig
+from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import hidden_desktop
 from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.cache import FileCache
@@ -268,8 +269,14 @@ class SessionState:
                 f"on the next call, no restart. {SANDBOX_ENV} sets the same list "
                 "and overrides the file (restart required)."
             )
+        try:
+            here = self.resolve_path(".")
+        except PathSecurityError:
+            relative = ""
+        else:
+            relative = f" A relative path is taken from {here}, so a scratch file can go there."
         return (
-            f"Allowed paths: {allowed}\n"
+            f"Allowed paths: {allowed}.{relative}\n"
             "To work on this file: pass its content inline where the argument takes "
             "text (a compare reference), copy it into one of those directories, or "
             f"{widen} An inspect capabilities query shows the full sandbox configuration."

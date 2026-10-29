@@ -93,6 +93,20 @@ class TestAssignExpansion:
             {"R1": "2k", "C1": "2n"},
         ]
 
+    def test_a_one_value_entry_holds_its_targets_in_every_case(self, tmp_path: Path):
+        # The idiom guide section 'variations' gives for a value held fixed
+        # across a sweep: it multiplies the grid by one.
+        circuit = _deck(tmp_path / "dut.cir")
+        sweep = AssignVariation(kind="assign", assign={"R1": ["1k", "2k"]})
+        held = AssignVariation(kind="assign", assign={"gain": [3], "C1": ["2n"]})
+
+        cases = expand_variations([circuit], [sweep, held])
+
+        assert [case.assignments for case in cases] == [
+            {"R1": "1k", "gain": 3, "C1": "2n"},
+            {"R1": "2k", "gain": 3, "C1": "2n"},
+        ]
+
     def test_zip_rejects_unequal_lengths(self):
         with pytest.raises(ValidationError, match="equal lengths"):
             AssignVariation(
@@ -1116,9 +1130,10 @@ class TestRulesReadWhatEarlierRulesWrote:
         )
 
         # The second rule perturbed the card the first one injected, so both
-        # variants are on the deck and the instance names the newer of them.
-        assert ".MODEL NM__M1 " in cases[0].text
-        assert ".MODEL NM__M1__M1 " in cases[0].text
+        # variants are on the deck, each a copy of the card as the deck spells
+        # it, and the instance names the newer of them.
+        assert ".model NM__M1 " in cases[0].text
+        assert ".model NM__M1__M1 " in cases[0].text
         assert "M1 d g 0 0 NM__M1__M1" in cases[0].text
 
     def test_an_unparsable_twin_declaration_reports_the_reference(self, tmp_path: Path):

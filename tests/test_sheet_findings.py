@@ -56,6 +56,7 @@ class TestTheRegistry:
                 "shared_reference",
                 "dropped_wire",
                 "duplicate_parameter",
+                "subcircuit_value_slot",
                 "net_with_two_names",
                 "joined_at_crossing",
                 "unjoined_crossing",
@@ -101,6 +102,7 @@ class TestTheRegistry:
             "quality": {
                 "shared_reference",
                 "duplicate_parameter",
+                "subcircuit_value_slot",
                 "label_over_component",
                 "text_in_symbol_body",
                 "stacked_directive",
@@ -111,6 +113,7 @@ class TestTheRegistry:
     def test_a_finding_on_a_whole_sheet_is_called_what_it_always_was(self) -> None:
         called = {rule.rule_id: rule.severity for rule in RULES.values()}
         assert called.pop("dropped_wire") == "warning"
+        assert called.pop("subcircuit_value_slot") == "warning"
         assert called.pop("unresolved_symbol") == "error"
         assert called.pop("shared_reference") == "error"
         assert set(called.values()) == {"observation"}
@@ -462,6 +465,16 @@ FRAMED = Part(
     pins=(("IN", 0, 48), ("OUT", 160, 48), ("REF", 112, 64)),
 )
 
+#: An amplifier drawn as a triangle pointing right, as LTspice's opamp is: its
+#: body box has empty corners above and below the slopes.
+TRIANGLE = Part(
+    "U2",
+    box=BBox(-32, -64, 96, 64),
+    body=BBox(-32, -64, 96, 64),
+    pins=(("In-", -32, -32), ("In+", -32, 32), ("OUT", 96, 0)),
+    strokes=(((-32, -64), (-32, 64)), ((-32, 64), (96, 0)), ((96, 0), (-32, -64))),
+)
+
 
 class TestHowTheSheetReads:
     def test_boxes_that_share_an_area_and_boxes_that_only_touch(self) -> None:
@@ -505,6 +518,19 @@ class TestHowTheSheetReads:
         view = SheetView(parts=(r1,), wires=((48, -16, 48, 112), (16, -16, 16, 112)))
         (found,) = only(view, "wire_through_symbol")
         assert found.points == ((16, -16), (16, 112))
+
+    def test_a_wire_through_an_empty_corner_of_a_body_is_not_through_the_part(self) -> None:
+        """Beside an amplifier's slope is inside its box, nowhere near a line
+        it draws; across the triangle is through it."""
+        view = SheetView(parts=(TRIANGLE,), wires=((48, -56, 128, -56), (16, -96, 16, 96)))
+        (found,) = only(view, "wire_through_symbol")
+        assert found.points == ((16, -96), (16, 96))
+
+    def test_a_wire_through_a_rectangle_a_part_draws_is_through_it(self) -> None:
+        plate = Part("C1", body=BBox(0, 0, 64, 96), areas=(BBox(0, 40, 64, 56),))
+        view = SheetView(parts=(plate,), wires=((32, -16, 32, 112), (48, 8, 80, 8)))
+        (found,) = only(view, "wire_through_symbol")
+        assert found.points == ((32, -16), (32, 112))
 
     def test_a_view_that_knows_no_body_uses_the_box(self) -> None:
         assert Part("R1", box=BBox(0, 0, 64, 96)).drawn == BBox(0, 0, 64, 96)
@@ -567,6 +593,55 @@ class TestHowTheSheetReads:
             (("R1",), {"text": "1k"}, "Text '1k' at (16,48) is anchored inside R1's body"),
             (("R2",), {"text": ".op"}, "Text '.op' at (110,48) is anchored inside R2's body"),
         ]
+
+    def test_text_in_an_empty_corner_of_a_body_is_not_in_the_part(self) -> None:
+        """Beside an amplifier's slope is inside its box but outside what it
+        draws; inside the triangle, or on one of its lines, is in it."""
+        view = SheetView(
+            parts=(TRIANGLE,),
+            texts=((64, -48, "corner"), (0, 0, "inside"), (32, -32, "on the slope")),
+        )
+        assert [one.facts["text"] for one in only(view, "text_in_symbol_body")] == [
+            "inside",
+            "on the slope",
+        ]
+
+    @pytest.mark.parametrize(
+        ("element", "spice_model", "value", "said"),
+        [
+            ("X", "", "Level.2", True),
+            ("X", "UniversalOpamp2", "level.1", True),
+            ("X", "UniversalOpamp2", "10k", True),
+            ("R", "", "Level.2", False),
+            ("R", "", "10k", False),
+            ("X", "", "LT1013", False),
+            ("Q", "mdl", "2", False),
+        ],
+        ids=[
+            "level-on-subcircuit",
+            "level-with-spicemodel",
+            "any-value-with-spicemodel",
+            "level-on-resistor",
+            "resistor-value",
+            "subcircuit-named-in-value",
+            "transistor-area-factor",
+        ],
+    )
+    def test_a_value_slot_a_subcircuit_call_cannot_hold(
+        self, element: str, spice_model: str, value: str, said: bool
+    ) -> None:
+        """LTspice writes a subcircuit call's Value last, where the subcircuit
+        is named: an opamp's complexity label there, or any Value after a
+        SpiceModel, names the wrong one. A library part naming its subcircuit
+        in Value is the ordinary case, and a transistor's Value after its
+        SpiceModel is its area factor."""
+        part = Part("U1", element=element, spice_model=spice_model, parameters=(("Value", value),))
+        found = only(SheetView(parts=(part,)), "subcircuit_value_slot")
+        assert [one.facts for one in found] == ([{"value": value}] if said else [])
+
+    def test_an_empty_value_slot_is_not_said(self) -> None:
+        part = Part("U1", element="X", spice_model="UniversalOpamp2")
+        assert only(SheetView(parts=(part,)), "subcircuit_value_slot") == []
 
     def test_attribute_text_across_a_wire_names_the_wire(self) -> None:
         value = Part("R1", text_extents=((0, 0, "10k", BBox(0, -8, 60, 14)),))

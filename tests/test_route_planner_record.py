@@ -6,8 +6,8 @@ those checks is held to this: on every sheet in the suite the editor opens,
 a fixed set of proposals (pin to pin straight and by each corner, pin to the
 middle of each wire, a detour through each other part, a waypoint on an end,
 an end given by the name of its net, and an end given by a label's point) is
-put to the planner, and what it answers, refusal or route with its
-advisories, is as it was when the record was made.
+put to the planner, and what it answers, refusal or route with the junctions
+it makes onto its own net, is as it was when the record was made.
 
 The record is ``fixtures/route_planner_record.json``. It keeps, for each sheet,
 how many proposals there were, a digest of every answer in order, and how many
@@ -135,7 +135,6 @@ def _answer(editor: AscEditor, proposal: Proposal) -> dict[str, Any]:
         return {"refused": str(refused)}
     return {
         "segments": [list(segment) for segment in plan.segments],
-        "warnings": list(plan.warnings),
         "junctions": list(plan.junctions),
     }
 
@@ -145,7 +144,8 @@ def _shape(answer: dict[str, Any]) -> str:
     if "refused" in answer:
         text = "refused: " + answer["refused"]
     else:
-        text = "routed: " + " | ".join(answer["warnings"]) if answer["warnings"] else "routed"
+        joined = sorted({str(junction["via"]) for junction in answer["junctions"]})
+        text = "routed: joins its net by " + ", ".join(joined) if joined else "routed"
     return without_particulars(text)
 
 
@@ -197,7 +197,8 @@ def test_record_the_planners_answers(tmp_path: Path):
 
 
 def test_the_record_asks_enough_to_hold_every_check():
-    """Each refusal and each advisory the planner has is in it many times over."""
+    """Each refusal the planner has, and each way a route joins its own net, is
+    in it many times over."""
     record = _recorded()
     shapes: dict[str, int] = {}
     for entry in record["sheets"].values():
@@ -217,8 +218,7 @@ def test_the_record_asks_enough_to_hold_every_check():
         "will create unintended junction",
         "runs along the wire",
         "Route touches",
-        "already wired to this net",
-        "The route touches",
+        "joins its net by",
     ):
         seen = sum(count for shape, count in shapes.items() if said in shape)
         assert seen >= 3, f"{said!r} is in {seen} recorded answers"

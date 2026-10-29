@@ -177,7 +177,9 @@ class DecodedRun:
 
 def _decode(build: str, case_id: str, scratch: Path, *, raw: bool) -> ParsedArtifacts:
     raw_path = recorded(build, f"{case_id}.raw") if raw else None
-    log_path = recorded(build, f"{case_id}.log")
+    # Another raw a run wrote beside its own (``raw/fra.fra_1``) is read with
+    # the run's log, as the server reads a case's other raw.
+    log_path = recorded(build, f"{case_id.partition('.')[0]}.log")
     return _decode_paths(
         raw_path,
         log_path if log_path.is_file() else None,

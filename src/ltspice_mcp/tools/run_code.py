@@ -511,6 +511,11 @@ def _hint(reply: dict[str, Any]) -> str | None:
     parts: list[str] = []
     if reply["status"] == "timeout":
         parts.append(_TIMEOUT_HINT)
+    elif reply["status"] == "error" and reply["error"]["type"] == "NameError":
+        parts.append(
+            "Each call starts from a fresh namespace, so a name an earlier call set "
+            "is gone: set it again here, or keep it on disk (a file, a job by request_id)."
+        )
     elif reply["status"] == "error":
         parts.append("reference('<op>') lists an op's arguments; the traceback names the line.")
     if reply["truncated"]:

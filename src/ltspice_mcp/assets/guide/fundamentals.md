@@ -18,8 +18,11 @@ description: >
 
 - `.END` must be the last line; nothing after it is read.
 - `+` at the start of a line continues the previous statement.
-- `*` starts a full-line comment. The inline comment is `;` in LTspice and `$`
-  in ngspice (`;` is not an inline comment in ngspice).
+- `*` starts a full-line comment. The inline comment is `;` in LTspice, or a
+  `$` that stands alone; a `$` inside a name (`N$1`, `$N_0001`) is part of the
+  name. In ngspice it is `$` (`;` is not an inline comment in ngspice). An
+  inline comment ends at the end of its line, and a `+` line after it still
+  continues the statement.
 
 ## Component Syntax
 
@@ -122,6 +125,13 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
   complex voltage, and it reads back as that number's magnitude, which is 7.46
   where the gain is -3.01 dB. Write `db(mag(V(out)))`. A `WHEN db(V(out))=-3`
   crossing is found either way.
+- On LTspice, the log prints every AC `.meas` result as dB and angle, a real
+  one included: `db(mag(V(out)))` of −3.01 prints as `(9.5722dB,180°)`, the
+  dB of its absolute value with its sign as the angle. `.options
+  meascplxfmt=polar` prints magnitude and angle instead, and `=cartesian`
+  real and imaginary parts. Read results through the `measurements` recipe
+  or `api.measurements`, which decode all three: a complex result as its
+  magnitude, a real one with its sign.
 - `MAX` returns the largest signed value. On a trace that stays negative, such
   as a PMOS drain current from −3 mA to −1 mA, `.meas TRAN imax MAX I(V1)`
   returns −1 mA. For the peak magnitude, measure `MAX abs(I(V1))`.

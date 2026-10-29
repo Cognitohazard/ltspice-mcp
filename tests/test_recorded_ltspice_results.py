@@ -22,8 +22,14 @@ from pydantic import ValidationError
 
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
-from ltspice_mcp.lib.device_names import owner_path, path_text, table_device_path
+from ltspice_mcp.lib.device_names import (
+    owner_path,
+    parse_device_param,
+    path_text,
+    table_device_path,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
@@ -34,13 +40,13 @@ from ltspice_mcp.lib.log_parser import (
     parse_step_iterations,
     parse_temperatures,
     read_device_op_points,
-    split_device_key,
 )
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     has_valid_raw_header,
+    may_hold_compressed_transient,
     raw_writer_command,
     read_partial_raw_progress,
 )
@@ -49,6 +55,7 @@ from ltspice_mcp.lib.recipes import (
     StabilityRecipe,
     ValueRecipe,
 )
+from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck_tran_max_step
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
@@ -63,7 +70,7 @@ from tests._asc_ops import inspect_one
 from tests._ltspice_recorded import declared_points, header_fields
 from tests.conftest import SyncApi, make_experiment_job
 from tests.ltspice_recorder import INPUTS, raw_header_text, split_raw
-from tests.test_decoded_raw import assert_classified_as_named
+from tests.test_decoded_raw import assert_every_plot_classified
 
 
 def complete_raws(build: str) -> list[str]:
@@ -98,11 +105,14 @@ def test_every_recorded_raw_decodes_to_the_traces_its_header_declares(
 ):
     """Binary and text, four-byte and eight-byte, real and complex, stepped,
     windowed, uncompressed, converted to Fast Access, with subcircuits; and
-    each is classified by its decoded analysis as its plot name is."""
+    each plot is read as an analysis the readers know."""
     parsed = rec.decode(build, case_id, tmp_path)
-    assert parsed.raw.get_trace_names() == declared_names(build, case_id)
+    # A stepped plot that opens with its stepped values lists them as step
+    # values, not signals.
+    signals = parsed.raw.get_trace_names()
+    assert [*parsed.raw.descriptor.step_variables, *signals] == declared_names(build, case_id)
     assert parsed.raw.dialect == "ltspice"
-    assert_classified_as_named(parsed.raw)
+    assert_every_plot_classified(parsed.raw)
     if parsed.raw.descriptor.step_status == "unresolved":
         return  # a stepped operating point: see TestSteppedRuns
     points = declared_points(build, case_id)
@@ -180,6 +190,31 @@ class TestRawLayouts:
         assert math.degrees(math.atan2(at_corner.imag, at_corner.real)) == pytest.approx(
             -45, abs=1e-3
         )
+
+    @pytest.mark.parametrize(
+        ("case_id", "plain", "steps"),
+        [
+            ("raw/ac_numdgt7", "raw/ac", 1),
+            ("raw/ac_numdgt15", "raw/ac", 1),
+            ("raw/step_ac_one_freq_numdgt7", "raw/step_ac_one_freq", 3),
+        ],
+    )
+    def test_an_ac_raw_marked_double_reads_as_the_same_run_without_it(
+        self, build: str, case_id: str, plain: str, steps: int, tmp_path: Path
+    ):
+        """Under ``.options numdgt`` above 6 both builds mark an AC plot
+        ``double``, and store it as they store any complex plot, 16 bytes a
+        value: the samples are those of the run without the option."""
+        assert "double" in header_fields(build, case_id)["Flags"][0].split()
+        assert "double" not in header_fields(build, plain)["Flags"][0].split()
+        marked = rec.decode(build, case_id, tmp_path)
+        unmarked = rec.decode(build, plain, tmp_path)
+        assert marked.raw.get_trace_names() == unmarked.raw.get_trace_names()
+        for step in range(steps):
+            for name in ("V(in)", "V(out)"):
+                assert self.wave(marked, name, step) == pytest.approx(
+                    self.wave(unmarked, name, step), rel=1e-12
+                )
 
     def test_a_dc_sweep_has_the_swept_source_for_its_axis(self, build: str, tmp_path: Path):
         parsed = rec.decode(build, "raw/dc", tmp_path)
@@ -388,6 +423,37 @@ class TestSteppedRuns:
             (gain,) = parsed.raw.get_wave("V(out)", step)
             assert gain == pytest.approx(expected, rel=1e-5)
 
+    def test_a_stepped_ac_at_one_frequency_cut_part_way_reads_with_no_axis(
+        self, build: str, tmp_path: Path
+    ):
+        """A run stopped part way is read as a full read reads its plot: the
+        stepped parameter the plot opens with is not an axis to report."""
+        whole = rec.recorded(build, "raw/step_ac_one_freq.raw").read_bytes()
+        cut = tmp_path / "step_ac_one_freq.raw"
+        cut.write_bytes(whole[:-1])
+
+        progress = read_partial_raw_progress(cut, "ltspice")
+
+        assert progress is not None
+        assert (progress.points, progress.axis, progress.last_axis_value) == (2, None, None)
+
+    async def test_signal_stats_on_a_point_a_step_points_at_the_value_recipe(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A stepped .ac at one frequency has one point a step, which has no
+        statistics to take; the refusal names the recipe that reads it."""
+        raw = rec.stage_run(build, "raw/step_ac_one_freq", work_dir)
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None
+        [failure] = data["failures"]
+        assert "value recipe" in failure["message"]
+
     async def test_the_value_recipe_reads_a_step_at_one_frequency_without_at(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
@@ -442,6 +508,19 @@ def test_xvii_stores_a_compressed_transient_in_a_few_points_and_26_in_all(
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize(
+    ("case_id", "may_be"),
+    [("raw/compress_1mv", True), ("raw/compress_1mv_off", False), ("raw/ac", False)],
+)
+def test_a_header_says_whether_a_raw_may_hold_a_compressed_transient(
+    build: str, case_id: str, may_be: bool
+):
+    """Read off the first plot's header alone, so a reader that only needs the
+    compression fact decodes nothing else."""
+    assert may_hold_compressed_transient(rec.recorded(build, f"{case_id}.raw")) is may_be
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 def test_xvii_measures_a_compressed_run_apart_from_an_uncompressed_one(build: str):
     """XVII's own .meas results move with compression, though less than a
     straight line between the stored points would; 26's do not move."""
@@ -454,6 +533,24 @@ def test_xvii_measures_a_compressed_run_apart_from_an_uncompressed_one(build: st
         assert compressed["vavg"] != pytest.approx(uncompressed["vavg"], rel=1e-5)
     else:
         assert compressed == uncompressed
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_gap_no_wider_than_the_decks_maximum_step_is_not_coarse(build: str, tmp_path: Path):
+    """XVII's 50 us maximum step still left a gap of most of a millisecond,
+    which is reported; the same gap under a deck that asked for steps up to
+    1 ms is what the deck asked for."""
+    deck = deck_tran_max_step(INPUTS / "raw/compress_1mv_maxstep.cir")
+    assert deck == pytest.approx(50e-6)
+    raw = rec.decode(build, "raw/compress_1mv_maxstep", tmp_path).raw
+    found = coarse_compressed_waveform(raw, max_step=deck)
+    _, gap = COMPRESSION[build, "raw/compress_1mv_maxstep"]
+    if gap is None:
+        assert found is None
+        return
+    assert found is not None
+    assert (found["gap_from_s"], found["gap_to_s"]) == pytest.approx(gap, rel=1e-4)
+    assert coarse_compressed_waveform(raw, max_step=1e-3) is None
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(COMPRESSION))
@@ -487,6 +584,203 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     assert evidence["span_s"] == pytest.approx(5e-3)
     assert (evidence["gap_from_s"], evidence["gap_to_s"]) == pytest.approx(gap, rel=1e-4)
     assert "plotwinsize=0" in observation["detail"]
+
+
+#: The same charge under a maximum step of a fifth of the run, 1 ms: the
+#: points each build stored, the widest gap between them being that step.
+WIDE_MAX_STEP_POINTS = {"ltspice26": 32, "ltspice17": 12}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_job_whose_deck_asked_for_wide_steps_is_not_reported_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Read through the job that ran it, the run is judged against its own
+    deck: a 1 ms gap is the step the deck allowed, on both builds."""
+    case_id = "raw/compress_1mv_wide_maxstep"
+    assert declared_points(build, case_id) == WIDE_MAX_STEP_POINTS[build]
+    raw = rec.decode(build, case_id, work_dir / "decoded").raw
+    gap = coarse_compressed_waveform(raw)
+    assert gap is not None
+    assert gap["gap_to_s"] - gap["gap_from_s"] == pytest.approx(1e-3, rel=1e-6)
+
+    job = make_experiment_job(
+        state_no_sim,
+        job_id="exp_wide",
+        raw=rec.stage_run(build, case_id, work_dir / "run"),
+        netlist=INPUTS / f"{case_id}.cir",
+    )
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"job_id": job.job_id, "label": "dut"}],
+            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "1m"}],
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None
+    assert data["failures"] == []
+    assert [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"] == []
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped .ac at one frequency stores none; its deck's .ac list 100k is
+    the frequency, given with that source when the run's deck is known, and
+    each step's gain is the low-pass's there. Read by path, with no deck, no
+    frequency is given."""
+    case_id = "raw/step_ac_one_freq"
+    raw = rec.stage_run(build, case_id, work_dir / "run")
+    job = make_experiment_job(
+        state_no_sim, job_id="exp_one_freq", raw=raw, netlist=INPUTS / f"{case_id}.cir"
+    )
+
+    async def values(source: dict[str, str]) -> list[dict[str, Any]]:
+        request = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [source],
+                "all_steps": True,
+                "recipes": [{"key": "v", "metric": "value", "expr": "V(out)"}],
+                "include": {"per_run": True},
+            }
+        )
+        data = (await handle_analyze_results(request, state_no_sim)).structured_content
+        assert data is not None and data["failures"] == []
+        return data["results"]["v"]["per_run"]["items"]
+
+    rows = await values({"job_id": job.job_id})
+    assert [row["step_values"] for row in rows] == ONE_FREQUENCY_STEPS
+    for row, gain in zip(rows, ONE_FREQUENCY_GAINS, strict=True):
+        value = row["value"]
+        assert (value["actual_x"], value["actual_x_source"]) == (100e3, "deck")
+        assert value["magnitude_linear"] == pytest.approx(abs(gain), rel=1e-5)
+    by_path = await values({"raw_path": str(raw)})
+    assert all("actual_x" not in row["value"] for row in by_path)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_one_frequency_noise_is_read_a_step_at_a_time(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped .noise at one frequency holds one point a step, as the .ac
+    does, and the value recipe reads each with no 'at': the thermal noise of
+    r through the RC low-pass (100 nF) at 1 kHz, at 27 °C."""
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [
+                {"raw_path": str(rec.stage_run(build, "raw/step_noise_one_freq", work_dir))}
+            ],
+            "all_steps": True,
+            "recipes": [{"key": "n", "metric": "value", "expr": "V(onoise)"}],
+            "include": {"per_run": True},
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None and data["failures"] == []
+    rows = data["results"]["n"]["per_run"]["items"]
+    assert [row["step_values"] for row in rows] == ONE_FREQUENCY_STEPS
+    for row in rows:
+        r = row["step_values"]["r"]
+        gain = abs(1 / (1 + 2j * math.pi * 1e3 * r * 100e-9))
+        density = math.sqrt(4 * 1.380649e-23 * 300.15 * r) * gain
+        assert row["value"]["value"] == pytest.approx(density, rel=1e-3)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_measurements_only_call_reports_a_transient_compression_left_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """No recipe here reads the samples, but XVII computed its .meas results
+    from the few points it kept, so the call still says so."""
+    _, gap = COMPRESSION[build, "raw/compress_1mv"]
+    raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"raw_path": str(raw), "label": "dut"}],
+            "recipes": [{"key": "m", "metric": "measurements"}],
+        }
+    )
+    data = (await handle_analyze_results(request, state_no_sim)).structured_content
+    assert data is not None
+    found = [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"]
+    if gap is None:
+        assert found == []
+        return
+    (observation,) = found
+    assert observation["evidence"]["gap_from_s"] == pytest.approx(gap[0], rel=1e-4)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The Python API, plot_waveform and inspect's results report it as
+    analyze_results does."""
+    _, gap = COMPRESSION[build, "raw/compress_1mv"]
+    raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
+    plot = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
+        state_no_sim,
+    )
+    listed = await inspect_one(
+        state_no_sim, {"kind": "results", "view": "signals", "path": str(raw)}
+    )
+    assert plot.structured_content is not None
+    readers = {
+        "plot_waveform": plot.structured_content["observations"],
+        "inspect": listed.get("observations", []),
+    }
+    for reader, observations in readers.items():
+        codes = [o["code"] for o in observations]
+        assert ("coarse_compressed_waveform" in codes) == (gap is not None), reader
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_api_says_compression_left_a_raw_coarse(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    _, gap = COMPRESSION[build, "raw/compress_1mv"]
+    raw = SyncApi(state_no_sim).load_raw(rec.stage_run(build, "raw/compress_1mv", work_dir))
+    codes = [o["code"] for o in raw.observations]
+    assert ("coarse_compressed_waveform" in codes) == (gap is not None)
+
+
+@pytest.mark.parametrize("run", ["step_tran_op_raw", "step_ac_op_raw"])
+def test_the_api_says_why_26s_op_raw_of_a_stepped_run_has_no_steps(
+    run: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 wrote one point and no step variable, so trace() is refused
+    with the cause and where to read an operating point a step."""
+    raw = rec.stage_run("ltspice26", f"raw/{run}.op", work_dir)
+    loaded = SyncApi(state_no_sim).load_raw(raw)
+    with pytest.raises(ResultError, match="does not say which step") as refused:
+        loaded.trace(loaded.signals[0])
+    assert "run .op under the same .step" in str(refused.value)
+
+
+def test_the_apis_log_readers_say_a_stopped_cases_results_end_early(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A stopped case that kept its raw is read with the partial_raw
+    observation; the log readers carry it as load_raw does."""
+    raw = rec.stage_run("ltspice26", "raw/compress_1mv", work_dir)
+    job = make_experiment_job(state_no_sim, job_id="exp_stopped", raw=raw)
+    case = job.cases[0]
+    case.status, case.failure_code = "failed", "run_timeout"
+    held = {"points": 600, "axis": "time", "last_axis_value": 2.5e-3}
+    case.failure_evidence = {PARTIAL_RAW_KEY: held}
+    api = SyncApi(state_no_sim)
+
+    measured = api.measurements(job_id=job.job_id)
+    ops = api.device_op_points(job_id=job.job_id)
+    loaded = api.load_raw(job_id=job.job_id)
+
+    assert measured["measurements"]["vat"] is not None
+    for result in (measured, ops, loaded):
+        [read] = result.observations
+        assert read["code"] == "partial_raw"
+        assert read["evidence"]["last_axis_value"] == pytest.approx(2.5e-3)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -645,6 +939,28 @@ class TestMeasurements:
         assert value["g_re"] == pytest.approx(0.5, rel=1e-5)
         assert value["g_im"] == pytest.approx(-0.5, rel=1e-5)
         assert value["g_mag"] == pytest.approx(1 / math.sqrt(2), rel=1e-5)
+
+    @pytest.mark.parametrize("form", ["polar", "cartesian"])
+    def test_meascplxfmt_changes_the_print_and_not_the_numbers(self, build: str, form: str):
+        """Polar prints (magnitude,angle°) in plain units and cartesian prints
+        (real,imaginary), where the default prints dB: V(out) of the low-pass
+        at its 1 kHz corner reads as its magnitude, and a real result as its
+        signed value, in either."""
+        data = self.measured(build, f"log/meas_cplxfmt_{form}")
+        assert data["failed_measurements"] == []
+        value = {name: entry["values"][0] for name, entry in data["measurements"].items()}
+        assert value == pytest.approx(
+            {
+                "g": 1 / math.sqrt(2),
+                "g_mag": 1 / math.sqrt(2),
+                "g_neg": -1 / math.sqrt(2),
+                "g_ph": -45.0,
+                "g_re": 0.5,
+            },
+            rel=1e-5,
+        )
+        printed = rec.recorded(build, f"log/meas_cplxfmt_{form}.log").read_bytes()
+        assert b"dB" not in printed.replace(b"\x00", b"")
 
     def test_stepped_tables_are_read_per_step(self, build: str):
         data = self.measured(build, "log/meas_step")
@@ -1170,7 +1486,7 @@ class TestSubcircuitDeviceNames:
         XVII the device's letter, each instance's name without its X, and the
         device's name without its letter."""
         points = read_device_op_points(rec.recorded(build, f"{self._table_case(build)}.log"))
-        names = sorted({split_device_key(key)[0] for key in points})
+        names = sorted({parsed[0] for key in points if (parsed := parse_device_param(key))})
         if rec.generation(build) == "xvii":
             assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
         else:
@@ -1571,6 +1887,7 @@ async def test_plot_and_inspect_refuse_an_other_raw_the_run_did_not_write(
     assert reply.structured_content is not None
     [listed] = reply.structured_content["results"]
     assert not listed["ok"]
+    assert listed["error"]["code"] == "other_raw_not_written"
     assert "wrote no fra_1 raw" in listed["error"]["message"]
 
 

@@ -53,18 +53,22 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import numpy as np
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.spice_lex import extract_meas_name
+from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
+from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
+    from ltspice_mcp.lib.result_kinds import Analysis
 
 # Salience threshold for lifting a node value into view. The gmin/floating-node
 # artifact lands at ~1e30, so 1e8 has enormous headroom; a legitimate HV design
@@ -318,10 +322,69 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
     return out
 
 
-def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
+def _first_directive(netlist_text: str, head: str) -> list[str] | None:
+    """The tokens of a deck's first ``head`` directive (``.tran``, ``.ac``);
+    None when it has none."""
+    for card in lex(netlist_text).cards:
+        tokens = card.body.split() if card.kind == "directive" else []
+        if tokens and tokens[0].casefold() == head:
+            return tokens
+    return None
+
+
+def _read_deck(netlist: Path, parse: Callable[[str], float | None]) -> float | None:
+    """``parse`` of the deck at ``netlist``; None when it cannot be read."""
+    try:
+        return parse(read_spice_text(netlist))
+    except OSError:
+        return None
+
+
+def tran_max_step(netlist_text: str) -> float | None:
+    """The maximum time step a deck's first ``.tran`` asks for, its fourth
+    number (``.tran <Tstep> <Tstop> <Tstart> <Tmax>``). None when the card
+    gives none, or a value that is not a number, or the deck has no ``.tran``."""
+    tokens = _first_directive(netlist_text, ".tran")
+    numbers = leading_numeric_tokens(tokens[1:5]) if tokens else []
+    return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
+
+
+def one_ac_frequency(netlist_text: str) -> float | None:
+    """The one frequency a deck's first ``.ac`` names as ``.ac list <f>``: the
+    frequency of a stepped ``.ac`` at one frequency, which its raw does not
+    store (``result_kinds.STEPPED_AC_ONE_FREQUENCY``, recorded as
+    ``raw/step_ac_one_freq``). None for any other form, or a value that is not
+    a number."""
+    tokens = _first_directive(netlist_text, ".ac")
+    if tokens is None or len(tokens) != 3 or tokens[1].casefold() != "list":
+        return None
+    numbers = leading_numeric_tokens(tokens[2:])
+    return numbers[0] if numbers and numbers[0] > 0 else None
+
+
+#: Each deck's ``one_ac_frequency``, kept while the deck is unchanged: a
+#: stepped run asks it once for every step it reads.
+_ONE_AC_FREQUENCIES: FileCache[float | None] = FileCache(maxsize=64)
+
+
+def deck_one_ac_frequency(netlist: Path) -> float | None:
+    """``one_ac_frequency`` of the deck at ``netlist``; None when it cannot be read."""
+    return _ONE_AC_FREQUENCIES.get(netlist, lambda path: _read_deck(path, one_ac_frequency))
+
+
+def deck_tran_max_step(netlist: Path) -> float | None:
+    """``tran_max_step`` of the deck at ``netlist``; None when it cannot be read."""
+    return _read_deck(netlist, tran_max_step)
+
+
+def coarse_compressed_waveform(
+    raw: DecodedRaw, *, max_step: float | None = None
+) -> dict[str, float] | None:
     """The first step of a compressed LTspice transient whose widest gap
-    between stored points spans more than a twentieth of its time: the step,
-    its points and span, and where the gap lies. None for any other plot.
+    between stored points spans more than a twentieth of its time, and more
+    than ``max_step``, the step its deck asked the solver not to exceed: the
+    step, its points and span, and where the gap lies. None for any other
+    plot. A gap no wider than the deck's own maximum step is what it asked for.
 
     LTspice adds ``nocompression`` to a transient's flags when waveform
     compression is off (``raw/compress_*``).
@@ -341,7 +404,9 @@ def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
             span = float(times[-1] - times[0])
             gaps = np.diff(times)
             widest = int(np.argmax(gaps))
-            if span > 0 and gaps[widest] > span * _COARSE_GAP_SHARE:
+            # A stored time can round past the step by a few parts in a billion.
+            limit = max(span * _COARSE_GAP_SHARE, (max_step or 0.0) * (1 + 1e-6))
+            if span > 0 and gaps[widest] > limit:
                 return {
                     "step": step,
                     "points": times.size,
@@ -352,6 +417,38 @@ def coarse_compressed_waveform(raw: DecodedRaw) -> dict[str, float] | None:
     except ResultError:
         return None  # step boundaries unresolved: no step to read
     return None
+
+
+def coarse_waveform_observation(
+    coarse: Sequence[tuple[str, Mapping[str, float]]], *, run_cap: int
+) -> Observation:
+    """The observation for the transient runs ``coarse_compressed_waveform``
+    found coarse, each with its label: the first one's evidence, and up to
+    ``run_cap`` labels."""
+    label, first = coarse[0]
+    span = first["span_s"]
+    gap = first["gap_to_s"] - first["gap_from_s"]
+    labels = [label for label, _ in coarse]
+    return Observation(
+        code="coarse_compressed_waveform",
+        kind="value",
+        detail=(
+            f"{len(labels)} LTspice transient run(s) read here were saved with "
+            f"waveform compression on and store few points. In {label}, "
+            f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
+            f"between two, from {first['gap_from_s']:.3g} s to "
+            f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
+            "read between stored points is interpolated across the gap, and "
+            "LTspice's own .meas results can differ from an uncompressed run's "
+            "too. '.options plotwinsize=0' stores every point."
+        ),
+        evidence={
+            "run": label,
+            **first,
+            "runs": labels[:run_cap],
+            "run_count": len(labels),
+        },
+    )
 
 
 def deck_observation_inputs(
@@ -631,6 +728,7 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
 def surface_observations(
     summary: dict,
     *,
+    analysis: Analysis | None = None,
     requested: dict[str, list[str]] | None = None,
     value_traces: dict[str, np.ndarray] | None = None,
     source_amplitudes: dict[str, float] | None = None,
@@ -641,7 +739,8 @@ def surface_observations(
     that loaded them wants them scanned, and one that did not passes None.
 
     ``source_amplitudes`` (from ``parse_source_amplitudes``) arms the
-    source-relative ``extreme_value`` trigger for real-valued analyses.
+    source-relative ``extreme_value`` trigger for the selected plot's decoded
+    ``analysis`` when that is a transient or an operating point.
     """
     obs: list[Observation] = []
     obs.extend(relay_observations(summary))
@@ -652,13 +751,11 @@ def surface_observations(
             obs.append(abort)
     if value_traces is not None:
         source_reference: tuple[str, float] | None = None
-        if source_amplitudes:
-            # Only where "node voltage vs. drive level" is meaningful: transient
-            # and operating point. AC/noise traces are per-frequency small-signal
-            # gains, and a .dc sweep's source range comes from the .dc line, not
-            # the V-card this parser read.
-            sim_type = str(summary.get("sim_type", "")).strip().lower()
-            if sim_type.startswith("transient") or sim_type.startswith("operating"):
-                source_reference = max(source_amplitudes.items(), key=lambda kv: kv[1])
+        # Only where "node voltage vs. drive level" is meaningful: transient
+        # and operating point. AC/noise traces are per-frequency small-signal
+        # gains, and a .dc sweep's source range comes from the .dc line, not
+        # the V-card this parser read.
+        if source_amplitudes and analysis in ("transient", "op"):
+            source_reference = max(source_amplitudes.items(), key=lambda kv: kv[1])
         obs.extend(value_observations(value_traces, source_reference=source_reference))
     return obs

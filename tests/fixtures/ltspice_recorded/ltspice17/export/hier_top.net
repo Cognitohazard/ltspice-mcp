@@ -1,0 +1,7 @@
+* C:\recording\hier_top.asc
+V1 N001 0 1
+XX1 N001 out
+R3 out 0 10k
+.op
+.backanno
+.end

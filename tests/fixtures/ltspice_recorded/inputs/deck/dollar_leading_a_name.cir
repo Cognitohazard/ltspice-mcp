@@ -1,0 +1,5 @@
+* a dollar sign that begins a node name, as OrCAD names nets
+I1 0 $N_0001 1
+R1 $N_0001 0 1k
+.op
+.end

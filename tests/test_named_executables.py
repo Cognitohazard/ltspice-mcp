@@ -628,7 +628,7 @@ class TestScopedKill:
         xvii_job, lt24_job = "exp_dut_1790000000_ab12cd34", "exp_dut_1790000001_cd34ef56"
         xvii = _FakeProc(11, "XVIIx64.exe", [str(builds["xvii"]), "-Run", "-b", f"{xvii_job}.net"])
         lt24 = _FakeProc(12, "LTspice.exe", [str(builds["lt24"]), "-Run", "-b", f"{lt24_job}.net"])
-        monkeypatch.setattr(proc_kill.psutil, "process_iter", lambda attrs: iter([xvii, lt24]))
+        monkeypatch.setattr(proc_kill, "_running_processes", lambda attrs: iter([xvii, lt24]))
 
         assert simulator_executable_names(runners["ltspice:xvii"].simulator_class) == {
             "xviix64.exe"

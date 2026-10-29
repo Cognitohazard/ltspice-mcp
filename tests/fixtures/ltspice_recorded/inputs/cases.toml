@@ -198,6 +198,17 @@ model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py",
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
+[behaviour.export-hierarchical-block]
+summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it, the symbol drawn as LTspice draws one or given a Prefix of X: the netlist each build exports for it, and what a build writes when it runs the sheet."
+model = ["lib/deck_prep.py", "lib/schematic_ops.py"]
+# hier_plain.asy is a block symbol with pins IN and OUT and no attribute, as
+# LTspice makes one for a sheet; hier_amp.asy is the same block with
+# SYMATTR Prefix X. Each block's own sheet (hier_plain.asc, hier_amp.asc) is
+# a 1k/1k divider between ports of those names. Each top sheet drives its
+# block from a 1 V source into a 10k load and runs .op.
+inputs = ["export/hier_top.asc", "export/hier_plain_top.asc"]
+extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", "export/hier_plain.asy"]
+
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
 model = ["lib/schematic_ops.py"]
@@ -288,15 +299,19 @@ inputs = [
 ]
 
 [behaviour.deck-structure]
-summary = "How a deck's lines are read: the title line, ; and $ comments, + continuations, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
+summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
 model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py"]
 inputs = [
     "deck/comment_semicolon.cir",
     "deck/comment_dollar.cir",
+    "deck/dollar_inside_a_name.cir",
+    "deck/dollar_leading_a_name.cir",
     "deck/after_end.cir",
     "deck/title_card.cir",
     "deck/title_directive.cir",
     "deck/continuation.cir",
+    "deck/comment_in_model_parens.cir",
+    "deck/comment_then_continuation.cir",
     "deck/gnd_alias.cir",
     "deck/crlf.cir",
     "deck/no_end.cir",
@@ -360,9 +375,9 @@ model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/ra
 inputs = ["raw/tran.cir", "raw/tran_uncompressed.cir", "raw/tran_double.cir"]
 
 [behaviour.raw-compression]
-summary = "What waveform compression keeps of a transient: a 1 mV RC charge compressed, uncompressed and with a maximum step, the same charge at 1 V, and what a .meas reads from each."
+summary = "What waveform compression keeps of a transient: a 1 mV RC charge compressed, uncompressed, with a maximum step and with a maximum step of a fifth of the run, the same charge at 1 V, and what a .meas reads from each."
 model = ["lib/raw_parser.py", "lib/result_observations.py"]
-inputs = ["raw/compress_1mv.cir", "raw/compress_1mv_off.cir", "raw/compress_1mv_maxstep.cir", "raw/compress_1v.cir"]
+inputs = ["raw/compress_1mv.cir", "raw/compress_1mv_off.cir", "raw/compress_1mv_maxstep.cir", "raw/compress_1mv_wide_maxstep.cir", "raw/compress_1v.cir"]
 
 [behaviour.raw-window-offset]
 summary = "A transient saved from a later start time: the Offset field and the stored time axis."
@@ -370,9 +385,9 @@ model = ["lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/tran_window.cir"]
 
 [behaviour.raw-ac]
-summary = "An AC raw: complex samples, a frequency axis stored complex."
+summary = "An AC raw: complex samples, a frequency axis stored complex; and the same sweep, and a stepped one at one frequency, under .options numdgt above 6, which writes the double flag and changes no width."
 model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_parser.py", "lib/ac_analysis.py"]
-inputs = ["raw/ac.cir"]
+inputs = ["raw/ac.cir", "raw/ac_numdgt7.cir", "raw/ac_numdgt15.cir", "raw/step_ac_one_freq_numdgt7.cir"]
 
 [behaviour.raw-dc]
 summary = "A DC sweep raw: the swept source as the axis."
@@ -380,9 +395,9 @@ model = ["lib/raw_header.py", "lib/raw_parser.py"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
-summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces."
+summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step."
 model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
-inputs = ["raw/noise.cir"]
+inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir"]
 
 [behaviour.raw-op]
 summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
@@ -390,17 +405,17 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.raw-stepped]
-summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op and a stepped .dc store, and a stepped .ac at one frequency, which stores no frequency and one point a step."
+summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, and a stepped .ac at one frequency, which stores no frequency and one point a step."
 model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
-inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_ac_one_freq.cir"]
+inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
-summary = "A .tf run: the Transfer Function plot and what the log says."
+summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
 model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
-inputs = ["raw/tf.cir"]
+inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
-summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout."
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7."
 model = ["lib/raw_header.py", "lib/raw_parser.py"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
@@ -459,6 +474,12 @@ inputs = ["log/meas_trig.cir"]
 summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
 model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
 inputs = ["log/meas_db.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-complex-format]
+summary = "How .options meascplxfmt=polar and =cartesian change the way the log prints an AC .meas result: a complex one, a magnitude, a negative real, a phase and a real part."
+model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
+inputs = ["log/meas_cplxfmt_polar.cir", "log/meas_cplxfmt_cartesian.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-reserved-name]
@@ -633,6 +654,21 @@ behaviour = "raw-op"
 source = "raw/tran.cir"
 keep = ["op.raw"]
 note = "The operating-point raw LTspice writes beside a transient's raw."
+
+# What a stepped run leaves in the operating-point raw beside its own: one
+# point a step, or one point. Their logs are those of raw/step_tran and
+# raw/step_ac, which run the same decks.
+[[case]]
+id = "raw/step_tran_op_raw"
+behaviour = "raw-stepped"
+source = "raw/step_tran.cir"
+keep = ["op.raw"]
+
+[[case]]
+id = "raw/step_ac_op_raw"
+behaviour = "raw-stepped"
+source = "raw/step_ac.cir"
+keep = ["op.raw"]
 
 # A build ignores -ascii when it is also given a settings file, so these two
 # run on the recording user's own settings. What they pin is the file's form,
@@ -1034,3 +1070,42 @@ behaviour = "schematic-save-encoding"
 kind = "save"
 source = "export/micro_utf16le_bom.asc"
 extra = ["export/res.asy"]
+
+# The hierarchical sheet run with -Run -b, rather than exported: whether a
+# build writes the netlist beside the sheet, and the block's node names in the
+# raw and the log.
+[[case]]
+id = "export/hier_top_run"
+behaviour = "export-hierarchical-block"
+kind = "run"
+source = "export/hier_top.asc"
+extra = ["export/hier_amp.asc", "export/hier_amp.asy"]
+keep = ["net", "log", "raw"]
+
+[[case]]
+id = "export/hier_plain_top_run"
+behaviour = "export-hierarchical-block"
+kind = "run"
+source = "export/hier_plain_top.asc"
+extra = ["export/hier_plain.asc", "export/hier_plain.asy"]
+keep = ["net", "log", "raw"]
+
+# A frequency response analysis over two .step values: how the results file
+# beside the transient raw holds each step. LTspice XVII 17.0 refuses the
+# analyzer (raw/fra records that), so only the current build runs this.
+[[case]]
+id = "raw/fra_step"
+behaviour = "raw-fra"
+source = "raw/fra_step.cir"
+keep = ["log", "raw", "fra_1.raw"]
+builds = ["current"]
+
+# The same loop under .options numdgt=7: whether the results file, a complex
+# plot, carries the double flag and what it changes. Only the current build
+# runs the analyzer.
+[[case]]
+id = "raw/fra_numdgt7"
+behaviour = "raw-fra"
+source = "raw/fra_numdgt7.cir"
+keep = ["log", "raw", "fra_1.raw"]
+builds = ["current"]

@@ -18,6 +18,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
 from ltspice_mcp.lib.format import is_scaled_number
 from ltspice_mcp.lib.spice_lex import (
@@ -66,8 +67,8 @@ class _Params:
     copy a simulator reads is not recorded here.
 
     ``tokens`` holds each pair's token while every offset is good for an
-    in-place edit, else None: after a re-render, or for parameters with no
-    offset of their own (inside a ``.MODEL`` card's parentheses).
+    in-place edit, else None: after a re-render, or for parameters whose place
+    in the card is not known.
     """
 
     pairs: list[tuple[str, str]] = field(default_factory=list)
@@ -91,19 +92,20 @@ class _Params:
     def rendered(self) -> list[str]:
         return [f"{k}={v}" for k, v in self.pairs]
 
-    def set(self, card: SpiceCard, key: str, value: str) -> bool:
+    def set(self, card: SpiceCard, key: str, value: str, *, append_at: int | None = None) -> bool:
         """Set every copy of ``key``, matched without regard to case, or add it.
 
-        True when each copy was replaced in place, right to left so the offsets
-        still to edit stay put; False when the caller must render the card
-        again from the pairs: a new key, or a copy whose span cannot be
-        replaced in place.
+        True when the card was edited in place: each copy replaced, right to
+        left so the offsets still to edit stay put, or a new key written at
+        ``append_at``. False when the caller must render the card again from
+        the pairs: a new key with nowhere to go, or a copy whose span cannot
+        be replaced in place.
         """
         name = key.casefold()
         copies = [i for i, (k, _) in enumerate(self.pairs) if k.casefold() == name]
         if not copies:
             self.pairs.append((key, value))
-            return False
+            return append_at is not None and self._insert(card, append_at, key, value)
         for i in copies:
             self.pairs[i] = (self.pairs[i][0], value)
         try:
@@ -128,6 +130,27 @@ class _Params:
         """Move the tokens at or past ``edit_old_end`` by ``delta``."""
         if self.tokens is not None:
             self.tokens = _shift_tokens(self.tokens, edit_old_end, delta)
+
+    def _insert(self, card: SpiceCard, at: int, key: str, value: str) -> bool:
+        """Write the new last pair at body offset ``at``; False when it cannot go there."""
+        if self.tokens is None:
+            return False
+        text = f" {key}={value}"
+        try:
+            card.replace_span(at, at, text)
+        except ValueError:
+            return False
+        self.tokens.append(
+            Token(
+                kind=TokenKind.KEY_VALUE,
+                text=text[1:],
+                key=key,
+                value=value,
+                body_offset=at + 1,
+                body_length=len(text) - 1,
+            )
+        )
+        return True
 
     def _replace(self, card: SpiceCard, index: int, value: str) -> None:
         """Replace one pair's text in place; ``ValueError`` when it cannot be."""
@@ -160,6 +183,11 @@ class ModelCard:
     type: str
     level: int | None
     _params: _Params = field(default_factory=_Params)
+    #: The name's token, renamed in place while it is good.
+    _name_token: Token | None = None
+    #: Just inside the card's opening parenthesis, for a new parameter written
+    #: in place: after the last one, or here when there is none.
+    _in_parens: int | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> ModelCard:
@@ -173,22 +201,21 @@ class ModelCard:
         name = strip_matching_quotes(tokens[1].text)
         type_ = strip_matching_quotes(tokens[2].text)
         # Params can come as a single PARENED group or as a sequence of
-        # KEY_VALUE tokens after the type. PARENED params have no body
-        # offsets of their own (they're nested), so an edit of a card with
-        # them renders it again.
+        # KEY_VALUE tokens after the type. A PARENED group's own tokens are
+        # placed in the card by the group's offset, so they are edited where
+        # they stand. The body holds no comment: each line's ends at the end
+        # of the line, and the lexer leaves it out.
         found: list[Token] = []
-        nested = False
+        in_parens = None
         for tok in tokens[3:]:
             if tok.kind == TokenKind.PARENED:
-                nested = True
-                found.extend(
-                    t for t in tokenize_body(tok.text[1:-1]) if t.kind == TokenKind.KEY_VALUE
-                )
+                in_parens = tok.body_offset + 1
+                inner = tokenize_body(tok.text[1:-1])
+                own = [t for t in inner if t.kind == TokenKind.KEY_VALUE]
+                found.extend(_shift_tokens(own, 0, in_parens))
             elif tok.kind == TokenKind.KEY_VALUE:
                 found.append(tok)
-            elif tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-        params = _Params.of(found, in_place=not nested)
+        params = _Params.of(found)
         level = None
         for k, v in params.as_dict().items():
             if k.lower() == "level":
@@ -197,7 +224,15 @@ class ModelCard:
                 except ValueError:
                     level = None
                 break
-        return cls(card=card, name=name, type=type_, level=level, _params=params)
+        return cls(
+            card=card,
+            name=name,
+            type=type_,
+            level=level,
+            _params=params,
+            _name_token=tokens[1],
+            _in_parens=in_parens,
+        )
 
     @property
     def params(self) -> dict[str, str]:
@@ -215,9 +250,11 @@ class ModelCard:
 
     def set_param(self, key: str, value: float | str) -> None:
         """Set every copy of a parameter, or add it, flipping the card dirty.
-        In place where the card allows; otherwise the card is rendered again,
-        every copy kept."""
-        if not self._params.set(self.card, key, _format_value(value)):
+        In place where the card allows, a new one after the last inside the
+        parentheses; otherwise the card is rendered again, every copy kept."""
+        tokens = self._params.tokens
+        append_at = tokens[-1].body_end if tokens else self._in_parens
+        if not self._params.set(self.card, key, _format_value(value), append_at=append_at):
             self._canonical_rerender()
 
     def remove_param(self, key: str) -> None:
@@ -226,10 +263,24 @@ class ModelCard:
             self._canonical_rerender()
 
     def set_name(self, new_name: str) -> None:
-        """Rename the model. Canonical rerender, every parameter copy kept."""
+        """Rename the model, in place where the card allows; otherwise the
+        card is rendered again, every parameter copy kept."""
         self.name = new_name
-        self._canonical_rerender()
         self.card.name = new_name
+        tok = self._name_token
+        if tok is not None:
+            try:
+                self.card.replace_span(tok.body_offset, tok.body_end, new_name)
+            except ValueError:
+                pass
+            else:
+                delta = len(new_name) - tok.body_length
+                self._params.shift(tok.body_end, delta)
+                if self._in_parens is not None:
+                    self._in_parens += delta
+                self._name_token = replace(tok, text=new_name, body_length=len(new_name))
+                return
+        self._canonical_rerender()
 
     def _canonical_rerender(self) -> None:
         params_text = " ".join(self._params.rendered())
@@ -238,6 +289,8 @@ class ModelCard:
         # The offsets are now stale, so later edits on this view render the
         # card again too; re-derive the view via from_card for in-place edits.
         self._params.tokens = None
+        self._name_token = None
+        self._in_parens = None
 
 
 # ---------------------------------------------------------------------------
@@ -687,9 +740,20 @@ class InstanceLine:
         ``set_param``/``remove_param``. ``params`` preserves source casing
         (ngspice decks conventionally write lowercase ``w=``/``l=``), so a
         plain dict lookup silently misses — readers must come through here.
+
+        A parameter the card gives more than once reads as its value when
+        every copy agrees, and copies that differ are refused: which one a
+        simulator reads is not recorded here.
         """
-        key_lower = key.lower()
-        return next((v for k, v in self.params.items() if k.lower() == key_lower), None)
+        name = key.casefold()
+        copies = [(k, v) for k, v in self._params.pairs if k.casefold() == name]
+        if len({v for _k, v in copies}) > 1:
+            given = ", ".join(f"{k}={v}" for k, v in copies)
+            raise NetlistError(
+                f"{self.ref} gives {key} {len(copies)} times with different values ({given}), "
+                "and which one the simulator reads is not known. Keep one."
+            )
+        return copies[0][1] if copies else None
 
     def set_param(self, key: str, value: float | str) -> None:
         """Set a parameter, or add it, flipping the card dirty.
@@ -965,10 +1029,7 @@ class MeasCard:
     Exposes its body as classified tokens (``body_tokens``) plus
     pre-extracted ``function_calls`` and ``signal_refs`` so callers
     (esp. ``spice_validator``) can run semantic checks without
-    re-parsing characters.
-
-    Setters operate on identity fields (analysis, label) only — the
-    measurement body itself is not mutated through this view.
+    re-parsing characters. Read-only.
     """
 
     card: SpiceCard
@@ -977,7 +1038,6 @@ class MeasCard:
     body_tokens: list[Token]
     function_calls: list[FunctionCall]
     signal_refs: list[str]
-    _directive_text: str = ".MEAS"  # ``.MEAS`` or ``.MEASURE``
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard:
@@ -987,7 +1047,6 @@ class MeasCard:
         # analysis kind or measurement label.
         if len(tokens) < 2:
             raise _malformed(card, "malformed .MEAS")
-        directive = tokens[0].text
         idx = 1
         analysis: MeasAnalysis | None = None
         second = tokens[idx].text.lower()
@@ -1013,30 +1072,7 @@ class MeasCard:
             body_tokens=body_tokens,
             function_calls=function_calls,
             signal_refs=signal_refs,
-            _directive_text=directive,
         )
-
-    def set_label(self, new_name: str) -> None:
-        """Rename the measurement label. Canonical rerender."""
-        self.name = new_name
-        self._canonical_rerender()
-
-    def set_analysis(self, kind: MeasAnalysis | None) -> None:
-        """Set or clear the analysis-kind keyword. Canonical rerender."""
-        self.analysis = kind
-        self._canonical_rerender()
-
-    def _canonical_rerender(self) -> None:
-        parts: list[str] = [self._directive_text]
-        if self.analysis is not None:
-            parts.append(self.analysis.upper())
-        parts.append(self.name)
-        for tok in self.body_tokens:
-            if tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-            parts.append(tok.text)
-        body = " ".join(parts)
-        self.card.replace_body(body)
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ or ``field`` is rejected by schema validation instead of being ignored.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
@@ -19,6 +19,8 @@ from pydantic import (
     model_validator,
 )
 
+from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.models import StrictModel
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
@@ -212,6 +214,29 @@ class StepSelector(StrictModel):
 
     axis: str
     value: float | str
+
+    def pick(self, step_values: Sequence[Mapping[str, Any]]) -> int:
+        """The index of the step whose ``axis`` is nearest ``value``, or for a
+        value that is not a number, the first equal to it as text."""
+        candidates = [
+            (index, values) for index, values in enumerate(step_values) if self.axis in values
+        ]
+        if not candidates:
+            raise ResultError(
+                f"step axis {self.axis!r} is not present in the captured step metadata"
+            )
+        try:
+            target = float(format_spice_value(self.value))
+            return min(candidates, key=lambda pair: abs(float(pair[1][self.axis]) - target))[0]
+        except (TypeError, ValueError):
+            return next(
+                (
+                    index
+                    for index, values in candidates
+                    if str(values[self.axis]) == str(self.value)
+                ),
+                candidates[0][0],
+            )
 
 
 class StepSelectionFields(StrictModel):

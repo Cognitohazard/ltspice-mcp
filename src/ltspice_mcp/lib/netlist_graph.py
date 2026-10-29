@@ -234,14 +234,17 @@ class DuplicateSubckt:
 
 @dataclass(frozen=True)
 class DuplicateParam:
-    """An instance that gives one parameter more than once on its card.
+    """A card that gives one parameter more than once.
 
-    ``key`` is case-folded, as SPICE reads it; ``values`` are the copies in card
-    order. Which copy a simulator uses is not modelled here, so the comparison
-    holds an instance equal only where it is equal whichever copy is read.
+    The card is ``ref`` as written in ``subckt`` (``None`` at the top level),
+    named once however many instances of that subcircuit there are. ``key`` is
+    case-folded, as SPICE reads it; ``values`` are the copies in card order.
+    Which copy a simulator uses is not modelled here, so the comparison holds an
+    instance equal only where it is equal whichever copy is read.
     """
 
     ref: str
+    subckt: str | None
     side: str
     key: str
     values: tuple[str, ...]
@@ -494,7 +497,13 @@ class GraphComparison:
                 for d in self.duplicate_subckts
             ],
             "duplicate_params": [
-                {"ref": d.ref, "side": d.side, "key": d.key, "values": list(d.values)}
+                {
+                    "ref": d.ref,
+                    "subckt": d.subckt,
+                    "side": d.side,
+                    "key": d.key,
+                    "values": list(d.values),
+                }
                 for d in self.duplicate_params
             ],
         }
@@ -1072,12 +1081,12 @@ def compare_graphs(
         for dup in outcome.graph.duplicate_subckts:
             if dup not in result.duplicate_subckts:
                 result.duplicate_subckts.append(dup)
-    for side, flat in (("reference", ref_flat), ("candidate", cand_flat)):
-        for comp in flat.components:
+    for side, outcome in (("reference", ref), ("candidate", cand)):
+        for subckt, comp in _cards_in_use(outcome.graph):
             for key, values in copies_by_name(comp.params).items():
                 if len(values) > 1:
                     result.duplicate_params.append(
-                        DuplicateParam(ref=comp.ref, side=side, key=key, values=tuple(values))
+                        DuplicateParam(comp.ref, subckt, side, key, tuple(values))
                     )
 
     result.equivalent = (
@@ -1134,6 +1143,22 @@ def rekey_across_added_x(
             rekeyed[ref_keys[0]] = rekeyed.pop(cand_keys[0])
             paired.append(ref_keys[0])
     return rekeyed, sorted(paired)
+
+
+def _cards_in_use(graph: NetlistGraph) -> list[tuple[str | None, Component]]:
+    """Each card the top level reaches, once, with the subcircuit it is in
+    (``None`` at the top level): the top level's, then each subcircuit's an
+    ``X`` instance calls, in the order first called."""
+    cards: list[tuple[str | None, Component]] = [(None, comp) for comp in graph.components]
+    seen: set[str] = set()
+    for _subckt, comp in cards:
+        key = comp.model.lower() if comp.type_letter == "X" and comp.model else None
+        if key is None or key in seen or key not in graph.subckts:
+            continue
+        seen.add(key)
+        sub = graph.subckts[key]
+        cards.extend((sub.name, inner) for inner in sub.components)
+    return cards
 
 
 def _renamed_instances(

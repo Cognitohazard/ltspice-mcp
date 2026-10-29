@@ -101,5 +101,6 @@ Guide section 'python' covers the rest of the API.
   deck has a `.save` line, ngspice keeps only what `.save` names. Under this
   server, ngspice skips a top-level `.meas`, so the deck runs but the value is
   missing from the result. Read the trace with a recipe instead.
-- Inline comments are `;` in LTspice and `$` in ngspice.
+- Inline comments are `;` (or a `$` standing alone) in LTspice and `$` in
+  ngspice. Each ends at the end of its line.
 - Ground is `0`; `00` is a different node.

@@ -46,6 +46,11 @@ are named below):
   has no grid whatever the setting (``plot/read_two_panes_grid``). So new
   panes keep the line when every pane they replace had the same one: a
   person's grid outlives new traces, and the file says nothing else about it.
+- An AC pane a build makes has ``PltMag: 1`` and ``PltPhi: 1 0`` after its
+  ``Log`` and ``GridStyle`` lines (``plot/ac``, ``plot/ac_grid_on``); no other
+  analysis's pane has them. Both builds save a file read without them back
+  without them (``plot/read_ac``), and LTspice XVII then opens the pane with
+  its magnitude and phase curves off, so every AC pane written here has them.
 - LTspice 26 writes the file in UTF-8 and LTspice XVII in UTF-16 LE, neither
   with a byte order mark, and both end lines with LF alone
   (``plot/one_trace``). Each reads the other's (``plot/read_two_panes``,
@@ -71,6 +76,11 @@ from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
 PlotAnalysis = Literal["tran", "ac", "dc", "noise"]
 XScale = Literal["linear", "log"]
 YScale = Literal["linear", "log", "db"]
+
+#: The lines that switch an AC pane's magnitude and phase curves on, as both
+#: builds write them for a pane they make (``plot/ac``).
+_AC_MAGNITUDE_ON = "      PltMag: 1"
+_AC_PHASE_ON = "      PltPhi: 1 0"
 
 #: The section each analysis's panes are under: the plot name its raw file has.
 SECTION_NAMES: dict[PlotAnalysis, str] = {
@@ -312,8 +322,10 @@ def pane_specs(panes: Sequence[PlotPane]) -> list[dict[str, object]]:
     return [{"traces": list(pane.traces), **scale_names(pane.scales)} for pane in panes]
 
 
-def _render_body(panes: Sequence[PlotPane]) -> str:
-    """The text between a section's braces for ``panes`` (top first), as LTspice lays it out."""
+def _render_body(panes: Sequence[PlotPane], analysis: PlotAnalysis) -> str:
+    """The text between a section's braces for ``panes`` (top first), as LTspice
+    lays it out. An AC pane switches its magnitude and phase curves on, as a
+    pane either build makes does."""
     lines = [f"   Npanes: {len(panes)}"]
     written = list(panes)[::-1]
     for index, pane in enumerate(written):
@@ -328,6 +340,8 @@ def _render_body(panes: Sequence[PlotPane]) -> str:
         ]
         if pane.grid is not None:
             lines.append(f"      GridStyle: {pane.grid}")
+        if analysis == "ac":
+            lines += [_AC_MAGNITUDE_ON, _AC_PHASE_ON]
         lines.append("   }," if index < len(written) - 1 else "   }")
     return "\n" + "\n".join(lines) + "\n"
 
@@ -347,7 +361,9 @@ def with_panes(
         raise NetlistError("every pane needs at least one trace")
     replacement: PlotSection | None = None
     if panes:
-        replacement = PlotSection(name=name, panes=tuple(panes), body=_render_body(panes))
+        replacement = PlotSection(
+            name=name, panes=tuple(panes), body=_render_body(panes, analysis)
+        )
     kept: list[PlotSection] = []
     placed = False
     for section in settings.sections:

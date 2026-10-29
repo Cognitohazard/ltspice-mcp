@@ -484,7 +484,7 @@ class _FakeProc:
 
 class TestScopedKill:
     def _iter(self, monkeypatch, procs):
-        monkeypatch.setattr(proc_kill_mod.psutil, "process_iter", lambda attrs: iter(procs))
+        monkeypatch.setattr(proc_kill_mod, "_running_processes", lambda attrs: iter(procs))
 
     def test_kills_only_name_and_token_match(self, monkeypatch):
         token = "sim_1751000000_deadbeef"
@@ -640,6 +640,38 @@ class TestScopedKill:
             launcher.wait()
             launcher.stdout.close()
 
+    def test_a_process_on_a_pid_psutil_cached_for_an_earlier_one_is_killed(self, tmp_path: Path):
+        """psutil's process_iter yields the Process it built for a pid on an
+        earlier call without checking that the pid still names that process.
+        For a simulator that took a dead process's pid, the cached object read
+        the simulator's command line and then refused to kill it as a reused
+        pid, so the kill found it and killed nothing. The cache is given here
+        the entry PID reuse leaves: this process's pid, an earlier start."""
+        token = "exp_reused_1790000000_ab12cd34_case_0"
+        executable, env = python_launch()
+        ready = "import time; print('ready', flush=True); time.sleep(60)"
+        launched = subprocess.Popen(
+            [executable, "-c", ready, str(tmp_path / f"{token}.cir")],
+            env=env,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert launched.stdout is not None
+        try:
+            assert launched.stdout.readline() == "ready\n"
+            earlier = psutil.Process(launched.pid)
+            pid, started = earlier._ident  # pyright: ignore[reportAttributeAccessIssue]
+            earlier._ident = (pid, started - 1.0)  # pyright: ignore[reportAttributeAccessIssue]
+            psutil._pmap[pid] = earlier  # pyright: ignore[reportAttributeAccessIssue]
+            assert kill_simulator_by_token(token, {"ngspice"}) == 1
+            assert launched.wait(timeout=LIVENESS_S) is not None
+        finally:
+            psutil._pmap.pop(launched.pid, None)  # pyright: ignore[reportAttributeAccessIssue]
+            if launched.poll() is None:
+                launched.kill()
+            launched.wait()
+            launched.stdout.close()
+
     def test_a_launched_child_under_another_name_is_killed_by_its_deck_path(self, tmp_path: Path):
         """A wrapper or launcher the name gate does not know is still our child.
 
@@ -673,7 +705,7 @@ class TestScopedKill:
         def _must_not_scan(attrs):
             raise AssertionError("process table must not be scanned")
 
-        monkeypatch.setattr(proc_kill_mod.psutil, "process_iter", _must_not_scan)
+        monkeypatch.setattr(proc_kill_mod, "_running_processes", _must_not_scan)
         assert kill_simulator_by_token("", {"ngspice"}) == 0
         assert kill_simulator_by_token("sim_1_x", set()) == 0
 

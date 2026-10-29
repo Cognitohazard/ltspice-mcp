@@ -16,6 +16,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PLACEHOLDERS = frozenset({"user", "me", "dev", "test", "u", "...", "youruser", "foo"})
 ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
+# Replace undecodable bytes rather than drop them: dropping them joins the text
+# on either side, so binary data can read as an address.
+DECODE_ERRORS = "replace"
 ZERO_OIDS = {"0" * 40, "0" * 64}
 OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z", re.IGNORECASE)
 REMOTE_NAME = re.compile(r"[A-Za-z0-9._/-]+\Z")
@@ -85,14 +88,14 @@ def scan_bytes(data: bytes) -> set[Finding]:
     return {
         finding
         for encoding in ENCODINGS
-        for finding in scan_text(data.decode(encoding, errors="ignore"))
+        for finding in scan_text(data.decode(encoding, errors=DECODE_ERRORS))
     }
 
 
 def scan_message(data: bytes) -> set[Finding]:
     findings = set()
     for encoding in ENCODINGS:
-        text = data.decode(encoding, errors="ignore")
+        text = data.decode(encoding, errors=DECODE_ERRORS)
         lines = text.rstrip("\r\n").splitlines()
         footer_start = len(lines)
         while footer_start and TRAILER.fullmatch(lines[footer_start - 1]):

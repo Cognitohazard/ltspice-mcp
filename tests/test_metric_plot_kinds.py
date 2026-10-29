@@ -12,7 +12,7 @@ from ltspice_mcp.lib.metrics import (
     unverified_input_noise_warning,
 )
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
-from tests.test_decoded_raw import header
+from tests.conftest import header
 
 
 @pytest.mark.parametrize(

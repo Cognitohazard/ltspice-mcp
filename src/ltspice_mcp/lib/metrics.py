@@ -50,17 +50,18 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED, DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
 from ltspice_mcp.lib.device_names import (
     current_device,
     device_names,
     device_query,
     owner_path,
+    parse_device_param,
     path_text,
     writes_xvii_names,
 )
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, scan_op_step_log, split_device_key
+from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -110,8 +111,10 @@ from ltspice_mcp.lib.recipes import (
     Window,
     quantile_row,
 )
+from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
 from ltspice_mcp.lib.result_observations import (
     deck_observation_inputs,
+    deck_one_ac_frequency,
     relay_observations,
 )
 from ltspice_mcp.lib.signal_analysis import (
@@ -243,26 +246,19 @@ def reject_non_transient(raw) -> None:
         )
 
 
-def _ac_point_a_step(raw: DecodedRaw | DecodedPlot, step: int) -> bool:
-    """Whether an AC plot with no sampled axis holds one point at ``step``, as
-    a stepped ``.ac`` at one frequency does: it stores no frequency at all.
-
-    Another analysis's table (``.tf``, ``.pz``) stays a table even at one
-    point, because its traces' declared types do not name what they hold.
-    """
-    if raw.descriptor.analysis not in AC_SHAPED:
-        return False
-    try:
-        return len(raw.get_wave(0, step=step)) == 1
-    except (ResultError, IndexError):
-        return False
+def _point_a_step_at_one_frequency(raw: DecodedRaw | DecodedPlot) -> bool:
+    """Whether the plot holds one point a step at a frequency only its deck
+    names, as a stepped ``.ac`` or ``.noise`` at one frequency does
+    (``result_kinds``)."""
+    kind = kind_named(raw.descriptor.stepped_kind)
+    return kind is not None and kind.stepping == "point_a_step" and kind.axis == "deck"
 
 
-def _no_axis_error(raw: DecodedRaw | DecodedPlot, step: int) -> NoAxisError:
+def _no_axis_error(raw: DecodedRaw | DecodedPlot) -> NoAxisError:
     """Why a plot with no sampled axis cannot be read along one, and what reads it."""
     if raw.descriptor.analysis == "op":
         hint = "Use operating_point to read this bias point."
-    elif _ac_point_a_step(raw, step):
+    elif _point_a_step_at_one_frequency(raw):
         hint = (
             "It holds one point a step: read it with the value recipe and no 'at', "
             "or api.load_raw(...).value(name, step=k)."
@@ -278,48 +274,17 @@ def _no_axis_error(raw: DecodedRaw | DecodedPlot, step: int) -> NoAxisError:
     )
 
 
-def guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
-    """Real-valued sweep axis for ``step``, or a clean error for a no-axis raw.
-
-    spicelib's ``get_axis`` raises when a result has no axis (e.g. an Operating
-    Point run); convert that into a friendly ResultError pointing at
-    ``operating_point`` rather than letting it surface as a generic internal
-    error. AC frequency axes come back complex — strip to the real part.
-
-    When ``raw_path`` is given, a no-axis raw that is really a stepped ``.op``
-    read at its first step (the log shows >1 bias iteration) gets the same
-    ``.dc``-conversion pointer ``build_simulation_summary`` emits — so the
-    confused caller learns the fix where they hit the wall, not just that the
-    axis is missing.
-    """
-    if isinstance(raw, (DecodedRaw, DecodedPlot)):
-        if raw.descriptor.axis is None:
-            raise _no_axis_error(raw, step)
-        axis = np.asarray(raw.get_axis(step=step))
-        if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
-            raise ResultError(
-                "The selected plot has non-real coordinates; a real sampled axis is required."
-            )
-        return real_axis(axis)
-    try:
-        axis = np.asarray(raw.get_axis(step=step))
-    except Exception as e:
-        hint = "Use operating_point for a .op result."
-        if raw_path is not None:
-            log_path = services.AnalysisSource.for_raw(raw_path).log
-            if log_path is not None and log_path.exists():
-                log_steps, op_iters = scan_op_step_log(log_path)
-                if max(len(log_steps), op_iters) > 1:
-                    param = next(iter(log_steps[0].keys()), "param") if log_steps else "<param>"
-                    hint = (
-                        "This is a stepped .op, read here at its first step only. Convert "
-                        f"to '.dc {param} START STOP STEP' to get an axis over every bias "
-                        "point, or use operating_point for a single bias point."
-                    )
-        raise NoAxisError(f"This result has no data axis ({e}). {hint}") from e
-    if np.iscomplexobj(axis):
-        axis = np.real(axis)
-    return axis
+def guarded_axis(raw: DecodedRaw | DecodedPlot, step: int) -> np.ndarray:
+    """Real-valued sweep axis for ``step``, or a clean error for a plot with
+    no sampled axis (an operating point, a table) naming what reads it."""
+    if raw.descriptor.axis is None:
+        raise _no_axis_error(raw)
+    axis = np.asarray(raw.get_axis(step=step))
+    if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
+        raise ResultError(
+            "The selected plot has non-real coordinates; a real sampled axis is required."
+        )
+    return real_axis(axis)
 
 
 def window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
@@ -404,8 +369,8 @@ def unrecognized_matches(warning: str, signal: str) -> bool:
     only tell a ``.save``'d variable is bogus is its mention in the log, so this
     is how a read decides whether a 0.0 trace it touched is the real result."""
     sig_l = signal.lower()
-    at_match = re.search(r"@[\w.]+\[[^\]]*\]", sig_l)
-    at_token = at_match.group(0) if at_match else None
+    parsed = parse_device_param(sig_l)
+    at_token = None if parsed is None else device_key(*parsed)
     return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
 
 
@@ -486,9 +451,11 @@ async def relay_solve_failures(
     return data
 
 
-async def _logs_for_raw(source: services.AnalysisSource, state: SessionState, raw) -> DecodedLog:
+async def _logs_for_raw(
+    source: services.AnalysisSource, state: SessionState, raw: DecodedRaw
+) -> DecodedLog:
     """Use companion facts from the same capture when they are already resident."""
-    if isinstance(raw, DecodedRaw) and raw.logs is not None:
+    if raw.logs is not None:
         return raw.logs
     return await services.load_logs(source, state)
 
@@ -504,7 +471,7 @@ async def load_real_signal(
     reject_non_transient(raw)
     resolved = services.resolve_signal(raw, signal)
     services.validate_step(raw, step)
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
     wave = resolved.wave(raw, step)
     if np.iscomplexobj(wave):
         raise ResultError(
@@ -566,7 +533,7 @@ async def load_ac_signal(
             show_hint=False,
         )
     services.validate_step(raw, step)
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
 
     ratio = split_ratio(signal)
     if ratio is not None:
@@ -875,7 +842,9 @@ def is_input_noise(trace: str) -> bool:
     return "inoise" in trace.lower()
 
 
-def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[str | None, bool]:
+def noise_trace_unit(
+    raw: DecodedRaw | DecodedPlot, trace: str, input_source_unit: str | None
+) -> tuple[str | None, bool]:
     """The unit a noise-run trace's density is referred to, and whether it was checked.
 
     The simulator's declared unit (``trace_unit``) stands for every trace but
@@ -885,7 +854,7 @@ def noise_trace_unit(raw, trace: str, input_source_unit: str | None) -> tuple[st
     when there is none. The unit is of the amplitude; the density is per √Hz.
     """
     unit = trace_unit(raw, trace)
-    if isinstance(raw, (DecodedRaw, DecodedPlot)) and unit is not None:
+    if unit is not None:
         # Descriptors label the stored density; this helper supplies the unit
         # of its integrated amplitude to both density and RMS consumers.
         unit = unit.removesuffix("/√Hz")
@@ -1124,21 +1093,32 @@ async def value(
     With no ``at``, a run whose axis holds a single sample answers from that
     sample. An operating point, which has no axis, falls back to its bias point,
     where the expression is addressed by the name the operating point carries.
-    An AC plot with no axis answers from the one point it holds at the step, as
-    a stepped ``.ac`` at one frequency does.
+    A stepped ``.ac`` or ``.noise`` at one frequency answers from the one point
+    it holds at the step. Its raw stores no frequency, so for an ``.ac`` the
+    deck's is given as ``actual_x`` with ``actual_x_source: "deck"`` when the
+    run's deck names it.
     """
     at = recipe.at
     if at is None:
         raw = await services.load_raw(source, state)
         services.validate_step(raw, step)
         try:
-            axis = guarded_axis(raw, step, source.raw)
+            axis = guarded_axis(raw, step)
         except NoAxisError:
-            if not isinstance(raw, (DecodedRaw, DecodedPlot)) or raw.descriptor.analysis == "op":
+            if raw.descriptor.analysis == "op":
                 return await _value_from_operating_point(source, recipe, raw, step, state)
-            if not _ac_point_a_step(raw, step):
+            if not _point_a_step_at_one_frequency(raw):
                 raise
-            return await point_value(source, recipe.expr, None, step, state)
+            data = await point_value(source, recipe.expr, None, step, state)
+            frequency = (
+                await asyncio.to_thread(deck_one_ac_frequency, source.netlist)
+                if source.netlist is not None and raw.descriptor.analysis == "ac"
+                else None
+            )
+            if frequency is not None:
+                data["actual_x"] = frequency
+                data["actual_x_source"] = "deck"
+            return data
         if len(axis) != 1:
             raise ResultError(
                 "value.at is required when the selected run has more than one "
@@ -1151,7 +1131,7 @@ async def value(
 async def _value_from_operating_point(
     source: services.AnalysisSource,
     recipe: ValueRecipe,
-    raw: RawData,
+    raw: DecodedRaw,
     step: int,
     state: SessionState,
 ) -> MetricValue:
@@ -1246,16 +1226,7 @@ async def point_value(
                 raw, sig.name, target_x, step, read_wave=lambda: sig.wave(raw, step)
             )
         except NoAxisError as e:
-            if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.analysis != "op":
-                raise _no_axis_error(raw, step) from e
-            # Operating-point raws have no time/frequency axis. Give a precise,
-            # actionable message instead of the generic failure.
-            raise ResultError(
-                "This is an Operating Point result (no time/frequency axis to "
-                "query). Use operating_point to read node voltages and branch "
-                "currents.",
-                show_hint=False,
-            ) from e
+            raise _no_axis_error(raw) from e
         except Exception as e:
             raise ResultError(f"Failed to query value: {e}") from e
 
@@ -1312,12 +1283,14 @@ async def signal_stats(
     resolved = services.resolve_signal(raw, recipe.signal)
     signal = resolved.name
     services.validate_step(raw, step)
-    analysis = raw.descriptor.analysis if isinstance(raw, (DecodedRaw, DecodedPlot)) else None
-    if analysis is not None and analysis not in _STATS_ANALYSES:
-        if raw.descriptor.axis is None:
-            guarded_axis(raw, step)
+    analysis = raw.descriptor.analysis
+    if raw.descriptor.axis is None:
+        # Nothing to take statistics along; the refusal names what reads it,
+        # the value recipe for a point a step.
+        raise _no_axis_error(raw)
+    if analysis not in _STATS_ANALYSES:
         raise ResultError(
-            f"signal_stats does not define statistics for {raw.descriptor.analysis!r}. "
+            f"signal_stats does not define statistics for {analysis!r}. "
             "Read this plot's quantities through inspect(kind='results') or "
             "api.load_raw(...).trace(signal) and choose the appropriate calculation.",
             show_hint=False,
@@ -1338,6 +1311,12 @@ async def signal_stats(
     if len(wave) == 0:
         raise ResultError(
             f"Signal {signal!r} has no data points at step {step}; cannot compute statistics."
+        )
+    if len(wave) == 1:
+        raise ResultError(
+            f"Signal {signal!r} holds one point at step {step}, so its statistics would be "
+            "that point. Read it with the value recipe, or api.load_raw(...).value(name).",
+            show_hint=False,
         )
 
     if np.iscomplexobj(wave):
@@ -1364,7 +1343,7 @@ async def signal_stats(
             data["warnings"] = failures
         return data
 
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
     wave_real = np.asarray(wave)
 
     # Distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
@@ -1583,7 +1562,7 @@ async def transient_response(
         raw = await services.load_raw(source, state)
         reference = services.resolve_signal(raw, recipe.input)
         if t_start is None:
-            axis = guarded_axis(raw, step, source.raw)
+            axis = guarded_axis(raw, step)
             wave = reference.wave(raw, step)
             if np.iscomplexobj(wave) or len(wave) < 2:
                 raise ResultError(
@@ -1621,7 +1600,7 @@ async def timing(
     signal_b = services.resolve_signal(raw, recipe.to.signal)
     services.validate_step(raw, step)
 
-    axis = guarded_axis(raw, step, source.raw)
+    axis = guarded_axis(raw, step)
     ya_full = signal_a.wave(raw, step)
     yb_full = signal_b.wave(raw, step)
     if np.iscomplexobj(ya_full) or np.iscomplexobj(yb_full):
@@ -2036,7 +2015,7 @@ async def noise_integral(
     services.validate_step(raw, step)
     density_signal = services.resolve_signal(raw, recipe.signal or "onoise")
     signal = density_signal.name
-    freqs = guarded_axis(raw, step, source.raw)
+    freqs = guarded_axis(raw, step)
     density = density_signal.wave(raw, step)
     data = await run_metric(
         source,
@@ -2132,7 +2111,7 @@ async def operating_point(
             at_value = parse_spice_value(at)
         except Exception as e:
             raise ResultError(f"Invalid 'at' value {at!r}: {e}", show_hint=False) from e
-        axis = guarded_axis(raw, step, source.raw)
+        axis = guarded_axis(raw, step)
         if axis.size > 1:
             point_index = nearest_index(axis, at_value)
             sweep_value = float(axis[point_index])
@@ -2192,7 +2171,9 @@ async def operating_point(
     # The log's table holds fewer digits than a raw trace: mark a result that
     # carries a value from it (analyze_results says so in its observations).
     table = {
-        split_device_key(key)[0] for key in op_data["device_op_points"] if key not in from_raw
+        parsed[0]
+        for key in op_data["device_op_points"]
+        if key not in from_raw and (parsed := parse_device_param(key)) is not None
     }
     if table:
         op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS

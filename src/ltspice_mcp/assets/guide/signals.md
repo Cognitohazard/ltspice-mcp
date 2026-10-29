@@ -23,8 +23,12 @@ spellings name a quantity that the simulator did not write as a trace:
 
 `value` reads the sample nearest `at` on the run's axis, without
 interpolation, and needs `at` whenever that axis has more than one sample. A
-stepped `.ac` at one frequency stores one point per step and no frequency, so
-leave `at` out and pick the step.
+stepped `.ac` or `.noise` at one frequency stores one point per step and no
+frequency, and a stepped `.op` or `.tf` stores one point per step and no axis,
+so leave `at` out and pick the step. The stepped values are in each row's
+`step_values`, not among the signals. For a stepped `.ac` read from its job,
+`value` gives the frequency the deck names (`.ac list 100k`) as `actual_x`,
+with `actual_x_source: "deck"`, because the raw does not hold it.
 
 ## Trace math in Python
 

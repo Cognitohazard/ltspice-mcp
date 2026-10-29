@@ -5,7 +5,6 @@
     "net": "filtered",
     "sheet": "fixtures/Draft1.asc",
     "there": "a name already elsewhere; 0 at the point, 0 named",
-    "warnings": [],
     "x": 400,
     "y": 272
    },
@@ -13,7 +12,6 @@
     "net": "filtered",
     "sheet": "fixtures/Draft1.asc",
     "there": "a name already elsewhere; 1 at the point, 0 named",
-    "warnings": [],
     "x": 240,
     "y": 256
    },
@@ -21,7 +19,6 @@
     "net": "GND",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/gnd_label.asc",
     "there": "a name already elsewhere; 1 at the point, 1 named",
-    "warnings": [],
     "x": 96,
     "y": 96
    },
@@ -29,7 +26,6 @@
     "net": "filtered",
     "sheet": "fixtures/Draft1.asc",
     "there": "a name already here; 1 at the point, 1 named",
-    "warnings": [],
     "x": 208,
     "y": 128
    },
@@ -37,7 +33,6 @@
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/Draft1.asc",
     "there": "a new name; 0 at the point, 0 named",
-    "warnings": [],
     "x": 400,
     "y": 272
    },
@@ -45,7 +40,6 @@
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/Draft1.asc",
     "there": "a new name; 1 at the point, 0 named",
-    "warnings": [],
     "x": 240,
     "y": 256
    },
@@ -53,7 +47,6 @@
     "net": "0",
     "sheet": "fixtures/Draft1.asc",
     "there": "ground; 0 at the point, 0 named",
-    "warnings": [],
     "x": 400,
     "y": 272
    },
@@ -61,7 +54,6 @@
     "net": "0",
     "sheet": "fixtures/Draft1.asc",
     "there": "ground; 1 at the point, 0 named",
-    "warnings": [],
     "x": 240,
     "y": 256
    },
@@ -69,7 +61,6 @@
     "net": "0",
     "sheet": "fixtures/Draft1.asc",
     "there": "ground; 1 at the point, 1 named",
-    "warnings": [],
     "x": 208,
     "y": 128
    },
@@ -77,7 +68,6 @@
     "net": "a",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a name already elsewhere; 2 at the point, 0 named",
-    "warnings": [],
     "x": 400,
     "y": 96
    },
@@ -85,7 +75,6 @@
     "net": "top",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/pin_at_crossing.asc",
     "there": "a name already here; 1 at the point, 1 named",
-    "warnings": [],
     "x": 96,
     "y": 96
    },
@@ -93,7 +82,6 @@
     "net": "c",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a name already here; 2 at the point, 1 named",
-    "warnings": [],
     "x": 96,
     "y": 400
    },
@@ -101,7 +89,6 @@
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a new name; 2 at the point, 0 named",
-    "warnings": [],
     "x": 400,
     "y": 96
    },
@@ -109,7 +96,6 @@
     "net": "0",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "ground; 2 at the point, 0 named",
-    "warnings": [],
     "x": 400,
     "y": 96
    },
@@ -117,7 +103,6 @@
     "net": "0",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "ground; 2 at the point, 1 named",
-    "warnings": [],
     "x": 96,
     "y": 400
    },
@@ -125,7 +110,6 @@
     "net": "a",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc",
     "there": "a name already here; 1 at the point, 1 named",
-    "warnings": [],
     "x": 192,
     "y": 96
    },
@@ -133,7 +117,6 @@
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc",
     "there": "a new name; 1 at the point, 1 named",
-    "warnings": [],
     "x": 192,
     "y": 96
    },
@@ -141,7 +124,6 @@
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a new name; 2 at the point, 1 named",
-    "warnings": [],
     "x": 96,
     "y": 400
    },
@@ -149,7 +131,6 @@
     "net": "a",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc",
     "there": "a name already here; 1 at the point, 1 named",
-    "warnings": [],
     "x": 96,
     "y": 96
    },
@@ -157,7 +138,6 @@
     "net": "a_name_no_sheet_has",
     "sheet": "fixtures/Draft1.asc",
     "there": "a new name; 1 at the point, 1 named",
-    "warnings": [],
     "x": 208,
     "y": 128
    },
@@ -214,28 +194,24 @@
    "moved": {
     "reference": "C1",
     "sheet": "fixtures/Draft1.asc",
-    "warnings": [],
     "x": 240,
     "y": 288
    },
    "moved | sheet: joined_at_crossing": {
     "reference": "R1",
     "sheet": "fixtures/crossings/every_kind.asc",
-    "warnings": [],
     "x": 96,
     "y": 448
    },
    "moved | sheet: joined_at_crossing, net_with_two_names": {
     "reference": "R1",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc",
-    "warnings": [],
     "x": 192,
     "y": 144
    },
    "moved | sheet: net_with_two_names": {
     "reference": "R1",
     "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_at_vertex.asc",
-    "warnings": [],
     "x": 96,
     "y": 192
    },
@@ -252,7 +228,7 @@
   "fixtures/Draft1.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "34ec989902adc6fd96b9a274d85d64d9f8938b3109a3d7de7563097104f5ceb7",
+    "sha256": "f524e0b44b8649aeb248715bfaebcbe1bb917c7d3690566f16bb1b50520e67a5",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -267,7 +243,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -276,7 +252,7 @@
   "fixtures/crossings/every_kind.asc": {
    "labels": {
     "proposals": 264,
-    "sha256": "05d81af444e13ccb8628d4353b3141e0aca8106f45404b96a8fcd87f519bf1c6",
+    "sha256": "3ab169ae9eb5a72bc0a3290f80b92d814a02116a1ab5052a128bc3dfde01347e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 120,
@@ -303,7 +279,7 @@
    },
    "moves": {
     "proposals": 168,
-    "sha256": "33d81c5c94db612f041ffa7b641184a32a503dc8e7e655ecc485d6b7023ac007",
+    "sha256": "46451ae22cc03b1cd919cfef9bf39a65f1398abe296e4c6c1a6d26ba5fd8b3c1",
     "shapes": {
      "moved": 136,
      "moved | sheet: joined_at_crossing": 24,
@@ -314,7 +290,7 @@
   "fixtures/ltspice_bridge_recorded/inputs/micro_sign.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "34ec989902adc6fd96b9a274d85d64d9f8938b3109a3d7de7563097104f5ceb7",
+    "sha256": "f524e0b44b8649aeb248715bfaebcbe1bb917c7d3690566f16bb1b50520e67a5",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -329,7 +305,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -338,7 +314,7 @@
   "fixtures/ltspice_bridge_recorded/inputs/older_version.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "cfcdd5c180b07a2d5c67a6f33e3740d02195e2754bfa17161f38b19596417861",
+    "sha256": "bf3cd9759d2b81e5fd444822b862730579fab8cafdaa76fadeebe0a7de5b34f5",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -353,7 +329,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -362,7 +338,7 @@
   "fixtures/ltspice_bridge_recorded/inputs/symbol_attributes.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "05b8f5b1c67faf2adcf7befa3a10aea7f1f30b25ca39df0606441aafcb53982c",
+    "sha256": "82f6596355c52b145bf2289a20b009d5115b65be53f729d764661cc4838af6c7",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -377,7 +353,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -386,7 +362,7 @@
   "fixtures/ltspice_bridge_recorded/inputs/text_off_grid.asc": {
    "labels": {
     "proposals": 36,
-    "sha256": "5e3284f72507bcf40564572b643f2c506d990e33da1920de57094b767ea24e26",
+    "sha256": "378d191b6e192b3edb9d58321981d2b34fa7a9850a2db086114afd6e70dba032",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 17,
@@ -396,7 +372,7 @@
    },
    "moves": {
     "proposals": 66,
-    "sha256": "3ca25a0f4d03113b915c171491770fe7aad85fe9eb76b6c48133abfe4d9bfb8a",
+    "sha256": "3e6003c40f46cb5be95a55600e8d969b065c5ffee4f8a9784346daa90f4f2673",
     "shapes": {
      "moved": 66
     }
@@ -405,7 +381,7 @@
   "fixtures/ltspice_bridge_recorded/ltspice26/sheets/micro_sign.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "34ec989902adc6fd96b9a274d85d64d9f8938b3109a3d7de7563097104f5ceb7",
+    "sha256": "f524e0b44b8649aeb248715bfaebcbe1bb917c7d3690566f16bb1b50520e67a5",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -420,7 +396,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -429,7 +405,7 @@
   "fixtures/ltspice_bridge_recorded/ltspice26/sheets/older_version.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "05b8f5b1c67faf2adcf7befa3a10aea7f1f30b25ca39df0606441aafcb53982c",
+    "sha256": "82f6596355c52b145bf2289a20b009d5115b65be53f729d764661cc4838af6c7",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -444,7 +420,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -453,7 +429,7 @@
   "fixtures/ltspice_bridge_recorded/ltspice26/sheets/symbol_attributes.asc": {
    "labels": {
     "proposals": 75,
-    "sha256": "05b8f5b1c67faf2adcf7befa3a10aea7f1f30b25ca39df0606441aafcb53982c",
+    "sha256": "82f6596355c52b145bf2289a20b009d5115b65be53f729d764661cc4838af6c7",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 17,
@@ -468,7 +444,7 @@
    },
    "moves": {
     "proposals": 141,
-    "sha256": "e7d577589c7a1a0faf4cb3fd86abfd0bb9469e5a2b494ede72bbfeb75d5092ce",
+    "sha256": "ae41330799418c6cd3f34cc6ee1babcde05ecb533d30a150bafc5506148c0d6b",
     "shapes": {
      "moved": 141
     }
@@ -477,7 +453,7 @@
   "fixtures/ltspice_bridge_recorded/ltspice26/sheets/text_off_grid.asc": {
    "labels": {
     "proposals": 36,
-    "sha256": "5e3284f72507bcf40564572b643f2c506d990e33da1920de57094b767ea24e26",
+    "sha256": "378d191b6e192b3edb9d58321981d2b34fa7a9850a2db086114afd6e70dba032",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 17,
@@ -487,7 +463,7 @@
    },
    "moves": {
     "proposals": 66,
-    "sha256": "3ca25a0f4d03113b915c171491770fe7aad85fe9eb76b6c48133abfe4d9bfb8a",
+    "sha256": "3e6003c40f46cb5be95a55600e8d969b065c5ffee4f8a9784346daa90f4f2673",
     "shapes": {
      "moved": 66
     }
@@ -496,7 +472,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc": {
    "labels": {
     "proposals": 130,
-    "sha256": "abecb5fff5e576df659fed1ab518a76dc5ec2c58f5a79bfedb96deaa5ff6d132",
+    "sha256": "ec3efb0c83b6d27a31a3573eab0921c0a0a2f91a432712922767aae18675d247",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 33,
@@ -512,7 +488,7 @@
    },
    "moves": {
     "proposals": 233,
-    "sha256": "154810b85da7a1dedf49bdd0e3361920e77dda8eba731f61502ca898acf8c520",
+    "sha256": "7c3151359996b0c581fe621dfb473c650603593880d87bd24cc6b278e9034adc",
     "shapes": {
      "moved": 233
     }
@@ -521,7 +497,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/common_source_labelled.asc": {
    "labels": {
     "proposals": 100,
-    "sha256": "0b33018d09c3e72d427301422150088353b43bb978e382e7054de2f77c470d57",
+    "sha256": "96dd57022498f55775545aac7a02dffce8b9512eec09b90052239f2038a461a1",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 32,
@@ -537,7 +513,7 @@
    },
    "moves": {
     "proposals": 221,
-    "sha256": "d2b0571878a5e929f5b86d9b8a8bea8b63f4ebb2e51fa221f2d16161fa7cec79",
+    "sha256": "885058ffa281e91f2421f66e229a27961d7c0140dbc70bb76938262c2af67041",
     "shapes": {
      "moved": 221
     }
@@ -546,7 +522,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_drawn.asc": {
    "labels": {
     "proposals": 408,
-    "sha256": "662787501d7ce424c39cdc0e3e0884bf18b595902f95d52596ab7f7056de701e",
+    "sha256": "c39ab3a140a1e0e3f1901a8ae440c4f8bda10bddf12f4edaf638fcb1bdaa9667",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 6,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 72,
@@ -562,7 +538,7 @@
    },
    "moves": {
     "proposals": 588,
-    "sha256": "082037474c9b70b726b19a44b3b8fbad08ad7e17e459b253b468cd5da15fdba4",
+    "sha256": "2b655992e7dc4d15948534c99376a4c8aceb800d60deda99b25e393a25523f09",
     "shapes": {
      "moved": 588
     }
@@ -571,7 +547,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_labelled.asc": {
    "labels": {
     "proposals": 328,
-    "sha256": "acf4384d4c5315d9a32900c4419dc698dd3b7df528fcecbae106e1fd9be7f43a",
+    "sha256": "cde715a58c634fe070ee1056b8e72cb14e3aa72042516373057d6d050be33711",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 6,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 72,
@@ -587,7 +563,7 @@
    },
    "moves": {
     "proposals": 386,
-    "sha256": "a4abcd768905ae5a50f3d5370bd1e100007810df02b55799869e5e999237fc78",
+    "sha256": "e5422f3ff60a59b30e7173b7ac4d6a5514264dce9808aed339708d64815f0277",
     "shapes": {
      "moved": 386
     }
@@ -596,7 +572,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_drawn.asc": {
    "labels": {
     "proposals": 180,
-    "sha256": "a283001679742573e74f11f66cbd89b1c05c3ca674ec1422bd9fba7a3a2ade88",
+    "sha256": "f13bbb02c168879a9a75e93055cbe52f87e92567ed89c2925e21967da22fadcd",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 30,
@@ -612,7 +588,7 @@
    },
    "moves": {
     "proposals": 425,
-    "sha256": "4d6e96a73611c07f7f8197bce2451f3e840446b97d5c39cbb23cecbc548efb0d",
+    "sha256": "e3934e3af39c86a6dc246b5781aef095229b2b8eae46a2a0485a2a852c92783e",
     "shapes": {
      "moved": 425
     }
@@ -621,7 +597,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_labelled.asc": {
    "labels": {
     "proposals": 145,
-    "sha256": "5021c47749a8c3be01cafaf8da5dde68e5c88650c70a5b4b0adf34ad3f5216d4",
+    "sha256": "a35fdc5ed08830c2e551013eb390e715f3d20c38e94007e8be64866719046a91",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 30,
@@ -637,7 +613,7 @@
    },
    "moves": {
     "proposals": 367,
-    "sha256": "a6ea8fbbdc5180a76df8cd0bdbce2dad7e408c567239a336d5e18497652e971f",
+    "sha256": "a4380a6a7e68d5b0f2f802fb08b1ffd685fa9c5b643b23742f9200ef24417d83",
     "shapes": {
      "moved": 367
     }
@@ -646,7 +622,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/r2r_ladder_drawn.asc": {
    "labels": {
     "proposals": 311,
-    "sha256": "bcc9aaeef3edabe5849c74c9a603fc3be336925cb4d58fcdad9bc25d8a34eb5c",
+    "sha256": "9cad408fbf26fe125f0256cc593c5d917e2b38d23cb0e4a73c3c7ba3f35033b1",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 249,
@@ -661,7 +637,7 @@
    },
    "moves": {
     "proposals": 585,
-    "sha256": "fcdbe330d84aaf5ebcfc8fe37939b5f60743f0aa5156dc46056c800ec2e15bd8",
+    "sha256": "aaeed397090d24ec1bbc998783d60e2beef46ba76f5479eab471f509c6d38095",
     "shapes": {
      "moved": 585
     }
@@ -670,7 +646,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/r2r_ladder_labelled.asc": {
    "labels": {
     "proposals": 312,
-    "sha256": "814cf573ff8f31db4a6045312c05597acfd7a2e5004cabd2b7970e375fffe8d9",
+    "sha256": "2bd4bf4d06df64b50d8fde3836db5a02f2697154197caeae172eb6d143b4886d",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 249,
@@ -685,7 +661,7 @@
    },
    "moves": {
     "proposals": 593,
-    "sha256": "faec1ed2cb8d84b7d5f5fe0dfd676927c034ff7399f9fb52b15227081c823760",
+    "sha256": "d16384fe21f70ce6d94fc821a875c08bd1635f11bfb3f4619c7c0458f9f23438",
     "shapes": {
      "moved": 593
     }
@@ -694,7 +670,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/rc_lowpass_drawn.asc": {
    "labels": {
     "proposals": 60,
-    "sha256": "a5de5a3ff23e07a38b04e9528ebc4fce27d5be843a42388134ada1f6d7c9554b",
+    "sha256": "853838041e337b4d0b86ed41ee26195ba286296f2ec2ec8d5e0e839e5b6fe612",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 8,
@@ -710,7 +686,7 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
     }
@@ -719,7 +695,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/rc_lowpass_labelled.asc": {
    "labels": {
     "proposals": 52,
-    "sha256": "04ec9a4247b388d95ecd8cdeadcf728b08cb2e7b29f2edd7197e76f71cc4c5ae",
+    "sha256": "fba910c53e510cc848209587df1e9ca315966019f47051f7bb020a837fabb197",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 8,
@@ -735,7 +711,7 @@
    },
    "moves": {
     "proposals": 69,
-    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "sha256": "c572044cad2267dfe55d18e1441b83a048988625345b841acbce3e283eacbfb3",
     "shapes": {
      "moved": 69
     }
@@ -744,7 +720,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/rectifier_drawn.asc": {
    "labels": {
     "proposals": 60,
-    "sha256": "1a8a4cd2dbd15193c87323b1f4a0a1c5f26d62871a9e624f6f751b23dd37f59f",
+    "sha256": "80e8beb0739eb1ecac4bafb367c0906187f5adceb865822ad4819f1de9a5ea01",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 8,
@@ -760,7 +736,7 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
     }
@@ -769,7 +745,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/rectifier_labelled.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "2657f4756eabd814a50c87194135cd2389e044da9832dcd3e04fef203a82c2eb",
+    "sha256": "02c1c2a7858b483e25c14dd1380ed3e08441a2bbf5ea1ae85861e5fa23837024",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 9,
@@ -784,7 +760,7 @@
    },
    "moves": {
     "proposals": 67,
-    "sha256": "15a3be6188c61d0b7c0da10fd791c80ae40f8edd153c9ca31869e2b3a77bb310",
+    "sha256": "dd699644e40e890ff9a61c16cb16e096f083b708e98f272dbc26b239741108d1",
     "shapes": {
      "moved": 67
     }
@@ -793,7 +769,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_drawn.asc": {
    "labels": {
     "proposals": 519,
-    "sha256": "592f5a94548ed721af0f98ff42a824dc5456c46a1bcaa4013022cb9ef7b5bcac",
+    "sha256": "f16d7ca02f10442dfd4b13744ce87b698208abd5cfef1fb339826d11e1791726",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 470,
@@ -803,7 +779,7 @@
    },
    "moves": {
     "proposals": 599,
-    "sha256": "a0c7b5fc80859455db1683556916ae3f936f052edac7d2c87ba8bfab055c041b",
+    "sha256": "eaa941e0344942e70a516b6812f1756594c97a60f3a307a1a92f94e61a207c40",
     "shapes": {
      "moved": 599
     }
@@ -812,7 +788,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/rlc_line_labelled.asc": {
    "labels": {
     "proposals": 593,
-    "sha256": "b5c5081b4db6285287cd0e9f6d268cb45de45c4c9219b5664a3077505cc4019f",
+    "sha256": "06e3a0fc54dca830dafce2770ea4b16f0388d3d472a5cad6f1fa02f4ed806966",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 190,
@@ -822,7 +798,7 @@
    },
    "moves": {
     "proposals": 600,
-    "sha256": "1b677f0d23ceaa67078718b04a5e4af1bede3066d403595ec531aa071f9133b9",
+    "sha256": "6976cacdef987fdba2cc0f1ad9850e361b8a99ca6e90e9d5f31396e734c2e773",
     "shapes": {
      "moved": 600
     }
@@ -831,7 +807,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_drawn.asc": {
    "labels": {
     "proposals": 196,
-    "sha256": "f37c3e15c65c0af870f3fb0e6ee23ceb9c9ddcdb9856115677baab135d213f99",
+    "sha256": "512066f865a56785b0dde07f62c4757afd38bf8b5d85afab7de53743decfad15",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 48,
@@ -847,7 +823,7 @@
    },
    "moves": {
     "proposals": 313,
-    "sha256": "507d0b3adcde75d3621c1d91058b9248a761f72dc24dc3d1918ff56e4ee355a9",
+    "sha256": "7f62e1e057aff087c91847eb5147b7a46a46a4c3476c75993e185b5cb22fed2d",
     "shapes": {
      "moved": 313
     }
@@ -856,7 +832,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/sallen_key_labelled.asc": {
    "labels": {
     "proposals": 174,
-    "sha256": "7a86f328013c5a11763991bfde917b7ad71b423781e4fd291f2f19d8a0bb0905",
+    "sha256": "bb95ef60db6659ebc6d6a6fdc913120539875cd67a76975682b35e9469d86cbd",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 24,
@@ -872,7 +848,7 @@
    },
    "moves": {
     "proposals": 376,
-    "sha256": "443160d4234e789810eb73cee6841ca029dab4c01d4b1f2ce6736246bafd0e4b",
+    "sha256": "e4613a22e76a484068fc7ea0371791f55c631ec17872335f79d54c427583641d",
     "shapes": {
      "moved": 376
     }
@@ -881,7 +857,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_drawn.asc": {
    "labels": {
     "proposals": 425,
-    "sha256": "2e17ef9a20b696280aa3a354153415ac79e4bb30be255f67fb2f5320b6a6f7ab",
+    "sha256": "60af8554a3be796c629ec055a997f40f8f6ea60e3c25dde6274a6d1a9117df1e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 5,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 149,
@@ -897,7 +873,7 @@
    },
    "moves": {
     "proposals": 586,
-    "sha256": "f203a9aceaff5b32aebe669f65c90d147cbd9f972e8ea3b13fdda66e25e5b717",
+    "sha256": "7c5518484280ca8217fd42f9c14f693cc2f211a2c894d1f91c8d5292424cd4a8",
     "shapes": {
      "moved": 586
     }
@@ -906,7 +882,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_labelled.asc": {
    "labels": {
     "proposals": 445,
-    "sha256": "944451bc0d7f1b3fd2b17171c40af53fb69728b5a1f82340bf91f474fba30db6",
+    "sha256": "2af454bbcc3704abb27dc1f2e50536a5d1b0c631854b1c356e564368900f0896",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 5,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 120,
@@ -916,7 +892,7 @@
    },
    "moves": {
     "proposals": 583,
-    "sha256": "eb0a543320ac9e3fb0b68d1383729f0bfcd5090346acdd64aab3d126c9dc2e04",
+    "sha256": "e7b2635416f8ff802242caadbef2805b271862ebd06120a4b267e4bf59742b89",
     "shapes": {
      "moved": 583
     }
@@ -925,7 +901,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_moved.asc": {
    "labels": {
     "proposals": 425,
-    "sha256": "2e17ef9a20b696280aa3a354153415ac79e4bb30be255f67fb2f5320b6a6f7ab",
+    "sha256": "60af8554a3be796c629ec055a997f40f8f6ea60e3c25dde6274a6d1a9117df1e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 5,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 149,
@@ -941,7 +917,7 @@
    },
    "moves": {
     "proposals": 586,
-    "sha256": "f203a9aceaff5b32aebe669f65c90d147cbd9f972e8ea3b13fdda66e25e5b717",
+    "sha256": "7c5518484280ca8217fd42f9c14f693cc2f211a2c894d1f91c8d5292424cd4a8",
     "shapes": {
      "moved": 586
     }
@@ -950,7 +926,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_drawn.asc": {
    "labels": {
     "proposals": 76,
-    "sha256": "816c5151a8831cef567a745fd27336b12bb7d3b5a2d77cec6872a959c1d1850e",
+    "sha256": "d02a6b0bcce9a12ae3e1ccf92bbb39fed67e982887e182085bdc8939cd93b2f0",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 22,
@@ -966,7 +942,7 @@
    },
    "moves": {
     "proposals": 117,
-    "sha256": "b7a1076de89d7c9dbf94fbe27b17681708ab7b1bf70c3da70a99bc722ed76870",
+    "sha256": "40726185f72545512aaca741bb27fc5d446285d4400da7f7dbdc568902f6c7cc",
     "shapes": {
      "moved": 117
     }
@@ -975,7 +951,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/vccs_stage_labelled.asc": {
    "labels": {
     "proposals": 72,
-    "sha256": "d67413aa4a1e07d0e74fb0fea2944514bc6e6c93030fbb3f04cc252fae2fa024",
+    "sha256": "91f8a60b605f0190f12a2eb926a9765780cac0932a2c45fd1d0ff52fdeddd165",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 22,
@@ -991,7 +967,7 @@
    },
    "moves": {
     "proposals": 113,
-    "sha256": "0373f845c6129f2f6251077bcbbc89cef54269106290ab7b42c92e65b1ac58f6",
+    "sha256": "39dd27af4e988ff1142602094b721118957d11b273d318f60d3a312729548cdd",
     "shapes": {
      "moved": 113
     }
@@ -1000,7 +976,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/vcvs_stage_drawn.asc": {
    "labels": {
     "proposals": 76,
-    "sha256": "9fff84ee78b04569848f15acfe014fe486918e99f368dc31461ae18764250e12",
+    "sha256": "5a7954a463225c46d34cf85b244145dfbfdc03bae644a2a98948141b3faaaca1",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 22,
@@ -1016,7 +992,7 @@
    },
    "moves": {
     "proposals": 117,
-    "sha256": "b7a1076de89d7c9dbf94fbe27b17681708ab7b1bf70c3da70a99bc722ed76870",
+    "sha256": "40726185f72545512aaca741bb27fc5d446285d4400da7f7dbdc568902f6c7cc",
     "shapes": {
      "moved": 117
     }
@@ -1025,7 +1001,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/vcvs_stage_labelled.asc": {
    "labels": {
     "proposals": 72,
-    "sha256": "77856144fd61b914c415f7772e92b34595b6ea42322b9efa58a7fd0b35e5fca5",
+    "sha256": "6845a9df71dc4626df244f1ef779f6ec0b39fbb47ee16e319c88743d1c214363",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 22,
@@ -1041,7 +1017,7 @@
    },
    "moves": {
     "proposals": 113,
-    "sha256": "0373f845c6129f2f6251077bcbbc89cef54269106290ab7b42c92e65b1ac58f6",
+    "sha256": "39dd27af4e988ff1142602094b721118957d11b273d318f60d3a312729548cdd",
     "shapes": {
      "moved": 113
     }
@@ -1050,7 +1026,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
    "labels": {
     "proposals": 95,
-    "sha256": "8b746d055b91e3c89792675f598bc90b894fe8ede1efb2988525d7015da9d0a4",
+    "sha256": "6bd430d11ef28f786258347d53f10944a4d626bfa1ada7f5fcfa94278ad0f34e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 18,
@@ -1066,7 +1042,7 @@
    },
    "moves": {
     "proposals": 93,
-    "sha256": "b535586e6b1fe8f45ad7dc65747be4fe408539323533c9440e316f79a6dfb949",
+    "sha256": "46826b85c7b2d175e4e9e24d8560143148aed3d581bf6de40ca77d1762bec069",
     "shapes": {
      "moved": 93
     }
@@ -1075,7 +1051,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "7040b1fd990fd7d74cefbbdb7acaef5983dcc03ffc6026659deff3d3feb1739c",
+    "sha256": "09c3f1985f60a5f3db2ce46246f02f4404f815e4cbe98de80cbc5ba8f98ce184",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -1090,7 +1066,7 @@
    },
    "moves": {
     "proposals": 71,
-    "sha256": "01f62e32e122254b910410033f032eda649ea7d812c478c8216438dde30cbb8f",
+    "sha256": "1019b7dafec45c8d7a31ff677926d5dd50b5f53e050e074f972ef7472ae927b1",
     "shapes": {
      "moved": 71
     }
@@ -1099,7 +1075,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc": {
    "labels": {
     "proposals": 64,
-    "sha256": "106abd19cb8a198c09ac2aaf2d0e23c4b997237156b4b43b2bbbb76062beb54c",
+    "sha256": "1513be7e8ab76a6d23f4aabc1c039fe41de341e4e8516eddb85c69ab8506788f",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
@@ -1118,7 +1094,7 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "e8d01b92810549e795a3ad115086cfb5a0256e13d38d39f514c92e9d39634395",
+    "sha256": "6a09db673023f94d96aaeb43da6d2b8877ad65ed1c1ef8560bce77d4eede5188",
     "shapes": {
      "moved": 73,
      "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 6
@@ -1128,7 +1104,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_end.asc": {
    "labels": {
     "proposals": 18,
-    "sha256": "32d28f3d53199bc4432ec5f54f4cd76595d650917aa7c03e02ccc8bcf37dbded",
+    "sha256": "60bfe30bab51486be4aa45fd101598ef42af6e479d805bc75abb4e9ccea9b238",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -1143,7 +1119,7 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
     "shapes": {
      "moved": 9
     }
@@ -1152,7 +1128,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_interior.asc": {
    "labels": {
     "proposals": 18,
-    "sha256": "32d28f3d53199bc4432ec5f54f4cd76595d650917aa7c03e02ccc8bcf37dbded",
+    "sha256": "60bfe30bab51486be4aa45fd101598ef42af6e479d805bc75abb4e9ccea9b238",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -1167,7 +1143,7 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
     "shapes": {
      "moved": 9
     }
@@ -1176,7 +1152,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/floating_label.asc": {
    "labels": {
     "proposals": 24,
-    "sha256": "c29d38f661e92ba6ba39ab198e85aaa0f5d12e3dc9e9b224b132c586ebeb45e9",
+    "sha256": "8c156b08712817656278e39f22877a4b36226b49eb1577b5195324d1845b358b",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1192,7 +1168,7 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
     "shapes": {
      "moved": 9
     }
@@ -1201,7 +1177,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/gnd_label.asc": {
    "labels": {
     "proposals": 36,
-    "sha256": "254f95653912cdf0a34bd311938155bc19aa69d54089f56669d934ea1b389444",
+    "sha256": "18e92beb4223826f3a0ef628f032cf225569719840b79f4d134e35efd39c0465",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
@@ -1217,7 +1193,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -1226,7 +1202,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/gnd_label_lower_case.asc": {
    "labels": {
     "proposals": 54,
-    "sha256": "cb110cefbf34098eb65e7d718633d3a8a7cd3ad41bb7319373e8b5964ae0685d",
+    "sha256": "8a045227d17a4dcbcb603ca1f041058fd04e9b67929e4379923dfb19130c55ac",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
@@ -1243,7 +1219,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -1252,7 +1228,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_and_ground.asc": {
    "labels": {
     "proposals": 28,
-    "sha256": "e80bcefd2e3d642b6f15cc3fa627a5e1ed493f6a730d50d95bc9bc08a1f695b6",
+    "sha256": "a9715df9421dbf9187ad8d11e422d5e6900491253045c6edb465f673f8a44dc3",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already here; 1 at the point, 1 named]": 6,
@@ -1265,7 +1241,7 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "sha256": "7d80c439947c2ad4682c043003a48ee1e606adbe15c550121a9b6011dec2d2a1",
     "shapes": {
      "moved": 11
     }
@@ -1274,7 +1250,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc": {
    "labels": {
     "proposals": 80,
-    "sha256": "c535717bca0931cfebf6a01ffdce9cb8459fcbc2c00db49da24316183e22b826",
+    "sha256": "fc8091d4d19eedfeb7c9045ad8c3fe6129364c4e85a3ab569c1ca4eb145355a5",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 18,
@@ -1291,7 +1267,7 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
+    "sha256": "de50f18a7ecdf8a5d2262ba7de3b44244ead06acfcdadde108480ba844ba851e",
     "shapes": {
      "moved": 73,
      "moved | sheet: joined_at_crossing, net_with_two_names": 6
@@ -1301,7 +1277,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_case_one_wire.asc": {
    "labels": {
     "proposals": 28,
-    "sha256": "3c0935c1e912df96a5cca833fb89ea4954b3e09fc6f0351c609e76aa0c566a42",
+    "sha256": "af071ef1cff5f88ec9e3d62224777ed691b4ecee2be7532a2ef0d84da1f26a71",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1316,7 +1292,7 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "sha256": "7d80c439947c2ad4682c043003a48ee1e606adbe15c550121a9b6011dec2d2a1",
     "shapes": {
      "moved": 11
     }
@@ -1325,7 +1301,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_case_second_name.asc": {
    "labels": {
     "proposals": 65,
-    "sha256": "0a360968f2a456c15874519f13bf9aca8ad93930a9967f3c34a9350dfb0d5ff7",
+    "sha256": "0d31fa3d7feaeef8cacb48a89508238c024eecc9c3eaf16f73a9c4cb37859353",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
@@ -1340,7 +1316,7 @@
    },
    "moves": {
     "proposals": 42,
-    "sha256": "15f19f3f4c0cf25de15cf25e7430906c2e30ab01fc348ee63d8b502652c919f3",
+    "sha256": "cde369ead56f753e5200c3bb9860d03870c6d56b488f07912d04666a338ba8bc",
     "shapes": {
      "moved": 42
     }
@@ -1349,7 +1325,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_case_separate_wires.asc": {
    "labels": {
     "proposals": 52,
-    "sha256": "30092e08aa413e173f445fb896ce1b6fb8c59d9e428d6d2ee32a82027b7acc56",
+    "sha256": "0026ff504688ea053cfaec50c37e9187b196c66406b3273535a58b899afe8974",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 8,
@@ -1364,7 +1340,7 @@
    },
    "moves": {
     "proposals": 42,
-    "sha256": "15f19f3f4c0cf25de15cf25e7430906c2e30ab01fc348ee63d8b502652c919f3",
+    "sha256": "cde369ead56f753e5200c3bb9860d03870c6d56b488f07912d04666a338ba8bc",
     "shapes": {
      "moved": 42
     }
@@ -1373,7 +1349,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_on_vertical_wire_interior.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "3a0d4eb34744aac66e69a7994997346d39d13be9d24cd884728175ac88d2ac80",
+    "sha256": "757f44b019c9e923dac65130f831a896e7ed0deea5f124975aca50a505bcaf9a",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1388,7 +1364,7 @@
    },
    "moves": {
     "proposals": 46,
-    "sha256": "2feb71786419bd43c610f9727867e736aaa6dd2e3dc354582872927fd9ac89ff",
+    "sha256": "5019b733a2f2d32fd94e8698fbde54468a651d9a5e72192f01f57923d3cf3d30",
     "shapes": {
      "moved": 46
     }
@@ -1397,7 +1373,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/label_on_wire_interior.asc": {
    "labels": {
     "proposals": 30,
-    "sha256": "28272da2240ed2fc3f6262b2abaccd477febfc185a3ce698626f1165c62f93ef",
+    "sha256": "d3ac246a21a06df99cb2dc54e28ffcc6ae2b2642508edef4d948bccd5332306c",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1412,7 +1388,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -1421,7 +1397,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/pin_at_crossing.asc": {
    "labels": {
     "proposals": 48,
-    "sha256": "3bec5d2f7b6b30f45e3630196f3acfcd7bb43ebfbf5fff8349129504a425c73d",
+    "sha256": "f2ac70a27070086a6da8624ff40d2d4e14f5cb265037fd70c144fb9c57767a70",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -1438,7 +1414,7 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
+    "sha256": "de50f18a7ecdf8a5d2262ba7de3b44244ead06acfcdadde108480ba844ba851e",
     "shapes": {
      "moved": 63,
      "moved | sheet: joined_at_crossing": 16
@@ -1448,7 +1424,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/pin_on_pin.asc": {
    "labels": {
     "proposals": 21,
-    "sha256": "e1a4f7a6c0944a0d5ff69afaf12a8e05da9bdb52657c67d95520bb3ece00962e",
+    "sha256": "1d0220b6a80ab871b96ebd7e3bc9595c45f1be4fb8a76cb97c5af3a5673c0d6f",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1463,7 +1439,7 @@
    },
    "moves": {
     "proposals": 22,
-    "sha256": "5eaa5e6822f616d261d9a2728ca04ae243a5fd3fa0c6439d8943c052d2560ca1",
+    "sha256": "83fb9d8ea8c7ee791fd2a7d867df8558e294ff7a72107281b0a55fce9296af26",
     "shapes": {
      "moved": 22
     }
@@ -1472,7 +1448,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/pin_on_wire_interior.asc": {
    "labels": {
     "proposals": 39,
-    "sha256": "dc888be682ed7e29d795625e30cda145dc0f108ecae3c31dbd432133b60b2d0d",
+    "sha256": "63de0b022570bd0bb61b909339a7ccd530e946ef0e6c498900c81335bd074f7e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -1487,7 +1463,7 @@
    },
    "moves": {
     "proposals": 61,
-    "sha256": "37ac08321e6602a6b9690255ae4f5b4d3070430f07e05ece23e27244ac256504",
+    "sha256": "04b80614b1fa0959a3888e001ed7158759e9ec3ab78edfb491068f2d534c6356",
     "shapes": {
      "moved": 61
     }
@@ -1496,7 +1472,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc": {
    "labels": {
     "proposals": 116,
-    "sha256": "7bb9970b8fa68fcbb58f72e0690f58707dae0280f2d0b36304a1a11a9b1a1cbc",
+    "sha256": "64ed68b1aa713cb8b569f6eced30735ec35363b3b47ca0fd5aa454cd3a6257e3",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 40,
@@ -1512,7 +1488,7 @@
    },
    "moves": {
     "proposals": 358,
-    "sha256": "03eb823e2fed87900806136826c577df405ba739955af37edaaa774677934539",
+    "sha256": "3d8197b9a9c295eba3e5cba32edefa6a7fad0734aff63ec439c833c7272c752f",
     "shapes": {
      "moved": 358
     }
@@ -1521,7 +1497,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
    "labels": {
     "proposals": 40,
-    "sha256": "72a6610bd2ba784a18e539c073c0f669d6a28a326fb9c09cc17e99bbff4dea43",
+    "sha256": "50769aacf1d99999b34917a1f24f48e07bbb72ed385ead298da993db0b51e938",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a new name; 0 at the point, 0 named]": 1,
@@ -1533,7 +1509,7 @@
    },
    "moves": {
     "proposals": 17,
-    "sha256": "7c6b69ff25ab107fe90ae560c186035ba0feb9a8af7ffcf214f96695d1804bd5",
+    "sha256": "60ed65d7c6817d9722b398f476bf461a4f67d388600c72ecabae20a6a77105ce",
     "shapes": {
      "moved": 17
     }
@@ -1542,7 +1518,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_ground_inside.asc": {
    "labels": {
     "proposals": 18,
-    "sha256": "16bf7829286f1d6193b5b38efe27a48e5b83c7cbd61f0352b40414e4d79aa795",
+    "sha256": "940b8e9f6f51c10e418dceb256743d9a1b0c20ff54311da11426e6ce302df99f",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already here; 1 at the point, 1 named]": 5,
@@ -1554,7 +1530,7 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
     "shapes": {
      "moved": 9
     }
@@ -1563,7 +1539,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc": {
    "labels": {
     "proposals": 32,
-    "sha256": "d7066028aedceeac9799f29c78d8be725ebe6db48e17e9889400b9332ad2f94c",
+    "sha256": "c5261a49cc099381968b1ffc9a4c6bc7f41ea5165daaad21d2e0b61b97686a59",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a new name; 0 at the point, 0 named]": 1,
@@ -1575,7 +1551,7 @@
    },
    "moves": {
     "proposals": 13,
-    "sha256": "4e69cc3576ee1ad7ded0e016711b23b968554cc8e1a1fb0d272f32a04ff53214",
+    "sha256": "dbb4a2f639bc2f062a48418ef829e55148e144ae4572d8121f551db62a86d8e2",
     "shapes": {
      "moved": 13
     }
@@ -1584,7 +1560,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_at_vertex.asc": {
    "labels": {
     "proposals": 32,
-    "sha256": "d7066028aedceeac9799f29c78d8be725ebe6db48e17e9889400b9332ad2f94c",
+    "sha256": "c5261a49cc099381968b1ffc9a4c6bc7f41ea5165daaad21d2e0b61b97686a59",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a new name; 0 at the point, 0 named]": 1,
@@ -1596,7 +1572,7 @@
    },
    "moves": {
     "proposals": 13,
-    "sha256": "4e69cc3576ee1ad7ded0e016711b23b968554cc8e1a1fb0d272f32a04ff53214",
+    "sha256": "dbb4a2f639bc2f062a48418ef829e55148e144ae4572d8121f551db62a86d8e2",
     "shapes": {
      "moved": 11,
      "moved | sheet: net_with_two_names": 2
@@ -1606,7 +1582,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_label_inside.asc": {
    "labels": {
     "proposals": 24,
-    "sha256": "ca62a675834eb635a6a805fd46ec79b0c0cffd27809d0c7092704ca8ea995ab4",
+    "sha256": "668d3ff12d16e34fb8b101d4b8232080c8db832346eb41e8e35abace42d47535",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a new name; 0 at the point, 0 named]": 1,
@@ -1618,7 +1594,7 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
     "shapes": {
      "moved": 9
     }
@@ -1627,7 +1603,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_pin_inside.asc": {
    "labels": {
     "proposals": 36,
-    "sha256": "8427219c50bba2078a9c2473bac947138d28ecfafd8a226922f1d28546506987",
+    "sha256": "2d2890b03f107649a403c1cca1220a3bf9a64f1a8a35b5255c605af3f3c6726f",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already here; 1 at the point, 1 named]": 8,
@@ -1640,7 +1616,7 @@
    },
    "moves": {
     "proposals": 26,
-    "sha256": "6d6d8707f0a9099924695d5767a2fa200b7e8b23f58109b4090ac7cd7424026a",
+    "sha256": "fe806ce3df19940c57034fb13c4f72c432cbd7c354878a1c34b06069983025d2",
     "shapes": {
      "moved": 26
     }
@@ -1649,7 +1625,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_t_junction.asc": {
    "labels": {
     "proposals": 33,
-    "sha256": "391a71870e42d2017442d65d72d6a38095d379d579b921a919682cea2e8907c3",
+    "sha256": "1aabc9766a8121cb5dc4cf3f2274894ac1dfd9a04e805568a009fcae954eca96",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -1664,7 +1640,7 @@
    },
    "moves": {
     "proposals": 34,
-    "sha256": "c0f9039d130cdadfbc699683a86e6b95fd22b6063726af088a4649c6d78e27da",
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
     "shapes": {
      "moved": 34
     }
@@ -1673,7 +1649,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_wire.asc": {
    "labels": {
     "proposals": 24,
-    "sha256": "ca62a675834eb635a6a805fd46ec79b0c0cffd27809d0c7092704ca8ea995ab4",
+    "sha256": "668d3ff12d16e34fb8b101d4b8232080c8db832346eb41e8e35abace42d47535",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a new name; 0 at the point, 0 named]": 1,
@@ -1685,7 +1661,7 @@
    },
    "moves": {
     "proposals": 9,
-    "sha256": "fe5aaebeeeb43f72cd3707b4a36f423598111f3383f2c3bbcce15613706c1901",
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
     "shapes": {
      "moved": 9
     }
@@ -1694,7 +1670,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_name_labels.asc": {
    "labels": {
     "proposals": 39,
-    "sha256": "34302337068c4ead12c3553e8cedb77fe7d8ebb05a525020d51c9a8804dbc35a",
+    "sha256": "effc0ab764b18c95342347b0349615605c52a90dad4d0580ea4778e74fdd125e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1709,7 +1685,7 @@
    },
    "moves": {
     "proposals": 42,
-    "sha256": "15f19f3f4c0cf25de15cf25e7430906c2e30ab01fc348ee63d8b502652c919f3",
+    "sha256": "cde369ead56f753e5200c3bb9860d03870c6d56b488f07912d04666a338ba8bc",
     "shapes": {
      "moved": 42
     }
@@ -1718,7 +1694,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/shared_reference_case.asc": {
    "labels": {
     "proposals": 54,
-    "sha256": "1ef75febce1a57c54b118a727b3af4bcb9d7085fc03b1c68d0cba0bcde3c4ea4",
+    "sha256": "4cc92cd10e8930f6766c697a5dc74e914179b21581dd40a471d16dd8c459c9bc",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
      "placed [a name already here; 1 at the point, 1 named]": 8,
@@ -1731,7 +1707,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -1740,7 +1716,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/two_instance_wire.asc": {
    "labels": {
     "proposals": 30,
-    "sha256": "a932463c415c77ed0dd229b2daed0c194b30d4715d3e0c1adc15ee65eb9af12f",
+    "sha256": "5bc75118dfedecd257de7f81836549bbf70dc667b949bb9f8b6387c8accb2768",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -1755,7 +1731,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -1764,7 +1740,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/two_labels_alpha_first.asc": {
    "labels": {
     "proposals": 28,
-    "sha256": "b4ae0f0c620c0e5641a96f8ab23f3afdeb980492da91bfe066b59d7abb740522",
+    "sha256": "fd4f211dbaef1d8f06f17e8fc65dfd0f8ef96eae2445804c009961c74febf2e9",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1779,7 +1755,7 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "sha256": "7d80c439947c2ad4682c043003a48ee1e606adbe15c550121a9b6011dec2d2a1",
     "shapes": {
      "moved": 11
     }
@@ -1788,7 +1764,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/two_labels_corner.asc": {
    "labels": {
     "proposals": 36,
-    "sha256": "830bdbf9527f03bd4e86f13e836201180663ec4c230b3e4de9dfa74f4c6377a5",
+    "sha256": "8c1707d4c5abc6655eb5f1fe41115ff5f9d0295f140bee9b0da8c94cef2e8ef7",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1803,7 +1779,7 @@
    },
    "moves": {
     "proposals": 15,
-    "sha256": "d196114fac3183c0138fc08673a08b51cadc3a162dac9a1c488fbbad511a1de1",
+    "sha256": "295d5644fad4a36bb6338b8674b0c7e31dd253abf47ac57981f5ea9c82046cdc",
     "shapes": {
      "moved": 15
     }
@@ -1812,7 +1788,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/two_labels_later_on_left.asc": {
    "labels": {
     "proposals": 28,
-    "sha256": "b4ae0f0c620c0e5641a96f8ab23f3afdeb980492da91bfe066b59d7abb740522",
+    "sha256": "fd4f211dbaef1d8f06f17e8fc65dfd0f8ef96eae2445804c009961c74febf2e9",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1827,7 +1803,7 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "sha256": "7d80c439947c2ad4682c043003a48ee1e606adbe15c550121a9b6011dec2d2a1",
     "shapes": {
      "moved": 11
     }
@@ -1836,7 +1812,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/two_labels_zeta_first.asc": {
    "labels": {
     "proposals": 28,
-    "sha256": "b4ae0f0c620c0e5641a96f8ab23f3afdeb980492da91bfe066b59d7abb740522",
+    "sha256": "fd4f211dbaef1d8f06f17e8fc65dfd0f8ef96eae2445804c009961c74febf2e9",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -1851,7 +1827,7 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "sha256": "7d80c439947c2ad4682c043003a48ee1e606adbe15c550121a9b6011dec2d2a1",
     "shapes": {
      "moved": 11
     }
@@ -1860,7 +1836,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/unconnected_pins.asc": {
    "labels": {
     "proposals": 12,
-    "sha256": "37b7d3a0b586722e0253d577c695f55e28c11611912a0b1f9c0658784ad1a3e7",
+    "sha256": "6a2499a917155ce0bfc015a96a307e2dae57175d070a9b326c8cbce757ef64f0",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 5,
@@ -1870,7 +1846,7 @@
    },
    "moves": {
     "proposals": 18,
-    "sha256": "2c56601e66432bacbb1cbadad01c40d914e91f14da07ce06ca381ae3c3533a6c",
+    "sha256": "0c934fac43cc1bfb5ae6100ddeeb826b0a61719bdc6e9ed682652c3df98b912f",
     "shapes": {
      "moved": 18
     }
@@ -1879,7 +1855,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/unlabelled_nets.asc": {
    "labels": {
     "proposals": 30,
-    "sha256": "300204546c2d37ab1124c19e50f4e5abb0349c66ab59593240b9e3d2d5227dfa",
+    "sha256": "67f71b4cd5e9320f7c645fc1ec042cf719626ab5f8f8bf0903708c7603991ddf",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 14,
@@ -1889,7 +1865,7 @@
    },
    "moves": {
     "proposals": 65,
-    "sha256": "0d8c03254cbdb690a33d4c46bc1cec160f47e854b81afb7bb488d6b877a81a62",
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
     "shapes": {
      "moved": 65
     }
@@ -1898,7 +1874,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/wire_end_on_vertical_wire_interior.asc": {
    "labels": {
     "proposals": 57,
-    "sha256": "19ab014e9ddddeea2a2b4a730de3d49bbcb0d91ee9c83d452b132826dae586ca",
+    "sha256": "03601062ff8938883119c89d6e522e88e1a132a2974fc19e681a4f7dd44ed82e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -1913,7 +1889,7 @@
    },
    "moves": {
     "proposals": 97,
-    "sha256": "326794ea0dfafc6a72c6f2b63b624e24e4f8875509d518115143093042deac62",
+    "sha256": "547d2caa737a547e1770953d2010eb17551da150cc196ce209cfa7c33f53de75",
     "shapes": {
      "moved": 97
     }
@@ -1922,7 +1898,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/wire_end_on_wire_interior.asc": {
    "labels": {
     "proposals": 45,
-    "sha256": "3157b53f975672a3b0bf0185703a0af85539f61b2848ab8f62be9d4caa4970af",
+    "sha256": "de5671f02b7512607e6e380ef3af228ef459af6ec12caad88e7f78f600fc7110",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -1937,7 +1913,7 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
     }
@@ -1946,7 +1922,7 @@
   "fixtures/ltspice_recorded/inputs/connectivity/wire_end_on_wire_interior_reversed.asc": {
    "labels": {
     "proposals": 45,
-    "sha256": "3157b53f975672a3b0bf0185703a0af85539f61b2848ab8f62be9d4caa4970af",
+    "sha256": "de5671f02b7512607e6e380ef3af228ef459af6ec12caad88e7f78f600fc7110",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -1961,7 +1937,7 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
     }
@@ -1970,7 +1946,7 @@
   "fixtures/ltspice_recorded/inputs/export/attributes.asc": {
    "labels": {
     "proposals": 62,
-    "sha256": "ad5bc440fdf37534b8e392654c84223244ba608166b28f7cf43ad55026ad3b20",
+    "sha256": "576beb8986bee7bb5bcc709ed409d464b8c0a103930294df987679afcb012dc1",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 30,
@@ -1980,7 +1956,7 @@
    },
    "moves": {
     "proposals": 298,
-    "sha256": "72fcedc9a422784a212c0e1cec51b601ce247284b7424ae27bc666dc9b7a9ba3",
+    "sha256": "52ba97028bc2c2b752bdb435013f5ef8da4ce715d2a8ba226aaa73161bdebcc6",
     "shapes": {
      "moved": 298
     }
@@ -1989,7 +1965,7 @@
   "fixtures/ltspice_recorded/inputs/export/block_symbol.asc": {
    "labels": {
     "proposals": 26,
-    "sha256": "76ccc98e6e1d2b3ddd36431ebf2df3d24c73b853283ac2b794f7a40245dccacc",
+    "sha256": "7823b1bf598f9fef6450a3db1b1b487623e805ca63734b4c8765268582f1e4f7",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 12,
@@ -1999,7 +1975,7 @@
    },
    "moves": {
     "proposals": 111,
-    "sha256": "3c09e4fae1c81a02085150198c7d2eb887e4ad96c02eda693d5b5aa58f9a92d9",
+    "sha256": "ec0afd732f321d02e30975626db4dc1ee25019e307238f2943279a61db060f4b",
     "shapes": {
      "moved": 111
     }
@@ -2008,7 +1984,7 @@
   "fixtures/ltspice_recorded/inputs/export/data_flags.asc": {
    "labels": {
     "proposals": 21,
-    "sha256": "d1857fa16612172aca0f5feb50069c708dca9eb5574f270c5ca1ad69237bb615",
+    "sha256": "974e9d99785d1454eb39345635c8b35a1c44700e07c47892ee250c9605ddef9d",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2023,7 +1999,7 @@
    },
    "moves": {
     "proposals": 11,
-    "sha256": "a026440fa4fedbf8cf78c62945b8f24180ebc0c992ac9aacba0caf8fc14e0933",
+    "sha256": "7d80c439947c2ad4682c043003a48ee1e606adbe15c550121a9b6011dec2d2a1",
     "shapes": {
      "moved": 11
     }
@@ -2032,7 +2008,7 @@
   "fixtures/ltspice_recorded/inputs/export/directives.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2047,7 +2023,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2056,7 +2032,7 @@
   "fixtures/ltspice_recorded/inputs/export/greek_mu_utf8.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2071,16 +2047,114 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_amp.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "d27c3bd34aed51209a1c9f821750f0d53761cbab5a9317b36592172bbfb99211",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_plain.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "d27c3bd34aed51209a1c9f821750f0d53761cbab5a9317b36592172bbfb99211",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_plain_top.asc": {
+   "labels": {
+    "proposals": 39,
+    "sha256": "46ecc3ec44b32e21af41551f87c73a1658d92b1b249867f16ece67a5a64deb2b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "proposals": 65,
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
+    "shapes": {
+     "moved": 65
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_top.asc": {
+   "labels": {
+    "proposals": 39,
+    "sha256": "46ecc3ec44b32e21af41551f87c73a1658d92b1b249867f16ece67a5a64deb2b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "proposals": 65,
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
+    "shapes": {
+     "moved": 65
     }
    }
   },
   "fixtures/ltspice_recorded/inputs/export/instance_names.asc": {
    "labels": {
     "proposals": 38,
-    "sha256": "9b5d7f32a09e5ea5c22296aaf7e23795d8e40d0465f931bb6602ff164bdc3862",
+    "sha256": "449eab5893039efa24b7dc98d97d3682fa5c52712225c1aae559548d7066caca",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 18,
@@ -2090,7 +2164,7 @@
    },
    "moves": {
     "proposals": 288,
-    "sha256": "d18b39d4c03edb9ff303bb91c74dfa5109f46aadc9d294c4be54761ffa1bed6f",
+    "sha256": "8b44ec989524b9dbe413002ed1a81023c4a3ca7a0f78f5d79f54b3ea39fd964b",
     "shapes": {
      "moved": 288
     }
@@ -2099,7 +2173,7 @@
   "fixtures/ltspice_recorded/inputs/export/instance_prefix.asc": {
    "labels": {
     "proposals": 46,
-    "sha256": "a501a97900529ce5b36263667f4dc3a51d72c8d2cb08b77fd19955186c5f1b15",
+    "sha256": "82a3156df91b9f2d21cc27ba716ff2055af7f6dfcaaa27d9245241c4edbf0eb0",
     "shapes": {
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [a new name; 1 at the point, 0 named]": 22,
@@ -2109,7 +2183,7 @@
    },
    "moves": {
     "proposals": 239,
-    "sha256": "037ec8dd4dba70a05d0baccad464e4250a1b7da93fff58579c3f4addb8d64403",
+    "sha256": "1c0b29835b9fb85466866bfcb9ef6ea5eef3ed7c2f854984ca97a380e60f102a",
     "shapes": {
      "moved": 239
     }
@@ -2118,7 +2192,7 @@
   "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2133,7 +2207,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2142,7 +2216,7 @@
   "fixtures/ltspice_recorded/inputs/export/micro_cp1252_v41.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2157,7 +2231,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2166,7 +2240,7 @@
   "fixtures/ltspice_recorded/inputs/export/micro_utf16le.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2181,7 +2255,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2190,7 +2264,7 @@
   "fixtures/ltspice_recorded/inputs/export/micro_utf16le_bom.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2205,7 +2279,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2214,7 +2288,7 @@
   "fixtures/ltspice_recorded/inputs/export/micro_utf8.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2229,7 +2303,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2238,7 +2312,7 @@
   "fixtures/ltspice_recorded/inputs/export/micro_utf8_v41.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2253,7 +2327,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2262,7 +2336,7 @@
   "fixtures/ltspice_recorded/inputs/export/multiline_text.asc": {
    "labels": {
     "proposals": 27,
-    "sha256": "c31821ad4a5501324e137e4e75cf0d9e1f76cb33d77fdede293fdcd7b3bd44d2",
+    "sha256": "bcefc89e0a7b74e1a2340b1eea0f819405663d5349542278e7c223a0324bc160",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -2277,7 +2351,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -2286,7 +2360,7 @@
   "fixtures/ltspice_recorded/inputs/export/orientation_cell4.asc": {
    "labels": {
     "proposals": 594,
-    "sha256": "4a86b9ef4f6895e48ca3cb1ec1b882928c904d40b058c483cc455b59db4bd781",
+    "sha256": "7978a4ed714eef0fd7972157c80b3191a5bfb36ae70c189c47d02537a0eedb81",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already here; 1 at the point, 1 named]": 45,
@@ -2296,7 +2370,7 @@
    },
    "moves": {
     "proposals": 520,
-    "sha256": "7de3c6c81fc6e50e44c3d70a6ca1ff2fe59c0240231602feaa47ed42cd29e467",
+    "sha256": "cefc114dc822096ea40aee5d02310b83da43cc1972798884849da8f7cda4ef5d",
     "shapes": {
      "moved": 520
     }
@@ -2305,7 +2379,7 @@
   "fixtures/ltspice_recorded/inputs/export/orientation_nmos4.asc": {
    "labels": {
     "proposals": 588,
-    "sha256": "16af229343d492486bbfdcc35cc8f17ec968dfbea47227bdce368908f7c5a9bc",
+    "sha256": "9ed3e7338e8f41441db370625f7dd4dac21ac7a74f3cb96dbcd700cb28f1a584",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already here; 1 at the point, 1 named]": 3,
@@ -2314,7 +2388,7 @@
    },
    "moves": {
     "proposals": 513,
-    "sha256": "a9ad0001f1c14e765dbeacdd6e636693b0fc6b095084500920eb1cb16a115397",
+    "sha256": "a84eda10fb8c4748ec1d9b88fa88ee8ca59fe0ba01071702617f6c28a4235fa0",
     "shapes": {
      "moved": 513
     }
@@ -2323,7 +2397,7 @@
   "fixtures/ltspice_recorded/inputs/export/orientation_npn.asc": {
    "labels": {
     "proposals": 584,
-    "sha256": "36535ea00373d3e7ca490e67492d8bb70660cda20e926121d71ffdd219dccaf1",
+    "sha256": "15fdc0d0d18e5403e02363b9d2e8e3bf709dc60e0fa9ad60b9d075c35b794c5b",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already here; 1 at the point, 1 named]": 5,
@@ -2334,7 +2408,7 @@
    },
    "moves": {
     "proposals": 538,
-    "sha256": "3e0fb748873008fc450627923525b50c048e9dc0b78501ec3b8df34052b879d2",
+    "sha256": "19aa31bf1bd86769d348748190bcb8e4ae9f74c9a2f88586b9e28eb98c58b343",
     "shapes": {
      "moved": 538
     }
@@ -2343,7 +2417,7 @@
   "fixtures/ltspice_recorded/inputs/export/orientation_res.asc": {
    "labels": {
     "proposals": 560,
-    "sha256": "e20318f1347e7cdfa606ad64be1e755329a2a385304184e979caa995d049a0e9",
+    "sha256": "cf61ff1bce029079fceeed4204f64e883f6e84da04e5804c4f0591829b5e7e7d",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 256,
@@ -2356,7 +2430,7 @@
    },
    "moves": {
     "proposals": 491,
-    "sha256": "32367018a536133e1da562524cde95b409e377b0d093dce0cfe532bc21d74791",
+    "sha256": "de8583745af0a22a985025328a03cfa08f547a7ee283af424440bf018b571d4c",
     "shapes": {
      "moved": 491
     }
@@ -2365,7 +2439,7 @@
   "fixtures/ltspice_recorded/inputs/plot/div_dc.asc": {
    "labels": {
     "proposals": 52,
-    "sha256": "77cc3385cba4cdc4ba2a0953bcb785e892eff96fe9fb4b9045a27873b38ef352",
+    "sha256": "ff73db5fe3c72f693433719200fcea981ba7fde49b08bb305eac0c76a49a7c96",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
@@ -2381,7 +2455,7 @@
    },
    "moves": {
     "proposals": 69,
-    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "sha256": "c572044cad2267dfe55d18e1441b83a048988625345b841acbce3e283eacbfb3",
     "shapes": {
      "moved": 69
     }
@@ -2390,7 +2464,7 @@
   "fixtures/ltspice_recorded/inputs/plot/rc_ac.asc": {
    "labels": {
     "proposals": 52,
-    "sha256": "96c7b7492eac89f745a5b7342d6bcda844210b4e6ff3e79102849fecb85a0036",
+    "sha256": "81bba5108fc9ec6034e06ce5f674a5c680be9e7debff26bbd26890ab0d7772b8",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
@@ -2406,7 +2480,7 @@
    },
    "moves": {
     "proposals": 69,
-    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "sha256": "c572044cad2267dfe55d18e1441b83a048988625345b841acbce3e283eacbfb3",
     "shapes": {
      "moved": 69
     }
@@ -2415,7 +2489,7 @@
   "fixtures/ltspice_recorded/inputs/plot/rc_noise.asc": {
    "labels": {
     "proposals": 52,
-    "sha256": "96c7b7492eac89f745a5b7342d6bcda844210b4e6ff3e79102849fecb85a0036",
+    "sha256": "81bba5108fc9ec6034e06ce5f674a5c680be9e7debff26bbd26890ab0d7772b8",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
@@ -2431,7 +2505,7 @@
    },
    "moves": {
     "proposals": 69,
-    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "sha256": "c572044cad2267dfe55d18e1441b83a048988625345b841acbce3e283eacbfb3",
     "shapes": {
      "moved": 69
     }
@@ -2440,7 +2514,7 @@
   "fixtures/ltspice_recorded/inputs/plot/rc_tran.asc": {
    "labels": {
     "proposals": 52,
-    "sha256": "96c7b7492eac89f745a5b7342d6bcda844210b4e6ff3e79102849fecb85a0036",
+    "sha256": "81bba5108fc9ec6034e06ce5f674a5c680be9e7debff26bbd26890ab0d7772b8",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
@@ -2456,7 +2530,7 @@
    },
    "moves": {
     "proposals": 69,
-    "sha256": "79bd776c796e8ea7431514b3cb75ea5adc09fc09bce35e4bf271d9f1dfa39571",
+    "sha256": "c572044cad2267dfe55d18e1441b83a048988625345b841acbce3e283eacbfb3",
     "shapes": {
      "moved": 69
     }
@@ -2465,7 +2539,7 @@
   "fixtures/ltspice_recorded/inputs/save/built.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "7ae6e5f8dce597958ce294da4a5923b84994aeafddf0837bef239605e94f9525",
+    "sha256": "fea6a8902e6169f24a5509ea06254f6c5edcda7cab0c4ebe81d5faad2659e016",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2480,7 +2554,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2489,7 +2563,7 @@
   "fixtures/ltspice_recorded/inputs/save/crlf.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "7ae6e5f8dce597958ce294da4a5923b84994aeafddf0837bef239605e94f9525",
+    "sha256": "fea6a8902e6169f24a5509ea06254f6c5edcda7cab0c4ebe81d5faad2659e016",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2504,7 +2578,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2513,7 +2587,7 @@
   "fixtures/ltspice_recorded/inputs/save/shuffled.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "0548ffc6bf84d8ebc413bfd079eeb76802c7b63f014c82ea2264fa89bd6218b4",
+    "sha256": "c800e0ac6a23a573d949817580d072f079b5eedf11aa321185c833157c29b01d",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2528,7 +2602,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2537,7 +2611,7 @@
   "fixtures/ltspice_recorded/inputs/search/in_subfolder.asc": {
    "labels": {
     "proposals": 9,
-    "sha256": "93fada7be963d0a36861d155f847f6287ebf7e5a05b73e01a39913741b863520",
+    "sha256": "07711cc9a29c565e6e75a48392beaac3e9f257770503391c75d8c51cea0ecb1b",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 1,
@@ -2559,7 +2633,7 @@
   "fixtures/ltspice_recorded/inputs/search/named_subfolder.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2574,7 +2648,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2583,7 +2657,7 @@
   "fixtures/ltspice_recorded/ltspice17/save/built.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "b48bb0ea1194ec974a2628378532f176dbaec2093581f90b85de15698e98da9a",
+    "sha256": "f7c1b2ed120c399e5e9b19b6e71e20340f646ef716b86607d3f8c7499893b792",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2598,7 +2672,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2607,7 +2681,7 @@
   "fixtures/ltspice_recorded/ltspice17/save/crlf.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "b48bb0ea1194ec974a2628378532f176dbaec2093581f90b85de15698e98da9a",
+    "sha256": "f7c1b2ed120c399e5e9b19b6e71e20340f646ef716b86607d3f8c7499893b792",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2622,7 +2696,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2631,7 +2705,7 @@
   "fixtures/ltspice_recorded/ltspice17/save/micro_cp1252.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2646,7 +2720,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2655,7 +2729,7 @@
   "fixtures/ltspice_recorded/ltspice17/save/micro_utf16le.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2670,7 +2744,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2679,7 +2753,7 @@
   "fixtures/ltspice_recorded/ltspice17/save/micro_utf8.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2694,7 +2768,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2703,7 +2777,7 @@
   "fixtures/ltspice_recorded/ltspice17/save/shuffled.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "069c1f2136cb14699f0a03a36b5e6723115a320ac747a9d95e02f0b5d9e4d93e",
+    "sha256": "22932a423ed36ad5444546e3c0d7bbd6339db29468acb501a34842620649ae44",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2718,7 +2792,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2727,7 +2801,7 @@
   "fixtures/ltspice_recorded/ltspice26/save/built.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "b48bb0ea1194ec974a2628378532f176dbaec2093581f90b85de15698e98da9a",
+    "sha256": "f7c1b2ed120c399e5e9b19b6e71e20340f646ef716b86607d3f8c7499893b792",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2742,7 +2816,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2751,7 +2825,7 @@
   "fixtures/ltspice_recorded/ltspice26/save/crlf.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "b48bb0ea1194ec974a2628378532f176dbaec2093581f90b85de15698e98da9a",
+    "sha256": "f7c1b2ed120c399e5e9b19b6e71e20340f646ef716b86607d3f8c7499893b792",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2766,7 +2840,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2775,7 +2849,7 @@
   "fixtures/ltspice_recorded/ltspice26/save/micro_cp1252.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2790,7 +2864,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2799,7 +2873,7 @@
   "fixtures/ltspice_recorded/ltspice26/save/micro_utf16le.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2814,7 +2888,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2823,7 +2897,7 @@
   "fixtures/ltspice_recorded/ltspice26/save/micro_utf8.asc": {
    "labels": {
     "proposals": 15,
-    "sha256": "db91adcfe2da35ae91abf53af72115e31cea385bc064fb2c42d99b35f81c28e9",
+    "sha256": "8fbebb4c995d51447b345e77ae3660b3a7348be4ede5836cba4d3c27d22fe543",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 2,
@@ -2838,7 +2912,7 @@
    },
    "moves": {
     "proposals": 7,
-    "sha256": "6c795ed2056253519b89b7c16eab3a5aba926154dd7c5f362ad87ba9b64dbbd0",
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
     "shapes": {
      "moved": 7
     }
@@ -2847,7 +2921,7 @@
   "fixtures/ltspice_recorded/ltspice26/save/shuffled.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "069c1f2136cb14699f0a03a36b5e6723115a320ac747a9d95e02f0b5d9e4d93e",
+    "sha256": "22932a423ed36ad5444546e3c0d7bbd6339db29468acb501a34842620649ae44",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 7,
@@ -2862,7 +2936,7 @@
    },
    "moves": {
     "proposals": 44,
-    "sha256": "720d3ab8d507f2fc6231f3289e00b29e5eecd67f6294abf6315720d96b3eae39",
+    "sha256": "d21044b6207c5bfccda28001a5c08ba9eb32dcc5b9af2a23e2e6792f4bba97b2",
     "shapes": {
      "moved": 44
     }
@@ -2871,7 +2945,7 @@
   "fixtures/nmos4_mirrored_quarter_turns.asc": {
    "labels": {
     "proposals": 140,
-    "sha256": "1884646b7264260db8b5bbf6ccf5bdae74a8fc597f5f114443e55c5e2db6feaf",
+    "sha256": "7c7dd62d98b07547de81574cd96f123112a8becd92af976f2b646a8f648475ee",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
@@ -2887,7 +2961,7 @@
    },
    "moves": {
     "proposals": 218,
-    "sha256": "07d3489d2a026d347ca6c7209c3d264c744347ec793e6e4000ecc4696864dff1",
+    "sha256": "393923076308b06ab16636fb949c46f3c67877b52cc87c15fce39dc7951e71b4",
     "shapes": {
      "moved": 218
     }
@@ -2896,7 +2970,7 @@
   "fixtures/t_junctions/crossing_wires.asc": {
    "labels": {
     "proposals": 64,
-    "sha256": "106abd19cb8a198c09ac2aaf2d0e23c4b997237156b4b43b2bbbb76062beb54c",
+    "sha256": "1513be7e8ab76a6d23f4aabc1c039fe41de341e4e8516eddb85c69ab8506788f",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
@@ -2915,7 +2989,7 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "e8d01b92810549e795a3ad115086cfb5a0256e13d38d39f514c92e9d39634395",
+    "sha256": "6a09db673023f94d96aaeb43da6d2b8877ad65ed1c1ef8560bce77d4eede5188",
     "shapes": {
      "moved": 73,
      "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 6
@@ -2925,7 +2999,7 @@
   "fixtures/t_junctions/label_at_crossing.asc": {
    "labels": {
     "proposals": 80,
-    "sha256": "c535717bca0931cfebf6a01ffdce9cb8459fcbc2c00db49da24316183e22b826",
+    "sha256": "fc8091d4d19eedfeb7c9045ad8c3fe6129364c4e85a3ab569c1ca4eb145355a5",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 18,
@@ -2942,7 +3016,7 @@
    },
    "moves": {
     "proposals": 79,
-    "sha256": "34d05a7f762cb37da1e9c5bf5b383b250b51e1736e9a0905fbffc07ca4f97f8e",
+    "sha256": "de50f18a7ecdf8a5d2262ba7de3b44244ead06acfcdadde108480ba844ba851e",
     "shapes": {
      "moved": 73,
      "moved | sheet: joined_at_crossing, net_with_two_names": 6
@@ -2952,7 +3026,7 @@
   "fixtures/t_junctions/label_on_vertical_wire_interior.asc": {
    "labels": {
     "proposals": 42,
-    "sha256": "3a0d4eb34744aac66e69a7994997346d39d13be9d24cd884728175ac88d2ac80",
+    "sha256": "757f44b019c9e923dac65130f831a896e7ed0deea5f124975aca50a505bcaf9a",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -2967,7 +3041,7 @@
    },
    "moves": {
     "proposals": 46,
-    "sha256": "2feb71786419bd43c610f9727867e736aaa6dd2e3dc354582872927fd9ac89ff",
+    "sha256": "5019b733a2f2d32fd94e8698fbde54468a651d9a5e72192f01f57923d3cf3d30",
     "shapes": {
      "moved": 46
     }
@@ -2976,7 +3050,7 @@
   "fixtures/t_junctions/label_on_wire_interior.asc": {
    "labels": {
     "proposals": 30,
-    "sha256": "28272da2240ed2fc3f6262b2abaccd477febfc185a3ce698626f1165c62f93ef",
+    "sha256": "d3ac246a21a06df99cb2dc54e28ffcc6ae2b2642508edef4d948bccd5332306c",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
@@ -2991,7 +3065,7 @@
    },
    "moves": {
     "proposals": 30,
-    "sha256": "4af4af5315ab3022cf2f4dcd95c51dfd0a293db93e29761183b72c40feaa8bd0",
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
     }
@@ -3000,7 +3074,7 @@
   "fixtures/t_junctions/pin_on_wire_interior.asc": {
    "labels": {
     "proposals": 39,
-    "sha256": "dc888be682ed7e29d795625e30cda145dc0f108ecae3c31dbd432133b60b2d0d",
+    "sha256": "63de0b022570bd0bb61b909339a7ccd530e946ef0e6c498900c81335bd074f7e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -3015,7 +3089,7 @@
    },
    "moves": {
     "proposals": 61,
-    "sha256": "37ac08321e6602a6b9690255ae4f5b4d3070430f07e05ece23e27244ac256504",
+    "sha256": "04b80614b1fa0959a3888e001ed7158759e9ec3ab78edfb491068f2d534c6356",
     "shapes": {
      "moved": 61
     }
@@ -3024,7 +3098,7 @@
   "fixtures/t_junctions/wire_end_on_vertical_wire_interior.asc": {
    "labels": {
     "proposals": 57,
-    "sha256": "19ab014e9ddddeea2a2b4a730de3d49bbcb0d91ee9c83d452b132826dae586ca",
+    "sha256": "03601062ff8938883119c89d6e522e88e1a132a2974fc19e681a4f7dd44ed82e",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -3039,7 +3113,7 @@
    },
    "moves": {
     "proposals": 97,
-    "sha256": "326794ea0dfafc6a72c6f2b63b624e24e4f8875509d518115143093042deac62",
+    "sha256": "547d2caa737a547e1770953d2010eb17551da150cc196ce209cfa7c33f53de75",
     "shapes": {
      "moved": 97
     }
@@ -3048,7 +3122,7 @@
   "fixtures/t_junctions/wire_end_on_wire_interior.asc": {
    "labels": {
     "proposals": 45,
-    "sha256": "3157b53f975672a3b0bf0185703a0af85539f61b2848ab8f62be9d4caa4970af",
+    "sha256": "de5671f02b7512607e6e380ef3af228ef459af6ec12caad88e7f78f600fc7110",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -3063,7 +3137,7 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
     }
@@ -3072,7 +3146,7 @@
   "fixtures/t_junctions/wire_end_on_wire_interior_reversed.asc": {
    "labels": {
     "proposals": 45,
-    "sha256": "3157b53f975672a3b0bf0185703a0af85539f61b2848ab8f62be9d4caa4970af",
+    "sha256": "de5671f02b7512607e6e380ef3af228ef459af6ec12caad88e7f78f600fc7110",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
@@ -3087,7 +3161,7 @@
    },
    "moves": {
     "proposals": 73,
-    "sha256": "0ad1a541d395f03c1783e8f670c28c559dc7d7044384b6c678bf46c293fa10d4",
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
     }

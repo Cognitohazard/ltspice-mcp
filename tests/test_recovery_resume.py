@@ -55,6 +55,9 @@ async def test_invalid_selection_refuses_without_advancing_head(failed_campaign,
             retry_failed=True,
         )
     assert error.value.code == "recovery_case_selection"
+    # The refusal names the case and why, not only that the selection is bad.
+    reason = "not cases of job" if selection == "unknown" else "produced already"
+    assert reason in str(error.value) and selected in str(error.value)
     journal = load_journal(Store(state.working_dir), parent.request_id)
     assert journal is not None and journal.head_job_id == parent.job_id and not journal.resumes
     assert len(submitted) == 2
@@ -96,6 +99,8 @@ async def test_competing_resume_ids_admit_exactly_one_child(failed_campaign):
     assert len(successes) == len(failures) == 1
     assert failures[0].code == "recovery_stale_parent"
     child = successes[0].job
+    # It names the attempt to resume instead.
+    assert f"resume the newest attempt, job {child.job_id}" in str(failures[0])
     assert await job_done(state, child)
     assert len(submitted) == 3 and len(set(submitted)) == 3
     journal = load_journal(Store(state.working_dir), parent.request_id)
@@ -155,10 +160,11 @@ async def test_committed_noop_replays_without_available_simulator(failed_campaig
     assert len(submitted) == 2
     from ltspice_mcp.lib.experiment_runner import IdempotencyConflictError
 
-    with pytest.raises(IdempotencyConflictError):
+    with pytest.raises(IdempotencyConflictError, match="new resume_request_id") as conflict:
         await resume_experiment(
             state, job_id=parent.job_id, resume_request_id="nothing-eligible", retry_failed=True
         )
+    assert f"to resume job {parent.job_id}" in str(conflict.value)
 
 
 async def test_a_stopped_recoverable_case_keeps_its_raw(work_dir, monkeypatch):

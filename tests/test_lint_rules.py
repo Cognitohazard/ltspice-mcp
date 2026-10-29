@@ -153,6 +153,12 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "duplicate-param",
+        "V1 d 0 1\nM1 d d 0 0 NMOS w=1u W=2u\n.model NMOS NMOS\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "value-suffix-mojibake",
         "V1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n",
         None,

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 from itertools import pairwise
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.connectivity import point_on_segment
@@ -504,6 +504,10 @@ class PlacedSymbol:
     texts: list[DrawText] = field(default_factory=list)
     #: The part's parameter attributes, ``SheetPart.parameters``.
     parameters: tuple[tuple[str, str], ...] = ()
+    #: The element letter it netlists as (``SheetPart.element``), and the
+    #: model its ``SpiceModel`` attribute selects, if any.
+    element: str = ""
+    spice_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -654,6 +658,12 @@ def _arc_polyline(arc: SymbolArc, ox: int, oy: int, rot: str) -> DrawPolyline | 
 def _place_symbol(part: SheetPart) -> PlacedSymbol:
     ref = part.reference
     (ox, oy), rot = part.at, part.rotation
+    # What the sheet rules read of the part, whether its symbol was found or not.
+    facts: dict[str, Any] = {
+        "parameters": part.parameters,
+        "element": part.element,
+        "spice_model": part.spice_model,
+    }
 
     if part.symbol is None or not part.usable:
         placeholder = place_box(_PLACEHOLDER, ox, oy, rot)
@@ -666,7 +676,7 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
             resolved_path=part.symbol.path if part.symbol is not None else None,
             missing=True,
             problem=part.symbol.problem if part.symbol is not None else "",
-            parameters=part.parameters,
+            **facts,
         )
         placed.graphics.append(
             DrawRect(placeholder.x1, placeholder.y1, placeholder.x2, placeholder.y2)
@@ -695,7 +705,7 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
         missing=False,
         box=part.box,
         body=part.body,
-        parameters=part.parameters,
+        **facts,
     )
     for x1, y1, x2, y2 in drawing.lines:
         placed.graphics.append(
@@ -909,6 +919,8 @@ def sheet_view(scene: Scene) -> SheetView:
                 missing=sym.missing,
                 problem=sym.problem,
                 parameters=sym.parameters,
+                element=sym.element,
+                spice_model=sym.spice_model,
             )
             for sym in scene.symbols
             for drawn in [

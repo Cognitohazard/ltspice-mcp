@@ -28,7 +28,7 @@ from ltspice_mcp.lib.netlist_graph import compare_graphs
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import read_instance
+from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
@@ -386,6 +386,37 @@ class TestDeckStructure:
         line = read_instance(resistor)
         assert line is not None
         assert line.value == "1k"
+
+    @pytest.mark.parametrize(
+        "case_id", ["deck/comment_then_continuation", "deck/comment_in_model_parens"]
+    )
+    def test_a_comment_ends_at_the_end_of_its_line(self, build: str, case_id: str, tmp_path: Path):
+        """The diode's ``n=2`` is on the ``+`` line after a ``;`` comment, which
+        follows the parameters outside the card's parentheses or inside them.
+        Read, it doubles the diode's drop at 1 mA from about 0.65 V to 1.31 V:
+        the comment ends at the end of its line, and the card goes on."""
+        assert self.voltage(build, case_id, tmp_path) == pytest.approx(1.3102, abs=1e-3)
+        (model,) = [card for card in self.cards(case_id) if card.kind == "model"]
+        assert ModelCard.from_card(model).params == {"is": "1e-14", "n": "2"}
+        assert not [f for f in lint_input(case_id) if f["severity"] == "error"]
+
+    @pytest.mark.parametrize(
+        ("case_id", "node"),
+        [("deck/dollar_inside_a_name", "N$1"), ("deck/dollar_leading_a_name", "$N_0001")],
+    )
+    def test_a_dollar_sign_in_a_word_is_part_of_the_word(
+        self, build: str, case_id: str, node: str, tmp_path: Path
+    ):
+        """PSpice and OrCAD name nets ``N$1`` and ``$N_0001``. Both builds read
+        each as a node: the source's ampere through 1k gives 1000 V on it. Only a
+        ``$`` that stands alone begins a comment (``deck/comment_dollar``)."""
+        assert self.voltage(build, case_id, tmp_path, node.lower()) == pytest.approx(1000.0)
+        lines = {
+            line.ref: line for line in map(read_instance, self.cards(case_id)) if line is not None
+        }
+        assert (lines["I1"].nodes, lines["R1"].nodes) == (["0", node], [node, "0"])
+        assert (lines["I1"].value, lines["R1"].value) == ("1", "1k")
+        assert not [f for f in lint_input(case_id) if f["severity"] == "error"]
 
     def test_the_first_line_is_a_title_even_when_it_reads_as_a_card(
         self, build: str, tmp_path: Path

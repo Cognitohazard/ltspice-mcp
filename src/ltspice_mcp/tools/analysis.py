@@ -52,7 +52,6 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
-from ltspice_mcp.lib.decoded_raw import AC_SHAPED
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -79,6 +78,8 @@ from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     safe_magnitude_db,
 )
+from ltspice_mcp.lib.recipes import StepSelector
+from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.signal_analysis import (
     TraceStats,
     downsample_minmax,
@@ -91,8 +92,8 @@ from ltspice_mcp.tools._base import (
     LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
+    OptionalRawSelectionFields,
     OtherRawFields,
-    RawSelectionFields,
     ToolInput,
     format_observations,
     format_response,
@@ -972,7 +973,7 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
     return lines
 
 
-class PlotWaveformInput(RawSelectionFields, OtherRawFields, ToolInput):
+class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
     raw_file: str | None = Field(
         default=None,
         description="Path to .raw result file. Pass this or ``job_id`` (a job run), not both.",
@@ -986,6 +987,8 @@ class PlotWaveformInput(RawSelectionFields, OtherRawFields, ToolInput):
     )
     run_index: int = Field(
         default=0,
+        strict=True,
+        ge=0,
         description="0-based run to read when ``job_id`` is given (default 0).",
     )
     case_id: str | None = Field(
@@ -1011,11 +1014,11 @@ class PlotWaveformInput(RawSelectionFields, OtherRawFields, ToolInput):
             "traces of very different size. Replaces signals."
         ),
     )
-    step: int | None = Field(
+    step: int | StepSelector | None = Field(
         default=None,
         description=(
-            "For a .step run: omit to overlay all steps as separate traces, or give "
-            "a 0-based step index to plot just that one."
+            "For a .step run: omit to overlay every step, or plot one by its 0-based "
+            "index or its axis value ({axis:'temp', value:27}, nearest wins)."
         ),
     )
     t_start: str | None = Field(
@@ -1457,12 +1460,18 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         args.raw_file, args.job_id, args.run_index, args.case_id, state, other_raw=args.other_raw
     )
     if case is not None:
-        source = services.source_for_run(case, plot_index=args.plot_index, dialect=args.dialect)
+        source = services.source_for_run(
+            case, plot_index=args.plot_index or 0, dialect=args.dialect
+        )
         run_index = case.identity["run_index"]
         netlist: Path | None = case.netlist
     else:
         source = _direct_source(
-            args.raw_file, args.job_id, state, plot_index=args.plot_index, dialect=args.dialect
+            args.raw_file,
+            args.job_id,
+            state,
+            plot_index=args.plot_index or 0,
+            dialect=args.dialect,
         )
         run_index = args.run_index
         netlist = source.netlist
@@ -1473,17 +1482,17 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     raw = await services.load_raw(source, state)
     assert raw_path is not None
-    if raw.descriptor.axis is None:
+    sampled = raw.descriptor.axis
+    if sampled is None:
         raise ResultError("This plot has no sampled axis; use inspect results table instead.")
     # Refuse unsupported coordinates before building a plot.
-    guarded_axis(raw, 0, raw_path)
+    guarded_axis(raw, 0)
 
     analysis_type = raw.descriptor.analysis
-    x_is_log = raw.descriptor.axis is not None and raw.descriptor.axis.quantity == "frequency"
+    x_is_log = sampled.quantity == "frequency"
 
     trace_names = raw.get_trace_names()
-    assert raw.descriptor.axis is not None
-    axis_name = raw.descriptor.axis.name
+    axis_name = sampled.name
     # A signal list is one panel's worth; resolved once, whatever the spelling.
     requested = (
         args.panels
@@ -1533,7 +1542,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         raise ResultError("No signal traces to plot (the result has only an axis).")
 
     n_steps = get_step_count(raw)
-    if args.step is not None:
+    step_dicts = [dict(step.parameters) for step in raw.descriptor.steps]
+    if isinstance(args.step, StepSelector):
+        steps_to_plot = [args.step.pick(step_dicts)]
+    elif args.step is not None:
         services.validate_step(raw, args.step)
         steps_to_plot = [args.step]
     else:
@@ -1541,8 +1553,6 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     ts = parse_time(args.t_start, "t_start")
     te = parse_time(args.t_end, "t_end")
-
-    step_dicts = [dict(step.parameters) for step in raw.descriptor.steps]
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, PLOT_MAX_POINTS_CEILING)
     # Asked for in LTspice, the chart is not also opened in a browser unless
@@ -1655,7 +1665,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # Surface FACTS, not verdicts (result-trust doctrine). What the reply's own
     # fields already say (the panels, series and steps drawn, `opened`,
     # `delivery`) is not restated here.
-    observations: list[dict] = list(source.observations)
+    observations = list(await asyncio.to_thread(services.read_observations, source, raw))
     if traces_total > len(traces):
         observations.append(
             {

@@ -106,6 +106,19 @@ class TestWhatTheWriterWrites:
         text = written(("ac", [pane("V(out)", analysis="ac"), pane("V(in)", analysis="ac")]))
         assert text.decode("utf-16-le").count("      Log: 1 2 0\n") == 2
 
+    @pytest.mark.parametrize("grid", [None, 1])
+    def test_an_ac_pane_switches_on_its_magnitude_and_phase_as_ltspice_does(self, grid):
+        """Both builds write PltMag and PltPhi for an AC pane they make, after
+        its Log and GridStyle lines (recorded: plot/ac, plot/ac_grid_on); a pane
+        read without them opens with both curves off. No other analysis's pane
+        has them."""
+        text = written(("ac", [pane("V(out)", analysis="ac", grid=grid)])).decode("utf-16-le")
+        tail = "      Log: 1 2 0\n" + ("      GridStyle: 1\n" if grid else "")
+        assert tail + "      PltMag: 1\n      PltPhi: 1 0\n   }\n" in text
+        for other in ("tran", "dc", "noise"):
+            other_text = written((other, [pane("V(out)", analysis=other)])).decode("utf-16-le")
+            assert "PltMag" not in other_text and "PltPhi" not in other_text
+
     def test_no_axis_range_is_written(self):
         text = written(("tran", TWO_PANES)).decode("utf-16-le")
         assert "X:" not in text and "Y[0]" not in text

@@ -20,30 +20,19 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ltspice_mcp.errors import NoAxisError, ResultError
-from ltspice_mcp.lib.raw_header import RawPlotHeader
+from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
+from ltspice_mcp.lib.result_kinds import (
+    Analysis,
+    header_analysis,
+    kind_named,
+    sampled_axis,
+    stepped_kind,
+)
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
 
 StepValue = str | int | float
-Analysis = Literal[
-    "op",
-    "transient",
-    "ac",
-    "fra",
-    "dc",
-    "noise",
-    "tf",
-    "pz",
-    "sens_dc",
-    "sens_ac",
-    "disto",
-    "unknown",
-]
-#: The analyses whose results are complex values over frequency: an .AC sweep,
-#: and the results file of an LTspice frequency response analysis, which is
-#: written in the same layout.
-AC_SHAPED: frozenset[Analysis] = frozenset({"ac", "fra"})
 Representation = Literal["real", "complex"]
 StepStatus = Literal["unstepped", "matched", "unresolved", "mismatch"]
 Monotonicity = Literal["nondecreasing", "nonincreasing", "constant", "nonmonotonic", "unknown"]
@@ -64,7 +53,7 @@ class RawTrace(Protocol):
 class RawData(Protocol):
     """Reader access used by numerical helpers, independent of plot descriptors.
 
-    Structural typing also accepts existing spicelib test readers. Implementing
+    Structural typing also accepts the reader stubs numeric tests use. Implementing
     this interface alone does not establish residency or parser safety; the
     production loader supplies those guarantees through DecodedRaw.
     """
@@ -134,6 +123,16 @@ class PlotDescriptor:
     dialect: str
     dialect_evidence: tuple[str, ...]
     step_status: StepStatus = "unstepped"
+    #: The kind of stepped result the plot is (``result_kinds``), None for an
+    #: unstepped plot or one no kind describes.
+    stepped_kind: str | None = None
+    #: The variables that hold each step's stepped values rather than a signal.
+    step_variables: tuple[str, ...] = ()
+
+    def signals(self) -> tuple[TraceDescriptor, ...]:
+        """The plot's traces but those holding each step's stepped values,
+        which are read from ``steps``."""
+        return tuple(trace for trace in self.traces if trace.name not in self.step_variables)
 
 
 _UNITS = {
@@ -150,28 +149,6 @@ _UNITS = {
     "current-density": "A/√Hz",
 }
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
-_ANALYSIS_NAMES: dict[str, Analysis] = {
-    "operating point": "op",
-    "transfer function": "tf",
-    "pole-zero analysis": "pz",
-    "transient analysis": "transient",
-    "ac analysis": "ac",
-    "frequency response analysis": "fra",
-    "dc transfer characteristic": "dc",
-    "integrated noise": "noise",
-}
-
-
-def _analysis(header: RawPlotHeader) -> Analysis:
-    label = header.plot_name.strip().lower()
-    if label == "sensitivity analysis":
-        first = header.variables[0]
-        return "sens_ac" if first.declared_type.lower() in ("frequency", "hertz") else "sens_dc"
-    if label.startswith("distortion -"):
-        return "disto"
-    if label.startswith("noise spectral density"):
-        return "noise"
-    return _ANALYSIS_NAMES.get(label, "unknown")
 
 
 def _trace_descriptor(
@@ -259,24 +236,13 @@ def _step_descriptors(
     return tuple(descriptors), (*starts, points)
 
 
-def _axis_kind(header: RawPlotHeader, analysis: Analysis) -> tuple[str, str] | None:
-    declared = header.variables[0].declared_type.lower()
-    if analysis == "transient" and declared == "time":
-        return "time", "deck_time"
-    if (analysis in AC_SHAPED or analysis in ("sens_ac", "disto", "noise")) and declared in (
-        "frequency",
-        "hertz",
-    ):
-        return "frequency", "swept_f1" if analysis == "disto" else "frequency"
-    if analysis == "dc":
-        return "swept_variable", "sweep"
-    return None
-
-
 def transient_time_offset(header: RawPlotHeader) -> float:
     """Validate the time offset using header facts before numeric allocation."""
-    analysis = _analysis(header)
-    if analysis != "transient" or _axis_kind(header, analysis) is None:
+    analysis = header_analysis(header)
+    if (
+        analysis != "transient"
+        or sampled_axis(analysis, header.variables[0].declared_type) is None
+    ):
         return 0.0
     offset = float(next((value for key, value in header.fields if key.lower() == "offset"), "0"))
     if not math.isfinite(offset):
@@ -305,6 +271,23 @@ def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool,
     return True, "nonmonotonic"
 
 
+def unresolved_steps_reason(stepped: str | None) -> str:
+    """Why a stepped plot whose kind is ``stepped`` (its ``stepped_kind``)
+    cannot be read a step at a time, and what to read instead, where it shows.
+
+    The operating-point raw of a stepped ``.tran`` or ``.ac`` on LTspice 26
+    is one point that does not say whose step it is.
+    """
+    kind = kind_named(stepped)
+    if kind is not None and kind.stepping == "point_of_no_step":
+        return (
+            "This operating-point raw of a stepped run holds one point and does not say "
+            "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
+            "an operating point at each step, run .op under the same .step."
+        )
+    return "Step boundaries are unresolved; this plot supports inventory only"
+
+
 @dataclass(frozen=True)
 class DecodedTrace:
     """Original trace metadata and a read-only step slice, with no lazy loader."""
@@ -312,6 +295,8 @@ class DecodedTrace:
     descriptor: TraceDescriptor
     _values: NDArray
     _boundaries: tuple[int, ...] | None
+    #: The refusal of a step read when the boundaries are unresolved.
+    _unresolved: str
 
     @property
     def name(self) -> str:
@@ -329,7 +314,7 @@ class DecodedTrace:
 
     def get_wave(self, step: int = 0) -> NDArray:
         if self._boundaries is None:
-            raise ResultError("Step boundaries are unresolved; this plot supports inventory only")
+            raise ResultError(self._unresolved)
         if type(step) is not int or not 0 <= step < len(self._boundaries) - 1:
             raise IndexError(f"Step {step} is outside this plot")
         return self._values[self._boundaries[step] : self._boundaries[step + 1]]
@@ -370,7 +355,7 @@ class DecodedPlot:
                 "Resident arrays must be one-dimensional numeric arrays of the declared length"
             )
         descriptors, boundaries = _step_descriptors(header.point_count, steps, step_offsets)
-        stepped = any(flag.lower() == "stepped" for flag in header.flags)
+        stepped = header.stepped
         if step_status is None:
             if step_offsets is None and stepped:
                 step_status = "unresolved"
@@ -389,11 +374,12 @@ class DecodedPlot:
             if steps is not None:
                 raise ValueError("Step metadata cannot be associated without validated boundaries")
             descriptors = ()
-        analysis = _analysis(header)
-        kind = _axis_kind(header, analysis)
+        analysis = header_analysis(header)
+        kind = stepped_kind(header)
+        sampled = sampled_axis(analysis, header.variables[0].declared_type)
         arrays = list(waves)
         offset = transient_time_offset(header)
-        if kind is not None and analysis == "transient":
+        if sampled is not None and analysis == "transient":
             if np.iscomplexobj(arrays[0]):
                 raise ValueError("Transient time must be real and its offset finite")
             if offset or np.any(arrays[0] < 0):
@@ -404,15 +390,27 @@ class DecodedPlot:
             _trace_descriptor(header, i, wave, analysis) for i, wave in enumerate(arrays)
         )
         axis = None
-        if kind is not None:
+        if sampled is not None:
             real, monotonicity = _coordinate_facts(arrays[0], boundaries)
             if unresolved_boundaries:
                 monotonicity = "unknown"
             first = traces[0]
             axis = AxisDescriptor(
-                0, first.name, first.declared_type, first.unit, *kind, real, monotonicity, offset
+                0,
+                first.name,
+                first.declared_type,
+                first.unit,
+                *sampled,
+                real,
+                monotonicity,
+                offset,
             )
         missing_steps = steps is None and step_status != "unstepped"
+        step_variables = (
+            tuple(header.variables[index].name for index in leading_parameters(header))
+            if kind is not None and kind.step_values == "raw"
+            else ()
+        )
         descriptor = PlotDescriptor(
             snapshot_id,
             header.index,
@@ -426,6 +424,8 @@ class DecodedPlot:
             header.dialect,
             header.dialect_evidence,
             step_status,
+            None if kind is None else kind.name,
+            step_variables,
         )
         for wave in waves:
             wave.setflags(write=False)
@@ -435,11 +435,12 @@ class DecodedPlot:
         object.__setattr__(self, "descriptor", descriptor)
         object.__setattr__(self, "_has_step_metadata", steps is not None)
         object.__setattr__(self, "_stored_waves", tuple(waves))
+        refusal = unresolved_steps_reason(descriptor.stepped_kind)
         object.__setattr__(
             self,
             "_traces",
             tuple(
-                DecodedTrace(t, w, None if unresolved_boundaries else boundaries)
+                DecodedTrace(t, w, None if unresolved_boundaries else boundaries, refusal)
                 for t, w in zip(traces, arrays, strict=True)
             ),
         )
@@ -455,7 +456,7 @@ class DecodedPlot:
     @property
     def raw_params(self) -> dict[str, str | list[str]]:
         params: dict[str, str | list[str]] = dict(self.header.fields)
-        params["Variables"] = self.get_trace_names()
+        params["Variables"] = [variable.name for variable in self.header.variables]
         return params
 
     @property
@@ -478,7 +479,9 @@ class DecodedPlot:
         raise ValueError(f"Unknown RAW property: {property_name}")
 
     def get_trace_names(self) -> list[str]:
-        return [t.name for t in self._traces]
+        """The plot's signals (``PlotDescriptor.signals``); a variable holding
+        a step's stepped values is still read by name with ``get_trace``."""
+        return [trace.name for trace in self.descriptor.signals()]
 
     def get_trace(self, trace_ref: str | int) -> DecodedTrace:
         if type(trace_ref) is int and 0 <= trace_ref < len(self._traces):
@@ -501,7 +504,7 @@ class DecodedPlot:
 
     def get_steps(self, **kwargs: StepValue) -> list[int]:
         if not self.descriptor.steps:
-            raise ResultError("Step boundaries are unresolved; this plot supports inventory only")
+            raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
         indices = []
         for step in self.descriptor.steps:
             parameters = dict(step.parameters)

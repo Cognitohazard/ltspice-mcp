@@ -36,7 +36,7 @@ import importlib
 import math
 import re
 import traceback
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -118,7 +118,13 @@ from ltspice_mcp.lib.routing import (
     segment_text,
     wires_through,
 )
-from ltspice_mcp.lib.sheet import PARAMETER_ATTRIBUTES, PlacedPin, find_pin
+from ltspice_mcp.lib.sheet import (
+    INSTANCE_PREFIX,
+    PARAMETER_ATTRIBUTES,
+    PlacedPin,
+    element_letter,
+    find_pin,
+)
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -277,12 +283,6 @@ async def edit_guard(path: Path, *beside: Path) -> AsyncIterator[None]:
         yield
 
 
-#: An instance's own ``Prefix`` overrides its symbol's: both builds write the
-#: part's card with that element letter, in either case of the letter, on a
-#: library, stock or block symbol (recorded: ``export/instance_prefix``).
-#: spicelib reads the attribute back in upper case.
-INSTANCE_PREFIX = "Prefix"
-
 # Standard LTspice SYMATTR slot names. Anything outside this set is
 # silently ignored at netlist-export time, so we reject up-front rather
 # than letting a typo no-op silently. Sourced from spicelib so a future
@@ -319,12 +319,6 @@ def _parse_rotation(rotation: str) -> ERotation:
 # Validation uses it to accept a value shaped ``"NMOS1 W=10u L=1u"``: one head
 # token, then only parameters.
 _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
-
-# A GUI opamp complexity-level label (e.g. ``Level.2``) that belongs in the
-# SpiceModel/level selector, NOT the Value slot. On a subcircuit (X) symbol
-# LTspice emits the Value as an extra positional token on the instance line,
-# so netlisting fails downstream with "sub-circuit name is not defined".
-_LEVEL_LABEL_RE = re.compile(r"^\s*level\.\d+\s*$", re.IGNORECASE)
 
 
 # Element classes with exactly two terminals before a value that runs to the
@@ -487,52 +481,6 @@ def _asc_component_value(editor, reference: str) -> str | None:
         return str(editor.get_component_value(reference))
     except Exception:
         return None
-
-
-def level_label_lint(editor, reference: str, value: str) -> str | None:
-    """Warn when a subcircuit (X) symbol's Value slot will corrupt the netlist.
-
-    Two shapes, both ending in "sub-circuit name is not defined" at netlist
-    time because LTspice appends the Value as a stray positional token on the X
-    instance line:
-
-    - a GUI opamp complexity label (``Level.2``) written to Value; or
-    - any Value set on a symbol whose model is selected via the ``SpiceModel``
-      attribute (e.g. UniversalOpamp2), whose Value slot must stay empty.
-
-    The subcircuit gate is the element letter the part netlists as
-    (``element_class``: its own Prefix, its symbol's, or its name's first
-    letter), or a ``SpiceModel``. A symbol that carries its subckt name IN Value (the common
-    library part, no SpiceModel) is left alone. Returns the warning text, or
-    ``None`` when neither shape applies.
-    """
-    if not value.strip():
-        return None
-    comp = editor.components.get(reference)
-    attrs = getattr(comp, "attributes", None) or {}
-    has_spicemodel = "SpiceModel" in attrs
-    # Not spicelib's _SUBCKT, which it sets for every part named X...
-    # (docs/spicelib_bugs.md, Bug 30).
-    is_subckt = element_class(editor, reference) == "X" or has_spicemodel
-    if not is_subckt:
-        return None
-    if _LEVEL_LABEL_RE.match(value):
-        return (
-            f"{reference}: Value {value!r} is a GUI opamp complexity-level label, not a "
-            "subcircuit value. LTspice emits it as an extra positional token on the X "
-            "instance line, so netlisting fails with 'sub-circuit name is not defined'. "
-            "Select the level via the SpiceModel attribute (or the symbol's default), "
-            "not the Value slot."
-        )
-    if has_spicemodel:
-        return (
-            f"{reference}: this symbol's model is selected via its SpiceModel attribute, "
-            f"so its Value slot must stay empty. LTspice emits Value {value!r} as an "
-            "extra positional token on the X instance line, and netlisting fails with "
-            "'sub-circuit name is not defined'. Clear the Value; pick the model through "
-            "SpiceModel instead."
-        )
-    return None
 
 
 def _reference_taken(
@@ -771,22 +719,16 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
 
 
 def element_class(editor: AscEditor, reference: str) -> str:
-    """The element letter a placed part netlists as.
-
-    LTspice takes it from the part's own ``Prefix`` when it has one, else from
-    its symbol's (``QN`` → ``Q``), and prepends that letter to an instance name
-    that does not already start with it, so a part named ``Vin`` on a resistor
-    symbol is a resistor. Falls back to the reference's own first letter when
-    neither gives one.
-    """
+    """The element letter a placed part netlists as (``sheet.element_letter``),
+    read from the editor's part and its symbol."""
     comp = editor.components.get(reference)
-    own = (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX)
-    if own:
-        return own[:1].upper()
     symbol = getattr(comp, "symbol", None)
     info = symbol_info_for(editor, symbol) if symbol else None
-    prefix = info.prefix if info is not None and info.prefix else reference
-    return prefix[:1].upper()
+    return element_letter(
+        (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX),
+        info.prefix if info is not None else None,
+        reference,
+    )
 
 
 def export_parts(editor: AscEditor, geometry: Iterable[dict]) -> list[tuple[str, str, list[str]]]:
@@ -1086,7 +1028,10 @@ class _AscEditor(AscEditor):
     the parent without it (``docs/spicelib_bugs.md``, Bug 22). Here such an
     instance loads with no resolved subcircuit, as spicelib already loads a
     cell symbol with no library, and a sheet that is there opens as one of
-    these, so a block nested further down is read the same way.
+    these, so a block nested further down is read the same way. A block symbol
+    that gives a Prefix is the element it names, as a cell is, and LTspice
+    reads no sheet for it even beside it (``export-hierarchical-block``;
+    ``docs/spicelib_bugs.md``, Bug 33).
     """
 
     def __init__(
@@ -1105,6 +1050,8 @@ class _AscEditor(AscEditor):
     def _get_subcircuit(self, symbol: Any) -> Any:
         if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
             return super()._get_subcircuit(symbol)
+        if INSTANCE_PREFIX in symbol.attributes:
+            return None
         sheet = symbol.get_schematic_file()
         if not sheet.exists():
             folder = str(self.asc_file_path.parent)
@@ -1312,7 +1259,7 @@ def _remove_exact_directive(editor, instruction: str) -> bool:
     return False
 
 
-def _remove_directive_or_comment(editor, instruction: str) -> str:
+def _remove_directive_or_comment(editor, instruction: str) -> None:
     """Remove a directive or comment matching ``instruction``.
 
     The default path is an exact, literal match: a DIRECTIVE is removed only when
@@ -1323,9 +1270,8 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
     turn into regex capture groups under any "metachar means regex" heuristic.
     Pass an explicit ``regex:`` prefix to opt in to regex matching.
 
-    Returns a label describing what was removed. Raises NetlistError when
-    nothing matched, so the user can't think they cleaned a directive
-    that's still in the file.
+    Raises NetlistError when nothing matched, so the user can't think they
+    cleaned a directive that's still in the file.
     """
     matcher = _text_matcher(instruction)
     if isinstance(matcher, re.Pattern):
@@ -1336,7 +1282,7 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
                 f"No directive or comment matched regex {matcher.pattern!r}. It is matched "
                 "against each TEXT line's text, where a line break is a \\n escape."
             )
-        return "directive(s)/comment(s)"
+        return
 
     directive_hit = _remove_exact_directive(editor, instruction)
     comment_hit = _strip_matching_comments(editor, instruction)
@@ -1348,7 +1294,6 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
             "(directive) or ';' (comment); a line break may be given as a newline "
             "or as the \\n escape the file holds."
         )
-    return "directive"
 
 
 def _strip_matching_comments(editor, matcher) -> bool:
@@ -1771,7 +1716,6 @@ class _ConnectPlan(NamedTuple):
     y2: int
     points: list[tuple[int, int]]
     segments: list[tuple[int, int, int, int]]
-    warnings: list[str]
     # Every point other than the two endpoints where the route joins existing
     # wiring, and each endpoint that ends on a wire's interior (a T-junction).
     junctions: list[dict[str, object]]
@@ -1867,7 +1811,7 @@ def _plan_connect_route(
     resolve, a route of no length, two named nets joined, a wire LTspice
     would drop. What drawing the route would do to the rest of the sheet (a
     diagonal segment, a pin passed over, a wire run along, another net's
-    wiring touched) is ``routing.judge``'s, and so are the advisories.
+    wiring touched) is ``routing.judge``'s, and so are the junctions it makes.
 
     Backs the ``wire_pins`` op, so a route the planner refuses is never
     written by any caller.
@@ -2013,9 +1957,8 @@ def _plan_connect_route(
         error_lines.extend(f"  {found.detail}" for found in judged.refusals)
         error_lines.append("\nFix the route with different waypoints to avoid these issues.")
         raise NetlistError("\n".join(error_lines))
-    warnings = [found.detail for found in judged.advisories]
 
-    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings, judged.junctions)
+    return _ConnectPlan(x1, y1, x2, y2, points, segments, judged.junctions)
 
 
 # ---------------------------------------------------------------------------
@@ -2399,18 +2342,20 @@ KEEPS_WIRING = frozenset(
 
 # The keys of an op's result that report what applying it found on the sheet:
 # the segments a route found already drawn, the junctions it made, how much a
-# removal took. A value or attribute change reports what it changed. The rest of a result restates the op or carries geometry and
-# advisories a surface reports through views and warnings of its own. A route's
-# ``wire_count`` is not one: ``already_present`` names the segments it did not
-# draw, and relaying the count would put a line per route on every build. Nor
-# is ``remove_directive``'s ``removed``, which names a kind, not an amount. An
-# op missing here reports nothing beyond its arguments.
+# removal took. A value or attribute change reports what it changed. The rest
+# of a result restates the op or carries geometry a surface reports through
+# views of its own. A route's ``wire_count`` is not one: ``already_present``
+# names the segments it did not draw, and relaying the count would put a line
+# per route on every build. ``remove_directive``'s ``removed_texts`` names each
+# text it took, since a regex leaves that unknown. An op missing here reports nothing
+# beyond its arguments, and the reply's ``applied`` count says it ran.
 OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "set_component_value": ("changed",),
     "set_component_attribute": ("changed",),
     "wire_pins": ("already_present", "junctions"),
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
+    "remove_directive": ("removed_texts",),
     "remove_component": ("deleted_wires",),
     "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
@@ -2500,7 +2445,6 @@ def apply_op_inplace(
     if isinstance(op, OpSetComponentValue):
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
-        lint = level_label_lint(editor, op.reference, op.value)
         before = _attributes_of(editor, op.reference)
         _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
         result: dict[str, object] = {
@@ -2510,8 +2454,6 @@ def apply_op_inplace(
         }
         if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
             result["changed"] = changed
-        if lint:
-            result["warnings"] = [lint]
         return result
 
     if isinstance(op, OpSetComponentAttribute):
@@ -2681,8 +2623,6 @@ def apply_op_inplace(
             result["already_present"] = [segment_json(seg) for seg in already]
         if plan.junctions:
             result["junctions"] = plan.junctions
-        if plan.warnings:
-            result["warnings"] = plan.warnings
         return result
 
     if isinstance(op, OpAddDirective):
@@ -2700,45 +2640,28 @@ def apply_op_inplace(
         return {"op": "add_directive", "instruction": op.instruction}
 
     if isinstance(op, OpRemoveDirective):
-        # Literal-by-default, 'regex:' opt-in, raises if nothing matched.
-        removed = _remove_directive_or_comment(editor, op.instruction)
-        return {"op": "remove_directive", "instruction": op.instruction, "removed": removed}
+        # Literal-by-default, 'regex:' opt-in, raises if nothing matched. What
+        # it removed is read off the sheet's texts, not the matcher's say-so.
+        had = list(editor.directives)
+        _remove_directive_or_comment(editor, op.instruction)
+        kept = {id(text) for text in editor.directives}
+        removed_texts = [
+            {
+                "kind": "comment" if text.type == TextTypeEnum.COMMENT else "directive",
+                "text": text.text,
+                "x": int(text.coord.X),
+                "y": int(text.coord.Y),
+            }
+            for text in had
+            if id(text) not in kept
+        ]
+        return {
+            "op": "remove_directive",
+            "instruction": op.instruction,
+            "removed_texts": removed_texts,
+        }
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
-
-
-def collapse_result_warnings(results: list[dict[str, object]]) -> None:
-    """Collapse identical per-op warnings across one ops batch, in place.
-
-    An advisory that repeats across a batch, such as one value set on one part
-    by several ops, would otherwise be listed once per op. Keep the first
-    occurrence (annotated with the repeat count) and drop the copies.
-    """
-    counts: Counter[str] = Counter()
-    for entry in results:
-        warnings = entry.get("warnings")
-        if isinstance(warnings, list):
-            counts.update(warnings)
-    if not counts or max(counts.values()) < 2:
-        return
-    emitted: set[str] = set()
-    for entry in results:
-        warnings = entry.get("warnings")
-        if not isinstance(warnings, list):
-            continue
-        kept: list[str] = []
-        for w in warnings:
-            if w in emitted:
-                continue
-            emitted.add(w)
-            n = counts[w]
-            kept.append(
-                w if n == 1 else f"{w} (identical warning on {n} ops in this batch; collapsed)"
-            )
-        if kept:
-            entry["warnings"] = kept
-        else:
-            del entry["warnings"]
 
 
 def run_op_batch(
