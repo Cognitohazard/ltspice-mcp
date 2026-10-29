@@ -11,8 +11,12 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.result_kinds import STEPPED_KINDS, SteppedKind
+from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import inspect_one
+from tests.conftest import SyncApi
 
 
 def _cases(kind: SteppedKind) -> list[tuple[str, str]]:
@@ -71,3 +75,41 @@ def test_a_recording_decodes_as_the_kind_that_names_it(
 @pytest.mark.parametrize(("build", "stem"), _stepped_raws())
 def test_every_stepped_recording_is_of_a_kind(build: str, stem: str, tmp_path: Path):
     assert rec.decode(build, stem, tmp_path).raw.descriptor.stepped_kind is not None
+
+
+#: Recorded runs that keep each step's values in the raw.
+POINT_A_STEP = ["raw/step_op", "raw/step_temp_op", "raw/tf_step", "raw/step_ac_one_freq"]
+
+
+def _step_variable(build: str, case_id: str, scratch: Path) -> str:
+    (variable,) = rec.decode(build, case_id, scratch).raw.descriptor.step_variables
+    return variable
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", POINT_A_STEP)
+def test_the_api_reads_a_step_variable_as_a_step_value(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Its values are in the steps and it is no signal; asked for as one, it
+    says where its values are."""
+    variable = _step_variable(build, case_id, work_dir / "decoded")
+    loaded = SyncApi(state_no_sim).load_raw(rec.stage_run(build, case_id, work_dir / "run"))
+    assert variable not in loaded.signals
+    assert len(loaded.steps) == 3 and all(variable in step for step in loaded.steps)
+    with pytest.raises(ResultError, match="stepped value, not a signal"):
+        loaded.trace(variable)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", POINT_A_STEP)
+async def test_inspect_lists_no_step_variable_among_the_signals(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    variable = _step_variable(build, case_id, work_dir / "decoded")
+    raw = rec.stage_run(build, case_id, work_dir / "run")
+    listed = await inspect_one(
+        state_no_sim, {"kind": "results", "view": "signals", "path": str(raw)}
+    )
+    names = [row["name"] for row in listed["signals"]]
+    assert names and variable not in names

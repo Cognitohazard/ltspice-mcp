@@ -838,7 +838,13 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
     sig_lo = signal.lower()
     dev_param = parse_shorthand(sig_lo)
     trace_lo = {t.lower() for t in trace_names}
-    if sig_lo in ("v(onoise)", "v(inoise)") and (
+    descriptor = getattr(raw, "descriptor", None)
+    if sig_lo in {name.lower() for name in getattr(descriptor, "step_variables", ())}:
+        hint = (
+            f" '{signal}' holds each step's stepped value, not a signal: read it from "
+            "the steps (each row's step_values, or RawResult.steps)."
+        )
+    elif sig_lo in ("v(onoise)", "v(inoise)") and (
         "onoise_spectrum" in trace_lo or "inoise_spectrum" in trace_lo
     ):
         hint = " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"

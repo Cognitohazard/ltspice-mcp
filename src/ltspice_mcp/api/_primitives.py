@@ -163,7 +163,7 @@ class RawResult:
             raise ResultError("table() requires a plot with no sampled axis")
         self._validate_step(step)
         rows: list[dict[str, Any]] = []
-        for trace in self._raw.descriptor.traces:
+        for trace in self._raw.descriptor.signals():
             for index, sample in enumerate(self._raw.get_wave(trace.name, step=step)):
                 value: float | dict[str, float] = (
                     {"real": float(np.real(sample)), "imag": float(np.imag(sample))}
@@ -185,11 +185,13 @@ class RawResult:
         """This plot's traces but its axis, by ``trace_key``, each to its index;
         a key two traces share is left out, never guessed between."""
         xvii = writes_xvii_names(self._raw)
-        axis = self._raw.descriptor.axis
+        descriptor = self._raw.descriptor
         keyed: dict[TraceKey, int] = {}
         shared: set[TraceKey] = set()
-        for index, trace in enumerate(self._raw.descriptor.traces):
-            if axis is not None and trace.name == axis.name:
+        for index, trace in enumerate(descriptor.traces):
+            if trace.name in descriptor.step_variables or (
+                descriptor.axis is not None and trace.name == descriptor.axis.name
+            ):
                 continue
             key = trace_key(trace.name, xvii=xvii)
             shared.update([key] if key in keyed else [])
@@ -313,7 +315,7 @@ class RawResult:
         """The trace ``signal`` names in this result, found as :meth:`trace`
         finds one."""
         return services.find_trace(
-            [trace.name for trace in self._raw.descriptor.traces],
+            self._raw.get_trace_names(),
             signal,
             xvii=writes_xvii_names(self._raw),
         )

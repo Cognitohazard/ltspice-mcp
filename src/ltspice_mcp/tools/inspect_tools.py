@@ -2333,7 +2333,7 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
     prefix = _check_prefix(query.prefix)
     traces = [
         trace
-        for trace in descriptor.traces
+        for trace in descriptor.signals()
         if prefix is None or matches_prefix(trace.name, prefix)
     ]
     rows: Sequence[dict[str, Any]]

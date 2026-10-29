@@ -346,12 +346,14 @@ def test_a_run_stored_a_point_a_step_is_one_sweep_to_ltspices_reader_and_steps_h
     stepped transfer function, and a stepped AC or noise analysis at one
     frequency, which stores no frequency. LTspice's reader calls that an
     unstepped run with the parameter for its axis; the server's keeps the
-    steps, and the values are the same."""
+    steps, with the parameter as their values and not a signal, and the values
+    are the same."""
     said = reader_reply(reader, written_by, name)
     info, read = said["info"], said["read"]
     assert (read["stepped"], read["analysis"]) == ("false", PARAMETERS_FIRST[name])
     raw = rec.decode(written_by, f"raw/{name}", tmp_path).raw
-    stepped_parameter, *traces = raw.get_trace_names()
+    (stepped_parameter,) = raw.descriptor.step_variables
+    traces = raw.get_trace_names()
     assert (info["x_name"], info["signals"]) == (stepped_parameter, traces)
     steps = raw.get_steps()
     assert len(steps) == int(read["n_points"]) == 3

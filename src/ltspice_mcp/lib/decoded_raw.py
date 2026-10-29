@@ -129,6 +129,11 @@ class PlotDescriptor:
     #: The variables that hold each step's stepped values rather than a signal.
     step_variables: tuple[str, ...] = ()
 
+    def signals(self) -> tuple[TraceDescriptor, ...]:
+        """The plot's traces but those holding each step's stepped values,
+        which are read from ``steps``."""
+        return tuple(trace for trace in self.traces if trace.name not in self.step_variables)
+
 
 _UNITS = {
     "voltage": "V",
@@ -450,7 +455,7 @@ class DecodedPlot:
     @property
     def raw_params(self) -> dict[str, str | list[str]]:
         params: dict[str, str | list[str]] = dict(self.header.fields)
-        params["Variables"] = self.get_trace_names()
+        params["Variables"] = [variable.name for variable in self.header.variables]
         return params
 
     @property
@@ -473,7 +478,9 @@ class DecodedPlot:
         raise ValueError(f"Unknown RAW property: {property_name}")
 
     def get_trace_names(self) -> list[str]:
-        return [t.name for t in self._traces]
+        """The plot's signals (``PlotDescriptor.signals``); a variable holding
+        a step's stepped values is still read by name with ``get_trace``."""
+        return [trace.name for trace in self.descriptor.signals()]
 
     def get_trace(self, trace_ref: str | int) -> DecodedTrace:
         if type(trace_ref) is int and 0 <= trace_ref < len(self._traces):

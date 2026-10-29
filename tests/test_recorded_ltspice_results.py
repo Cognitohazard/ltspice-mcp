@@ -107,7 +107,10 @@ def test_every_recorded_raw_decodes_to_the_traces_its_header_declares(
     windowed, uncompressed, converted to Fast Access, with subcircuits; and
     each plot is read as an analysis the readers know."""
     parsed = rec.decode(build, case_id, tmp_path)
-    assert parsed.raw.get_trace_names() == declared_names(build, case_id)
+    # A stepped plot that opens with its stepped values lists them as step
+    # values, not signals.
+    signals = parsed.raw.get_trace_names()
+    assert [*parsed.raw.descriptor.step_variables, *signals] == declared_names(build, case_id)
     assert parsed.raw.dialect == "ltspice"
     assert_every_plot_classified(parsed.raw)
     if parsed.raw.descriptor.step_status == "unresolved":
