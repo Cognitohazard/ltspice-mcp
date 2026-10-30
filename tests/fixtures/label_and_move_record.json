@@ -1665,6 +1665,27 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_waypoint_on_wire.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "50769aacf1d99999b34917a1f24f48e07bbb72ed385ead298da993db0b51e938",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 9,
+     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 18,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 9
+    }
+   },
+   "moves": {
+    "proposals": 17,
+    "sha256": "60ed65d7c6817d9722b398f476bf461a4f67d388600c72ecabae20a6a77105ce",
+    "shapes": {
+     "moved": 17
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_wire.asc": {
    "labels": {
     "proposals": 24,
@@ -1959,6 +1980,30 @@
     "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
     "shapes": {
      "moved": 73
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/wire_ends_meeting_on_wire_interior.asc": {
+   "labels": {
+    "proposals": 68,
+    "sha256": "f3d14087ea6191c2a555a435830e21686fc2e6311c6f905d8964ce3f66350127",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 12,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 6,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 6,
+     "placed [ground; 1 at the point, 1 named]": 10,
+     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 20,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 10
+    }
+   },
+   "moves": {
+    "proposals": 85,
+    "sha256": "1717b3ab85935437738dae8d2b57431bb9547fa221acf25be6c879d9d254c2c1",
+    "shapes": {
+     "moved": 85
     }
    }
   },

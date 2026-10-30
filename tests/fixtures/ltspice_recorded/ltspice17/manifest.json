@@ -1616,6 +1616,33 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_waypoint_on_wire": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_waypoint_on_wire.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_waypoint_on_wire.asc": "c51f057db7a8578549f800f6352b514f61a79af9a295e65e23f767ee567a3e43"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_waypoint_on_wire.net": {
+          "bytes": 79,
+          "sha256": "a5f184d99e27bc86c07e95e69b20e3b7b283707003277dec516d813bece7284b"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_wire": {
       "behaviour": "same-instance-wire",
       "command": [
@@ -1988,6 +2015,33 @@
         "connectivity/wire_end_on_wire_interior_reversed.net": {
           "bytes": 105,
           "sha256": "9f149927508bf3d20102e8a1742561d0e69f41c2dc643c6abf78a94b8b5a3c84"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/wire_ends_meeting_on_wire_interior": {
+      "behaviour": "wire-connectivity",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/wire_ends_meeting_on_wire_interior.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/wire_ends_meeting_on_wire_interior.asc": "1ccb22ad32c23f9b711f585fe02783df7c30b282ef3373132689a199e958addb"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/wire_ends_meeting_on_wire_interior.net": {
+          "bytes": 105,
+          "sha256": "949043de6a40db4ec42530ea32b4c9361314b0f0979cfe2ffc3593508d893428"
         }
       },
       "reported_build": null,

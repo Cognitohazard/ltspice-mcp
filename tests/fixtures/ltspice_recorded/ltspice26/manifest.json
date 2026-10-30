@@ -1616,6 +1616,33 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_waypoint_on_wire": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_waypoint_on_wire.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_waypoint_on_wire.asc": "c51f057db7a8578549f800f6352b514f61a79af9a295e65e23f767ee567a3e43"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_waypoint_on_wire.net": {
+          "bytes": 118,
+          "sha256": "1273cb774950cad641ed32323380978a61141dfd55b15c069be6d2788ba08fb9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_wire": {
       "behaviour": "same-instance-wire",
       "command": [
@@ -1972,6 +1999,33 @@
         "connectivity/wire_end_on_wire_interior_reversed.net": {
           "bytes": 142,
           "sha256": "0555df93e8da2136f7a6fc6d7168a1f67c503e8183e7f4849c15158f3d9d1c5c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/wire_ends_meeting_on_wire_interior": {
+      "behaviour": "wire-connectivity",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/wire_ends_meeting_on_wire_interior.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/wire_ends_meeting_on_wire_interior.asc": "1ccb22ad32c23f9b711f585fe02783df7c30b282ef3373132689a199e958addb"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/wire_ends_meeting_on_wire_interior.net": {
+          "bytes": 142,
+          "sha256": "f6426eb77f39da27eaccdefa4e7d195bad70a395647c23cd34ef3976223c412f"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

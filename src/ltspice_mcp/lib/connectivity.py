@@ -421,14 +421,16 @@ def _merge_collinear_runs(
     mirroring LTspice's netlist-time wire merge.
 
     A vertex breaks a run — stays its own node — when it is a pin or a label
-    coordinate (``node_coords``) or a corner/junction (its incident segment ends
-    are not exactly two ends of one orientation). Only pure pass-through
-    vertices (degree-2, both ends collinear, nothing on them) are merged
-    across. This is what
-    makes a *collinear* waypoint disappear: an in-line bend leaves only bare
-    pass-through vertices, so the run collapses back to one segment; a bend that
-    turns a corner leaves the corner vertices as breaks, so its segments stay
-    split. Verticals (``x1==x2``) and horizontals (``y1==y2``) are merged
+    coordinate (``node_coords``), a corner/junction (its incident segment ends
+    are not exactly two ends of one orientation), or a point another wire
+    passes through: the two ends there are each on that wire, and join it, as
+    a single end on a wire's interior does (recorded:
+    ``wire_ends_meeting_on_wire_interior``). Only pure pass-through vertices
+    (degree-2, both ends collinear, nothing on them) are merged across. This is
+    what makes a *collinear* waypoint disappear: an in-line bend leaves only
+    bare pass-through vertices, so the run collapses back to one segment; a
+    bend that turns a corner leaves the corner vertices as breaks, so its
+    segments stay split. Verticals (``x1==x2``) and horizontals (``y1==y2``) are merged
     per-line by interval union split at breaks; any diagonal passes through
     unchanged.
     """
@@ -436,9 +438,11 @@ def _merge_collinear_runs(
     verticals: dict[int, list[tuple[int, int]]] = defaultdict(list)
     horizontals: dict[int, list[tuple[int, int]]] = defaultdict(list)
     merged: list[tuple[int, int, int, int]] = []
+    wires: list[Segment] = []
     for x1, y1, x2, y2 in segments:
         if (x1, y1) == (x2, y2):
             continue  # zero-length record (hand-corrupted WIRE) — nothing to merge
+        wires.append(((x1, y1), (x2, y2)))
         if x1 == x2:
             verticals[x1].append((min(y1, y2), max(y1, y2)))
             ends[(x1, y1)].append("V")
@@ -450,9 +454,13 @@ def _merge_collinear_runs(
         else:
             merged.append((x1, y1, x2, y2))  # diagonal — passed through as-is
 
+    through = build_wire_counter(wires)
+
     def _breaks(coord: tuple[int, int]) -> bool:
         es = ends.get(coord, [])
-        return coord in node_coords or len(es) != 2 or len(set(es)) != 1
+        return (
+            coord in node_coords or len(es) != 2 or len(set(es)) != 1 or through(coord) > len(es)
+        )
 
     def _emit(intervals: list[tuple[int, int]], cuts: set[int], vertical: bool, line: int) -> None:
         intervals.sort()
