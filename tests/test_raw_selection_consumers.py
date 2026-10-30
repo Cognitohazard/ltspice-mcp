@@ -112,6 +112,33 @@ def test_an_empty_job_id_is_refused_beside_a_path(model, payload):
 
 
 @pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (analyze.AnalyzeSourceInput, {"job_id": "job-1", "label": "selected"}),
+        (analysis.PlotWaveformInput, {"job_id": "job-1", "open": False}),
+        (inspect_tools.ResultsQuery, {"kind": "results", "job_id": "job-1"}),
+    ],
+)
+@pytest.mark.parametrize("path", ["", "  "])
+def test_an_empty_path_is_refused_beside_a_job(model, payload, path):
+    """An empty path names no file, and is refused as an empty job_id is."""
+    with pytest.raises(ValidationError, match="path"):
+        model.model_validate({**payload, "path": path})
+
+
+def test_inspect_reads_a_job_only_by_its_job_id(state_no_sim):
+    """Beside a job_id, an empty path made inspect look for a file and say no
+    source was named; with a case_id, that the case needs a job_id."""
+    for query in (
+        {"kind": "results", "path": "", "job_id": "job-1"},
+        {"kind": "results", "path": "", "job_id": "job-1", "case_id": "case-0"},
+    ):
+        (result,) = SyncApi(state_no_sim).inspect(queries=[query])["results"]
+        assert result["error"]["code"] == "invalid_query"
+        assert "results.path" in result["error"]["message"]
+
+
+@pytest.mark.parametrize(
     "selection",
     [{"other_raw": "op"}, {"runs": {"case_ids": ["case-0"]}}],
     ids=["other_raw", "case_ids"],
@@ -148,6 +175,11 @@ def test_a_log_source_selects_no_plot():
 
 def test_api_validates_selection_before_loading(state_no_sim):
     api = SyncApi(state_no_sim)
+    for empty in ("", "  "):
+        with pytest.raises(TypeError, match="path is empty"):
+            api.load_raw(empty)
+        with pytest.raises(TypeError, match="path is empty"):
+            api.measurements(empty)
     invalid_indices: list[Any] = [-1, True, "1", 1.0]
     for index in invalid_indices:
         with pytest.raises(ApiValidationError):

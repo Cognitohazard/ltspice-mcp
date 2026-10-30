@@ -1316,7 +1316,7 @@ async def test_raw_path_has_null_deck_hash_and_provenance_observation(
     # provenance to offer.
     assert "deck_sha256" not in value
     assert any(
-        observation["code"] == "raw_path_without_deck_provenance"
+        observation["code"] == "path_without_deck_provenance"
         for observation in data["observations"]
     )
 

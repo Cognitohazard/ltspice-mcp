@@ -1292,17 +1292,19 @@ def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
 
 
 def _one_source(
-    path: object,
+    path: str | os.PathLike[str] | None,
     job_id: str | None,
     run_index: int,
     case_id: str | None,
     *,
     other_raw: str | None = None,
 ) -> None:
-    """Refuse a read that names both or neither of a file and a job, or a case
-    selector without a job."""
+    """Refuse a read that names both or neither of a file and a job, an empty
+    path, or a case selector without a job."""
     if (path is None) == (job_id is None):
         raise TypeError("Pass exactly one of path or job_id")
+    if path is not None and not os.fspath(path).strip():
+        raise TypeError("path is empty; pass a file or job_id")
     if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
         raise TypeError("run_index, case_id and other_raw are only valid with job_id")
 

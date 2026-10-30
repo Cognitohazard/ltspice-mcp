@@ -153,6 +153,7 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
     )
     path: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Analyze a file this server did not run: a .raw, read with the .log "
             "of its name, or a .log alone for its .meas results. Its rows carry "
@@ -180,11 +181,11 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
     def is_log(self) -> bool:
         """``path`` names a log, read alone; any other path names a RAW, read
         with the ``.log`` of its name."""
-        return bool(self.path) and _names_a_log(str(self.path))
+        return self.path is not None and _names_a_log(self.path)
 
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
-        if bool(self.job_id) == bool(self.path):
+        if (self.job_id is None) == (self.path is None):
             raise ValueError("provide exactly one of job_id or path")
         if self.is_log and self.plot_index is not None:
             raise ValueError("a .log path does not select a RAW plot")
@@ -995,7 +996,7 @@ async def _resolve_sources(
     observations: list[Observation] = []
     for source_input in inputs:
         imported_path = source_input.path
-        if imported_path:
+        if imported_path is not None:
             requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
             for index in sorted(requested_indices - {0}):
                 missing.append(
@@ -1054,11 +1055,7 @@ async def _resolve_sources(
             )
             observations.append(
                 Observation(
-                    code=(
-                        "raw_path_without_deck_provenance"
-                        if not source_input.is_log
-                        else "log_path_without_deck_provenance"
-                    ),
+                    code="path_without_deck_provenance",
                     kind="provenance",
                     detail=(
                         f"Source {source_input.label!r} is an imported result path; "

@@ -662,7 +662,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 225 characters for the attached analyze block's
     # other_raw, so a job can measure its FRA results as its cases finish, as
     # analyze_results can afterwards. Measured 16,882.
-    "run_experiments": 16900,
+    # Raised by about 15 characters for minLength on circuits[].path: an
+    # empty path names no file. Measured 16,910.
+    "run_experiments": 16920,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -752,7 +754,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # reads a case's FRA results or a transient's operating point by job and
     # case, as analyze_results does, where only their path could. Measured
     # 11,557.
-    "inspect": 11590,
+    # Raised by about 95 characters for minLength on each query's path (six
+    # queries take one): an empty path names no file. Measured 11,631.
+    "inspect": 11640,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -779,7 +783,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # region, optionally dragging attached wires. Most of it is the op's
     # structure (seven selectors, a region and a wire shape); the descriptions
     # are a line each. Measured 14,768.
-    "edit_schematic": 14775,
+    # Raised by about 15 characters for minLength on path: an empty path names
+    # no file. Measured 14,781.
+    "edit_schematic": 14790,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
@@ -806,7 +812,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # quality check now reports on a netlist and on a sheet: an edit that set
     # one copy left the other behind, and nothing but a reference compare
     # showed it. Named for the reason the others are. Measured 5,223.
-    "verify_circuit": 5230,
+    # Raised by about 15 characters for minLength on path: an empty path names
+    # no file. Measured 5,238.
+    "verify_circuit": 5245,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

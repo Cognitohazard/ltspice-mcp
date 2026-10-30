@@ -12,7 +12,7 @@ from __future__ import annotations
 import functools
 import json
 from collections import defaultdict
-from collections.abc import Set
+from collections.abc import Iterator, Set
 from typing import Any
 
 import pytest
@@ -115,6 +115,26 @@ def test_a_shared_argument_has_one_schema(name: str):
     if ignored:
         # A known difference that has gone must leave this table too.
         assert len(_shapes(uses)) > 1, f"{name} no longer differs; drop it here"
+
+
+def _every(node: dict[str, Any], name: str, where: str) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Each schema of an argument called ``name`` under ``node``, in every
+    branch of every union, where ``_arguments`` keeps one per location."""
+    for branch in _branches(node):
+        for key, schema in (branch.get("properties") or {}).items():
+            if key == name:
+                yield f"{where}.{key}", schema
+            yield from _every(schema, name, f"{where}.{key}")
+        if isinstance(branch.get("items"), dict):
+            yield from _every(branch["items"], name, f"{where}[]")
+
+
+def test_every_file_argument_is_a_path_that_is_never_empty():
+    """A file argument is named path, and an empty one names no file."""
+    assert not {"raw_file", "raw_path", "log_path"} & set(_shared_arguments())
+    paths = [use for tool, schema in _published().items() for use in _every(schema, "path", tool)]
+    assert len(paths) == 11
+    assert [where for where, schema in paths if schema.get("minLength") != 1] == []
 
 
 def test_a_step_is_chosen_by_the_same_selector_everywhere():

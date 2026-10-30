@@ -95,7 +95,7 @@ def test_analysis_measurements_no_raw_and_null_identity(state_no_sim, work_dir, 
     assert manifest["raw_present"] is False
     assert manifest["log_present"] is True and manifest["console_present"] is False
     assert any(
-        observation["code"] == "log_path_without_deck_provenance"
+        observation["code"] == "path_without_deck_provenance"
         for observation in reply["observations"]
     )
     stored = result_store.load(reply["result_set_id"], working_dir=work_dir)

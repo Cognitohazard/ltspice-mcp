@@ -122,12 +122,10 @@ def _direct_source(
     """The source a direct call names, refusing an ambiguous or empty pair.
 
     A user-supplied ``path`` is untrusted input → validated via
-    ``safe_path``. Truthiness, not identity: an empty/whitespace path
-    (StrictModel strips to "") must count as absent, else it slips past and
-    safe_path("") resolves to the working dir → a confusing "not a valid .raw"
-    error downstream.
+    ``safe_path``. The input model refuses an empty path or job_id, so each
+    is either a value or absent.
     """
-    if bool(path) == bool(job_id):
+    if (path is None) == (job_id is None):
         # Complete redirect, so no generic hint: the analysis tools read an
         # existing result — a caller holding only a netlist runs it first.
         raise ResultError(
@@ -159,7 +157,11 @@ async def _experiment_case(
     something here, so they are refused beside a path. A path together with
     job_id is left to ``_direct_source``'s exclusivity error.
     """
-    job = await services.resolve_job_async(job_id, state) if job_id and not path else None
+    job = (
+        await services.resolve_job_async(job_id, state)
+        if job_id is not None and path is None
+        else None
+    )
     if job is not None:
         return services.experiment_run_context(
             job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
@@ -976,6 +978,7 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
 class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
     path: str | None = Field(
         default=None,
+        min_length=1,
         description="Path to a .raw result file. Pass this or job_id (a job run), not both.",
     )
     job_id: str | None = Field(

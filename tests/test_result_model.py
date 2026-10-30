@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.metrics import summary
@@ -63,25 +64,22 @@ class TestSimulationSummaryStepAware:
 class TestExactlyOneSource:
     """A direct read names a raw path OR a job, never both and never neither.
 
-    Truthiness, not identity: an empty or whitespace path is stripped to ``""``
-    by the input model, and must count as absent — otherwise it slips past and
-    resolves to the working directory, which fails later with an error about
-    the wrong thing.
+    An empty or whitespace path is stripped to ``""`` by the input model and
+    refused there, so it never reaches the resolver, where the working
+    directory it resolves to would fail later with an error about the wrong
+    thing.
     """
 
     @pytest.mark.parametrize(
         ("path", "job_id"),
-        [("x.raw", "b1"), (None, None), ("", None)],
-        ids=["both", "neither", "empty"],
+        [("x.raw", "b1"), (None, None)],
+        ids=["both", "neither"],
     )
     def test_refused(self, state_no_sim: SessionState, path: str | None, job_id: str | None):
         with pytest.raises(ResultError, match="exactly one"):
             _direct_source(path, job_id, state_no_sim)
 
     @pytest.mark.parametrize("spelling", ["", "  "])
-    def test_a_blank_path_arrives_as_absent(self, state_no_sim: SessionState, spelling: str):
-        # The input model strips whitespace, so a blank path reaches the
-        # resolver as "" — which the check above reads as no source at all.
-        args = PlotWaveformInput(path=spelling)
-        with pytest.raises(ResultError, match="exactly one"):
-            _direct_source(args.path, args.job_id, state_no_sim)
+    def test_a_blank_path_is_refused(self, spelling: str):
+        with pytest.raises(ValidationError, match="path"):
+            PlotWaveformInput(path=spelling)

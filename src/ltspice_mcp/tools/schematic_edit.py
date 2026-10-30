@@ -182,7 +182,7 @@ class EditViewCursors(StrictModel):
 
 
 class EditSchematicInput(ToolInput):
-    path: str = Field(description="Path to the .asc schematic (created if absent).")
+    path: str = Field(min_length=1, description="Path to the .asc schematic (created if absent).")
     base: Literal["existing", "blank"] = Field(
         default="existing",
         description=(
