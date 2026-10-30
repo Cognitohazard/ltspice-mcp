@@ -1,10 +1,11 @@
 """Which points of a sheet are one net, by the rules LTspice's netlister applies.
 
-``partition`` takes a sheet's pins, labels and wire segments as plain
-coordinates and returns a :class:`NetPartition`: every pin, label and wire end
-grouped by the wiring that joins it. This is the one place those rules are
-written down, for the editor that refuses a wrong connection, the checker that
-reports one, and the trace that explains one.
+``nets_by_ltspice`` takes a sheet's pins, labels and wires and returns its
+nets as a :class:`~ltspice_mcp.lib.nets.Nets`, every rule below applied. This
+is the one place those rules are written down, for the editor that refuses a
+wrong connection, the checker that reports one, and the trace that explains
+one. ``Nets`` holds no LTspice rule (``lib/nets.py``), so another schematic
+tool's rules would go in a builder of their own.
 
 The rules, each recorded from the ``-netlist`` export of LTspice 26 and of
 LTspice XVII (the ``connectivity`` cases; ``docs/TESTING.md``, "Recorded
@@ -32,10 +33,12 @@ short, two labels of one name are not). ``label_folded_nets`` applies it on
 top, and ``signature`` reduces a sheet to the pin groups and names a netlist
 would show, so two drawings of one circuit compare equal.
 
-Two of the rules are in ``signature`` alone, because a partition is by
-coordinate and cannot hold them: the wire LTspice leaves out between two
-pins of one part when nothing else is on it, and the pins of one part that
-share a point.
+``partition`` (with :class:`NetPartition`, ``label_folded_nets``,
+``NamedNets`` and ``net_members``) groups the same points by coordinate. It
+cannot hold two of the rules, the wire LTspice leaves out between two pins of
+one part when nothing else is on it and the pins of one part that share a
+point, and is kept only until its readers move to ``nets_by_ltspice``. New code
+reads ``Nets``.
 
 Nothing here reads a file or a symbol, and nothing depends on the event loop.
 """
@@ -45,100 +48,39 @@ from __future__ import annotations
 import itertools
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from typing import NamedTuple
 
-Point = tuple[int, int]
-Segment = tuple[Point, Point]
+from ltspice_mcp.lib.nets import (
+    DroppedRun,
+    LabelAt,
+    Nets,
+    PinAt,
+    Point,
+    Segment,
+    SegmentIndex,
+    fold_by_name,
+    point_on_segment,
+)
+
+# A point on a wire need not be at its ends, nor the wire horizontal or
+# vertical: LTspice draws diagonal wires and connects a pin or label anywhere
+# along one, as on any other wire (``point_on_segment``).
 
 
-def point_on_segment(point: Point, v1: Point, v2: Point) -> bool:
-    """True iff ``point`` lies on the wire segment ``v1 → v2``, ends included.
-
-    A wire need not be horizontal or vertical: LTspice draws diagonal ones and
-    connects a pin or label that sits on one anywhere along its length, as it
-    does on any other wire.
-    """
-    px, py = point
-    x1, y1 = v1
-    x2, y2 = v2
-    if (x2 - x1) * (py - y1) != (y2 - y1) * (px - x1):
-        return False
-    return min(x1, x2) <= px <= max(x1, x2) and min(y1, y2) <= py <= max(y1, y2)
+def build_on_wire_predicate(segments: Iterable[Segment]) -> Callable[[Point], bool]:
+    """``on_wire(point)``: whether ``point`` lies on any of ``segments``, ends
+    included, with each lookup reading only the wires on the point's own row
+    or column (:class:`~ltspice_mcp.lib.nets.SegmentIndex`)."""
+    return SegmentIndex((segment, None) for segment in segments).touches
 
 
-def build_on_wire_predicate(
-    segments: list[tuple[tuple[int, int], tuple[int, int]]],
-) -> Callable[[tuple[int, int]], bool]:
-    """Return an ``on_wire(coord)`` predicate with the same semantics as
-    ``point_on_segment`` but O(1)-amortised per query.
-
-    The naive ``any(point_on_segment(coord, *seg) for seg in segments)``
-    scan is O(segments) per coord; calling it once per pin makes a pass
-    over a sheet's pins O(pins × segments), which becomes the dominant
-    cost during a long ``add_component`` build. Bucketing
-    horizontal segments by row and vertical by column collapses each query
-    to the handful of segments sharing that row/column.
-    """
-    endpoints: set[tuple[int, int]] = set()
-    horiz: dict[int, list[tuple[int, int]]] = {}
-    vert: dict[int, list[tuple[int, int]]] = {}
-    diagonal: list[tuple[tuple[int, int], tuple[int, int]]] = []
-    for (x1, y1), (x2, y2) in segments:
-        endpoints.add((x1, y1))
-        endpoints.add((x2, y2))
-        if y1 == y2 and x1 != x2:
-            horiz.setdefault(y1, []).append((min(x1, x2), max(x1, x2)))
-        elif x1 == x2 and y1 != y2:
-            vert.setdefault(x1, []).append((min(y1, y2), max(y1, y2)))
-        elif x1 != x2:
-            # A sheet rarely has one, so each is tested on its own. A point
-            # on its interior is on the wire, as LTspice has it.
-            diagonal.append(((x1, y1), (x2, y2)))
-        # A wire of no length is its one point, which the ends cover.
-
-    def on_wire(coord: tuple[int, int]) -> bool:
-        if coord in endpoints:
-            return True
-        px, py = coord
-        if any(xmin <= px <= xmax for xmin, xmax in horiz.get(py, ())):
-            return True
-        if any(ymin <= py <= ymax for ymin, ymax in vert.get(px, ())):
-            return True
-        return any(point_on_segment(coord, a, b) for a, b in diagonal)
-
-    return on_wire
-
-
-def build_wire_counter(
-    segments: list[tuple[tuple[int, int], tuple[int, int]]],
-) -> Callable[[tuple[int, int]], int]:
-    """Return ``count(coord)``: how many of ``segments`` the point lies on, ends included.
-
-    The same test as ``point_on_segment``, with horizontal and vertical wires
-    looked up by their row or column. A wire end that touches another wire is a
-    point two wires pass through.
-    """
-    horiz: dict[int, list[tuple[int, int]]] = {}
-    vert: dict[int, list[tuple[int, int]]] = {}
-    other: list[tuple[tuple[int, int], tuple[int, int]]] = []
-    for (x1, y1), (x2, y2) in segments:
-        if y1 == y2 and x1 != x2:
-            horiz.setdefault(y1, []).append((min(x1, x2), max(x1, x2)))
-        elif x1 == x2 and y1 != y2:
-            vert.setdefault(x1, []).append((min(y1, y2), max(y1, y2)))
-        else:
-            other.append(((x1, y1), (x2, y2)))
-
-    def count(coord: tuple[int, int]) -> int:
-        px, py = coord
-        return (
-            sum(1 for lo, hi in horiz.get(py, ()) if lo <= px <= hi)
-            + sum(1 for lo, hi in vert.get(px, ()) if lo <= py <= hi)
-            + sum(1 for a, b in other if point_on_segment(coord, a, b))
-        )
-
-    return count
+def build_wire_counter(segments: Iterable[Segment]) -> Callable[[Point], int]:
+    """``count(point)``: how many of ``segments`` the point lies on, ends
+    included. A wire end that touches another wire is a point two wires pass
+    through."""
+    index = SegmentIndex((segment, None) for segment in segments)
+    return lambda point: len(index.at(point))
 
 
 def crossing_points(segments: Iterable[Segment]) -> list[Point]:
@@ -186,10 +128,27 @@ def partition(
     caller checking a route it has not drawn yet lists its segments with the
     sheet's own.
 
-    The work is in finding which points lie on which wire. Points are indexed
-    by row and by column, so a horizontal or vertical wire looks only at the
-    points on its own line; a diagonal one, which a sheet rarely has, looks at
-    all of them.
+    The work is in finding which points lie on which wire (:func:`_join`).
+    """
+    pin_owners: dict[Point, list[tuple[str, str]]] = {}
+    for coord, owner in pins:
+        pin_owners.setdefault(coord, []).append(owner)
+    label_texts: dict[Point, set[str]] = {}
+    for coord, text in labels:
+        label_texts.setdefault(coord, set()).add(text)
+    find, members = _join([*pin_owners, *label_texts], list(segments))
+    return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
+
+
+def _join(
+    points: Iterable[Point], wires: list[Segment]
+) -> tuple[Callable[[Point], Point], dict[Point, set[Point]]]:
+    """Group ``points`` and the wires' ends by the wires that join them: each
+    point's representative, and every point by representative.
+
+    Points are indexed by row and by column, so a horizontal or vertical wire
+    looks only at the points on its own line; a diagonal one, which a sheet
+    rarely has, looks at all of them.
     """
     parent: dict[Point, Point] = {}
 
@@ -208,18 +167,10 @@ def partition(
             parent[ra] = rb
 
     interest: set[Point] = set()
-    pin_owners: dict[Point, list[tuple[str, str]]] = {}
-    for coord, owner in pins:
+    for coord in points:
         interest.add(coord)
         find(coord)
-        pin_owners.setdefault(coord, []).append(owner)
-    label_texts: dict[Point, set[str]] = {}
-    for coord, text in labels:
-        interest.add(coord)
-        find(coord)
-        label_texts.setdefault(coord, set()).add(text)
 
-    wires = list(segments)
     for v1, v2 in wires:
         interest.add(v1)
         interest.add(v2)
@@ -259,8 +210,7 @@ def partition(
     members: dict[Point, set[Point]] = {}
     for p in parent:
         members.setdefault(find(p), set()).add(p)
-
-    return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
+    return find, members
 
 
 #: The name of ground. A ground flag is a label like any other to the
@@ -316,27 +266,15 @@ def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
     here, names compared as :func:`name_key` has them. Two coordinates are on
     the same netlist node iff this returns the same representative for both.
     """
-    parent: dict[Point, Point] = {}
-
-    def find(r: Point) -> Point:
-        parent.setdefault(r, r)
-        while parent[r] != r:
-            parent[r] = parent[parent[r]]
-            r = parent[r]
-        return r
-
-    first_root: dict[str, Point] = {}
-    for root, coords in part.members.items():
-        for coord in coords:
-            for text in part.label_texts.get(coord, ()):
-                key = name_key(text)
-                if key not in first_root:
-                    first_root[key] = root
-                    continue
-                ra, rb = find(first_root[key]), find(root)
-                if ra != rb:
-                    parent[ra] = rb
-
+    find = fold_by_name(
+        (
+            (root, text)
+            for root, coords in part.members.items()
+            for coord in coords
+            for text in part.label_texts.get(coord, ())
+        ),
+        name_key,
+    )
     return lambda coord: find(part.root(coord))
 
 
@@ -527,7 +465,7 @@ def same_instance_dropped_segments(
 
 def _runs_and_drops(
     segments: Iterable[tuple[int, int, int, int]],
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
+    pin_owners: Mapping[Point, Sequence[tuple[Hashable, str]]],
     labels: Iterable[Point],
 ) -> tuple[list[tuple[int, int, int, int]], list[dict]]:
     """The collinear-merged runs of ``segments``, cut at every pin and label,
@@ -538,7 +476,7 @@ def _runs_and_drops(
 
 def _dropped_among(
     runs: list[tuple[int, int, int, int]],
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
+    pin_owners: Mapping[Point, Sequence[tuple[Hashable, str]]],
 ) -> list[dict]:
     """:func:`same_instance_dropped_segments` for runs that are already merged."""
     dropped: list[dict] = []
@@ -572,14 +510,11 @@ def signature(
     """The circuit a sheet draws, as a netlist would show it: each net as the
     pins on it and the names it carries.
 
-    Every rule above is applied: wiring by :func:`partition`, same-named labels
-    as one net, the wire LTspice leaves out because it runs straight between
-    two pins of one part (:func:`same_instance_dropped_segments`), and a
-    part's pins that share a point with no wire or label on it, of which only
-    the highest in SpiceOrder touches anything. A net with no pin on it is
-    left out, since nothing in a netlist shows it. Names are given as
-    :func:`name_key` has them, so two spellings of one name, or of ground,
-    compare equal.
+    Every rule above is applied (:func:`nets_by_ltspice`), same-named labels as
+    one net among them. Parts are told apart by reference, which on any sheet
+    LTspice netlists names one part. A net with no pin on it is left out, since
+    nothing in a netlist shows it. Names are given as :func:`name_key` has
+    them, so two spellings of one name, or of ground, compare equal.
 
     Two sheets with equal signatures connect the same pins and name the same
     nets, wherever their parts and wires are drawn, so an edit meant to change
@@ -587,37 +522,81 @@ def signature(
     those of :func:`partition`, with each part's pins listed in SpiceOrder,
     as a symbol gives them.
     """
-    pins = list(pins)
-    labels = list(labels)
-    owners: dict[Point, list[tuple[str, str]]] = {}
-    for coord, owner in pins:
-        owners.setdefault(coord, []).append(owner)
-    runs, drops = _runs_and_drops(
-        [(a[0], a[1], b[0], b[1]) for a, b in segments],
-        owners,
-        (coord for coord, _text in labels),
-    )
-    dropped = {drop["segment"] for drop in drops}
-    netlisted = [
-        ((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in dropped
+    parts: dict[str, int] = {}
+    placed = [
+        PinAt(point, parts.setdefault(reference, len(parts)), order, reference, name)
+        for order, (point, (reference, name)) in enumerate(pins)
     ]
-    part = partition(pins, labels, netlisted)
-    net_of = label_folded_nets(part)
-    on_net: dict[Point, set[tuple[str, str]]] = {}
-    names: dict[Point, set[str]] = {}
-    alone: list[tuple[str, str]] = []
-    for coord, at in part.pin_owners.items():
-        touching = at
-        if coord not in part.label_texts and part.members[part.root(coord)] == {coord}:
-            # Nothing but pins here. Each part's last-listed pin is the one
-            # that touches the others; its other pins on the point touch
-            # nothing, not even each other.
-            last = {ref: (ref, name) for ref, name in at}
-            touching = list(last.values())
-            alone += [pin for pin in at if last[pin[0]] != pin]
-        on_net.setdefault(net_of(coord), set()).update(touching)
-    for coord, texts in part.label_texts.items():
-        names.setdefault(net_of(coord), set()).update(name_keys(texts))
-    nets = {(frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()}
-    nets |= {(frozenset({pin}), frozenset()) for pin in alone}
-    return frozenset(nets)
+    named = [LabelAt(point, index, text) for index, (point, text) in enumerate(labels)]
+    nets = nets_by_ltspice(placed, named, list(segments))
+    on_net: dict[int, set[tuple[str, str]]] = {}
+    for pin in placed:
+        on_net.setdefault(nets.folded(nets.of_pin(pin)), set()).add((pin.reference, pin.name))
+    names: dict[int, set[str]] = {}
+    for label in named:
+        names.setdefault(nets.folded(nets.of_label(label)), set()).add(nets.name_key(label.text))
+    return frozenset(
+        (frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()
+    )
+
+
+# ---------------------------------------------------------------------------
+# LTspice's nets
+# ---------------------------------------------------------------------------
+
+
+def nets_by_ltspice(
+    pins: Sequence[PinAt], labels: Sequence[LabelAt], wires: Sequence[Segment]
+) -> Nets:
+    """The nets LTspice's netlister makes of a sheet with ``pins``, ``labels``
+    and ``wires``, by every rule of this module.
+
+    Wires are merged into runs as LTspice merges them, cut at every pin, label
+    and junction, and the runs it drops join nothing; a point on one touches
+    the nets of both its pins, because anything put there keeps the run. Of
+    one part's pins on a point with no wire or label there, only the last in
+    SpiceOrder joins what else is on the point. Names compare as
+    :func:`name_key` has them.
+    """
+    pins_at: dict[Point, list[PinAt]] = {}
+    for pin in pins:
+        pins_at.setdefault(pin.point, []).append(pin)
+    labelled = {label.point for label in labels}
+    owners = {point: [(pin.part, pin.name) for pin in here] for point, here in pins_at.items()}
+    runs, drops = _runs_and_drops([(a[0], a[1], b[0], b[1]) for a, b in wires], owners, labelled)
+    gone = {drop["segment"] for drop in drops}
+    kept = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in gone]
+    find, members = _join([*pins_at, *labelled], kept)
+    point_nets = {
+        point: net for net, root in enumerate(sorted(members)) for point in members[root]
+    }
+    fresh = itertools.count(len(members))
+    pin_nets: dict[PinAt, int] = {}
+    for point, here in pins_at.items():
+        last: dict[int, PinAt] = {}
+        if len(here) > 1 and point not in labelled and len(members[find(point)]) == 1:
+            # Nothing but pins here: each part's last pin in SpiceOrder touches
+            # the others, and its other pins on the point touch nothing.
+            last = {pin.part: pin for pin in sorted(here, key=lambda one: one.order)}
+        for pin in here:
+            alone = bool(last) and last[pin.part] is not pin
+            pin_nets[pin] = next(fresh) if alone else point_nets[point]
+
+    def end(point: Point, part: int, name: str) -> PinAt:
+        return next(pin for pin in pins_at[point] if pin.part == part and pin.name == name)
+
+    dropped = [
+        DroppedRun(
+            ((x1, y1), (x2, y2)),
+            (
+                end((x1, y1), drop["ref"], drop["pins"][0]),
+                end((x2, y2), drop["ref"], drop["pins"][1]),
+            ),
+        )
+        for drop in drops
+        for x1, y1, x2, y2 in [drop["segment"]]
+    ]
+    segments = [(run, (point_nets[run[0]],)) for run in kept]
+    segments += [(run.segment, tuple(pin_nets[pin] for pin in run.ends)) for run in dropped]
+    label_nets = {label: point_nets[label.point] for label in labels}
+    return Nets(pin_nets, label_nets, segments, dropped, name_key)

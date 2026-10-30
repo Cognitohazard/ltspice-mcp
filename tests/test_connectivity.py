@@ -21,13 +21,17 @@ from ltspice_mcp.lib.connectivity import (
     NetPartition,
     Point,
     Segment,
+    _runs_and_drops,  # pyright: ignore[reportPrivateUsage]
     build_on_wire_predicate,
     label_folded_nets,
+    name_key,
     net_members,
+    nets_by_ltspice,
     partition,
     point_on_segment,
     signature,
 )
+from ltspice_mcp.lib.nets import LabelAt, PinAt
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 from ltspice_mcp.lib.symbol_library import find_symbol
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
@@ -418,3 +422,103 @@ class TestSignature:
         assert signature(R1, [], around) == frozenset(
             {(frozenset({("R1", "A"), ("R1", "B")}), frozenset())}
         )
+
+
+# ---------------------------------------------------------------------------
+# Nets over a sheet's pins and labels
+# ---------------------------------------------------------------------------
+
+
+def reference_signature(pins: Pins, labels: Labels, segments: list[Segment]):
+    """The signature as it was first written, on the exhaustive
+    :func:`reference_partition`: every pin on its point's wired net, then,
+    where a point holds nothing but pins, each part's last pin left there and
+    its others on nothing.
+
+    It checks how ``nets_by_ltspice`` puts the rules together; the rules
+    themselves are held to LTspice's exports in
+    ``test_recorded_ltspice_schematics.py``. It goes with ``partition`` once no
+    reader uses that."""
+    owners: dict[Point, list[tuple[str, str]]] = {}
+    for coord, owner in pins:
+        owners.setdefault(coord, []).append(owner)
+    runs, drops = _runs_and_drops(
+        [(a[0], a[1], b[0], b[1]) for a, b in segments], owners, [p for p, _ in labels]
+    )
+    dropped = {drop["segment"] for drop in drops}
+    kept = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in dropped]
+    part = reference_partition(pins, labels, kept)
+    net_of = label_folded_nets(part)
+    on_net: dict[Point, set[tuple[str, str]]] = {}
+    alone: list[tuple[str, str]] = []
+    for coord, at in part.pin_owners.items():
+        touching = at
+        if coord not in part.label_texts and part.members[part.root(coord)] == {coord}:
+            last = {ref: (ref, name) for ref, name in at}
+            touching = list(last.values())
+            alone += [pin for pin in at if last[pin[0]] != pin]
+        on_net.setdefault(net_of(coord), set()).update(touching)
+    names: dict[Point, set[str]] = {}
+    for coord, texts in part.label_texts.items():
+        names.setdefault(net_of(coord), set()).update(name_key(text) for text in texts)
+    nets = {(frozenset(group), frozenset(names.get(net, ()))) for net, group in on_net.items()}
+    return frozenset(nets | {(frozenset({pin}), frozenset()) for pin in alone})
+
+
+class TestTheSignatureIsTheReferenceCircuit:
+    @pytest.mark.parametrize("path", SUITE_SHEETS, ids=suite_name)
+    def test_on_every_sheet_in_the_suite(self, path: Path) -> None:
+        inputs = sheet_inputs(path)
+        assert signature(*inputs) == reference_signature(*inputs)
+
+    @pytest.mark.parametrize("seed", range(200))
+    def test_on_generated_sheets(self, seed: int) -> None:
+        inputs = generated_sheet(seed)
+        assert signature(*inputs) == reference_signature(*inputs)
+
+
+#: R1's two pins, at either end of a wire straight between them, or (with
+#: ``STACKED``) both on one point.
+TIE_A = PinAt((0, 0), 1, 0, "R1", "1")
+TIE_B = PinAt((0, 96), 1, 1, "R1", "2")
+STACKED = PinAt((0, 0), 1, 1, "R1", "2")
+
+
+class TestNetsOverTerminals:
+    def test_a_wire_straight_between_two_pins_of_one_part_joins_nothing(self) -> None:
+        nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 96))])
+        assert nets.of_pin(TIE_A) != nets.of_pin(TIE_B)
+        assert [run.ends for run in nets.dropped] == [(TIE_A, TIE_B)]
+
+    def test_a_point_on_a_dropped_run_is_on_the_nets_of_both_its_pins(self) -> None:
+        nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 48)), ((0, 48), (0, 96))])
+        assert set(nets.nets_at((0, 48))) == {nets.of_pin(TIE_A), nets.of_pin(TIE_B)}
+
+    def test_a_label_on_the_run_keeps_it(self) -> None:
+        nets = nets_by_ltspice([TIE_A, TIE_B], [LabelAt((0, 48), 0, "m")], [((0, 0), (0, 96))])
+        assert nets.of_pin(TIE_A) == nets.of_pin(TIE_B)
+        assert nets.dropped == ()
+
+    def test_stacked_pins_of_one_part_alone_on_a_point_are_apart(self) -> None:
+        other = PinAt((0, 0), 2, 0, "R2", "1")
+        nets = nets_by_ltspice([TIE_A, STACKED, other], [], [])
+        assert nets.of_pin(STACKED) == nets.of_pin(other) != nets.of_pin(TIE_A)
+        assert len(nets.nets_at((0, 0))) == 2
+
+    def test_two_parts_that_share_a_reference_stay_two_parts(self) -> None:
+        one, two = PinAt((0, 0), 1, 0, "R1", "1"), PinAt((0, 96), 2, 0, "R1", "1")
+        nets = nets_by_ltspice([one, two], [], [((0, 0), (0, 96))])
+        assert nets.of_pin(one) == nets.of_pin(two)
+        assert nets.dropped == ()
+
+    def test_a_wire_end_merged_into_a_run_is_on_its_net(self) -> None:
+        """An in-line waypoint is merged away, and still on its wire's net."""
+        label = LabelAt((0, 0), 0, "a")
+        nets = nets_by_ltspice([], [label], [((0, 0), (0, 48)), ((0, 48), (0, 96))])
+        assert nets.nets_at((0, 48)) == (nets.of_label(label),)
+
+    def test_a_wire_of_no_length_on_a_crossing_joins_nothing(self) -> None:
+        across, down = LabelAt((0, 48), 0, "a"), LabelAt((48, 0), 1, "b")
+        wires = [((0, 48), (96, 48)), ((48, 0), (48, 96)), ((48, 48), (48, 48))]
+        nets = nets_by_ltspice([], [across, down], wires)
+        assert nets.of_label(across) != nets.of_label(down)
