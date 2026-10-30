@@ -970,10 +970,13 @@ class ApiMethodsMixin(ABC):
             _collect_jobs,
             raw_page=raw_page,
             arguments=arguments,
-            # A cancel is the one action an interrupt must not abandon halfway.
-            # A collected list keeps paging until it is complete, so an
-            # interrupt has to reach it the way it reaches a dwelling wait.
-            cancelable=lambda request: request.action not in {"cancel", "resume"},
+            # A cancel, a resume and a copy beside a sheet are the actions an
+            # interrupt must not abandon halfway. A collected list keeps paging
+            # until it is complete, so an interrupt has to reach it the way it
+            # reaches a dwelling wait.
+            cancelable=lambda request: (
+                request.action not in {"cancel", "resume", "place_beside_sheet"}
+            ),
             cancel_on_interrupt=lambda request: (
                 request.action == "wait" or (not raw_page and request.action == "list")
             ),

@@ -466,7 +466,7 @@ def write_beside(results: Path, plot_name: str, panes: Sequence[Sequence[str]]) 
     analysis = analysis_of(plot_name)
     if analysis is None:
         return Kept(
-            f"no traces are drawn, because how LTspice reads the plot settings of a "
+            f"No traces are drawn, because how LTspice reads the plot settings of a "
             f"{plot_name} plot is not recorded"
         )
     target = plot_settings_path(results)

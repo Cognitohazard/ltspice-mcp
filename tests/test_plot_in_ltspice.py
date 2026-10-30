@@ -1158,3 +1158,74 @@ async def test_an_ltspice_that_cannot_be_started_leaves_a_sheets_results_alone(
     assert shown["shown"] is False
     assert shown["reason"] == "LTspice could not be started: access is denied"
     assert not exists(sheet.with_suffix(".raw"))
+
+
+# ---------------------------------------------------------------------------
+# A plot with no sampled axis
+# ---------------------------------------------------------------------------
+
+#: What the reply says of the traces LTspice draws for a plot with no axis.
+NO_TRACES_NAMED = (
+    "No traces are named for it: how LTspice reads the plot settings of a plot with "
+    "no sampled axis is not recorded."
+)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_sheets_stepped_operating_point_is_opened_from_the_sheet_without_a_chart(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path, build: str
+):
+    """A stepped .op holds one point a step and no axis to chart, and the
+    window takes it as it is: it goes beside the sheet and is opened from it,
+    and the reply says that nothing was charted."""
+    sheet = a_sheet(work_dir)
+    raw = rec.stage_run(build, "raw/step_op", work_dir / "runs" / "stepped")
+    job = make_experiment_job(state_no_sim, job_id="stepped", raw=raw)
+    job.cases[0].circuit_path = sheet
+    world = tmp_path / "world.json"
+    one_window(state_no_sim, world)
+
+    data = await plot(state_no_sim, job_id="stepped", in_ltspice=True)
+
+    assert data["ltspice"] == {
+        "shown": True,
+        "sheet": str(sheet),
+        "results": str(sheet.with_suffix(".raw")),
+        "plot_settings": None,
+        "panes": [],
+        "tied": True,
+        "pid": PID,
+        "version": "26.1.1",
+        "note": f"{TIED} {NO_TRACES_NAMED}",
+    }
+    assert read(sheet.with_suffix(".raw")) == read(raw)
+    assert read(sheet.with_suffix(".log")) == read(raw.with_suffix(".log"))
+    assert not exists(sheet.with_suffix(".plt"))
+    assert read_world(world)["windows"][0]["commands"] == ["Visible Traces"]
+    assert "path" not in data
+    (no_chart,) = [o for o in data["observations"] if o["code"] == "no_chart"]
+    assert "one point a step, the stepped v first" in no_chart["detail"]
+    assert "not recorded" in no_chart["detail"]
+
+
+async def test_no_plot_settings_are_written_for_a_plot_with_no_axis(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """A stepped .ac at one frequency is an AC plot, whose section LTspice's
+    plot settings have, but it holds one point a step: nothing is written into
+    that section, and settings already beside the results are left alone."""
+    raw = rec.stage_run(rec.BUILDS[0], "raw/step_ac_one_freq", work_dir)
+    earlier = with_panes(PlotSettings(), "ac", [PlotPane(("V(out)",), DEFAULT_SCALES["ac"])])
+    write(raw.with_suffix(".plt"), write_plot_settings(earlier))
+    before = read(raw.with_suffix(".plt"))
+    world = tmp_path / "world.json"
+    one_window(state_no_sim, world)
+
+    data = await plot(state_no_sim, path=str(raw), in_ltspice=True)
+
+    shown = data["ltspice"]
+    assert shown["shown"] is True
+    assert shown["plot_settings"] is None
+    assert shown["note"] == NO_TRACES_NAMED
+    assert read(raw.with_suffix(".plt")) == before
+    assert read_world(world)["windows"][0]["shown"] == [str(raw)]

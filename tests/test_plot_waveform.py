@@ -17,7 +17,7 @@ import pytest
 from mcp import types
 from pydantic import ValidationError
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import desktop, services
 from ltspice_mcp.lib.ac_analysis import prepare_ac_arrays
 from ltspice_mcp.lib.metrics import guarded_axis
@@ -30,6 +30,7 @@ from ltspice_mcp.tools.analysis import (
     _panel,
     handle_plot_waveform,
 )
+from tests import _ltspice_recorded as rec
 from tests.conftest import (
     make_experiment_job,
     needs_raster,
@@ -418,11 +419,40 @@ class TestErrors:
             )
 
     async def test_op_raw_refused(self, state_no_sim: SessionState, work_dir: Path):
+        """The refusal says what the plot holds and where it can be read, with
+        no generic hint to check that the run finished: it did."""
         raw = stage_recorded_fixture(work_dir, "op_extreme_node")
-        with pytest.raises(ResultError, match="inspect results table"):
+        with pytest.raises(NoAxisError) as refused:
             await handle_plot_waveform(
                 PlotWaveformInput(path=str(raw), signals="all"), state_no_sim
             )
+        assert str(refused.value).startswith(
+            "This plot has no sampled axis to chart: its op results are one table of values."
+        )
+        assert "inspect(kind='results', view='table')" in str(refused.value)
+        assert "in_ltspice=true" in str(refused.value)
+        assert refused.value.show_hint is False
+
+    @pytest.mark.parametrize(
+        ("build", "case_id", "holds"),
+        [
+            *(
+                (build, "raw/step_op", "it holds one point a step, the stepped v first")
+                for build in rec.BUILDS
+            ),
+            (
+                "ltspice26",
+                "raw/step_tran_op_raw.op",
+                "it holds one point, and nothing in it says which step that is",
+            ),
+        ],
+    )
+    async def test_a_stepped_plot_with_no_axis_is_refused_with_what_it_holds(
+        self, state_no_sim: SessionState, work_dir: Path, build: str, case_id: str, holds: str
+    ):
+        raw = rec.stage_run(build, case_id, work_dir)
+        with pytest.raises(NoAxisError, match=f"no sampled axis to chart: {holds}\\."):
+            await handle_plot_waveform(PlotWaveformInput(path=str(raw)), state_no_sim)
 
 
 # --- handler integration via recorded fixtures -----------------------------
