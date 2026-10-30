@@ -734,7 +734,7 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
         default=None,
         description="RAW path for plots/signals/table, log path for measurements/native_tables; pass this or job_id.",
     )
-    job_id: str | None = None
+    job_id: str | None = Field(default=None, min_length=1)
     run_index: int = Field(default=0, strict=True, ge=0)
     case_id: str | None = None
     prefix: str | None = Field(

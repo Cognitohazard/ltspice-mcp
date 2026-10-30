@@ -25,13 +25,7 @@ SHARED_NAMES = ("job_id", "case_id", "run_index", "plot_index", "dialect", "othe
 
 # Schema keywords a shared argument still differs by, and why, until a change
 # of its own settles them.
-KNOWN_DIFFERENCES = {
-    "job_id": (
-        {"minLength"},
-        "jobs refuses an empty job_id as it validates the call; plot_waveform, "
-        "analyze_results' sources and inspect take an empty one as absent",
-    ),
-}
+KNOWN_DIFFERENCES: dict[str, tuple[set[str], str]] = {}
 
 # analyze_results arguments the attached block does not take, and why.
 NOT_ATTACHED = {

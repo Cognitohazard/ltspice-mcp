@@ -976,26 +976,27 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
 class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
     raw_file: str | None = Field(
         default=None,
-        description="Path to .raw result file. Pass this or ``job_id`` (a job run), not both.",
+        description="Path to .raw result file. Pass this or job_id (a job run), not both.",
     )
     job_id: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Plot one run of a finished job instead of a raw_file path; pick "
-            "the run with ``run_index`` (or ``case_id`` for an experiment)."
+            "the run with run_index (or case_id for an experiment)."
         ),
     )
     run_index: int = Field(
         default=0,
         strict=True,
         ge=0,
-        description="0-based run to read when ``job_id`` is given (default 0).",
+        description="0-based run to read when job_id is given (default 0).",
     )
     case_id: str | None = Field(
         default=None,
         description=(
             "For a run_experiments job_id: the case to plot, as named in its receipt "
-            "and analysis identities (an alternative to ``run_index``)."
+            "and analysis identities (an alternative to run_index)."
         ),
     )
     signals: list[str] | Literal["all"] = Field(

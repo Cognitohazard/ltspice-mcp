@@ -139,6 +139,7 @@ class CaseSelection(NotedModel):
 class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     job_id: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Analyze the results of a job this server ran. Exactly one of "
             "job_id, raw_path or log_path. A job still running is reported under "

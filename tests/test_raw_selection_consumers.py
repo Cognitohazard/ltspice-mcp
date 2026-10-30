@@ -97,6 +97,41 @@ def test_plot_index_is_strict_on_every_input(model, payload, plot_index):
         model.model_validate({**payload, "plot_index": plot_index})
 
 
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (analyze.AnalyzeSourceInput, {"raw_path": "results.raw", "label": "selected"}),
+        (analysis.PlotWaveformInput, {"raw_file": "results.raw", "open": False}),
+        (inspect_tools.ResultsQuery, {"kind": "results", "path": "results.raw"}),
+    ],
+)
+def test_an_empty_job_id_is_refused_beside_a_path(model, payload):
+    """An empty job_id names no job, and is refused as jobs refuses it."""
+    with pytest.raises(ValidationError, match="job_id"):
+        model.model_validate({**payload, "job_id": ""})
+
+
+@pytest.mark.parametrize(
+    ("selection", "refusal"),
+    [
+        ({"other_raw": "op"}, "job_id"),
+        ({"runs": {"case_ids": ["case-0"]}}, "job_id"),
+    ],
+    ids=["other_raw", "case_ids"],
+)
+def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, selection, refusal):
+    """Taken as absent where a source was counted and as given where a case
+    selection was checked, an empty job_id let other_raw past beside a raw
+    path and failed a case selection with an internal error."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    for job_id in ({"job_id": ""}, {}):
+        with pytest.raises(ApiValidationError, match=refusal if job_id else "experiment job"):
+            SyncApi(state_no_sim).analyze_results(
+                sources=[{"raw_path": str(raw), "label": "a", **job_id, **selection}],
+                recipes=[{"metric": "summary", "key": "s"}],
+            )
+
+
 def test_api_validates_selection_before_loading(state_no_sim):
     api = SyncApi(state_no_sim)
     invalid_indices: list[Any] = [-1, True, "1", 1.0]
