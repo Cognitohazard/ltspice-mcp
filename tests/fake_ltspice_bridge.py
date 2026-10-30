@@ -81,7 +81,7 @@ def own_desktop() -> str:
 
 def silence_of(world: Path) -> Path:
     """Where this program, run against ``world``, names the tool it has gone silent on."""
-    return world.with_name(f"{world.stem}.silent.json")
+    return world.with_name(f"{world.stem}.silent")
 
 
 def _kind(path: str) -> str:
@@ -254,9 +254,8 @@ class Bridge:
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._load().get("silent_on") == name:
-            # Never answers, as a bridge that has stopped: the caller's deadline
-            # ends it. It says so first, for a test that waits for that.
-            silence_of(self._world).write_text(json.dumps({"silent_on": name}), encoding="utf-8")
+            # Never answers, as a bridge that has stopped: the caller's deadline ends it.
+            silence_of(self._world).write_text(name, encoding="utf-8")
             threading.Event().wait()
         if name == "where_am_i":
             return {"desktop": own_desktop()}

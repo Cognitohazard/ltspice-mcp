@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import shutil
 import sys
 from collections.abc import Coroutine
@@ -104,22 +103,17 @@ class Window:
         self._state.open_windows = OpenWindows(fake_command(self._world), timeout=seconds)
 
     async def silent_until_the_deadline(self, call: Coroutine[Any, Any, dict]) -> dict:
-        """Run ``call`` with the bridge's deadline passing once the bridge has
-        gone silent on the tool the world names (``silent_on``), and not before.
-
-        The sessions' deadline is the liveness cap, so every answer the bridge
-        gives before it goes silent is waited for however long it takes. Only
-        the request it never answers meets the deadline, and that passes on
-        the bridge's word that it is silent (``silence_of``), not after a time.
-        """
+        """Run ``call`` under the liveness cap, and have the session's deadline
+        pass once the bridge has gone silent (``silence_of``), and not before."""
         windows = _KeptSessions(fake_command(self._world))
         self._state.open_windows = windows
         running = asyncio.create_task(call)
-        silent = written(silence_of(self._world), json.loads)
+        silent = written(silence_of(self._world), str)
         await await_until(lambda: running.done() or silent(), what="the bridge to go silent")
         if not running.done():
+            [waiting] = [session for session in windows.sessions if not session._ended]
             # What the session's watchdog does when its deadline passes.
-            await asyncio.to_thread(windows.sessions[-1]._expire)
+            await asyncio.to_thread(waiting._expire)
         return await running
 
     def closes(self) -> None:
@@ -300,12 +294,8 @@ async def test_a_new_sheet_asks_no_window(asc_state: SessionState, work_dir: Pat
 async def test_a_window_that_cannot_be_updated_is_reported_and_the_commit_stands(
     asc_state: SessionState, asc_file: Path, window: Window
 ):
-    """The bridge answers which windows have the sheet and what they hold, then
-    never answers the request that hands the window the committed sheet. Only
-    that request meets the deadline, so how quickly the bridge answers the ones
-    before it is no part of the test: raced against the deadline, they could
-    lose on a loaded machine, and the edit would report that no window could
-    be asked instead."""
+    """The bridge never answers the request that hands the window the committed
+    sheet; only that request meets the deadline, not the ones before it."""
     window.shows(asc_file, as_ltspice_reads(asc_file), silent_on="set_design_content")
     before = file_bytes(asc_file)
 
