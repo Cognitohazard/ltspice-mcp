@@ -121,7 +121,7 @@ def test_a_call_on_two_writings_of_one_sheet_has_one_key(tmp_path: Path):
         target.write_bytes(_bytes(_SHEET, newline))
         args = EditSchematicInput.model_validate(
             {
-                "target": str(target),
+                "path": str(target),
                 "expected_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 "ops": [{"op": "add_directive", "instruction": ".tran 1m"}],
             }
@@ -147,7 +147,7 @@ def test_a_file_beside_the_sheet_makes_one_key_in_either_line_ending(
         (folder / "ref.cir").write_bytes(reference)
         args = EditSchematicInput.model_validate(
             {
-                "target": str(target),
+                "path": str(target),
                 "ops": [{"op": "add_directive", "instruction": ".tran 1m"}],
             }
         )
@@ -161,7 +161,7 @@ def test_a_call_whose_reply_differs_by_platform_has_a_key_of_its_own(tmp_path: P
     target = tmp_path / "sheet.asc"
     target.write_bytes(_bytes(_SHEET))
     args = EditSchematicInput.model_validate(
-        {"target": str(target), "ops": [{"op": "add_directive", "instruction": ".op"}]}
+        {"path": str(target), "ops": [{"op": "add_directive", "instruction": ".op"}]}
     )
     resolver = suite_resolver(target)
     plain = key_of(target, target.read_bytes(), args, (tmp_path,), resolver=resolver)

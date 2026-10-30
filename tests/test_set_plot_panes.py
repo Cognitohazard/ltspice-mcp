@@ -209,7 +209,7 @@ async def test_a_trace_the_file_cannot_carry_aborts_the_batch(asc_state, sheet: 
 async def test_a_pane_with_no_trace_is_refused_by_the_model(asc_state, sheet: Path):
     with pytest.raises(ValueError, match="traces"):
         EditSchematicInput.model_validate(
-            {"target": "rc.asc", "ops": [_panes("tran", [{"traces": []}])]}
+            {"path": "rc.asc", "ops": [_panes("tran", [{"traces": []}])]}
         )
 
 

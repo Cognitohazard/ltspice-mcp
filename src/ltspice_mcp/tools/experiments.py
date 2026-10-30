@@ -168,6 +168,7 @@ class _CircuitPreparation:
 
 class ExperimentCircuit(StrictModel):
     path: str = Field(
+        min_length=1,
         description=(
             f"Deck to run: {NETLIST_SUFFIX_TEXT}, or an .asc, which LTspice exports. "
             "It is staged content-addressed at submission, so later edits to the "

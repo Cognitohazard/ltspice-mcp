@@ -34,7 +34,7 @@ def test_api_imports_measurements_with_no_raw(state_no_sim, work_dir, monkeypatc
     value = api.measurements(log)
     assert value["measurements"]["vfinal"]["values"] == [LTSPICE_TRAN_RC_VFINAL]
     value["measurements"].clear()
-    assert api.measurements(log_path=log)["measurements"]
+    assert api.measurements(path=log)["measurements"]
 
 
 @pytest.mark.parametrize(
@@ -74,7 +74,7 @@ def test_analysis_measurements_no_raw_and_null_identity(state_no_sim, work_dir, 
     log = recorded_log(work_dir)
     forbid_parent_reads(monkeypatch, log.with_suffix(".raw"))
     reply = SyncApi(state_no_sim).analyze_results(
-        sources=[{"log_path": str(log), "label": "log", "dialect": "ltspice"}],
+        sources=[{"path": str(log), "label": "log", "dialect": "ltspice"}],
         recipes=[{"metric": "measurements", "key": "meas"}],
         include={
             "per_run": True,
@@ -95,7 +95,7 @@ def test_analysis_measurements_no_raw_and_null_identity(state_no_sim, work_dir, 
     assert manifest["raw_present"] is False
     assert manifest["log_present"] is True and manifest["console_present"] is False
     assert any(
-        observation["code"] == "log_path_without_deck_provenance"
+        observation["code"] == "path_without_deck_provenance"
         for observation in reply["observations"]
     )
     stored = result_store.load(reply["result_set_id"], working_dir=work_dir)
@@ -107,7 +107,7 @@ def test_malformed_raw_does_not_suppress_measurements(state_no_sim, work_dir):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     raw.write_bytes(b"malformed RAW")
     reply = SyncApi(state_no_sim).analyze_results(
-        sources=[{"raw_path": str(raw), "label": "mixed"}],
+        sources=[{"path": str(raw), "label": "mixed"}],
         recipes=[{"metric": "summary", "key": "raw"}, {"metric": "measurements", "key": "meas"}],
         include={"per_run": True},
     )
@@ -117,16 +117,28 @@ def test_malformed_raw_does_not_suppress_measurements(state_no_sim, work_dir):
     assert any(failure["stage"] == "analyze" for failure in reply["failures"])
 
 
-@pytest.mark.parametrize("selector", [{"all_steps": True}, {"step": {"axis": "R", "value": 1}}])
-def test_whole_log_measurements_refuse_raw_step_selection(state_no_sim, work_dir, selector):
+def test_an_unstepped_logs_measurements_are_its_one_step(state_no_sim, work_dir):
     log = recorded_log(work_dir)
     reply = SyncApi(state_no_sim).analyze_results(
-        sources=[{"log_path": str(log), "label": "log"}],
+        sources=[{"path": str(log), "label": "log"}],
         recipes=[{"metric": "measurements", "key": "meas"}],
-        **selector,
+        all_steps=True,
+        include={"per_run": True},
+    )
+    (row,) = reply["results"]["meas"]["per_run"]["items"]
+    assert row["step_index"] == 0
+    assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
+
+
+def test_a_step_an_unstepped_log_does_not_have_is_refused(state_no_sim, work_dir):
+    log = recorded_log(work_dir)
+    reply = SyncApi(state_no_sim).analyze_results(
+        sources=[{"path": str(log), "label": "log"}],
+        recipes=[{"metric": "measurements", "key": "meas"}],
+        step={"axis": "R", "value": 1},
     )
     assert reply["outcome"] == "failed"
-    assert "whole-log" in reply["failures"][0]["message"]
+    assert "step axis 'R' is not present" in reply["failures"][0]["message"]
 
 
 def test_optional_selection_and_attached_serializer():
@@ -137,7 +149,7 @@ def test_optional_selection_and_attached_serializer():
     payload = experiments._attached_analysis_payload("job", attached.model_dump(mode="json"))
     assert payload["sources"][0]["plot_index"] is None
     for model, request in [
-        (analyze.AnalyzeSourceInput, {"log_path": "result.log", "label": "log"}),
+        (analyze.AnalyzeSourceInput, {"path": "result.log", "label": "log"}),
         (
             inspect_tools.ResultsQuery,
             {"kind": "results", "view": "native_tables", "path": "result.log"},
@@ -260,7 +272,7 @@ def test_log_console_companion_is_authorized_before_capture(state_no_sim, work_d
 def test_raw_analysis_retains_decoded_dialect_without_import_hint(state_no_sim, work_dir):
     raw = stage_recorded_fixture(work_dir, "ngspice_noise_2plot")
     reply = SyncApi(state_no_sim).analyze_results(
-        sources=[{"raw_path": str(raw), "label": "noise", "plot_index": 1}],
+        sources=[{"path": str(raw), "label": "noise", "plot_index": 1}],
         recipes=[
             {
                 "metric": "waveform",

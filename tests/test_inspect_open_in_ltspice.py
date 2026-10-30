@@ -189,7 +189,7 @@ async def test_the_digest_it_reports_is_the_one_an_edit_takes(
     result = await handle_edit_schematic(
         EditSchematicInput.model_validate(
             {
-                "target": design["path"],
+                "path": design["path"],
                 "expected_sha256": design["sha256"],
                 "ops": [{"op": "set_component_value", "reference": "R1", "value": "2.2k"}],
             }

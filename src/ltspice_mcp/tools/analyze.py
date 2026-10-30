@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakValueDictionary
 
@@ -136,26 +136,29 @@ class CaseSelection(NotedModel):
         return self
 
 
+def _names_a_log(path: str) -> bool:
+    """A source path ending ``.log``, in any case, is a log read alone."""
+    return PurePath(path).suffix.casefold() == ".log"
+
+
 class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     job_id: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Analyze the results of a job this server ran. Exactly one of "
-            "job_id, raw_path or log_path. A job still running is reported under "
+            "job_id or path. A job still running is reported under "
             "coverage.missing_cases instead of failing the call."
         ),
     )
-    raw_path: str | None = Field(
+    path: str | None = Field(
         default=None,
+        min_length=1,
         description=(
-            "Analyze a .raw file this server did not run. It has no job "
-            "provenance, so its rows carry deck_sha256: null. Exactly one of "
-            "job_id, raw_path or log_path."
+            "Analyze a file this server did not run: a .raw, read with the .log "
+            "of its name, or a .log alone for its .meas results. Its rows carry "
+            "deck_sha256: null. Exactly one of job_id or path."
         ),
-    )
-    log_path: str | None = Field(
-        default=None,
-        description="Imported log for whole-log measurements; exactly one of job_id, raw_path or log_path. No RAW sibling is read.",
     )
     runs: Literal["all"] | list[int] | CaseSelection = Field(
         default="all",
@@ -170,16 +173,22 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
         description=(
             "Short unique name for this source; it tags every returned row and is "
             "what a recipe's own 'sources' list refers to. Name the condition "
-            "('nominal', 'hot'). Default: the job_id, or the raw file's stem."
+            "('nominal', 'hot'). Default: the job_id, or the file's stem."
         ),
     )
 
+    @property
+    def is_log(self) -> bool:
+        """``path`` names a log, read alone; any other path names a RAW, read
+        with the ``.log`` of its name."""
+        return self.path is not None and _names_a_log(self.path)
+
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
-        if sum(bool(value) for value in (self.job_id, self.raw_path, self.log_path)) != 1:
-            raise ValueError("provide exactly one of job_id, raw_path or log_path")
-        if self.log_path is not None and self.plot_index is not None:
-            raise ValueError("log_path does not select a RAW plot")
+        if (self.job_id is None) == (self.path is None):
+            raise ValueError("provide exactly one of job_id or path")
+        if self.is_log and self.plot_index is not None:
+            raise ValueError("a .log path does not select a RAW plot")
         if isinstance(self.runs, list):
             if not self.runs:
                 raise ValueError("runs must be 'all' or a non-empty list")
@@ -194,7 +203,7 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
             # AnalyzeResultsInput makes a repeat unique.
-            derived = self.job_id or Path(str(self.raw_path or self.log_path)).stem
+            derived = self.job_id or Path(str(self.path)).stem
             object.__setattr__(self, "label", derived)
         return self
 
@@ -986,7 +995,7 @@ async def _resolve_sources(
     source_jobs: dict[str, str | None] = {}
     observations: list[Observation] = []
     for source_input in inputs:
-        imported_path = source_input.raw_path or source_input.log_path
+        imported_path = source_input.path
         if imported_path is not None:
             requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
             for index in sorted(requested_indices - {0}):
@@ -1004,8 +1013,8 @@ async def _resolve_sources(
             try:
                 resolved = services.resolve_analysis_source(
                     state,
-                    raw_file=source_input.raw_path,
-                    log_file=source_input.log_path,
+                    raw_file=None if source_input.is_log else imported_path,
+                    log_file=imported_path if source_input.is_log else None,
                     plot_index=source_input.plot_index or 0,
                     dialect=source_input.dialect,
                 )
@@ -1046,11 +1055,7 @@ async def _resolve_sources(
             )
             observations.append(
                 Observation(
-                    code=(
-                        "raw_path_without_deck_provenance"
-                        if source_input.raw_path is not None
-                        else "log_path_without_deck_provenance"
-                    ),
+                    code="path_without_deck_provenance",
                     kind="provenance",
                     detail=(
                         f"Source {source_input.label!r} is an imported result path; "
@@ -1565,6 +1570,19 @@ class StepSelection(NamedTuple):
             "all_steps": self.all_steps,
         }
 
+    def plan(self, count: int, step_values: Sequence[Mapping[str, Any]]) -> StepPlan:
+        """The steps this choice reads of a run of ``count`` steps, each with
+        its stepped values: every step, the one ``step`` picks, or the first."""
+        if self.all_steps:
+            return [
+                (index, dict(step_values[index]) if index < len(step_values) else {})
+                for index in range(count)
+            ]
+        if self.step is None:
+            return [(0, dict(step_values[0]) if step_values else {})]
+        index = self.step.pick(step_values)
+        return [(index, dict(step_values[index]))]
+
 
 #: A resolved step plan: ``(step index, that step's axis values)`` per step.
 StepPlan = list[tuple[int, dict[str, Any]]]
@@ -1603,32 +1621,39 @@ async def _build_step_plan(
     state: SessionState,
 ) -> _RawStepPlan:
     raw = await services.load_raw(source, state)
-    count = get_step_count(raw)
     step_values = [dict(step.parameters) for step in raw.descriptor.steps]
-    if steps.all_steps:
-        plan = [
-            (index, step_values[index] if index < len(step_values) else {})
-            for index in range(count)
-        ]
-    elif steps.step is None:
-        plan = [(0, step_values[0] if step_values else {})]
-    else:
-        index = steps.step.pick(step_values)
-        plan = [(index, step_values[index])]
-    return _RawStepPlan(plan, raw.descriptor)
+    return _RawStepPlan(steps.plan(get_step_count(raw), step_values), raw.descriptor)
+
+
+async def _measurement_step_plan(
+    steps: StepSelection,
+    source: services.AnalysisSource,
+    state: SessionState,
+) -> list[tuple[int | None, dict[str, Any]]]:
+    """The steps the measurements recipe reads of one source's log: with no
+    step chosen, every step at once, as statistics over them; else the chosen
+    rows, each with the stepped values of its ``.step`` line
+    (``metrics.measurement_step_values``)."""
+    if steps.step is None and not steps.all_steps:
+        return [(None, {})]
+    logs = await services.load_logs(source, state)
+    parsed = logs.value("measurements")
+    if not parsed or not parsed["measurements"]:
+        # The metric reads the log again and says why it holds no results.
+        return [(0, {})]
+    step_values = metrics.measurement_step_values(parsed, logs.value("steps") or [])
+    return list(steps.plan(len(step_values), step_values))
 
 
 async def _adapter_value(
     recipe: Recipe,
     source: services.AnalysisSource,
-    step: int | None,
+    step: int,
     state: SessionState,
 ) -> dict[str, Any]:
-    """One recipe's value, read by the metric function registered for its class.
-
-    RAW recipes use ``lib.metrics.METRICS``. Whole-log measurements call its
-    existing measurement function with a nullable step, independently of RAW
-    planning. Every recipe class must still have a registered metric.
+    """One RAW recipe's value, read by the metric function registered for its
+    class in ``lib.metrics.METRICS``. Whole-log measurements are read for
+    every step of a source at once (``metrics.measurement_rows``).
 
     Non-finite floats are nulled here rather than inside the metric, because
     that substitution is a property of what can cross the wire — a caller
@@ -1636,9 +1661,6 @@ async def _adapter_value(
     this edge also keeps the substitution note attached to the value it
     describes rather than to the whole response.
     """
-    if isinstance(recipe, MeasurementsRecipe):
-        return sanitize_payload(await metrics.measurements(source, recipe, step, state))
-    assert step is not None
     return sanitize_payload(await metrics.METRICS[type(recipe)](source, recipe, step, state))
 
 
@@ -2341,10 +2363,6 @@ async def _evaluate_item(
         try:
             with services.analysis_deadline(item_deadline):
                 if isinstance(recipe, MeasurementsRecipe):
-                    if steps.step is not None or steps.all_steps:
-                        raise ResultError(
-                            "RAW step selectors do not apply to whole-log measurements"
-                        )
                     if (
                         run.source.raw is None
                         and (run.source.identity or {}).get("requested_plot_index") is not None
@@ -2356,9 +2374,6 @@ async def _evaluate_item(
                             run.source, state, captures, require_raw=False
                         ),
                     )
-                    value = _promote_headlines(
-                        recipe.metric, await _adapter_value(recipe, run.source, None, state)
-                    )
                     log_source = replace(
                         run.source,
                         identity={
@@ -2366,14 +2381,19 @@ async def _evaluate_item(
                             "dialect": run.source.dialect,
                         },
                     )
-                    records.append(
-                        Record(
-                            manifest_id=run.manifest_id,
-                            source=run.label,
-                            identity=_identity(log_source, None, {}, plot_index=None),
-                            value=value,
-                        )
+                    plan = await _measurement_step_plan(steps, run.source, state)
+                    values = await metrics.measurement_rows(
+                        run.source, recipe, [step for step, _ in plan], state
                     )
+                    for (step, step_values), value in zip(plan, values, strict=True):
+                        records.append(
+                            Record(
+                                manifest_id=run.manifest_id,
+                                source=run.label,
+                                identity=_identity(log_source, step, step_values, plot_index=None),
+                                value=_promote_headlines(recipe.metric, sanitize_payload(value)),
+                            )
+                        )
                     continue
                 run = replace(
                     run,

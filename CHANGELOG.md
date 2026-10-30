@@ -10,6 +10,18 @@ tool-surface changes.
 
 ### Fixed
 
+- An empty `job_id` was taken as absent where a call's sources were counted
+  and as given where a case selection was checked. Beside a `raw_path` in
+  `analyze_results`, `other_raw` passed unchecked, where a source with no
+  `job_id` refuses it, and `runs: {case_ids: [...]}` failed with an internal
+  error. `plot_waveform`, `analyze_results`' sources and `inspect` now refuse
+  an empty `job_id` as they validate the call, as `jobs` does.
+- An empty `path` named no file but was not refused as one. Beside a `job_id`,
+  `inspect(kind="results")` looked for a file and answered that no source was
+  named, or with a `case_id` that the case needs a `job_id`; `verify_circuit`
+  answered about the working directory it resolved to. Every `path` argument
+  now refuses an empty one as the call is validated, and the Python API's
+  `load_raw`, `measurements` and `device_op_points` refuse one too.
 - The `value` recipe refused a stepped `.noise` at one frequency as a table,
   though guide section 'signals' says to read it, as a stepped `.ac` at one
   frequency is read, with no `at`. It now reads each step's point.
@@ -120,6 +132,16 @@ tool-surface changes.
 
 ### Added
 
+- The `measurements` recipe reads a stepped run's `.meas` results a step at a
+  time, where it refused `step` and `all_steps` and gave only statistics over
+  every step. With `all_steps` it returns one row per step, and with `step`
+  the row of the step the selector picks, each with that step's
+  `step_values`, so an `analyze` block's `group_by` can name a stepped
+  parameter. Row n of a stepped `.meas` table is the step of the log's n-th
+  `.step` line on both LTspice builds (recorded: `log/meas_step`,
+  `log/step_two_params`, `log/step_temp`); a log whose `.step` lines do not
+  number its rows is refused. Without either, the recipe still gives the
+  statistics.
 - The sheet rule `shared_reference`, an error for two or more parts under one
   reference, compared without case. `verify_circuit` reports it under the
   `quality` check, so it needs no LTspice, and `edit_schematic` reports it
@@ -156,6 +178,20 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** every argument that names a file is `path`, as
+  `run_experiments`, `verify_circuit` and `inspect` already spelled it.
+  `plot_waveform` takes `path` for `raw_file`. An `analyze_results` source
+  takes `path` for `raw_path` and `log_path`: a `.log` (in any case) is read
+  alone, as a `log_path` was, and any other file as a RAW with the `.log` of
+  the same name, as a `raw_path` was. `edit_schematic` takes `path` for
+  `target`, and its reply names the sheet `path`. A call that sends an old
+  name is refused with the name that replaced it. The Python API's
+  `load_raw`, `measurements` and `device_op_points` take `path` first; their
+  older `raw_path` and `log_path` keywords are still accepted. The
+  observations `raw_path_without_deck_provenance` and
+  `log_path_without_deck_provenance`, named after the retired arguments, are
+  one, `path_without_deck_provenance`; the source's `source_hashes` row says
+  which file it read.
 - A stepped LTspice result that keeps each step's values in variables of
   its own, a stepped `.op`, `.tf`, or `.ac` or `.noise` at one frequency,
   lists those variables among its steps' values and no longer among its

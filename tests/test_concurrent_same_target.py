@@ -143,7 +143,7 @@ async def test_simultaneous_edits_on_one_sha_commit_exactly_one(
             asc_state,
             "edit_schematic",
             {
-                "target": str(asc_file),
+                "path": str(asc_file),
                 "expected_sha256": before,
                 "ops": [{"op": "set_component_value", "reference": "R1", "value": "2k"}],
             },
@@ -152,7 +152,7 @@ async def test_simultaneous_edits_on_one_sha_commit_exactly_one(
             asc_state,
             "edit_schematic",
             {
-                "target": str(asc_file),
+                "path": str(asc_file),
                 "expected_sha256": before,
                 "ops": [{"op": "set_component_value", "reference": "C1", "value": "2u"}],
             },

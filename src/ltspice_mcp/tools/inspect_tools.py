@@ -220,7 +220,7 @@ from ltspice_mcp.tools.reference_index import build_index, search_branches, tabl
 
 
 class TraceNetInput(ToolInput):
-    path: str = Field(description="Path to an .asc schematic")
+    path: str = Field(min_length=1, description="Path to an .asc schematic")
     pin: str | None = Field(
         default=None,
         description=(
@@ -561,6 +561,7 @@ class SymbolsQuery(StrictModel):
     kind: Literal["symbols"]
     path: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Optional schematic whose own directory is put at the front of the "
             "reported precedence — pass it to see what that sheet would resolve."
@@ -585,6 +586,7 @@ class SymbolQuery(StrictModel):
     )
     path: str | None = Field(
         default=None,
+        min_length=1,
         description="Optional schematic whose directory is searched first, for a sheet-local symbol.",
     )
 
@@ -599,7 +601,7 @@ class NetQuery(StrictModel):
     is card membership, with no geometry."""
 
     kind: Literal["net"]
-    path: str = Field(description=_CIRCUIT_PATH_DESCRIPTION)
+    path: str = Field(min_length=1, description=_CIRCUIT_PATH_DESCRIPTION)
     at: str | list[int] = Field(
         description=(
             "Where the net is: 'REF.PIN', PIN a pin name or 1-based SpiceOrder "
@@ -632,7 +634,7 @@ class ComponentsQuery(StrictModel):
     """The components of a .asc schematic or a netlist."""
 
     kind: Literal["components"]
-    path: str = Field(description=_CIRCUIT_PATH_DESCRIPTION)
+    path: str = Field(min_length=1, description=_CIRCUIT_PATH_DESCRIPTION)
     prefix: str | None = Field(default=None, description=_PREFIX_DESCRIPTION)
     detail: Literal["list", "full"] = Field(
         default="list",
@@ -649,7 +651,9 @@ class HierarchyQuery(StrictModel):
     """Resolve repeated netlist instances, ports, parameters and backend device addresses."""
 
     kind: Literal["hierarchy"]
-    path: str = Field(description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first.")
+    path: str = Field(
+        min_length=1, description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first."
+    )
     simulator: str = Field(
         pattern=selector_pattern(("ltspice", "ngspice")),
         description=(
@@ -732,9 +736,10 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
     view: Literal["plots", "signals", "table", "measurements", "native_tables"] = "plots"
     path: str | None = Field(
         default=None,
+        min_length=1,
         description="RAW path for plots/signals/table, log path for measurements/native_tables; pass this or job_id.",
     )
-    job_id: str | None = None
+    job_id: str | None = Field(default=None, min_length=1)
     run_index: int = Field(default=0, strict=True, ge=0)
     case_id: str | None = None
     prefix: str | None = Field(
@@ -746,7 +751,7 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
 
     @model_validator(mode="after")
     def _source(self) -> ResultsQuery:
-        if bool(self.path) == bool(self.job_id):
+        if (self.path is None) == (self.job_id is None):
             raise ValueError("provide exactly one of path or job_id")
         if self.path is not None and (
             self.case_id is not None or self.run_index != 0 or self.other_raw is not None

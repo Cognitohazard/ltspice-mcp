@@ -143,7 +143,7 @@ RAW itself or the `.log` beside it.
 For a log without a RAW file:
 
 ```python
-meas = api.measurements(log_path="result.log")  # log_path XOR job_id
+meas = api.measurements("result.log")  # path XOR job_id
 facts = api.inspect(
     queries=[
         {
@@ -154,7 +154,7 @@ facts = api.inspect(
     ]
 )
 measured = api.analyze_results(
-    sources=[{"log_path": "result.log", "label": "imported"}],
+    sources=[{"path": "result.log", "label": "imported"}],
     recipes=[{"metric": "measurements", "key": "meas"}],
 )
 ```
@@ -165,10 +165,11 @@ The `measurements` inspect view returns each measurement's values with its
 entries and `Index frequency` table rows. Both return plain dicts and lists
 for your code to arrange or export. A unit the log does not print is `None`,
 and rows are not assigned to a plot or step. Omit `plot_index` on log views.
-The `measurements` recipe reads the whole log and rejects `step` and
-`all_steps`. A `log_path` source does not look for a RAW beside the log, and
-in a request that also has RAW recipes, a malformed RAW fails only those
-recipes. Guide section 'tools' covers when a page cursor stops working because
+The `measurements` recipe reads the whole log. It gives statistics over every
+step, or with `step` or `all_steps` each step's row with its `step_values`
+(guide section 'tools'). A source whose `path` is a `.log` does not look for a
+RAW beside the log, and in a request that also has RAW recipes, a malformed
+RAW fails only those recipes. Guide section 'tools' covers when a page cursor stops working because
 a file changed, and a timeout while `analyze_results` first reads its sources.
 
 Arrays are copies, so you can modify them. Trace math across steps and its

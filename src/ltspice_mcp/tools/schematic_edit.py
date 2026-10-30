@@ -182,7 +182,7 @@ class EditViewCursors(StrictModel):
 
 
 class EditSchematicInput(ToolInput):
-    target: str = Field(description="Path to the .asc schematic (created if absent).")
+    path: str = Field(min_length=1, description="Path to the .asc schematic (created if absent).")
     base: Literal["existing", "blank"] = Field(
         default="existing",
         description=(
@@ -293,7 +293,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         # Edit-specific: the write state of the target sheet, kept at the top
         # level (and mirrored into error.commit_state on failure envelopes).
         "commit_state": {"type": "string", "enum": ["committed", "not_committed"]},
-        "target": {"type": "string"},
+        "path": {"type": "string"},
         "sha256": {"type": ["string", "null"]},
         "build_id": {"type": "string"},
         "base": {"type": "string"},
@@ -531,7 +531,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "observations": {"type": "array", "items": {"type": "string"}},
         "hint": {"type": "string"},
     },
-    "required": ["outcome", "commit_state", "target", "build_id", "stages"],
+    "required": ["outcome", "commit_state", "path", "build_id", "stages"],
 }
 
 
@@ -1239,7 +1239,7 @@ def _envelope(
     data: dict[str, Any] = {
         "outcome": outcome_of(failures or error, partial=partial, delivered=delivered),
         "commit_state": commit_state,
-        "target": str(target),
+        "path": str(target),
         "build_id": build_id,
         "base": base,
         "stages": stages,
@@ -1353,7 +1353,7 @@ async def _evaluate_edit_schematic(
     present_mcp_views: bool = False,
 ) -> EditSchematicEvaluation:
     """Implementation shared by the neutral seam and guarded MCP presentation."""
-    target = safe_path(args.target, state)
+    target = safe_path(args.path, state)
     require_asc(target)
     views = _requested_views(args)
     if not args.ops and not views:

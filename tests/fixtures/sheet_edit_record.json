@@ -1,869 +1,152 @@
 {
- "024642010d2f6cee": {
-  "reply": "cbcaff816cac8c53",
-  "sheet": "509ddb679e8bfe03"
- },
- "02679b42b59a1242": {
-  "reply": "233c955699871f85",
-  "sheet": "f13722c501757260"
- },
- "02b48259ef1d4699": {
-  "reply": "2d905ba430bfe6df",
-  "sheet": null
- },
- "02fcabe597b0b3fa": {
-  "reply": "2faa231525de8361",
-  "sheet": "e51a879c905062d9"
- },
- "031bdbc2ee2f25ec": {
-  "reply": "6d9a95f70f6a1ad7",
-  "sheet": "168171de437364ed"
- },
- "03a4819478c1b449": {
-  "message": "disk full",
-  "raised": "OSError"
- },
- "06455ba9216857cf": {
-  "reply": "bfbb383807c5ddd4",
-  "sheet": "2f66633286ed1ad2"
- },
- "066a79cdbe03ecab": {
-  "reply": "6e26e1224fcce647",
-  "sheet": "0c9cf7c74f9326ad"
- },
- "06aaf541eed6760b": {
-  "reply": "800c6a6b37b44eaa",
-  "sheet": "21b15924f8cb8e38"
- },
- "06ec2540b250da87": {
-  "reply": "e9cacc44998f16d8",
-  "sheet": "4f614343a2c6e7aa"
- },
- "08654e3544f2fb4b": {
-  "reply": "06247319110395cc",
-  "sheet": "b3a2468022b86f34"
- },
- "08904e4780e6604e": {
-  "reply": "395cdf46243aaf1c",
-  "sheet": "b3a2468022b86f34"
- },
- "0a3796d7029d62fe": {
-  "reply": "2dfea2a9c38efebe",
-  "sheet": "b3a2468022b86f34"
- },
- "0ae5f3a953f9fa32": {
-  "reply": "7023c7903c99f278",
-  "sheet": "1f7cd86c8e0a12c6"
- },
- "0c579c6791db5cdd": {
-  "reply": "27b416fe28d0411f",
-  "sheet": null
- },
- "0e15c4a36341013c": {
-  "reply": "643674836799e994",
-  "sheet": "ebabd77bdc824e39"
- },
- "0f4bcf7dfa42b6a5": {
-  "reply": "44dfec50d494b02c",
-  "sheet": "53960f64fa788151"
- },
- "0ff721694063fc09": {
-  "reply": "bb2277608018d35c",
-  "sheet": null
- },
- "119de1bb2d61593f": {
-  "reply": "6a7f1dda31f8de2c",
-  "sheet": "29c596fe49dd2953"
- },
- "135653ab916a491c": {
-  "reply": "5db30ec1853fdaf2",
-  "sheet": "5fc5da36b17f4a93"
- },
- "1369769797cdf062": {
-  "reply": "62b8f972c2f65714",
-  "sheet": "0f7d0950a33ecae5"
- },
- "14a479487ccd3148": {
-  "reply": "7648d35c4c502ded",
-  "sheet": "7e46f18271775e61"
- },
- "15dc2bf02f4a686a": {
-  "reply": "e336e06d5784df95",
-  "sheet": "5dbf7601bad3bc6f"
- },
- "169359d393ad5b9f": {
-  "reply": "fb85f5eb05baf9eb",
-  "sheet": "2f66633286ed1ad2"
- },
- "16aa7f0343828f95": {
-  "reply": "2da29346b380caf9",
-  "sheet": "7e8b75862034a676"
- },
- "1a4001e090b05fe8": {
-  "reply": "2402d970c8cb26c1",
-  "sheet": "2f66633286ed1ad2"
- },
- "1a9859a2bc181688": {
-  "reply": "09aa9f3461de2593",
-  "sheet": "168171de437364ed"
- },
- "1aea6b26110e8d8b": {
-  "reply": "f419c6fe28f6cce2",
-  "sheet": "d70da2388e3f4613"
- },
- "1b6552f7f87e0755": {
-  "reply": "c1e08a96b8516da8",
-  "sheet": "2f66633286ed1ad2"
- },
- "1cd6ae62cc51cd3a": {
-  "reply": "18cd284f7f6242e4",
-  "sheet": "be2910d5a44c2ad2"
- },
- "1d5f28a6fa2eee89": {
-  "reply": "e77de5e471810260",
-  "sheet": null
- },
- "1e4d34a86a961413": {
-  "reply": "5d5f2eb23f21a70b",
-  "sheet": null
- },
- "224ec7d016e75c2c": {
-  "reply": "a4c670e4fc7c0ae3",
-  "sheet": "fd0b62d3879aefde"
- },
- "228b3273c9cb164f": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
-  "raised": "NetlistError"
- },
- "22a606f70da537b0": {
-  "reply": "30fa923c87669d07",
-  "sheet": null
- },
- "22e7c8bb333a2c26": {
-  "message": "injected mid-batch failure",
-  "raised": "RuntimeError"
- },
- "23214af1cf029a20": {
-  "reply": "9432f156279d0a3f",
-  "sheet": null
- },
- "26d9cca888cd07da": {
-  "reply": "089ba1f0a790988c",
-  "sheet": null
- },
- "270cc4ec4a68cb0a": {
-  "reply": "04f9b1c33cb7b5d5",
-  "sheet": "4464b9a7038d05c9"
- },
- "2b28769a68d6b67c": {
-  "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "2bb59489b7363ac0": {
-  "reply": "a000a6f51b421f7c",
-  "sheet": "bbd6b0cfdd8cd329"
- },
- "2be6db6b2f052148": {
-  "reply": "2dfea2a9c38efebe",
-  "sheet": "b3a2468022b86f34"
- },
- "2d3208499e19272d": {
-  "reply": "8bf8090c786522bb",
-  "sheet": "189e647fb79514c1"
- },
- "2e4e28825c5c2aac": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
-  ]
- },
- "2e94673c44b10090": {
-  "reply": "54ddab2f5af9fb12",
-  "sheet": "842d0f37c2e53812"
- },
- "311b2886828a4238": {
-  "reply": "e0db450e038d1869",
-  "sheet": "6de60ebbdd4c2559"
- },
- "317111a0594f8c45": {
-  "reply": "a3aac06b7c7811e1",
-  "sheet": "d70da2388e3f4613"
- },
- "3219786c56b9fddd": {
-  "reply": "65e12850a6b5b39b",
-  "sheet": "5309d926a1d3da61"
- },
- "3283501cb3d82aac": {
-  "reply": "c6fbb9e542b71a35",
-  "sheet": "2f66633286ed1ad2"
- },
- "38a3f6984431f97e": {
-  "reply": "6a7c71bd679ac13e",
-  "sheet": "44202d5c22063149"
- },
- "390da064f4cb1afd": {
-  "reply": "e3c3487ff9bd0b3a",
-  "sheet": "935c282522aab58f"
- },
- "3aec1feca40af999": {
-  "reply": "0822e7a55006ee2b",
-  "sheet": null
- },
- "3b44bfe23d56e093": {
-  "reply": "b9a840ca18e4e323",
-  "sheet": "c116e78a4d734899"
- },
- "3e6ef77d5678db31": {
-  "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
-  "raised": "NetlistError"
- },
- "3e71f56c0d398b97": {
-  "reply": "856f2cda852b37f9",
-  "sheet": "e51a879c905062d9"
- },
- "3eb740523a90cfcf": {
-  "reply": "7f91673c616beaed",
-  "sheet": "6fc11c0de7f0f741"
- },
- "3f0071d83de93d52": {
-  "reply": "f87937d2509d5eee",
-  "sheet": null
- },
- "40309e6885f0c65f": {
-  "reply": "92c3f86ebfa90025",
-  "sheet": "43a2822eb408c09d"
- },
- "40b30d6706e4d110": {
-  "varies": [
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-False]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-False]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-False]"
-  ]
- },
- "41089a25bf146c42": {
-  "reply": "bb2277608018d35c",
-  "sheet": null
- },
- "414a5284b56ee149": {
-  "reply": "48555e8794806665",
-  "sheet": "89c7502b2db3c9e2"
- },
- "41594b09620a94e6": {
-  "reply": "74fc72190d2d254b",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "42b67f43baf56a6e": {
-  "message": "ops list is empty \u2014 pass at least one op, or name return_views to read the sheet's pin table without changing it.",
-  "raised": "NetlistError"
- },
- "439f49304d68bcc1": {
-  "varies": [
-   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
-   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes"
-  ]
- },
- "43af4c3dabf1aad0": {
-  "reply": "428a76dabd404dd9",
-  "sheet": "2f66633286ed1ad2"
- },
- "457cd7321a42a1bc": {
+ "0078ed477a8b397d": {
+  "reply": "1b96d48cfd32c2b6",
+  "sheet": "672bc0a563ba2f34"
+ },
+ "00bf6a61cdb141f8": {
   "varies": [
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-True]",
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-True]",
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-True]"
   ]
  },
- "47102728b07dfb7d": {
-  "reply": "e7a117fc2b30011a",
-  "sheet": "4f700298c191ce88"
- },
- "4743083612f84785": {
-  "reply": "a38f785fb1a07053",
-  "sheet": "168171de437364ed"
- },
- "4790d3cc9c32b178": {
-  "reply": "51358623844634f7",
-  "sheet": "189e647fb79514c1"
- },
- "480b08e1b6d3148f": {
-  "reply": "b66a2b19cd70cabb",
-  "sheet": "59345d9e34feffe2"
- },
- "4ad41fe6cdef668f": {
-  "reply": "08c13ab6a35e1521",
-  "sheet": "159ab54529afe730"
- },
- "4c1ab2e8636c73f3": {
-  "reply": "e5751591f912e947",
-  "sheet": "c071ac08a8bd3d19"
- },
- "4c2b5a8df4fc3600": {
-  "reply": "29ade2dc97eff604",
-  "sheet": null
- },
- "4ca61f7dd09c2772": {
-  "reply": "fe2ddf9e1e67e637",
-  "sheet": "d70da2388e3f4613"
- },
- "4ce71d984b20d383": {
-  "reply": "6c5885dbfcb6e867",
-  "sheet": "9a63168c465b5051"
- },
- "5243b1a8e27e4cb7": {
-  "reply": "115dda5edfc2a9e1",
-  "sheet": null
- },
- "53f62c133ae1453b": {
-  "reply": "96e617bce5b7b355",
-  "sheet": "c13e97e9196a2fd7"
- },
- "5469d85a43e18543": {
-  "reply": "7e0acb3e1f90e529",
-  "sheet": "d70da2388e3f4613"
- },
- "54841aecabf3ad96": {
-  "reply": "848d0fe818271093",
-  "sheet": null
- },
- "550055e04c87f8ae": {
-  "reply": "8f0050519616b836",
-  "sheet": "a0e138e3ce059bf4"
- },
- "55e7e66090216981": {
-  "reply": "b8032ea70ef9a186",
-  "sheet": "189e647fb79514c1"
- },
- "5aa0072aa37081d8": {
-  "reply": "9a6d30795f8fd659",
-  "sheet": "62ecac96c2c111e7"
- },
- "5e11221059ce83a8": {
-  "message": "Each hierarchical port must belong to exactly one unique label.",
-  "raised": "NetlistError"
- },
- "5ee1f0da4ff7557b": {
-  "reply": "520e3aef256d0f4e",
-  "sheet": null
- },
- "610d77e1822a3eb3": {
-  "reply": "94068578e6c0096c",
-  "sheet": null
- },
- "62becdcf1e5abb43": {
-  "reply": "780661eb92e2f9ac",
-  "sheet": null
- },
- "62c27c59a6532ad4": {
-  "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
-  "raised": "PathSecurityError"
- },
- "6445a832ccb0ab76": {
-  "reply": "06247319110395cc",
-  "sheet": "b3a2468022b86f34"
- },
- "657b446585deb10f": {
-  "reply": "874992a57e942f00",
-  "sheet": "2f66633286ed1ad2"
- },
- "670f42541645b4ca": {
-  "reply": "c2a1427467fb4cf7",
-  "sheet": "2385a94d791ae910"
- },
- "6720eb653f258619": {
-  "reply": "95efbcd6af3d935b",
-  "sheet": "f4955e6af62cdb33"
- },
- "6785671c051d3f69": {
-  "reply": "9c44100c1ad2bc1a",
-  "sheet": "4f700298c191ce88"
- },
- "687e03f531dd0725": {
-  "reply": "19e7850442d80792",
-  "sheet": "d70da2388e3f4613"
- },
- "6a2c5b2a5c7361ea": {
-  "reply": "73df32cbd97b6369",
-  "sheet": "003b5c758daab3c8"
- },
- "6a6fc6308d15f74b": {
-  "reply": "bb2277608018d35c",
-  "sheet": null
- },
- "6a94b3c48eb51e9c": {
-  "reply": "61a8c0bf7280f807",
-  "sheet": "f18b41994230550d"
- },
- "6b814102d763e79f": {
-  "reply": "47f5e7a3d4bea86c",
-  "sheet": "6706b0fcfb66049c"
- },
- "6be6f42617b87c8e": {
-  "reply": "526fbfdc138a9958",
-  "sheet": "2f66633286ed1ad2"
- },
- "6c67d8b37a209a0d": {
-  "reply": "d5202ceed58e2d94",
-  "sheet": "49b1144b74853f95"
- },
- "6dffc1e52654fd33": {
-  "reply": "ca99f4c4cca784ce",
-  "sheet": "15598c6f7ef7c69d"
- },
- "6e07da1b366f306e": {
-  "reply": "4c652deb6f3fdd61",
-  "sheet": "2f66633286ed1ad2"
- },
- "6ed3d81bd527b899": {
-  "reply": "f51ebfb2b105486b",
-  "sheet": null
- },
- "6f8ca26af01200b3": {
-  "reply": "f7388348d4f5d00d",
-  "sheet": "ccc0ccf65a13b089"
- },
- "707e96ee849c2b5e": {
-  "reply": "c3afee2ef3b3d851",
-  "sheet": "2f66633286ed1ad2"
- },
- "7205b8d3b010d460": {
-  "reply": "7ec34b1727fbfa52",
-  "sheet": "eac2755b33662a82"
- },
- "723b450e9432e1e4": {
-  "reply": "49bd9a0d136c4faf",
-  "sheet": "bab9cd389e43e638"
- },
- "73d62d743d954e2f": {
-  "reply": "e9c2c604c343d8e0",
-  "sheet": "b3a2468022b86f34"
- },
- "7440a7921a30d9ff": {
-  "reply": "48272f4f2bc7ae8e",
-  "sheet": "d70da2388e3f4613"
- },
- "74ee2a3c86ac5917": {
-  "reply": "a22c6a97cf9f1142",
-  "sheet": null
- },
- "75c3abc1b3693e92": {
-  "reply": "a1fa7646e747d298",
-  "sheet": "087779c62714d69a"
- },
- "770fc44c65ddcbcb": {
-  "reply": "8d57b1a2ab5eedfb",
-  "sheet": "dd784a9aa9452591"
- },
- "772701062a8eb2f0": {
-  "reply": "e9c2c604c343d8e0",
-  "sheet": "b3a2468022b86f34"
- },
- "7777eee063353f4f": {
-  "reply": "b3766f5cb270dfdd",
-  "sheet": "9130df515986b529"
- },
- "78526e7f8c4c4ec1": {
-  "reply": "4449293bdbaa89f5",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "787f5c39674f7d4c": {
-  "reply": "57e787c531681201",
-  "sheet": null
- },
- "790965858d8e64aa": {
-  "reply": "8c2fa7533c0c1a3e",
-  "sheet": null
- },
- "79a3393addc82350": {
-  "reply": "62842721418eefa5",
-  "sheet": "aaa53083dca6c6e2"
- },
- "79e36f19e52c3458": {
-  "reply": "71c1087d287d6979",
-  "sheet": "832fb497a634385d"
- },
- "7a741b658b10b06e": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
-  ]
- },
- "7d61f08a144242d3": {
-  "reply": "7acc10fc3b537247",
-  "sheet": "7537888aa9b73a27"
- },
- "7e501d985bf6605d": {
-  "reply": "167079a3b67ed1a3",
-  "sheet": null
- },
- "7ed7a78baa4954db": {
-  "reply": "5ab4b5756b621761",
-  "sheet": "672bc0a563ba2f34"
- },
- "7f67994fbf52cad8": {
-  "reply": "2db48eae0c90b0d1",
-  "sheet": "bc9c9f192388fafc"
- },
- "7f791ee61dd1bd18": {
-  "reply": "ce3ba1c93ac51d92",
-  "sheet": "2f66633286ed1ad2"
- },
- "7f809e4a80f3400d": {
-  "reply": "efb685e94b8edb33",
-  "sheet": "1986dcae4e2adb90"
- },
- "7fc33315bc87dff3": {
-  "reply": "ef01ba5f74e3250e",
-  "sheet": "cd333cd95ee819e3"
- },
- "802f81807ef3fd37": {
-  "reply": "2db6fcf3647fd19a",
-  "sheet": "d083b44e671b9297"
- },
- "80c95ac942e4b75c": {
-  "reply": "c1383f54d74c2551",
-  "sheet": "4a8d150aa88702d6"
- },
- "8100011cf15cfec6": {
-  "reply": "0e223fb61950be1f",
-  "sheet": "88c9ff221b645b1b"
- },
- "814c2140daf53430": {
-  "reply": "a92c1ccde47c0ff2",
-  "sheet": "2f66633286ed1ad2"
- },
- "828d15f03ba3c53f": {
-  "reply": "2dfea2a9c38efebe",
-  "sheet": "b3a2468022b86f34"
- },
- "83ab8127b022b09d": {
-  "reply": "bafb1e2fdb4116f3",
-  "sheet": "32351080a0d7479e"
- },
- "849c4569839f7948": {
-  "reply": "52e2c4cc798457c8",
-  "sheet": "30e2f036e5f18bc4"
- },
- "858d282860758b42": {
-  "reply": "68313910dce6d5b0",
-  "sheet": "b3a2468022b86f34"
- },
- "870b27916e66432a": {
-  "reply": "d4282ba4e6f00d33",
-  "sheet": "2f66633286ed1ad2"
- },
- "882c85518070dfe0": {
-  "reply": "2c7148f70dd841fd",
-  "sheet": "2fd4f6977eb9f79a"
- },
- "89503f62d771b10c": {
-  "reply": "0c62224398497d1c",
-  "sheet": "2f66633286ed1ad2"
- },
- "8d5c6ccfec7b07cd": {
-  "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
- },
- "8dabf48e21cc3f2d": {
-  "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
-  "raised": "NetlistError"
- },
- "8e3d827bb90b4ba7": {
-  "reply": "935a50d6845cae12",
-  "sheet": "047439922969956b"
- },
- "8e9de70a032287e6": {
-  "reply": "fbf939ba6cfb362e",
-  "sheet": "ffba5e1e9d340bbf"
- },
- "8eee76949bf12e9f": {
-  "reply": "f546a7c33af9eff7",
-  "sheet": "d70da2388e3f4613"
- },
- "907a3dd259f5cca2": {
-  "reply": "9838ffdce1d81bef",
-  "sheet": "ccc0ccf65a13b089"
- },
- "911d2d4e651f8b75": {
-  "reply": "5e3494dc17d4dc9a",
-  "sheet": "ccc0ccf65a13b089"
- },
- "936e4bd852a9ab45": {
-  "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
-  "raised": "NetlistError"
- },
- "94e2319095feb215": {
-  "reply": "e697a4e728fa4cc1",
-  "sheet": null
- },
- "960a8ad36218b43f": {
-  "reply": "5756435bd25bdd03",
-  "sheet": "a4f8c1030672b090"
- },
- "98604adee698a285": {
-  "reply": "f1cd1170ce47d324",
-  "sheet": "d70da2388e3f4613"
- },
- "988c68f1f47d5443": {
-  "reply": "c7f7e2a46781b422",
-  "sheet": null
- },
- "9afbceacb2bdcfca": {
-  "reply": "6677489bb08d8ff6",
-  "sheet": "5fcd33e31cbd8c08"
- },
- "9c42e8a69a175d61": {
-  "reply": "68313910dce6d5b0",
-  "sheet": "b3a2468022b86f34"
- },
- "9cbaa87613eafdb0": {
-  "reply": "148ffe297c3ed1e1",
-  "sheet": "2f66633286ed1ad2"
- },
- "9f7f1d4304d828ad": {
-  "reply": "2dfea2a9c38efebe",
-  "sheet": "b3a2468022b86f34"
- },
- "9fc0c6ac8819a457": {
-  "reply": "cb11312d5c44ebef",
-  "sheet": "5270a760fe5167ba"
- },
- "a0cc299935194b21": {
-  "reply": "c5f88ab47c66a866",
-  "sheet": "d70da2388e3f4613"
- },
- "a0cd146dbf9f9afb": {
-  "reply": "08815354468cce8e",
-  "sheet": "392e3cdd6b5d23fc"
- },
- "a0d2f3746a121e3b": {
-  "reply": "be08894b2fa28db0",
-  "sheet": null
- },
- "a2731357ade2c73b": {
-  "reply": "10b00ab6116c33e4",
-  "sheet": "2f66633286ed1ad2"
- },
- "a2a33cfff1b13acc": {
-  "reply": "32fc2fbaf0d527f5",
-  "sheet": "37b3406b8a47981e"
- },
- "a2fb20e45f3ab0db": {
-  "reply": "fe104d309766019c",
-  "sheet": "02799fe4a330ce21"
- },
- "a3f8f25c593dfd9e": {
-  "reply": "7332b89e89423864",
-  "sheet": "2f66633286ed1ad2"
- },
- "a469989e1da518e8": {
-  "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
-  "raised": "PathSecurityError"
- },
- "a60983147ecbc286": {
-  "reply": "c6af784220f189c8",
-  "sheet": "d70da2388e3f4613"
- },
- "a62fb18482377b05": {
-  "reply": "d018f4683dd7f119",
-  "sheet": "2f66633286ed1ad2"
- },
- "a71ada7e412b19fd": {
-  "reply": "06247319110395cc",
-  "sheet": "b3a2468022b86f34"
- },
- "aa507dc0fa8c0032": {
-  "reply": "23d430f8873e26cb",
-  "sheet": "2f66633286ed1ad2"
- },
- "ad2afa76a042a5d0": {
-  "reply": "144bbebef5f75652",
-  "sheet": "2f66633286ed1ad2"
- },
- "af02c6777cb81df7": {
-  "reply": "ccf505e0ccb68751",
-  "sheet": null
- },
- "b0f1c61496cf6c9f": {
-  "reply": "780661eb92e2f9ac",
-  "sheet": null
- },
- "b15ec7bb4b1f88dd": {
-  "reply": "2ed1222e2e9508c8",
-  "sheet": "562a9043164cff64"
- },
- "b1a4775af89771a5": {
-  "reply": "cba1f4f8aebeedcb",
-  "sheet": "2f66633286ed1ad2"
- },
- "b49ef160a026ba9a": {
-  "reply": "92b4b02f96f4d879",
-  "sheet": "733d1ab2e59d6d40"
- },
- "b5126c9403ab7030": {
-  "reply": "dd55d828cc50f9bf",
-  "sheet": "1128ba216dbad4a1"
- },
- "b528cbce9c6927f1": {
-  "reply": "37286f5e776ed3bc",
-  "sheet": "133c1190f24ed080"
- },
- "b5dcb0c32b88cd3b": {
-  "reply": "055c1ff9b41c3854",
-  "sheet": null
- },
- "b641254d61c433e6": {
-  "reply": "9a402d83574e9acc",
-  "sheet": "2f66633286ed1ad2"
- },
- "b71fe138d5857508": {
-  "reply": "4a28fbf15a2c23e5",
-  "sheet": "a5bda05d7e572abc"
- },
- "b88038b8ef490599": {
-  "reply": "d492ccf35e61e8ea",
-  "sheet": "5fcd33e31cbd8c08"
- },
- "b940e99362a31a95": {
-  "reply": "2d6c5d255cb51955",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "b9462687bc3e3301": {
-  "reply": "2177de03543850f0",
+ "00c41795103551ba": {
+  "reply": "4b961644d9c93963",
   "sheet": "4464b9a7038d05c9"
  },
- "ba1d05e07927dd79": {
-  "reply": "a1beb44a0d924904",
-  "sheet": "eb9a6ac0e8188eef"
+ "0181f91a3e4fc3b1": {
+  "reply": "04827a86c90bbdd6",
+  "sheet": "ebabd77bdc824e39"
  },
- "ba7106df610459a0": {
-  "reply": "c7f7e2a46781b422",
+ "02303610f4fd815f": {
+  "reply": "52814c8bb5fffab2",
+  "sheet": "0fe4a46d4fb4e6e1"
+ },
+ "02ddec8cb2530fdd": {
+  "reply": "494fd67321e34458",
   "sheet": null
  },
- "ba7dd10e5e378bf0": {
+ "030d1f59893ac588": {
+  "reply": "befe08fa96d54557",
+  "sheet": "d70da2388e3f4613"
+ },
+ "05a18c89440ead9e": {
+  "reply": "5ef26267ab742153",
+  "sheet": "879e5d6f510a331b"
+ },
+ "072669ac0f4c675f": {
+  "reply": "7d2c6207d2d5c052",
+  "sheet": "aaa53083dca6c6e2"
+ },
+ "07a9a4495fdcea98": {
+  "message": "ops list is empty \u2014 pass at least one op, or name return_views to read the sheet's pin table without changing it.",
+  "raised": "NetlistError"
+ },
+ "07b6f0e2ff1fb31c": {
+  "reply": "d5bea89aff31a171",
+  "sheet": null
+ },
+ "0b49ca592278c2ab": {
+  "reply": "1c30722b040476c2",
+  "sheet": "af20c6214833a1e7"
+ },
+ "0b81dfe13a923b93": {
+  "reply": "71cc4e8d546f0806",
+  "sheet": "43a2822eb408c09d"
+ },
+ "0c315af570dcae35": {
+  "reply": "2323cfa4d03654d4",
+  "sheet": "bab9cd389e43e638"
+ },
+ "0eb53899aaaac40d": {
+  "message": "disk full",
+  "raised": "OSError"
+ },
+ "0f6267a6239f6fd7": {
+  "reply": "ff4c14fe7b7dae4c",
+  "sheet": "018d0b7888b32527"
+ },
+ "13e2e70a9150b4f0": {
+  "reply": "d7671d06444192d5",
+  "sheet": "cd333cd95ee819e3"
+ },
+ "141bea8866f60a96": {
+  "reply": "1349433ce6857be2",
+  "sheet": null
+ },
+ "14af82af65c7ef5b": {
+  "reply": "0fcba82ed7e0608a",
+  "sheet": null
+ },
+ "14b7bfd2e8565cf2": {
+  "reply": "be9bcb363e8a692a",
+  "sheet": "6706b0fcfb66049c"
+ },
+ "15b8d4d52c82972a": {
+  "reply": "51810796bce4d89f",
+  "sheet": "d70da2388e3f4613"
+ },
+ "161a76248ab30e75": {
   "message": "Cannot open WORK/bus.asc: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
   "raised": "NetlistError"
  },
- "bbf923d8bed91842": {
-  "reply": "74164768f6e43438",
-  "sheet": "2f66633286ed1ad2"
- },
- "bcdd6fa70730ae44": {
-  "reply": "39ce8fa8b0c41e66",
-  "sheet": "2f66633286ed1ad2"
- },
- "bde19fe8bae3841c": {
-  "reply": "3b9c8913a5824fde",
-  "sheet": "879e5d6f510a331b"
- },
- "bdf2ddabc8f60e98": {
-  "reply": "3d67662387045746",
-  "sheet": "e51a879c905062d9"
- },
- "beef085ced34e26d": {
-  "reply": "f4b67427a86f7d3c",
-  "sheet": "e74de70382e0ec77"
- },
- "bf26b3480f8b0a3a": {
-  "reply": "80aaf8765feaadeb",
-  "sheet": "b274158233309af4"
- },
- "c02cd72e2649d43e": {
-  "reply": "b7c1b817223c2f48",
-  "sheet": "65f07c55b9c1a9d6"
- },
- "c085726c418e1243": {
-  "reply": "8ce09a7e75818248",
-  "sheet": "4464b9a7038d05c9"
- },
- "c0d42949719dcb98": {
-  "reply": "abb971f06e563907",
+ "17c602eba6f6679a": {
+  "reply": "a67b66b6b4f903ed",
   "sheet": null
  },
- "c117dd5ff9dfe0d2": {
-  "reply": "156f894914265966",
-  "sheet": "168171de437364ed"
+ "180542f3bdf14f5a": {
+  "reply": "1f8bdf137404d251",
+  "sheet": "1f1cd547b8f9866c"
  },
- "c2927133205799e3": {
-  "reply": "5d1d3ee249493856",
+ "18ca61ee97710aa0": {
+  "reply": "5acd0f22d5a24a53",
+  "sheet": null
+ },
+ "1e2c53cffcc68373": {
+  "reply": "d523349a0503ae26",
+  "sheet": "c13e97e9196a2fd7"
+ },
+ "1f9b41dd7fdb5640": {
+  "reply": "860eba7c82a82e83",
   "sheet": "dfa35865c0e752f9"
  },
- "c3d05a9a8f39cca4": {
-  "reply": "bca487eebfcb7205",
+ "21754d7d06f278f1": {
+  "reply": "0da82e9ca3d5ea82",
   "sheet": "2f66633286ed1ad2"
  },
- "c63ae99314875bb1": {
-  "reply": "0667020ce6c5edac",
-  "sheet": "6e9880d2e1a04bf2"
+ "23eb383b2f756a4a": {
+  "reply": "16ffb794802097ea",
+  "sheet": null
  },
- "c68c2fce8c2ce8b7": {
-  "reply": "c2f1dcb13ae702d2",
-  "sheet": "2f66633286ed1ad2"
- },
- "c76392b576a82da0": {
-  "reply": "77942bdf3a820a69",
-  "sheet": "2f66633286ed1ad2"
- },
- "c8925ae8dc305c34": {
-  "reply": "faeeeeeb92992f84",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "ca55d68df0878a55": {
-  "reply": "6a7c71bd679ac13e",
-  "sheet": "c064b176635b7503"
- },
- "caacb59ddef35259": {
-  "reply": "4eb4b754974232b7",
-  "sheet": "af20c6214833a1e7"
- },
- "cba3e68304f58841": {
-  "reply": "15add2130f3cec69",
-  "sheet": "2f66633286ed1ad2"
- },
- "cc2b4d1bcd7cb6cd": {
-  "reply": "5c7a02a01ba024cf",
-  "sheet": "5950d261f0733a5f"
- },
- "cc9519ed674f8128": {
-  "reply": "0b2f0b49254e7d05",
-  "sheet": "2f66633286ed1ad2"
- },
- "cf2e0c0e5c0dba5f": {
-  "reply": "67ab2da62a7adce4",
+ "25f32b6e5ca40dd7": {
+  "reply": "102204674be756d7",
   "sheet": "e25eabc5d902e620"
  },
- "cfffd08205c0154c": {
-  "reply": "77e0b887f56167d0",
-  "sheet": "4464b9a7038d05c9"
+ "264fdf37d3a68c5f": {
+  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+  "raised": "NetlistError"
  },
- "d0dd2bcfac7a94a9": {
-  "reply": "2dfea2a9c38efebe",
-  "sheet": "b3a2468022b86f34"
+ "274c8474611b1870": {
+  "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
+  "raised": "NetlistError"
  },
- "d0dfcb2fb61cb568": {
-  "reply": "31aa6dd9402648e6",
-  "sheet": "858573307ac29a7b"
+ "27f26a8f7046a3fe": {
+  "reply": "99c1a2fad48595bb",
+  "sheet": "562a9043164cff64"
  },
- "d0e98ef977fe4bea": {
-  "reply": "80c867a28f099930",
-  "sheet": "4919ae4e9092bfa8"
+ "283c087283b0c708": {
+  "reply": "51f023697f6c02fc",
+  "sheet": "168171de437364ed"
  },
- "d23cae2014ba122c": {
-  "reply": "5a32cd0269c23d05",
-  "sheet": "cce88fb6b2b0cacb"
+ "29f044dd6af7331d": {
+  "reply": "dc8b2e326771cea4",
+  "sheet": "59345d9e34feffe2"
  },
- "d24bf7fe3d968255": {
-  "reply": "acf42de0ce91a8ff",
-  "sheet": "acac928179f1ea70"
+ "2b43c949064d65fc": {
+  "reply": "2f4a90594527d70f",
+  "sheet": "5270a760fe5167ba"
  },
- "d27c9c778ed6f5ac": {
-  "reply": "ec2cb78ca0466eb9",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "d4d1b311f50efef3": {
-  "reply": "90c2ee90e37ab526",
-  "sheet": "ffb9eba3962b6fc3"
- },
- "d53e75939f0642d8": {
+ "2bc2d10462f65108": {
   "varies": [
    "tests/test_concurrent_same_target.py::test_simultaneous_edits_on_one_sha_commit_exactly_one",
    "tests/test_parallel_sessions.py::TestCircuitFileLock::test_a_plot_panes_edit_locks_the_plot_settings_file",
@@ -872,55 +155,829 @@
    "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_an_edit_leaves_nothing_beside_the_circuit"
   ]
  },
- "d71734fa5609b375": {
-  "reply": "bb265c1fdb610f9b",
-  "sheet": "88c9ff221b645b1b"
+ "2bed1d6a43939bef": {
+  "reply": "8046525f0c61aa68",
+  "sheet": "2f66633286ed1ad2"
  },
- "d94fa95b189bdad1": {
-  "reply": "b6a5935e0b9d4b08",
-  "sheet": "1f1cd547b8f9866c"
+ "2c22be5fb7512d57": {
+  "reply": "24401a5fea87f6d1",
+  "sheet": "f4955e6af62cdb33"
  },
- "d9ac1a6fcc6f6772": {
-  "reply": "9f0a9bedfce8c9c6",
-  "sheet": "52ecf6f819eba445"
- },
- "da54337ac1d5374e": {
-  "reply": "8fe1365dfb2ae3f7",
+ "2c79539d9b1241b0": {
+  "reply": "c85583e536b2c7b4",
   "sheet": null
  },
- "db84165f190de27e": {
-  "reply": "4b7ad22a10aca778",
+ "2cb637237a099b68": {
+  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+  "raised": "NetlistError"
+ },
+ "2d013c9429544d71": {
+  "reply": "5c3af9959286c52e",
+  "sheet": null
+ },
+ "2d216ce9ada56203": {
+  "reply": "f7443f63825f05c2",
+  "sheet": null
+ },
+ "2dd2aa029b3dd6b1": {
+  "reply": "bbacc709991dd2dd",
+  "sheet": "5fcd33e31cbd8c08"
+ },
+ "2ed0a62f83c63097": {
+  "reply": "b527e6e9221e9277",
+  "sheet": "189e647fb79514c1"
+ },
+ "2f8e75da4354f59c": {
+  "reply": "beb610081aa44d2e",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "30b55c7e02a4a0de": {
+  "reply": "726302ff0ac04dcd",
+  "sheet": "bbd6b0cfdd8cd329"
+ },
+ "30c419a1eac3564c": {
+  "varies": [
+   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
+   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes"
+  ]
+ },
+ "312c8822c687b384": {
+  "reply": "16ffb794802097ea",
+  "sheet": null
+ },
+ "3208e51813b78245": {
+  "reply": "7b14617fb3d969ec",
+  "sheet": "b3a2468022b86f34"
+ },
+ "338cdab8b555b642": {
+  "reply": "1881074ed89e0d72",
+  "sheet": "087779c62714d69a"
+ },
+ "362334f48ecbe6da": {
+  "reply": "9affac805afe10d8",
+  "sheet": "be2910d5a44c2ad2"
+ },
+ "3a74eb23905a9c8c": {
+  "reply": "0fcba82ed7e0608a",
+  "sheet": null
+ },
+ "3bdaf7ad818ce213": {
+  "reply": "f986db8def90c588",
+  "sheet": "5dbf7601bad3bc6f"
+ },
+ "3d35bf7992385840": {
+  "reply": "4e480a2ad1753f35",
+  "sheet": "1986dcae4e2adb90"
+ },
+ "3dac5d9b888c0ebd": {
+  "reply": "c9c35d708791ebd6",
+  "sheet": "29c596fe49dd2953"
+ },
+ "434041df4c262c9c": {
+  "reply": "16ffb794802097ea",
+  "sheet": null
+ },
+ "4511dacda083a4e3": {
+  "reply": "2a25ff0aab1cdecc",
+  "sheet": "6e9880d2e1a04bf2"
+ },
+ "49cb5ac094c63a7b": {
+  "reply": "7aa909cca2cba460",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "4a5000bac2a4d679": {
+  "reply": "4955badd90504579",
+  "sheet": "44202d5c22063149"
+ },
+ "4a568fdcdbb8d278": {
+  "reply": "ae3cd4742b8dc82a",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "4ac4096391f1853e": {
+  "reply": "9132c1481383f323",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "4ae6769abc10f560": {
+  "reply": "030d983f0a7c0cc3",
+  "sheet": "b3a2468022b86f34"
+ },
+ "4c47efb1c1c2315e": {
+  "reply": "d441f8189b9160c9",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "4d78477794acf7e6": {
+  "reply": "59e7753cd0f8c6d0",
+  "sheet": "4f700298c191ce88"
+ },
+ "4f5c128f1d8306fd": {
+  "reply": "80b60cd0db85bb38",
+  "sheet": null
+ },
+ "500f88ebad9130e2": {
+  "reply": "b9b9dcad0253cb27",
+  "sheet": "1128ba216dbad4a1"
+ },
+ "501b992666912d6c": {
+  "reply": "d47a1db615717903",
+  "sheet": "37b3406b8a47981e"
+ },
+ "502c3f7aef92f731": {
+  "reply": "75f0daa15e9f16f2",
+  "sheet": null
+ },
+ "504cadd7b5057292": {
+  "reply": "13caa4b77148bd3e",
+  "sheet": "133c1190f24ed080"
+ },
+ "50f8c4c3a2f87306": {
+  "reply": "a4d6b42e7145bc8c",
+  "sheet": "32351080a0d7479e"
+ },
+ "50fc9ae267a2e26f": {
+  "reply": "76470c94e3088aa1",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "523514c31ca5c28e": {
+  "reply": "777fe840d272960e",
+  "sheet": null
+ },
+ "53af20f74b2ff188": {
+  "reply": "827e3f8e31590254",
+  "sheet": "f18b41994230550d"
+ },
+ "5780a9aa658a824d": {
+  "reply": "f07ea67696bef69e",
+  "sheet": "d70da2388e3f4613"
+ },
+ "580bf4eff9e10a59": {
+  "reply": "f0f30648af6b4c32",
+  "sheet": "4919ae4e9092bfa8"
+ },
+ "5921e1307882eb2d": {
+  "reply": "fee67f3763dfe155",
+  "sheet": "d70da2388e3f4613"
+ },
+ "59a31fc84a1ad126": {
+  "reply": "4a2936351fb71d6c",
+  "sheet": "c116e78a4d734899"
+ },
+ "5af8b5aa090a4301": {
+  "reply": "cbfadc24570834c3",
+  "sheet": "ffba5e1e9d340bbf"
+ },
+ "5bf003efbe3ba9ae": {
+  "reply": "e5cbcbac012e05b9",
+  "sheet": null
+ },
+ "5c85ef840b67370a": {
+  "reply": "7de65b259e596784",
+  "sheet": "4f700298c191ce88"
+ },
+ "5db5b2cb671dd11f": {
+  "reply": "1411b3222fa3ac5b",
+  "sheet": "b3a2468022b86f34"
+ },
+ "5f189307b6e7980f": {
+  "reply": "754adcb6f13daa82",
+  "sheet": "b3a2468022b86f34"
+ },
+ "5f954bee08d235d0": {
+  "reply": "a9c6c4b9fc82965f",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "615748854b2a087d": {
+  "reply": "1e3676a67327900b",
+  "sheet": null
+ },
+ "615ac05397d737c8": {
+  "reply": "2cd60656c0e3bfc9",
+  "sheet": "5309d926a1d3da61"
+ },
+ "61cbd59f8fd1b899": {
+  "reply": "b651da0bc523daa6",
+  "sheet": null
+ },
+ "633c73e1a2353002": {
+  "reply": "40bebbac7f5e7e84",
+  "sheet": "e51a879c905062d9"
+ },
+ "63884d08966e48e4": {
+  "reply": "9c942fed50f079dc",
+  "sheet": "b3a2468022b86f34"
+ },
+ "64ad97d6925dce23": {
+  "reply": "534f5d13f5fe6cc9",
+  "sheet": null
+ },
+ "65db2293d5ae5466": {
+  "reply": "4e122718f4ed1756",
+  "sheet": null
+ },
+ "68fa8da266b3a096": {
+  "reply": "73dfc413350dc098",
+  "sheet": "b3a2468022b86f34"
+ },
+ "6ab9a16187efd9bd": {
+  "reply": "9c477a79ee929870",
+  "sheet": "acac928179f1ea70"
+ },
+ "6e9a1a4414bbefd9": {
+  "reply": "4fd2e8e2fc9acc29",
+  "sheet": "189e647fb79514c1"
+ },
+ "7087b9401c09317f": {
+  "reply": "99fa3a89af00f9ec",
+  "sheet": "4f700298c191ce88"
+ },
+ "7092156a5729750a": {
+  "reply": "122ca5632a7fe992",
+  "sheet": null
+ },
+ "71d21979c90d013b": {
+  "reply": "ae09c1762ce65743",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "736478a09e17a835": {
+  "reply": "c0c717d03a42fdf6",
+  "sheet": null
+ },
+ "75717d0d7c60a329": {
+  "reply": "d843f4e082c05d12",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "75d99245774c725c": {
+  "reply": "6398afa79da33c0c",
+  "sheet": "6fc11c0de7f0f741"
+ },
+ "75dea76059363000": {
+  "reply": "fb630505bafda063",
+  "sheet": "7537888aa9b73a27"
+ },
+ "76b4db12121dc302": {
+  "reply": "88ee0edd4be52ea3",
+  "sheet": null
+ },
+ "77d5d8df24683f69": {
+  "reply": "a4524376bc3f220b",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "79097df188d785eb": {
+  "reply": "7cfed02167a91db1",
+  "sheet": "d70da2388e3f4613"
+ },
+ "798abc58f8533667": {
+  "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+  "raised": "NetlistError"
+ },
+ "7a07fdd1a8693b48": {
+  "reply": "b3b4cd9b6f0ba3c5",
+  "sheet": null
+ },
+ "7a57e435c265ebb4": {
+  "reply": "7630483a5ae3e5b2",
+  "sheet": null
+ },
+ "7b59aec1d3bf25f1": {
+  "reply": "e468a9bfeabdb284",
+  "sheet": "fd0b62d3879aefde"
+ },
+ "7c985e1ec5f4841c": {
+  "reply": "9d8e8f15d07a603a",
   "sheet": "14058ceaeffcba38"
  },
- "ddcba59b8fbf194e": {
-  "reply": "6ffb327263fb39a5",
+ "7e3ce291f7a565b8": {
+  "reply": "4577d41de18680b4",
   "sheet": "2f66633286ed1ad2"
  },
- "ddcef1b12b3188c5": {
-  "reply": "cea4b6439eb89a38",
+ "7e44f021f2ac0c55": {
+  "reply": "51e47c2657ee684f",
+  "sheet": "4f614343a2c6e7aa"
+ },
+ "80087630bb02fe06": {
+  "reply": "4cac364c342df496",
+  "sheet": "9130df515986b529"
+ },
+ "81303ba00ff3f2ef": {
+  "reply": "a8007b64c4da3c48",
+  "sheet": "99098b43e1a2502f"
+ },
+ "8163352b27d37706": {
+  "reply": "7b9e93b390423353",
+  "sheet": "ccc0ccf65a13b089"
+ },
+ "8267cb46a60661dc": {
+  "reply": "19b827b8c1f173cb",
   "sheet": "2f66633286ed1ad2"
  },
- "deab2e73a2ccad3c": {
-  "reply": "c0002833e10630bd",
+ "82827b4a9de968aa": {
+  "reply": "8caf2c41a3fc2e46",
+  "sheet": null
+ },
+ "837d293f52763004": {
+  "reply": "8a7ce572eaa2b4df",
+  "sheet": null
+ },
+ "83bcd0d76d733afd": {
+  "reply": "1b86a0f04751617c",
+  "sheet": "e74de70382e0ec77"
+ },
+ "83d1208a045d0506": {
+  "reply": "1411b3222fa3ac5b",
+  "sheet": "b3a2468022b86f34"
+ },
+ "859323d25184ff25": {
+  "reply": "10487e0df69d58e9",
+  "sheet": null
+ },
+ "864a957a826b5596": {
+  "reply": "cabc9934c7860555",
   "sheet": "2f66633286ed1ad2"
  },
- "df6fb8511dc9aa83": {
-  "reply": "80aaf8765feaadeb",
+ "870cc49ff96e5718": {
+  "reply": "cc3c23bfb0339c9a",
+  "sheet": "eac2755b33662a82"
+ },
+ "8786a9408f13f385": {
+  "reply": "b960765a90985f7f",
+  "sheet": "e51a879c905062d9"
+ },
+ "89b96c7192e7e3d0": {
+  "reply": "63f73cd97c7dadc9",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "8b254f91e10ef6e2": {
+  "reply": "89881b8b19402f2f",
+  "sheet": null
+ },
+ "8cc3928d3f0be85b": {
+  "reply": "91e5dc475324a5d6",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "8e66af6ce1bf4211": {
+  "reply": "9a3a9c867911068d",
+  "sheet": "6c6f80b9f8fca180"
+ },
+ "9049f32a9138eb28": {
+  "reply": "91f0c4e39a06fff8",
+  "sheet": "b3a2468022b86f34"
+ },
+ "9107ff800e81f92e": {
+  "reply": "5d8c89ceff6ea09d",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "923dced34f344075": {
+  "reply": "f8f0e953d362ae62",
+  "sheet": "2fd4f6977eb9f79a"
+ },
+ "9272b155d4eaad3a": {
+  "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
+  "raised": "PathSecurityError"
+ },
+ "930c86e71165657d": {
+  "reply": "44c76122be496e47",
+  "sheet": "a0e138e3ce059bf4"
+ },
+ "935fc8fbffc9eddf": {
+  "reply": "71cb06652073b575",
+  "sheet": "733d1ab2e59d6d40"
+ },
+ "947735ca4123abdb": {
+  "reply": "6fb822ce4182aae1",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "96d6246897d5ed43": {
+  "reply": "1702e48910951698",
+  "sheet": "1f7cd86c8e0a12c6"
+ },
+ "96e2b85a2621c264": {
+  "reply": "7d9a61dfcdeeb242",
+  "sheet": "0fe4a46d4fb4e6e1"
+ },
+ "9709c2a7f0815c88": {
+  "reply": "1411b3222fa3ac5b",
+  "sheet": "b3a2468022b86f34"
+ },
+ "970fea1dff883eb0": {
+  "reply": "29e4915f53663a41",
+  "sheet": "392e3cdd6b5d23fc"
+ },
+ "980873709d934b2e": {
+  "reply": "88555c26beb55548",
+  "sheet": "9a63168c465b5051"
+ },
+ "98653cd25955fbc9": {
+  "reply": "7eb8444421190192",
+  "sheet": "1cd64b7050cdd9bd"
+ },
+ "9984b7c1539d0d5c": {
+  "reply": "61b996e40ef8679c",
+  "sheet": "7e8b75862034a676"
+ },
+ "99963c56acd750df": {
+  "reply": "7b14617fb3d969ec",
+  "sheet": "b3a2468022b86f34"
+ },
+ "99c199df7fda9d8c": {
+  "reply": "4955badd90504579",
+  "sheet": "c064b176635b7503"
+ },
+ "9a58e6fc6043c3ee": {
+  "reply": "9dbe8eb2fa0a7b93",
+  "sheet": "eb9a6ac0e8188eef"
+ },
+ "9a92675c491f703c": {
+  "reply": "42e2d9a870199a3a",
+  "sheet": "d083b44e671b9297"
+ },
+ "9bad3433cd24f69a": {
+  "reply": "754adcb6f13daa82",
+  "sheet": "b3a2468022b86f34"
+ },
+ "9c1171dd318e901f": {
+  "reply": "85f83752d7fda9af",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "9c7901679fac3b92": {
+  "reply": "aa9a6d2009880397",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "9ddde676c75ded5c": {
+  "reply": "9222323cc00cedcc",
+  "sheet": "b53e523c278c7a15"
+ },
+ "9eab12b8296fef1e": {
+  "reply": "a683fdc3e9b9637f",
+  "sheet": "dd784a9aa9452591"
+ },
+ "a0ad81c64965725c": {
+  "reply": "b85938329fec23ea",
+  "sheet": "f13722c501757260"
+ },
+ "a113e097e5851f04": {
+  "reply": "33c041729ffb3486",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "a201c4dede4ca70a": {
+  "reply": "5baa803b2cfc4879",
+  "sheet": "65f07c55b9c1a9d6"
+ },
+ "a22486d554d011e2": {
+  "reply": "9b58c7346d8ff703",
+  "sheet": "cce88fb6b2b0cacb"
+ },
+ "a319ea9036485cf7": {
+  "varies": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ]
+ },
+ "a33a19dfbd5c73b6": {
+  "reply": "5099abbe99460be0",
+  "sheet": "5fcd33e31cbd8c08"
+ },
+ "a3ee3bc3bd2fc192": {
+  "reply": "104ef8dbc457d4b1",
+  "sheet": "d70da2388e3f4613"
+ },
+ "a4082260ccc7e565": {
+  "reply": "b11598551df4bfac",
+  "sheet": "d70da2388e3f4613"
+ },
+ "a424ce6ae6505dd6": {
+  "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
+  "raised": "NetlistError"
+ },
+ "a43057cdea081ae0": {
+  "reply": "1d879e5347884e79",
+  "sheet": "15598c6f7ef7c69d"
+ },
+ "a44265599f7b2efd": {
+  "reply": "5cc1e0a8a02bf429",
+  "sheet": "e51a879c905062d9"
+ },
+ "a53026b741c7fb10": {
+  "reply": "4664b01414cca4c6",
+  "sheet": "c071ac08a8bd3d19"
+ },
+ "a866da4571a23867": {
+  "reply": "8babc0baa3d26402",
+  "sheet": null
+ },
+ "a90e0975120f9389": {
+  "reply": "cd7841b08ba18450",
+  "sheet": "30e2f036e5f18bc4"
+ },
+ "a91ebd1ca1277849": {
+  "reply": "f21be702f973a602",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "a94ac75a5d0d898a": {
+  "reply": "494fd67321e34458",
+  "sheet": null
+ },
+ "a96e40b78b176b87": {
+  "reply": "73dfc413350dc098",
+  "sheet": "b3a2468022b86f34"
+ },
+ "ab727a4751d6cea6": {
+  "reply": "264d300bd1803b09",
+  "sheet": "d54e46e32c2352ac"
+ },
+ "ab84048f7604ca56": {
+  "reply": "c7afda5d43ee15a6",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "aca5c00f910dab7c": {
+  "reply": "20ac97bddde40ea7",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "ad0dc0c9d6f44388": {
+  "reply": "f99914ba59c1b28a",
+  "sheet": "62ecac96c2c111e7"
+ },
+ "ad1cd1efc59c5aea": {
+  "reply": "2b9ab21bd9313609",
+  "sheet": "189e647fb79514c1"
+ },
+ "b14248667c394589": {
+  "reply": "dcb5e812caec3eca",
+  "sheet": "4919ae4e9092bfa8"
+ },
+ "b1da09ad044b80fa": {
+  "reply": "e8da3da651a19ec1",
+  "sheet": null
+ },
+ "b30071d27177bdf1": {
+  "reply": "114e0c0a1d8aff91",
+  "sheet": null
+ },
+ "b3d4f2c246cdf2af": {
+  "reply": "1db54d54b896eae6",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "b4de2f6da20586d6": {
+  "reply": "b270f43a48e8372c",
+  "sheet": "7e46f18271775e61"
+ },
+ "b4f4c9ed8ae74b3c": {
+  "reply": "786ccdd84cdbfaa6",
+  "sheet": "bc9c9f192388fafc"
+ },
+ "b608d0abcf760d0f": {
+  "reply": "92299c6ed54378fc",
+  "sheet": null
+ },
+ "b69353c5f0e00bdc": {
+  "reply": "6ed90582588fd832",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "b6e2ce0c7ca67e72": {
+  "reply": "41f3146ff7f6cd2a",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "b717cafa09a8affa": {
+  "reply": "de46f08c205cc3d4",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "b789e6237fc53c2c": {
+  "reply": "643bf18c4c8e5ad4",
+  "sheet": "168171de437364ed"
+ },
+ "b898de7f6c0ca8ba": {
+  "reply": "637203065b5ed307",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "b8a17c8b4418b11c": {
+  "reply": "bc806b6912d3a02b",
+  "sheet": "509ddb679e8bfe03"
+ },
+ "b928dc9a37c6cdf4": {
+  "reply": "0acd42dc67327896",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "ba6c7cabaccf2811": {
+  "reply": "e238c8b1e6f97ea5",
+  "sheet": "53960f64fa788151"
+ },
+ "bbb4e77e870f07b5": {
+  "reply": "8344de3ee590c644",
+  "sheet": "6de60ebbdd4c2559"
+ },
+ "bc3ee0ef47f66f14": {
+  "reply": "5bafd56edbfd9a39",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "bd13657c790295e8": {
+  "reply": "998f9d76a5fe864b",
+  "sheet": null
+ },
+ "be33eecb4d8550bc": {
+  "reply": "7ecf440aa16b9ce5",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "bfaaf5ae1d58ae63": {
+  "reply": "d05515fa1c722582",
+  "sheet": "a4f8c1030672b090"
+ },
+ "c1e22b9c9e9bb8d9": {
+  "reply": "5ad404c3e315a169",
+  "sheet": null
+ },
+ "c21608e81cfdbb2d": {
+  "reply": "11045181fe183f85",
+  "sheet": "832fb497a634385d"
+ },
+ "c291784162325a1a": {
+  "reply": "50efd33cdec2effa",
+  "sheet": "02799fe4a330ce21"
+ },
+ "c3a7da66fefb5530": {
+  "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
+ "c51f4c9e48e7c216": {
+  "reply": "50d503986a7aed1b",
   "sheet": "b274158233309af4"
  },
- "e12b115ec4acf192": {
-  "reply": "f1a1d81bdf1d1489",
+ "c687aafa5eb916a9": {
+  "reply": "15e6096daf5b8d15",
+  "sheet": "0f7d0950a33ecae5"
+ },
+ "c733e4b4949a1881": {
+  "varies": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ]
+ },
+ "c7a95ce2ebefdcb2": {
+  "reply": "c373abc50e116c32",
   "sheet": null
  },
- "e275c9116bdd412e": {
-  "reply": "b6c801c53e113e8e",
+ "c7cfcb50e7277c1e": {
+  "reply": "751abf692f07206a",
   "sheet": null
  },
- "e32b5aca77acc048": {
-  "reply": "abdb28695b04418f",
+ "c7d59f0b8ded41e2": {
+  "reply": "12ff90fdfc0e6d61",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "c7f360389caaf551": {
+  "reply": "50d503986a7aed1b",
+  "sheet": "b274158233309af4"
+ },
+ "cb5be219672338cd": {
+  "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
+  "raised": "NetlistError"
+ },
+ "cbb0db0750dfb362": {
+  "reply": "f130910d0c378871",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "cc5338e1004d50ca": {
+  "reply": "42f3bf40c0091ff1",
+  "sheet": "2385a94d791ae910"
+ },
+ "cc8460928efea069": {
+  "reply": "3d69d50658decd7a",
+  "sheet": "159ab54529afe730"
+ },
+ "cd3d86fb88a1d7a5": {
+  "message": "Each hierarchical port must belong to exactly one unique label.",
+  "raised": "NetlistError"
+ },
+ "cde8ce9629bd7df9": {
+  "reply": "1411b3222fa3ac5b",
+  "sheet": "b3a2468022b86f34"
+ },
+ "cdf6400cac3d2f4b": {
+  "reply": "e1e4f60306de4a67",
   "sheet": null
  },
- "e3b8077c96634bce": {
+ "ce4ce542d588bb80": {
+  "reply": "8f51b24624171b56",
+  "sheet": "21b15924f8cb8e38"
+ },
+ "cf930ff706c2fdf6": {
+  "reply": "0b5211e835f638f7",
+  "sheet": "047439922969956b"
+ },
+ "cfb1ae22f46aef09": {
+  "reply": "a4d94242a186678f",
+  "sheet": "5950d261f0733a5f"
+ },
+ "d274facc5d153374": {
+  "reply": "540a4f327362d74d",
+  "sheet": "d70da2388e3f4613"
+ },
+ "d361218d7c8d06cf": {
+  "reply": "259eeb5aef7037c2",
+  "sheet": "858573307ac29a7b"
+ },
+ "d4633ce30411e7bf": {
+  "reply": "b4913bf3ca984150",
+  "sheet": null
+ },
+ "d7aaddef6d8fe9f6": {
+  "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
+  "raised": "NetlistError"
+ },
+ "d8c9f3bb64936cf4": {
+  "reply": "7e6eafd8da1d00b7",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "d8f7cd4c4e4c8cec": {
+  "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
+  "raised": "PathSecurityError"
+ },
+ "d93ece8e86c20be8": {
+  "reply": "17fe131e4c952f4d",
+  "sheet": null
+ },
+ "db086c3407106b00": {
+  "reply": "5836d42624c8d5ae",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "db9b2da101c7aaa0": {
+  "reply": "95612be61e5c4e0f",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "dbf0e3599530ca74": {
+  "reply": "695cffad2fe43fa6",
+  "sheet": "935c282522aab58f"
+ },
+ "dc0c48cf9463fb49": {
+  "reply": "cfd9213ca4a63e92",
+  "sheet": "d70da2388e3f4613"
+ },
+ "dc150e0bbed94a8b": {
+  "reply": "64a24e3f7bbef407",
+  "sheet": null
+ },
+ "dc31243016383cb9": {
+  "message": "injected mid-batch failure",
+  "raised": "RuntimeError"
+ },
+ "dcb6d7bfd02e850d": {
+  "reply": "8b2a420b2132548a",
+  "sheet": "ccc0ccf65a13b089"
+ },
+ "e0106f9b74225567": {
+  "reply": "9f96dcc9faeda329",
+  "sheet": "ccc0ccf65a13b089"
+ },
+ "e2967ccaa7759ed3": {
+  "reply": "16ffb794802097ea",
+  "sheet": null
+ },
+ "e3171cb637d194b0": {
+  "reply": "640a2d41ef8cddfc",
+  "sheet": "89c7502b2db3c9e2"
+ },
+ "e34baa440384ddb2": {
+  "reply": "ea74a184770846ff",
+  "sheet": null
+ },
+ "e39c1605ccfa8a55": {
+  "reply": "1411b3222fa3ac5b",
+  "sheet": "b3a2468022b86f34"
+ },
+ "e431269a1207091d": {
+  "reply": "d27e4278b4adb821",
+  "sheet": "4a8d150aa88702d6"
+ },
+ "e55ee595c7eef00d": {
+  "reply": "5660602d8bd97672",
+  "sheet": "5fc5da36b17f4a93"
+ },
+ "e6894cc7bf4ccae0": {
+  "reply": "84ed51299a06b39d",
+  "sheet": "168171de437364ed"
+ },
+ "e6a93f970ca17ffc": {
+  "reply": "2bca98fbce143c2f",
+  "sheet": "88c9ff221b645b1b"
+ },
+ "e777245db0d0e3ef": {
+  "reply": "e10e7c48632850ca",
+  "sheet": "52ecf6f819eba445"
+ },
+ "e98da906a4065ee9": {
+  "reply": "5ba0fedc9a5682b9",
+  "sheet": "88c9ff221b645b1b"
+ },
+ "eab41b7f5aa2db01": {
+  "reply": "7446cccfaf58bbae",
+  "sheet": "168171de437364ed"
+ },
+ "ecb785cedf3ecb2e": {
+  "reply": "7175e74074075d5e",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "ed7c295511a9c178": {
+  "reply": "c749b3e2fbdc7433",
+  "sheet": "d70da2388e3f4613"
+ },
+ "ef5c73b4b81d3792": {
   "varies": [
    "tests/test_edit_open_window.py::test_a_bridge_that_cannot_say_does_not_stop_the_edit",
    "tests/test_edit_open_window.py::test_a_committed_edit_is_shown_in_the_window_that_has_the_sheet_open",
@@ -932,116 +989,59 @@
    "tests/test_inspect_open_in_ltspice.py::test_the_digest_it_reports_is_the_one_an_edit_takes"
   ]
  },
- "e48f7797a853b46e": {
-  "reply": "671b49d27a6c00a8",
-  "sheet": "b3a2468022b86f34"
- },
- "e4ce4cec0ea14907": {
-  "reply": "a482274bad4b6f5c",
+ "f05dd2fdd880491c": {
+  "reply": "825e45e2043fb937",
   "sheet": "2f66633286ed1ad2"
  },
- "e7189036c6ed8912": {
-  "reply": "04feea2725d62ea4",
-  "sheet": "4464b9a7038d05c9"
+ "f10f92044cab325c": {
+  "varies": [
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-False]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-False]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-False]"
+  ]
  },
- "e72011a5ee074f83": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
+ "f19df4ac751a6f77": {
+  "reply": "3d369d781be9e8e1",
+  "sheet": "0c9cf7c74f9326ad"
  },
- "ea05734b4af1ef87": {
-  "reply": "79ac5de9c41e16dd",
-  "sheet": "1cd64b7050cdd9bd"
+ "f273495b2fd2a846": {
+  "reply": "943a6745c34ecd8a",
+  "sheet": "49b1144b74853f95"
  },
- "ea1cde486ba5c3a0": {
-  "reply": "96fe3815321f894a",
-  "sheet": "4919ae4e9092bfa8"
+ "f328953e68e2f059": {
+  "reply": "bc03959dbc22ec77",
+  "sheet": "ffb9eba3962b6fc3"
  },
- "ea3e9cb57029d584": {
-  "reply": "a1b6fa6c76217bc6",
-  "sheet": "31b13aab2a2a8ebe"
+ "f56ef20a1fd63e07": {
+  "reply": "d509e9f253645251",
+  "sheet": "842d0f37c2e53812"
  },
- "eac2983a7153d753": {
-  "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
-  "raised": "NetlistError"
+ "f6561f060543f04e": {
+  "reply": "7859200c74c719e0",
+  "sheet": "a5bda05d7e572abc"
  },
- "edc7e0cf32afa669": {
-  "reply": "e7e28687e7383630",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "ee6637a43a7a8b3e": {
-  "reply": "bb2277608018d35c",
-  "sheet": null
- },
- "eec06e85e113c5cd": {
-  "reply": "fc23d2f08f7a9111",
-  "sheet": null
- },
- "ef1170e4819294e1": {
-  "reply": "8d5050c1983f5928",
-  "sheet": null
- },
- "f1e62c1692a43d30": {
-  "reply": "1d8da7cd57861de9",
-  "sheet": null
- },
- "f232d88ee1adfa58": {
-  "reply": "d5ceb196bcd55e2b",
-  "sheet": "ca4f09dc17968e9c"
- },
- "f5bdac8bcc0c975b": {
-  "reply": "67ccdde54770e73e",
-  "sheet": null
- },
- "f69c2113182e20de": {
-  "reply": "01f86e78eed60c19",
-  "sheet": null
- },
- "f780cc040c0414d8": {
-  "reply": "c25d9a89a2d782d1",
-  "sheet": "99098b43e1a2502f"
- },
- "f8052dc6717df75a": {
-  "reply": "7111069b411949ee",
-  "sheet": "4f700298c191ce88"
- },
- "f826a886de78c99b": {
-  "reply": "0a2404efca5e8609",
-  "sheet": "6c6f80b9f8fca180"
- },
- "f895b7bd9757fc68": {
-  "reply": "3210e3b2ac8643b4",
-  "sheet": null
- },
- "f92542868de2907c": {
-  "reply": "3fbd15bfe143d5c2",
-  "sheet": "d54e46e32c2352ac"
- },
- "f9a52563a7f61fd6": {
-  "reply": "71979520808debac",
-  "sheet": "018d0b7888b32527"
- },
- "fa29f0f4e21a7e0d": {
-  "reply": "f72d439ac842a9f7",
-  "sheet": null
- },
- "fade64e2cd1010b3": {
-  "reply": "6798853f5bfa964b",
-  "sheet": "b3a2468022b86f34"
- },
- "fbc46e4357b0d707": {
-  "reply": "73b978eafc8fad7a",
-  "sheet": "b53e523c278c7a15"
- },
- "fd03a3545a6fa225": {
-  "reply": "faab294ee34e4af8",
+ "f69d086bae990dfb": {
+  "reply": "44e1c7d05851d9b4",
   "sheet": "1ae5073d11532c6c"
  },
- "feaa75ec02159b3c": {
-  "reply": "fc7731b004824cae",
-  "sheet": null
+ "f84919f433f5af44": {
+  "reply": "dc7a7f35c7f3c404",
+  "sheet": "0fe4a46d4fb4e6e1"
  },
- "ff6f1613f0327ddc": {
-  "reply": "343c053b8113a87d",
-  "sheet": null
+ "f94133a15b93f0b2": {
+  "reply": "73dfc413350dc098",
+  "sheet": "b3a2468022b86f34"
+ },
+ "fd2bb153cfb902d2": {
+  "reply": "5a47ebee15d6a4c4",
+  "sheet": "ca4f09dc17968e9c"
+ },
+ "ffcd8c3a15d140f5": {
+  "reply": "538391ce6c780bc8",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "fff1dac10970a8b5": {
+  "reply": "27982def881342ad",
+  "sheet": "003b5c758daab3c8"
  }
 }

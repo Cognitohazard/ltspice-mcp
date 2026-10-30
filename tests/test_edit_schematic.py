@@ -99,7 +99,7 @@ _DIVIDER_OPS: list[dict] = [
 
 async def _build_blank(state: SessionState, name: str, ops: list[dict], **kw) -> dict:
     result = await handle_edit_schematic(
-        _edit_input(target=f"{name}.asc", base="blank", ops=ops, **kw), state
+        _edit_input(path=f"{name}.asc", base="blank", ops=ops, **kw), state
     )
     return _assert_schema(result)
 
@@ -232,7 +232,7 @@ async def test_existing_edit_requires_and_honors_sha(asc_state, work_dir):
     add_r3 = [{"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}]
     ok = _assert_schema(
         await handle_edit_schematic(
-            _edit_input(target="rev.asc", expected_sha256=sha0, ops=add_r3), asc_state
+            _edit_input(path="rev.asc", expected_sha256=sha0, ops=add_r3), asc_state
         )
     )
     assert ok["outcome"] == "complete"
@@ -263,7 +263,7 @@ async def test_stale_sha_returns_revision_conflict(config, work_dir, asc_symbols
 
     winner = _assert_schema(
         await handle_edit_schematic(
-            _edit_input(target="conflict.asc", expected_sha256=sha0, ops=add("R3", 1000)),
+            _edit_input(path="conflict.asc", expected_sha256=sha0, ops=add("R3", 1000)),
             session_a,
         )
     )
@@ -272,7 +272,7 @@ async def test_stale_sha_returns_revision_conflict(config, work_dir, asc_symbols
 
     loser = _assert_schema(
         await handle_edit_schematic(
-            _edit_input(target="conflict.asc", expected_sha256=sha0, ops=add("R4", 1300)),
+            _edit_input(path="conflict.asc", expected_sha256=sha0, ops=add("R4", 1300)),
             stale,
         )
     )
@@ -307,7 +307,7 @@ async def test_first_edit_commits_with_the_digest_inspect_reported(asc_state, wo
     committed = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="firstedit.asc",
+                path="firstedit.asc",
                 expected_sha256=found["data"]["sha256"],
                 ops=[
                     {
@@ -338,7 +338,7 @@ async def test_missing_expected_sha_refusal_hands_back_the_current_digest(asc_st
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="needsha.asc",
+                path="needsha.asc",
                 ops=[
                     {
                         "op": "add_component",
@@ -372,7 +372,7 @@ async def test_dry_run_needs_no_expected_sha_and_hands_back_the_digest(asc_state
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="drysha.asc",
+                path="drysha.asc",
                 dry_run=True,
                 ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
             ),
@@ -396,7 +396,7 @@ async def test_op_less_read_needs_no_expected_sha(asc_state, work_dir):
 
     data = _assert_schema(
         await handle_edit_schematic(
-            _edit_input(target="readsha.asc", ops=[], return_views=["pin_legend"]),
+            _edit_input(path="readsha.asc", ops=[], return_views=["pin_legend"]),
             asc_state,
         )
     )
@@ -415,7 +415,7 @@ async def test_dry_run_reports_a_stale_expected_sha_as_a_fact(asc_state, work_di
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="stalesha.asc",
+                path="stalesha.asc",
                 expected_sha256=stale,
                 dry_run=True,
                 ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
@@ -434,7 +434,7 @@ async def test_dry_run_reports_a_stale_expected_sha_as_a_fact(asc_state, work_di
     committed = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="stalesha.asc",
+                path="stalesha.asc",
                 expected_sha256=stale,
                 ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
             ),
@@ -464,7 +464,7 @@ async def test_crash_before_rename_leaves_the_target_and_writes_nothing_else(
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="crash.asc",
+                path="crash.asc",
                 expected_sha256=sha0,
                 ops=[
                     {
@@ -526,7 +526,7 @@ async def test_render_failure_leaves_the_target_and_evicts_the_edited_editor(
     op = {"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}
     with pytest.raises(OSError, match="disk full"):
         await handle_edit_schematic(
-            _edit_input(target="render.asc", expected_sha256=first["sha256"], ops=[op]),
+            _edit_input(path="render.asc", expected_sha256=first["sha256"], ops=[op]),
             asc_state,
         )
     monkeypatch.undo()
@@ -565,7 +565,7 @@ async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypat
 def test_connect_op_rejected_by_model():
     with pytest.raises(ValidationError):
         _edit_input(
-            target="x.asc",
+            path="x.asc",
             ops=[{"op": "connect", "from_pin": "R1.1", "to_pin": "R2.1"}],
         )
 
@@ -596,7 +596,7 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="dry.asc",
+                path="dry.asc",
                 expected_sha256=sha0,
                 dry_run=True,
                 return_views=["pin_legend"],
@@ -633,7 +633,7 @@ async def test_empty_ops_with_views_reads_the_sheet(asc_state, work_dir):
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="readonly.asc",
+                path="readonly.asc",
                 expected_sha256=sha0,
                 ops=[],
                 return_views=["pin_legend"],
@@ -653,7 +653,7 @@ async def test_empty_ops_without_views_is_rejected(asc_state):
     with pytest.raises(NetlistError, match="return_views"):
         await handle_edit_schematic(
             _edit_input(
-                target="noop.asc",
+                path="noop.asc",
                 expected_sha256=_sha(Path(asc_state.working_dir) / "noop.asc"),
                 ops=[],
                 return_views=[],
@@ -667,7 +667,7 @@ async def test_dry_run_surfaces_all_op_failures(asc_state):
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="dryfail.asc",
+                path="dryfail.asc",
                 expected_sha256=_sha(Path(asc_state.working_dir) / "dryfail.asc"),
                 dry_run=True,
                 ops=[
@@ -698,7 +698,7 @@ async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, wo
     follow_up = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="touched-scope.asc",
+                path="touched-scope.asc",
                 expected_sha256=_sha(work_dir / "touched-scope.asc"),
                 ops=[{"op": "move_component", "reference": "R2", "x": 700, "y": 300}],
             ),
@@ -711,7 +711,7 @@ async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, wo
     whole_sheet = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="touched-scope.asc",
+                path="touched-scope.asc",
                 expected_sha256=_sha(work_dir / "touched-scope.asc"),
                 return_views=["pin_legend"],
                 ops=[{"op": "set_component_value", "reference": "R2", "value": "5k"}],
@@ -730,7 +730,7 @@ async def test_the_parts_a_move_lists_are_the_ones_it_touched(asc_state, work_di
     moved = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="move-scope.asc",
+                path="move-scope.asc",
                 expected_sha256=_sha(work_dir / "move-scope.asc"),
                 ops=[{"op": "move", "references": ["R2"], "dx": 160, "dy": 0, "drag": True}],
             ),
@@ -743,7 +743,7 @@ async def test_the_parts_a_move_lists_are_the_ones_it_touched(asc_state, work_di
 
 async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, work_dir):
     args = _edit_input(
-        target="dry-full.asc",
+        path="dry-full.asc",
         base="blank",
         dry_run=True,
         return_views=["pin_legend"],
@@ -782,7 +782,7 @@ async def test_views_are_bound_to_the_committed_bytes_not_a_later_file_revision(
 
     monkeypatch.setattr(se, "_commit_asc", commit_then_peer_revision)
     args = _edit_input(
-        target="interleaved.asc",
+        path="interleaved.asc",
         base="blank",
         return_views=["pin_legend"],
         ops=_DIVIDER_OPS,
@@ -1563,7 +1563,7 @@ async def test_the_python_seam_scopes_the_same_way_and_completes_the_view(asc_st
     complete rather than paged."""
     sheet = await _untidy_sheet(asc_state, "untidy-api")
     args = _edit_input(
-        target=sheet.name,
+        path=sheet.name,
         expected_sha256=_sha(sheet),
         dry_run=True,
         return_views=["preexisting"],
@@ -1629,7 +1629,7 @@ async def test_view_pagination_cursor_resumption(asc_state):
         page = _assert_schema(
             await handle_edit_schematic(
                 _edit_input(
-                    target="pages.asc",
+                    path="pages.asc",
                     expected_sha256=_sha(Path(asc_state.working_dir) / "pages.asc"),
                     dry_run=True,
                     return_views=["pin_legend"],
@@ -1671,7 +1671,7 @@ async def test_cross_view_cursor_rejected(asc_state):
     with pytest.raises(NetlistError, match="pin_legend"):
         await handle_edit_schematic(
             _edit_input(
-                target="xcursor.asc",
+                path="xcursor.asc",
                 expected_sha256=_sha(Path(asc_state.working_dir) / "xcursor.asc"),
                 dry_run=True,
                 view_cursors={"pin_legend": legend_cursor},
@@ -1695,7 +1695,7 @@ async def test_malformed_touched_cursor_is_rejected_before_the_sheet_is_written(
     with pytest.raises(NetlistError, match="touched"):
         await handle_edit_schematic(
             _edit_input(
-                target="touchedcursor.asc",
+                path="touchedcursor.asc",
                 expected_sha256=_sha(sheet),
                 return_views=["touched"],
                 view_cursors={"touched": "tampered"},
@@ -1753,7 +1753,7 @@ def test_the_arguments_this_tool_no_longer_takes(payload: dict):
     clients drop, which the other six tools stopped advertising.
     """
     with pytest.raises(ValidationError):
-        _edit_input(target="gone.asc", base="blank", ops=_DIVIDER_OPS, **payload)
+        _edit_input(path="gone.asc", base="blank", ops=_DIVIDER_OPS, **payload)
 
 
 # ---------------------------------------------------------------------------
@@ -1963,7 +1963,7 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="amp.asc",
+                path="amp.asc",
                 expected_sha256=_sha(sheet),
                 ops=_ADD_R2,
                 compare={"reference": "amp_orig.asc", "mode": mode},
@@ -2026,7 +2026,7 @@ async def test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export(
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="amp.asc",
+                path="amp.asc",
                 expected_sha256=_sha(sheet),
                 ops=_ADD_R2,
                 compare={"reference": "amp_orig.asc", "mode": "structural_diff"},
@@ -2058,7 +2058,7 @@ async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="amp.asc",
+                path="amp.asc",
                 expected_sha256=_sha(sheet),
                 ops=_ADD_R2,
                 compare={"reference": "amp_orig.asc", "mode": "structural_diff"},
@@ -2113,7 +2113,7 @@ async def test_post_commit_reference_error_returns_committed_envelope(
     nxt = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="refboom.asc",
+                path="refboom.asc",
                 expected_sha256=data["sha256"],
                 ops=[
                     {
@@ -2171,7 +2171,7 @@ async def test_post_commit_view_error_returns_committed_envelope(asc_state, work
     monkeypatch.setattr(se, "paginate_view", boom)
 
     result = await handle_edit_schematic(
-        _edit_input(target="viewboom.asc", base="blank", ops=_DIVIDER_OPS), asc_state
+        _edit_input(path="viewboom.asc", base="blank", ops=_DIVIDER_OPS), asc_state
     )
     data = _assert_schema(result)
     committed = work_dir / "viewboom.asc"
@@ -2191,7 +2191,7 @@ async def test_bad_op_aborts_transaction_nothing_written(asc_state, work_dir):
     data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
-                target="abort.asc",
+                path="abort.asc",
                 base="blank",
                 ops=[
                     {
@@ -2264,7 +2264,7 @@ class TestRenderAndCompareArguments:
 
     @staticmethod
     def _edit(**kwargs: Any) -> EditSchematicInput:
-        return EditSchematicInput.model_validate({"target": "sheet.asc", "ops": [], **kwargs})
+        return EditSchematicInput.model_validate({"path": "sheet.asc", "ops": [], **kwargs})
 
     @pytest.mark.parametrize(
         "payload",
@@ -2319,7 +2319,7 @@ class TestHierarchicalPortPreservation:
         path = self._sheet(work_dir)
         result = await handle_edit_schematic(
             _edit_input(
-                target=str(path),
+                path=str(path),
                 expected_sha256=_sha(path),
                 ops=[{"op": "add_directive", "instruction": ".param marker=1"}],
             ),
@@ -2340,7 +2340,7 @@ class TestHierarchicalPortPreservation:
         with pytest.raises(NetlistError, match="port"):
             await handle_edit_schematic(
                 _edit_input(
-                    target=str(path),
+                    path=str(path),
                     expected_sha256=_sha(path),
                     ops=[{"op": "remove_net_label", "x": 0, "y": 0}],
                 ),
@@ -2416,7 +2416,7 @@ class TestHierarchicalPortPreservation:
             assert not loaded_child.updated
         before = {p: p.read_bytes() for p in (parent, outer, child)}
         request = _edit_input(
-            target=str(parent),
+            path=str(parent),
             expected_sha256=_sha(parent),
             dry_run=dry_run,
             ops=[{"op": "add_directive", "instruction": ".param parent_change=1"}],
@@ -2459,7 +2459,7 @@ _MID_LABEL = {"op": "add_net_label", "net": "MID", "x": 40, "y": 0}
 
 async def _commit(state: SessionState, path: Path, op: dict = _MID_LABEL, **kw) -> dict:
     """Commit ``op`` to the sheet at ``path``, quoting its current digest."""
-    request = _edit_input(target=str(path), expected_sha256=_sha(path), ops=[op], **kw)
+    request = _edit_input(path=str(path), expected_sha256=_sha(path), ops=[op], **kw)
     return _assert_schema(await handle_edit_schematic(request, state))
 
 
@@ -2681,7 +2681,7 @@ class TestPathsThatLeaveTheSheetAsItIs:
         assert se._render_editor_text(AscEditor(path)).encode("utf-8") != self.SHEET
         before = file_at(path)
         data = _assert_schema(
-            await handle_edit_schematic(_edit_input(target=str(path), **request_fields), asc_state)
+            await handle_edit_schematic(_edit_input(path=str(path), **request_fields), asc_state)
         )
         assert data["outcome"] == "complete"
         assert data["commit_state"] == commit_state

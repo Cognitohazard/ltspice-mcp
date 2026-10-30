@@ -60,7 +60,7 @@ from tests.test_measurement_aggregation import VFINAL as SWEEP_VFINAL
 
 
 def _source(raw: Path, label: str = "dut") -> dict[str, Any]:
-    return {"raw_path": str(raw), "label": label}
+    return {"path": str(raw), "label": label}
 
 
 def _args(raw: Path, recipes: list[dict[str, Any]], **extra: Any) -> AnalyzeResultsInput:
@@ -301,9 +301,7 @@ async def test_a_source_without_a_label_is_named_after_its_file(
     recipe = {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}
 
     single = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {"sources": [{"raw_path": str(raw)}], "recipes": [recipe]}
-        ),
+        AnalyzeResultsInput.model_validate({"sources": [{"path": str(raw)}], "recipes": [recipe]}),
         state_no_sim,
     )
     assert single.structured_content is not None
@@ -313,9 +311,9 @@ async def test_a_source_without_a_label_is_named_after_its_file(
     args = AnalyzeResultsInput.model_validate(
         {
             "sources": [
-                {"raw_path": str(raw)},
-                {"raw_path": str(raw)},
-                {"raw_path": str(raw), "label": raw.stem},
+                {"path": str(raw)},
+                {"path": str(raw)},
+                {"path": str(raw), "label": raw.stem},
             ],
             "recipes": [recipe],
         }
@@ -329,8 +327,8 @@ async def test_a_source_without_a_label_is_named_after_its_file(
         AnalyzeResultsInput.model_validate(
             {
                 "sources": [
-                    {"raw_path": str(raw), "label": "same"},
-                    {"raw_path": str(raw), "label": "same"},
+                    {"path": str(raw), "label": "same"},
+                    {"path": str(raw), "label": "same"},
                 ],
                 "recipes": [recipe],
             }
@@ -360,7 +358,7 @@ async def test_repeated_entries_are_read_once_and_said(
 
     args = AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"raw_path": str(raw), "label": "dut", "runs": [0, 0]}],
+            "sources": [{"path": str(raw), "label": "dut", "runs": [0, 0]}],
             "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
         }
     )
@@ -1193,7 +1191,7 @@ async def test_one_cause_relays_once_though_each_run_logged_its_own_numbers(
             base_log + f"\nTime step too small; time = {4.4e-05 + index * 1e-7:.7e}, "
             f"timestep = {1.2e-19 / (index + 1):.4e}\n"
         )
-        sources.append({"raw_path": str(raw), "label": f"corner{index}"})
+        sources.append({"path": str(raw), "label": f"corner{index}"})
 
     result = await handle_analyze_results(
         AnalyzeResultsInput.model_validate(
@@ -1318,7 +1316,7 @@ async def test_raw_path_has_null_deck_hash_and_provenance_observation(
     # provenance to offer.
     assert "deck_sha256" not in value
     assert any(
-        observation["code"] == "raw_path_without_deck_provenance"
+        observation["code"] == "path_without_deck_provenance"
         for observation in data["observations"]
     )
 
@@ -1331,7 +1329,7 @@ async def test_raw_path_run_selection_reports_nonzero_outer_runs_missing(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     args = AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"raw_path": str(raw), "label": "raw", "runs": [0, 3]}],
+            "sources": [{"path": str(raw), "label": "raw", "runs": [0, 3]}],
             "recipes": [{"key": "summary", "metric": "summary"}],
         }
     )
@@ -1759,7 +1757,7 @@ async def test_continuation_accepts_an_echo_and_refuses_a_change(
     silently dropped."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     original = {
-        "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+        "sources": [{"path": str(raw), "label": "dut", "runs": list(range(121))}],
         "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
     }
     first = await handle_analyze_results(
@@ -1795,7 +1793,7 @@ async def test_truncated_missing_cases_page_is_followable(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     args = AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+            "sources": [{"path": str(raw), "label": "dut", "runs": list(range(121))}],
             "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
         }
     )
@@ -1838,7 +1836,7 @@ async def test_work_and_coverage_cursors_advance_independently(
     """
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     request = {
-        "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+        "sources": [{"path": str(raw), "label": "dut", "runs": list(range(121))}],
         "recipes": [
             {
                 "key": "values",
@@ -2308,7 +2306,7 @@ async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
         {
             "sources": [
                 {
-                    "raw_path": str(raw),
+                    "path": str(raw),
                     "label": "dut",
                     "dialect": None if command else "ngspice",
                 }
@@ -3039,7 +3037,7 @@ def _meas_failed_sources(work_dir: Path) -> list[dict[str, Any]]:
     for build in recorded_ltspice.BUILDS:
         log = work_dir / f"meas_failed_{build}.log"
         shutil.copy(recorded_ltspice.recorded(build, "log/meas_failed.log"), log)
-        sources.append({"log_path": str(log), "label": build})
+        sources.append({"path": str(log), "label": build})
     return sources
 
 
@@ -3447,7 +3445,7 @@ class TestIncludeFlagList:
     def _include(value: Any):
         return AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": "r.raw", "label": "dut"}],
+                "sources": [{"path": "r.raw", "label": "dut"}],
                 "recipes": [{"key": "s", "metric": "summary"}],
                 "include": value,
             }

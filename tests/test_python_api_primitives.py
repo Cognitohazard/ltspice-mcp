@@ -113,12 +113,12 @@ def test_raw_result_xor_step_slicing_and_mutation_isolation(
     with pytest.raises(TypeError, match="exactly one"):
         api.load_raw()
     with pytest.raises(TypeError, match="exactly one"):
-        api.load_raw(raw_path="one.raw", job_id="job-one")
+        api.load_raw(path="one.raw", job_id="job-one")
 
     raw_path = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     # The receipt hands a caller the raw path; it is the one natural positional.
-    assert api.load_raw(raw_path).source == api.load_raw(raw_path=raw_path).source
-    result = api.load_raw(raw_path=raw_path)
+    assert api.load_raw(raw_path).source == api.load_raw(path=raw_path).source
+    result = api.load_raw(path=raw_path)
     assert isinstance(result, RawResult)
     assert result.source == raw_path.resolve()
     assert result.analysis_type == "transient"
@@ -143,7 +143,7 @@ def test_raw_result_xor_step_slicing_and_mutation_isolation(
     mutated_axis[:] = -67890
     result.steps[0]["r"] = -1
 
-    reloaded = api.load_raw(raw_path=raw_path)
+    reloaded = api.load_raw(path=raw_path)
     np.testing.assert_array_equal(reloaded.trace("V(out)", step=0), original_wave)
     np.testing.assert_array_equal(reloaded.axis(step=0), original_axis)
     assert reloaded.steps[0] == {"r": 1.0}
@@ -154,7 +154,7 @@ def test_raw_result_preserves_ac_complex_trace_and_real_axis(
     work_dir: Path,
 ) -> None:
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    result = SyncApi(state_no_sim).load_raw(raw_path=raw_path)
+    result = SyncApi(state_no_sim).load_raw(path=raw_path)
     trace = result.trace("V(out)")
     axis = result.axis()
 
@@ -207,7 +207,7 @@ def test_raw_result_uses_captured_steps_without_reopening_sibling_log(
 
     monkeypatch.setattr(services, "load_raw", fake_load)
     monkeypatch.setattr(services, "bounded_parse", forbidden_parent_parse)
-    result = SyncApi(state_no_sim).load_raw(raw_path=raw_path)
+    result = SyncApi(state_no_sim).load_raw(path=raw_path)
 
     assert result.steps == [{"gain": 10}, {"gain": 20}, {"gain": 40}]
     np.testing.assert_array_equal(result.trace("V(out)", step=2), np.array([2.0, 3.0]))
@@ -230,7 +230,7 @@ def test_raw_parser_refusal_propagates_through_api(
     api = Api()
     try:
         with pytest.raises(ResultError, match="exceeded"):
-            api.load_raw(raw_path=raw_path)
+            api.load_raw(path=raw_path)
     finally:
         api.close()
 
@@ -251,9 +251,27 @@ def test_load_raw_runs_on_the_concrete_api_private_loop(
     patch_stub_bootstrap(monkeypatch, state_no_sim)
     monkeypatch.setattr(services, "load_raw", observed_load)
     with Api() as api:
-        result = api.load_raw(raw_path=raw_path)
+        result = api.load_raw(path=raw_path)
         assert seen_threads == [api._loop_thread.ident]
         assert result.trace("V(out)").size > 0
+
+
+def test_the_older_file_keywords_are_still_accepted(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    log = raw.with_suffix(".log")
+    patch_stub_bootstrap(monkeypatch, state_no_sim)
+    with Api() as api:
+        assert api.load_raw(raw_path=raw).signals == api.load_raw(raw).signals
+        assert api.measurements(log_path=log) == api.measurements(log)
+        assert api.device_op_points(log_path=log) == api.device_op_points(log)
+        with pytest.raises(TypeError, match="Give path or raw_path, not both"):
+            api.load_raw(raw, raw_path=raw)
+        with pytest.raises(TypeError, match="Give path or log_path, not both"):
+            api.measurements(log, log_path=log)
 
 
 def test_measurements_support_cases_and_relay_contained_loader_failure(
@@ -345,7 +363,7 @@ def test_archetype_build_verify_and_recorded_analysis_through_api(
     patch_stub_bootstrap(monkeypatch, asc_state)
     with Api() as api:
         built = api.edit_schematic(
-            target="api_archetypes.asc",
+            path="api_archetypes.asc",
             base="blank",
             ops=[
                 {
@@ -390,7 +408,7 @@ def test_archetype_build_verify_and_recorded_analysis_through_api(
 
         recorded = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         analyzed = api.analyze_results(
-            sources=[{"raw_path": str(recorded), "label": "recorded"}],
+            sources=[{"path": str(recorded), "label": "recorded"}],
             recipes=[{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
         )
         assert analyzed["coverage"]["runs_analyzed"] == 1

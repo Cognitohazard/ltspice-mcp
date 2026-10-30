@@ -797,9 +797,12 @@ console files as they were read.
 Input:
 
 ```
-sources    list[{job_id? | raw_path? | log_path?, runs?: "all"|[int]|{case_ids}, label?,
+sources    list[{job_id? | path?, runs?: "all"|[int]|{case_ids}, label?,
                  plot_index?: int|null, dialect?: str|null,
                  other_raw?: "fra_1"|"op"}]
+                          path names a file the server did not run: a .log
+                          (in any case) is read alone, any other file as a
+                          RAW with the .log of the same name
                           other_raw (job sources only) reads each case's raw
                           of that kind, as its row's other_raws lists it,
                           instead of its raw; a case that wrote none is a
@@ -823,8 +826,8 @@ continue   {result_set_id, cursor}   resumes a budget-truncated call; request
 `continue` is the wire spelling; the Python attribute is `continuation`.
 
 `plot_index` is null or a strict nonnegative integer; when it is omitted, the
-first plot is selected only if a RAW recipe reads one. A `log_path` source
-refuses plot selection. `dialect` is null or one of `ltspice`, `ngspice`,
+first plot is selected only if a RAW recipe reads one. A source whose `path`
+is a `.log` refuses plot selection. `dialect` is null or one of `ltspice`, `ngspice`,
 `qspice`, `xyce`; an explicit dialect must agree with the raw file's header
 and with the simulator the job recorded. `plot_waveform` and the attached
 `run_experiments.analyze` block accept the same selectors and the same
@@ -846,10 +849,15 @@ log as read when the result set was created, string values included; no other
 log is read for them.
 
 The `measurements` recipe reads the `.meas` results in each source's log once,
-including a `log_path` source and a finished job case with no RAW. Its rows
-have null `plot_index` and step fields (the default row omits them), and the
-recipe refuses `step` and `all_steps`, because it does not map log values to
-`.step` iterations. Tables the simulator prints in its log are read through
+including a `.log` `path` source and a finished job case with no RAW. Its rows
+have null `plot_index`. With neither `step` nor `all_steps`, a row holds each
+measurement's statistics over every step and null step fields (the default row
+omits them). With `all_steps` the recipe returns one row per step, and with
+`step` the row of the step the selector picks, each with its `step_index` and
+the `step_values` of the log's `.step` line for that step: row n of a stepped
+`.meas` table is the step of the n-th `.step` line on both LTspice builds. A
+log whose `.step` lines do not number its tables' rows is refused for `step`
+and `all_steps`; LTspice writes no `.step` line for a stepped `.op`. Tables the simulator prints in its log are read through
 `inspect(kind="results", view="native_tables")`, not through a recipe. In a
 mixed request, a RAW recipe fails on its own when the RAW is missing or
 malformed, and valid log measurements are still returned. A source's
@@ -858,8 +866,7 @@ their hashes, and needs no readable RAW. The server does not take the
 producing simulator from a log's contents or from the session's default
 simulator, so only a job source has one. `include.provenance` reports
 `explicit_dialect` and `producing_dialect` separately; `measurements` rows
-report only the producing dialect, which is null for a `raw_path` or
-`log_path` source. A continuation reports `source_drift` for a source whose
+report only the producing dialect, which is null for a `path` source. A continuation reports `source_drift` for a source whose
 log or console file changed, or appeared after being absent, as it does for a
 changed RAW.
 
@@ -939,7 +946,7 @@ continuation replays them.
   60 s), on top of the deadline on each parse. Exceeding it returns partial
   results and a `result_set_id`, stored in the working directory's store. A
   result set that reads a job is deleted when the job is ("Job model", §3.1);
-  one that reads only `raw_path` or `log_path` sources expires after
+  one that reads only `path` sources expires after
   `[analysis] result_set_ttl_hours` (default 24). After it is gone, send the
   request again. A request for more than one call can compute, such as every
   waveform of a 300-run Monte Carlo, returns what was computed and that
@@ -971,7 +978,7 @@ continuation replays them.
   the sources again. After that read, every call completes at least one recipe
   evaluation, and work left over when the budget runs out continues through
   the returned `result_set_id`.
-- A `raw_path` source has no job provenance, so its rows have
+- A `path` source has no job provenance, so its rows have
   `deck_sha256: null` and an observation.
 - Full-resolution data is returned as artifact handles
   `{path, content_type, sha256, bytes}`. Inline waveform data is always
@@ -990,7 +997,7 @@ source_hashes, result_set_id?, hint`.
 editing one are the same operation; `base` selects which.
 
 ```
-target              .asc path (created if absent)
+path                .asc path (created if absent)
 base                "existing" (default) | "blank"
                     blank = treat the sheet as empty before applying ops;
                     existing = deltas preserving untouched content
@@ -1279,7 +1286,7 @@ at `apply_ops` or `stage_plot_settings`, and nothing is written.
 `verify_circuit` lints them but never changes them. A whole circuit can be
 built in one `edit_schematic{base: "blank"}` call.
 
-Output: `outcome, commit_state ("committed" | "not_committed"), target,
+Output: `outcome, commit_state ("committed" | "not_committed"), path,
 sha256, build_id, stages[] (the stages that did not
 complete; empty on success), netlist? (only when a
 compare did not confirm equivalence), verification?,

@@ -837,7 +837,9 @@ RenderArgument: TypeAlias = Annotated[
 
 
 class VerifyCircuitInput(ToolInput):
-    path: str = Field(description=f"Circuit to check: .asc or {NETLIST_SUFFIX_TEXT}.")
+    path: str = Field(
+        min_length=1, description=f"Circuit to check: .asc or {NETLIST_SUFFIX_TEXT}."
+    )
     checks: list[Literal["syntax", "symbols", "export", "layout", "quality", "compare"]] | None = (
         Field(
             default=None,

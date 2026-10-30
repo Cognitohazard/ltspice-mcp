@@ -497,7 +497,7 @@ class TestSchematicTools:
         async with mcp_session(tmp_path) as session:
             result = await session.call_tool(
                 "edit_schematic",
-                {"target": "divider.asc", "base": "blank", "ops": DIVIDER_OPS},
+                {"path": "divider.asc", "base": "blank", "ops": DIVIDER_OPS},
             )
             assert not result.is_error, tool_text(result)
             data = _data(result)
@@ -526,7 +526,7 @@ class TestSchematicTools:
             first = _data(
                 await session.call_tool(
                     "edit_schematic",
-                    {"target": "guarded.asc", "base": "blank", "ops": DIVIDER_OPS},
+                    {"path": "guarded.asc", "base": "blank", "ops": DIVIDER_OPS},
                 )
             )
             committed = (tmp_path / "guarded.asc").read_bytes()
@@ -537,7 +537,7 @@ class TestSchematicTools:
             stale = await session.call_tool(
                 "edit_schematic",
                 {
-                    "target": "guarded.asc",
+                    "path": "guarded.asc",
                     "ops": add_c1,
                     "expected_sha256": "0" * 64,
                 },
@@ -548,7 +548,7 @@ class TestSchematicTools:
             fresh = await session.call_tool(
                 "edit_schematic",
                 {
-                    "target": "guarded.asc",
+                    "path": "guarded.asc",
                     "ops": add_c1,
                     "expected_sha256": first["sha256"],
                 },
@@ -562,7 +562,7 @@ class TestSchematicTools:
             result = await session.call_tool(
                 "edit_schematic",
                 {
-                    "target": "nosym.asc",
+                    "path": "nosym.asc",
                     "base": "blank",
                     "ops": [
                         {
@@ -589,7 +589,7 @@ class TestSchematicTools:
         async with mcp_session(tmp_path) as session:
             await session.call_tool(
                 "edit_schematic",
-                {"target": "checked.asc", "base": "blank", "ops": DIVIDER_OPS},
+                {"path": "checked.asc", "base": "blank", "ops": DIVIDER_OPS},
             )
             result = await session.call_tool("verify_circuit", {"path": "checked.asc"})
             assert not result.is_error, tool_text(result)
@@ -645,7 +645,7 @@ class TestSecurity:
         result = await shared_session.call_tool(
             "analyze_results",
             {
-                "sources": [{"raw_path": "/etc/passwd", "label": "outside"}],
+                "sources": [{"path": "/etc/passwd", "label": "outside"}],
                 "recipes": [{"key": "s", "metric": "summary"}],
             },
         )
@@ -738,7 +738,7 @@ class TestAnalysisDegraded:
         result = await shared_session.call_tool(
             "analyze_results",
             {
-                "sources": [{"raw_path": "missing.raw", "label": "dut"}],
+                "sources": [{"path": "missing.raw", "label": "dut"}],
                 "recipes": [{"key": "s", "metric": "summary"}],
             },
         )
@@ -1017,7 +1017,7 @@ class TestErrorHandling:
     ):
         result = await shared_session.call_tool(
             "edit_schematic",
-            {"target": "bad.asc", "base": "blank", "ops": [{"op": "not_an_op"}]},
+            {"path": "bad.asc", "base": "blank", "ops": [{"op": "not_an_op"}]},
         )
         assert result.is_error
         assert tool_text(result).startswith("Invalid arguments for edit_schematic:")
@@ -1035,7 +1035,7 @@ class TestErrorHandling:
             "bogus": 1,
         }
         result = await shared_session.call_tool(
-            "edit_schematic", {"target": "bad.asc", "base": "blank", "ops": [op]}
+            "edit_schematic", {"path": "bad.asc", "base": "blank", "ops": [op]}
         )
         assert result.is_error
         text = tool_text(result)

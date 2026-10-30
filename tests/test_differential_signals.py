@@ -297,7 +297,7 @@ class TestRecipes:
 @pytest.mark.asyncio
 async def test_plot_waveform_draws_the_difference(state_no_sim: SessionState, work_dir: Path):
     path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
-    data = await _plot(state_no_sim, raw_file=str(path), signals=["V(in,out)"])
+    data = await _plot(state_no_sim, path=str(path), signals=["V(in,out)"])
     assert data["signals"] == ["V(in,out)"]
     blob = _data_blob(await asyncio.to_thread(_read, Path(data["path"])))
     (panel,) = blob["panels"]
@@ -348,7 +348,7 @@ class TestExpressionPointer:
             fake_request_context(state_no_sim),
             call_tool_params(
                 "plot_waveform",
-                {"raw_file": str(path), "signals": ["abs(V(out))"], "open": False},
+                {"path": str(path), "signals": ["abs(V(out))"], "open": False},
             ),
         )
         assert result.is_error
@@ -399,7 +399,7 @@ class TestPythonApiReadsTheMessageAsIs:
     def test_analyze_results(self, state_no_sim: SessionState, work_dir: Path):
         path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         data = SyncApi(state_no_sim).analyze_results(
-            sources=[{"raw_path": str(path), "label": "dut"}],
+            sources=[{"path": str(path), "label": "dut"}],
             recipes=[{"key": "v", "metric": "value", "expr": "V(in)-V(out)", "at": "900u"}],
         )
         message = _failure_message(data)

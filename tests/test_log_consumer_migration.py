@@ -67,7 +67,7 @@ async def test_resolved_analysis_relay_uses_captured_diagnostics_without_parent_
     captured = await analyze._create_result_set(
         analyze.AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [{"metric": "measurements", "key": "meas"}],
             }
         ),
@@ -98,7 +98,7 @@ async def test_resolved_analysis_relays_console_only_failure(
     captured = await analyze._create_result_set(
         analyze.AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "console"}],
+                "sources": [{"path": str(raw), "label": "console"}],
                 "recipes": [{"metric": "measurements", "key": "meas"}],
             }
         ),
@@ -186,7 +186,7 @@ async def test_analysis_preserves_unread_coverage_for_loader_and_section_errors(
     captured = await analyze._create_result_set(
         analyze.AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "unread"}],
+                "sources": [{"path": str(raw), "label": "unread"}],
                 "recipes": [{"metric": "measurements", "key": "meas"}],
             }
         ),

@@ -71,7 +71,7 @@ def test_raw_page_returns_each_handler_payload_verbatim(
             "handle_analyze_results",
             api.analyze_results,
             {
-                "sources": [{"raw_path": "result.raw", "label": "dut"}],
+                "sources": [{"path": "result.raw", "label": "dut"}],
                 "recipes": [{"key": "summary", "metric": "summary"}],
                 "budget": 500,
             },
@@ -86,7 +86,7 @@ def test_raw_page_returns_each_handler_payload_verbatim(
             schematic_edit,
             "handle_edit_schematic",
             api.edit_schematic,
-            {"target": "sheet.asc", "ops": [], "view_cursors": {}},
+            {"path": "sheet.asc", "ops": [], "view_cursors": {}},
         ),
         (verify, "handle_verify_circuit", api.verify_circuit, {"path": "deck.cir"}),
     ]
@@ -622,7 +622,7 @@ def test_analyze_drives_neutral_continuations_without_flipping_request_fields(
     monkeypatch.setattr(analyze, "evaluate_analysis_results", evaluate)
     monkeypatch.setattr(analyze, "complete_analysis_evaluations", complete)
     result = api.analyze_results(
-        sources=[{"raw_path": "result.raw", "label": "dut"}],
+        sources=[{"path": "result.raw", "label": "dut"}],
         recipes=[
             {"key": "summary", "metric": "summary"},
             {"key": "measurements", "metric": "measurements"},
@@ -652,7 +652,7 @@ def _complete_and_wire(
     """One analysis through the API twice: its complete result, and one MCP page."""
     api = SyncApi(state)
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    sources = [{"raw_path": str(raw), "label": "dut"}]
+    sources = [{"path": str(raw), "label": "dut"}]
     complete = api.analyze_results(sources=sources, recipes=recipes)
     wire = api.analyze_results(raw_page=True, sources=sources, recipes=recipes)
     return complete, wire
@@ -712,7 +712,7 @@ def test_analyze_reports_a_repeat_it_read_once_through_both_interfaces(
     api = SyncApi(state_no_sim)
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     arguments = {
-        "sources": [{"raw_path": str(raw), "label": "dut"}],
+        "sources": [{"path": str(raw), "label": "dut"}],
         "recipes": [
             {"key": "v", "metric": "value", "expr": "V(out)", "at": "500u", "reduce": ["max"]}
         ],
@@ -731,7 +731,7 @@ def test_analyze_collects_projected_per_run_rows_and_missing_cases_together(
     api = SyncApi(state_no_sim)
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     data = api.analyze_results(
-        sources=[{"raw_path": str(raw), "label": "dut", "runs": [0, 3]}],
+        sources=[{"path": str(raw), "label": "dut", "runs": [0, 3]}],
         recipes=[
             {"key": "summary", "metric": "summary"},
             {
@@ -800,7 +800,7 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     # The whole-sheet legend is named explicitly: the default view is now the
     # touched-scope one, which an empty op batch correctly leaves empty. What
     # is under test here is that the API door does not PAGE what it returns.
-    edit = api.edit_schematic(target="sheet.asc", ops=[], return_views=["pin_legend"])
+    edit = api.edit_schematic(path="sheet.asc", ops=[], return_views=["pin_legend"])
     legend = edit["views"]["pin_legend"]
     assert legend["items"] == list(pin_rows)
     assert legend["returned"] == legend["total"] == 121
@@ -836,8 +836,8 @@ def test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does(
         "ops": _DIVIDER_OPS,
         "compare": {"reference": _REF_DECK},
     }
-    page = api.edit_schematic(raw_page=True, target="mcp.asc", **arguments)
-    complete = api.edit_schematic(target="api.asc", **arguments)
+    page = api.edit_schematic(raw_page=True, path="mcp.asc", **arguments)
+    complete = api.edit_schematic(path="api.asc", **arguments)
     for data in (page, complete):
         assert data["verification"]["equivalent"] is (not returns_netlist)
         assert ("netlist" in data) is returns_netlist
@@ -854,8 +854,8 @@ def test_edit_returns_each_ops_facts_exactly_as_the_mcp_reply_does(
     the MCP page's, junctions and already-present segments included.
     """
     api = SyncApi(asc_state)
-    page = api.edit_schematic(raw_page=True, target="mcp.asc", base="blank", ops=_FACT_OPS)
-    complete = api.edit_schematic(target="api.asc", base="blank", ops=_FACT_OPS)
+    page = api.edit_schematic(raw_page=True, path="mcp.asc", base="blank", ops=_FACT_OPS)
+    complete = api.edit_schematic(path="api.asc", base="blank", ops=_FACT_OPS)
     assert page["results"] == complete["results"] == _FACT_RESULTS
 
 

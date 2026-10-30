@@ -13,21 +13,37 @@ def compact_validation_error(
     *,
     field_owners: Mapping[str, Sequence[str]] | None = None,
     nested: Mapping[str, Sequence[str]] | None = None,
+    renamed: Mapping[str, str] | None = None,
 ) -> str:
     """Render validation failures without input echoes or documentation URLs.
 
     An unknown top-level field is referred to where it is taken: ``nested``
     maps a field to its place inside this tool's own arguments (``path`` to
     ``circuits[].path``), named first, and ``field_owners`` to the tools
-    that take it at their top level.
+    that take it at their top level. An unknown field at any depth that is
+    a name this tool retired is referred to the one that replaced it, by
+    ``renamed``.
     """
     if not isinstance(exc, ValidationError):
         return str(exc)
-    referrable = {*(field_owners or ()), *(nested or ())}
+    renamed = renamed or {}
+    nested = nested or {}
+    field_owners = field_owners or {}
+
+    def referral(field: str) -> str:
+        if field in renamed:
+            return f" {field!r} is now {renamed[field]!r}."
+        text = ""
+        if nested.get(field):
+            text += f" This tool takes {field!r} as {' or '.join(nested[field])}."
+        owners = tuple(dict.fromkeys(field_owners.get(field, ())))
+        if owners:
+            text += f" Field {field!r} is accepted by {', '.join(owners)}."
+        return text
 
     entries: list[tuple[tuple[object, ...], str, str]] = []
     seen: set[tuple[tuple[object, ...], str, str]] = set()
-    referral_fields: list[str] = []
+    referrals: list[str] = []
     for error in exc.errors(include_url=False, include_input=False):
         loc = tuple(error["loc"])
         error_type = error["type"]
@@ -37,14 +53,13 @@ def compact_validation_error(
             continue
         seen.add(key)
         entries.append(key)
-        if (
-            error_type == "extra_forbidden"
-            and len(loc) == 1
-            and isinstance(loc[0], str)
-            and loc[0] in referrable
-            and loc[0] not in referral_fields
-        ):
-            referral_fields.append(loc[0])
+        field = loc[-1] if loc else None
+        if error_type != "extra_forbidden" or not isinstance(field, str):
+            continue
+        if field in renamed or (len(loc) == 1 and (field in nested or field in field_owners)):
+            sentence = referral(field)
+            if sentence not in referrals:
+                referrals.append(sentence)
 
     rendered = [
         f"{'.'.join(str(part) for part in loc) or '<root>'}: {message}"
@@ -53,15 +68,7 @@ def compact_validation_error(
     remaining = len(entries) - _MAX_VALIDATION_ERRORS
     if remaining > 0:
         rendered.append(f"… and {remaining} more")
-    text = "; ".join(rendered) or "Validation failed"
-
-    for field in referral_fields:
-        if nested and nested.get(field):
-            text += f" This tool takes {field!r} as {' or '.join(nested[field])}."
-        owners = tuple(dict.fromkeys((field_owners or {}).get(field, ())))
-        if owners:
-            text += f" Field {field!r} is accepted by {', '.join(owners)}."
-    return text
+    return ("; ".join(rendered) or "Validation failed") + "".join(referrals)
 
 
 class LTSpiceMCPError(Exception):

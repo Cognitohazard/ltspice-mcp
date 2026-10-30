@@ -417,7 +417,7 @@ class TestOpsUnionErrorEnumerates:
 
     def test_unknown_op_error_names_every_kind(self):
         with pytest.raises(ValidationError) as excinfo:
-            EditSchematicInput.model_validate({"target": "s.asc", "ops": [{"op": "bogus"}]})
+            EditSchematicInput.model_validate({"path": "s.asc", "ops": [{"op": "bogus"}]})
         detail = compact_validation_error(excinfo.value)
         assert "more" not in detail, detail
         for kind in _op_kinds():
@@ -426,7 +426,7 @@ class TestOpsUnionErrorEnumerates:
     def test_a_known_op_reports_against_that_kind_alone(self):
         with pytest.raises(ValidationError) as excinfo:
             EditSchematicInput.model_validate(
-                {"target": "s.asc", "ops": [{"op": "add_component", "reference": "R1"}]}
+                {"path": "s.asc", "ops": [{"op": "add_component", "reference": "R1"}]}
             )
         detail = compact_validation_error(excinfo.value)
         assert "symbol" in detail

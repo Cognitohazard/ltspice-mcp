@@ -28,7 +28,11 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     table_device_path,
 )
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, read_spice_text
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    encode_spice_text,
+    read_spice_text,
+)
 from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -445,7 +449,7 @@ class TestSteppedRuns:
         raw = rec.stage_run(build, "raw/step_ac_one_freq", work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
             }
         )
@@ -562,9 +566,7 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     points, gap = COMPRESSION[build, case_id]
     request = AnalyzeResultsInput.model_validate(
         {
-            "sources": [
-                {"raw_path": str(rec.stage_run(build, case_id, work_dir)), "label": "dut"}
-            ],
+            "sources": [{"path": str(rec.stage_run(build, case_id, work_dir)), "label": "dut"}],
             "recipes": [
                 {"key": "v", "metric": "value", "expr": "V(out)", "at": "1m"},
                 {"key": "s", "metric": "signal_stats", "signal": "V(out)"},
@@ -655,7 +657,7 @@ async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
         value = row["value"]
         assert (value["actual_x"], value["actual_x_source"]) == (100e3, "deck")
         assert value["magnitude_linear"] == pytest.approx(abs(gain), rel=1e-5)
-    by_path = await values({"raw_path": str(raw)})
+    by_path = await values({"path": str(raw)})
     assert all("actual_x" not in row["value"] for row in by_path)
 
 
@@ -668,9 +670,7 @@ async def test_a_one_frequency_noise_is_read_a_step_at_a_time(
     r through the RC low-pass (100 nF) at 1 kHz, at 27 °C."""
     request = AnalyzeResultsInput.model_validate(
         {
-            "sources": [
-                {"raw_path": str(rec.stage_run(build, "raw/step_noise_one_freq", work_dir))}
-            ],
+            "sources": [{"path": str(rec.stage_run(build, "raw/step_noise_one_freq", work_dir))}],
             "all_steps": True,
             "recipes": [{"key": "n", "metric": "value", "expr": "V(onoise)"}],
             "include": {"per_run": True},
@@ -697,7 +697,7 @@ async def test_a_measurements_only_call_reports_a_transient_compression_left_coa
     raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
     request = AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"raw_path": str(raw), "label": "dut"}],
+            "sources": [{"path": str(raw), "label": "dut"}],
             "recipes": [{"key": "m", "metric": "measurements"}],
         }
     )
@@ -720,7 +720,7 @@ async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
     _, gap = COMPRESSION[build, "raw/compress_1mv"]
     raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
     plot = await analysis.handle_plot_waveform(
-        analysis.PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
+        analysis.PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False),
         state_no_sim,
     )
     listed = await inspect_one(
@@ -1018,19 +1018,106 @@ class TestMeasurements:
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
         """A job's case records the build its run named, so the zeros are named
-        from that record when no artifact read here names XVII."""
+        from that record when no artifact read here names XVII, over every step
+        and on the row of the step that read 0."""
         if rec.generation(build) != "xvii":
             pytest.skip("only XVII prints 0 for a failed step")
-        log = work_dir / "meas_step.log"
-        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
+        log = rec.stage_run(build, "log/meas_step", work_dir).with_suffix(".log")
         source = services.resolve_analysis_source(state_no_sim, log_file=str(log))
         recipe = MeasurementsRecipe(key="meas", metric="measurements")
         unnamed = await metrics.measurements(source, recipe, None, state_no_sim)
         assert "observations" not in unnamed  # an XVII log names no build
         recorded = replace(source, simulator_version=rec.manifest(build)["reported_build"])
-        result = await metrics.measurements(recorded, recipe, None, state_no_sim)
-        (observation,) = result["observations"]
-        assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+        whole, first, last = await metrics.measurement_rows(
+            recorded, recipe, [None, 0, 2], state_no_sim
+        )
+        for result in (whole, last):
+            (observation,) = result["observations"]
+            assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+        assert "observations" not in first
+
+    def read_steps(self, log: Path, state: SessionState, **selection: Any) -> dict[str, Any]:
+        """The measurements recipe's reply over a log, steps chosen."""
+        return SyncApi(state).analyze_results(
+            sources=[{"path": str(log), "label": "log"}],
+            recipes=[{"metric": "measurements", "key": "meas"}],
+            include={"per_run": True},
+            **selection,
+        )
+
+    def test_each_steps_row_is_read_with_its_step_values(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Row n of every table is the step the n-th ``.step`` line names, so
+        each step's row comes back with that line's values."""
+        log = rec.stage_run(build, "log/meas_step", work_dir).with_suffix(".log")
+        reply = self.read_steps(log, state_no_sim, all_steps=True)
+        rows = reply["results"]["meas"]["per_run"]["items"]
+        table = self.measured(build, "log/meas_step")["measurements"]
+        assert [row["step_index"] for row in rows] == [0, 1, 2]
+        assert [row["step_values"] for row in rows] == [{"r": 1e3}, {"r": 2e3}, {"r": 2e4}]
+        for index, row in enumerate(rows):
+            assert row["value"]["measured"]["s_max"] == table["s_max"]["values"][index]
+            assert row["value"]["measured"]["s_rise"] == table["s_rise"]["values"][index]
+        failed = rows[2]["value"]
+        if rec.generation(build) == "xvii":
+            # XVII prints 0 for the crossing it never found; the row names it.
+            assert failed["measured"]["s_when"] == 0
+            assert "failed_measurements" not in failed
+        else:
+            assert failed["measured"]["s_when"] is None
+            assert failed["failed_measurements"] == ["s_when"]
+
+    def test_one_step_is_chosen_by_its_value(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        log = rec.stage_run(build, "log/step_temp", work_dir).with_suffix(".log")
+        reply = self.read_steps(log, state_no_sim, step={"axis": "temp", "value": 27})
+        (row,) = reply["results"]["meas"]["per_run"]["items"]
+        assert (row["step_index"], row["step_values"]) == (1, {"temp": 27.0})
+        # 1 V across 1 kohm at the nominal temperature.
+        assert row["value"]["measured"]["ir"] == pytest.approx(1e-3, rel=1e-6)
+
+    def test_two_stepped_parameters_pair_each_row(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The second .step line steps r first, under each c."""
+        log = rec.stage_run(build, "log/step_two_params", work_dir).with_suffix(".log")
+        rows = self.read_steps(log, state_no_sim, all_steps=True)["results"]["meas"]["per_run"][
+            "items"
+        ]
+        assert [row["step_values"] for row in rows] == [
+            {"r": 1e3, "c": 1e-7},
+            {"r": 2e3, "c": 1e-7},
+            {"r": 1e3, "c": 2e-7},
+            {"r": 2e3, "c": 2e-7},
+        ]
+        vend = [row["value"]["measured"]["vend"] for row in rows]
+        # One time constant: r*c is the same for the middle two.
+        assert vend[1] == pytest.approx(vend[2], rel=2e-4)
+        assert vend[0] > vend[1] > vend[3]
+        groups = self.read_steps(log, state_no_sim, all_steps=True, group_by=["c"])["results"][
+            "meas"
+        ]["groups"]
+        assert [(group["by"], group["count"]) for group in groups] == [
+            ({"c": 1e-7}, 2),
+            ({"c": 2e-7}, 2),
+        ]
+
+    def test_rows_the_step_lines_do_not_number_are_refused(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Without one ``.step`` line per row, a row's step is unknown; the
+        statistics over every row still read."""
+        log = work_dir / "meas_step.log"
+        text, codec = decode_spice_bytes_with_encoding(
+            rec.recorded(build, "log/meas_step.log").read_bytes()
+        )
+        kept = (line for line in text.splitlines(keepends=True) if not line.startswith(".step"))
+        log.write_bytes(encode_spice_text("".join(kept), codec))
+        (failure,) = self.read_steps(log, state_no_sim, all_steps=True)["failures"]
+        assert "hold 3 steps and its .step lines name 0" in failure["message"]
+        assert self.read_steps(log, state_no_sim)["outcome"] == "complete"
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
@@ -1388,7 +1475,7 @@ class TestDeviceOperatingPoints:
         raw = rec.stage_run(build, _device_op_case(build, numdgt=True), work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     {"key": "op", "metric": "operating_point"},
                     {"key": "gm", "metric": "value", "expr": "m1.gm"},
@@ -1548,7 +1635,7 @@ class TestSubcircuitDeviceNames:
         names = {"node": "V(xa.xin.mid)", "drain": "Id(xa.xin.mtail)", "port": "Ix(xb.top)"}
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     {"key": key, "metric": "value", "expr": expr, "at": "1u"}
                     for key, expr in names.items()
@@ -1582,7 +1669,7 @@ class TestSubcircuitDeviceNames:
         raw = rec.stage_run(build, self._table_case(build, saved=True), work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [{"key": "mid", "metric": "value", "expr": "V(xa.xin.mid)"}],
             }
         )
@@ -1599,7 +1686,7 @@ class TestSubcircuitDeviceNames:
         raw = rec.stage_run(build, self._table_case(build, saved=True), work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     {"key": "all", "metric": "operating_point"},
                     {"key": "tail", "metric": "operating_point", "device": "xa.xin.mtail"},
@@ -1935,7 +2022,7 @@ async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: 
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
     with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
         await analysis.handle_plot_waveform(
-            analysis.PlotWaveformInput(raw_file=str(raw), other_raw="fra_1", open=False),
+            analysis.PlotWaveformInput(path=str(raw), other_raw="fra_1", open=False),
             state_no_sim,
         )
     with pytest.raises(ValidationError, match="other_raw require job_id"):
@@ -1963,7 +2050,7 @@ class TestCompareRuns:
     signal by signal, the tolerance left to the caller."""
 
     def _load(self, state: SessionState, build: str, case_id: str, directory: Path):
-        return SyncApi(state).load_raw(raw_path=rec.stage_run(build, case_id, directory / build))
+        return SyncApi(state).load_raw(path=rec.stage_run(build, case_id, directory / build))
 
     @pytest.mark.parametrize("build", rec.BUILDS)
     def test_a_compressed_run_is_read_along_its_lines(

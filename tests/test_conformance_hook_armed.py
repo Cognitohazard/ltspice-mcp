@@ -102,7 +102,7 @@ async def test_malformed_final_analyze_results_payload_still_trips_the_hook(
     with pytest.raises(AssertionError, match="output_schema"):
         await handle_analyze_results(
             AnalyzeResultsInput.model_validate(
-                {"sources": [{"raw_path": str(raw), "label": "dut"}], "recipes": _tran_recipe()}
+                {"sources": [{"path": str(raw), "label": "dut"}], "recipes": _tran_recipe()}
             ),
             state_no_sim,
         )

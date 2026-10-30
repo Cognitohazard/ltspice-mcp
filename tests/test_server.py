@@ -4,6 +4,7 @@ import io
 import re
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -340,10 +341,42 @@ class TestServerDispatch:
         assert result.is_error
         assert "Invalid arguments" in tool_text(result)
 
+    @pytest.mark.parametrize(
+        ("tool", "arguments", "old"),
+        [
+            ("plot_waveform", {"raw_file": "run.raw"}, "raw_file"),
+            (
+                "analyze_results",
+                {
+                    "sources": [{"raw_path": "run.raw"}],
+                    "recipes": [{"metric": "summary", "key": "s"}],
+                },
+                "raw_path",
+            ),
+            (
+                "analyze_results",
+                {
+                    "sources": [{"log_path": "run.log"}],
+                    "recipes": [{"metric": "summary", "key": "s"}],
+                },
+                "log_path",
+            ),
+            ("edit_schematic", {"target": "sheet.asc", "ops": []}, "target"),
+        ],
+    )
+    async def test_a_retired_file_argument_names_its_replacement(
+        self, state_no_sim: SessionState, tool: str, arguments: dict[str, Any], old: str
+    ):
+        result = await call_tool(
+            fake_request_context(state_no_sim), call_tool_params(tool, arguments)
+        )
+        assert result.is_error
+        assert f"{old!r} is now 'path'." in tool_text(result)
+
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         result = await call_tool(
             fake_request_context(state_no_sim),
-            call_tool_params("plot_waveform", {"raw_file": "/etc/passwd"}),
+            call_tool_params("plot_waveform", {"path": "/etc/passwd"}),
         )
         assert result.is_error
         msg = tool_text(result)
@@ -365,7 +398,7 @@ class TestServerDispatch:
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         result = await call_tool(
             fake_request_context(state_no_sim),
-            call_tool_params("plot_waveform", {"raw_file": "missing.raw"}),
+            call_tool_params("plot_waveform", {"path": "missing.raw"}),
         )
         assert result.is_error
         msg = tool_text(result)

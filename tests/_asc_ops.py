@@ -65,7 +65,7 @@ async def build_sheet(
     return _envelope(
         await handle_edit_schematic(
             EditSchematicInput.model_validate(
-                {"target": f"{name}.asc", "base": "blank", "ops": ops, **kw}
+                {"path": f"{name}.asc", "base": "blank", "ops": ops, **kw}
             ),
             state,
         )
@@ -83,7 +83,7 @@ async def apply_ops(
     ``path`` is relative to the working directory: a bare name for a sheet in it.
     """
     target = Path(state.working_dir) / path
-    payload: dict[str, Any] = {"target": str(path), "ops": ops, **kw}
+    payload: dict[str, Any] = {"path": str(path), "ops": ops, **kw}
     payload.setdefault("expected_sha256", sha_of(target))
     return _envelope(
         await handle_edit_schematic(EditSchematicInput.model_validate(payload), state)

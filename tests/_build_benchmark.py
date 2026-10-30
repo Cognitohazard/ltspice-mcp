@@ -170,7 +170,7 @@ async def run_build(state: SessionState, build: Build, folder: Path) -> Built:
     built = Built(build, folder / f"{build.id}.asc")
     for number, ops in enumerate(build.calls):
         args: dict[str, Any] = {
-            "target": str(built.path),
+            "path": str(built.path),
             "ops": [dict(op) for op in ops],
             "view_limit": VIEW_LIMIT,
         }

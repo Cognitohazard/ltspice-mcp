@@ -1023,7 +1023,7 @@ def generate_default_config(path: Path) -> None:
     _shown_default(analysis, "default_budget")
     analysis.add(comment("Hours to keep an analyze_results result set whose sources are all"))
     analysis.add(
-        comment("raw_path files. A result set read from jobs is kept as long as its jobs.")
+        comment("files named by path. A result set read from jobs is kept as long as its jobs.")
     )
     _shown_default(analysis, "result_set_ttl_hours")
     analysis.add(

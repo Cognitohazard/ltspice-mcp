@@ -1973,7 +1973,7 @@ def test_the_exported_policy_models_are_accepted_by_their_tool():
 
     edit = api_types.EditSchematicInput.model_validate(
         {
-            "target": "divider.asc",
+            "path": "divider.asc",
             "ops": [{"op": "add_net_label", "net": "vout", "pin": "R1.2"}],
             "compare": api_types.VerifyCompareSpec(reference="ref.cir"),
         }

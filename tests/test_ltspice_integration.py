@@ -796,7 +796,7 @@ class TestSheetOpenInAWindow:
         result = await handle_edit_schematic(
             EditSchematicInput.model_validate(
                 {
-                    "target": str(sheet),
+                    "path": str(sheet),
                     "expected_sha256": digest,
                     "ops": [{"op": "set_component_value", "reference": "R1", "value": value}],
                 }

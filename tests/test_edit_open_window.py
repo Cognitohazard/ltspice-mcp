@@ -97,7 +97,7 @@ def window(asc_state: SessionState, tmp_path: Path) -> Window:
 
 async def edit(state: SessionState, sheet: Path, ops: list[dict] | None = None, **kw: Any) -> dict:
     arguments: dict[str, Any] = {
-        "target": str(sheet),
+        "path": str(sheet),
         "ops": SET_VALUE if ops is None else ops,
         **kw,
     }

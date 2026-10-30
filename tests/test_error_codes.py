@@ -47,7 +47,7 @@ async def _analyze(
     state: SessionState, raw: Path, recipes: list[dict[str, Any]]
 ) -> dict[str, Any]:
     args = AnalyzeResultsInput.model_validate(
-        {"sources": [{"raw_path": str(raw), "label": "dut"}], "recipes": recipes}
+        {"sources": [{"path": str(raw), "label": "dut"}], "recipes": recipes}
     )
     result = await handle_analyze_results(args, state)
     assert result.structured_content is not None
@@ -491,7 +491,6 @@ FROZEN_ERROR_CODES = (
     "lint_blocked",
     "live_include",
     "log_error",
-    "log_path_without_deck_provenance",
     "log_unread",
     "max_points_not_applied",
     "meas_batch_abort",
@@ -535,6 +534,7 @@ FROZEN_ERROR_CODES = (
     "partial_progress",
     "partial_raw",
     "path_denied",
+    "path_without_deck_provenance",
     "pdk_native_request",
     "phase_unwrapped",
     "post_commit_failed",
@@ -545,7 +545,6 @@ FROZEN_ERROR_CODES = (
     "raster_unavailable",
     "rational_fit",
     "raw_not_produced",
-    "raw_path_without_deck_provenance",
     "read_error",
     "receipt_failed",
     "recipe_failed",

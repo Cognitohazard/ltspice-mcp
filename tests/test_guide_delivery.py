@@ -183,7 +183,7 @@ class TestSectionContent:
             ("ngspice", "## .save Directive"),
             ("ngspice", "LTspice vs ngspice"),
             ("schematics", "## Building and editing a sheet"),
-            ("schematics", '`edit_schematic(target=..., base="blank")` starts a new sheet'),
+            ("schematics", '`edit_schematic(path=..., base="blank")` starts a new sheet'),
             ("python", "detach=True"),
             # The paragraph opening this subsection was once split off into
             # another section, leaving it to start mid-sentence.

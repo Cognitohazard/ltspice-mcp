@@ -12,7 +12,7 @@ description: >
 Settle the design as a netlist first, then build the sheet, which is for
 presentation and review. Edit `.asc` files only through `edit_schematic` (or
 LTspice's GUI), because it routes wires orthogonally and checks pin collisions
-and junctions. `edit_schematic(target=..., base="blank")` starts a new sheet;
+and junctions. `edit_schematic(path=..., base="blank")` starts a new sheet;
 every mutation below is an entry in its `ops` list. The ops are applied
 together, and the first one that fails aborts the batch with nothing written,
 so batch a whole build into one call. Place components with the
@@ -51,7 +51,7 @@ under its name, replacing any results there, and opened from the sheet, which
 makes LTspice tie the plot to the sheet. The reply's `ltspice` block then
 names the `sheet` and has `tied: true`, and a click on a net in the sheet
 plots it. Results already beside a sheet under its name, as a run in LTspice
-leaves them, open the same way when you pass them as `raw_file`. LTspice reads
+leaves them, open the same way when you pass them as `path`. LTspice reads
 a plot only when it opens it, so a plot of these results that is already open
 is closed and reopened, and the block reports `reopened: true`. Traces the
 user added to that plot by hand are lost, so tell them if they had been
