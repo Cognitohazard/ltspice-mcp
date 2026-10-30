@@ -2057,7 +2057,7 @@ class OpRemoveComponent(StrictModel):
 
 
 class OpMoveComponent(StrictModel):
-    """Move an existing component, optionally re-rotating it."""
+    """Move or turn one part alone; move with drag takes its labels."""
 
     op: Literal["move_component"]
     reference: str = Field(description=_REFERENCE_DESCRIPTION)

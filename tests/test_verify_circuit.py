@@ -701,6 +701,25 @@ async def test_layout_reports_attribute_text_drawn_across_a_wire(
     assert layout["rules_run"]["attribute_text_overlap"] == 1
 
 
+async def test_layout_reports_attribute_text_under_a_ground_flag(
+    state_no_sim, work_dir, asc_symbols
+):
+    """A ground flag dropped on a part's value hides it as a wire does; the
+    layout scan compared the text with wires, parts and text, not grounds."""
+    sheet = (
+        "Version 4\nSHEET 1 880 680\n"
+        "SYMBOL res 200 200 R180\nSYMATTR InstName R1\nSYMATTR Value {Rload*2}\n"
+        "FLAG 140 168 0\n"
+    )
+    asc = _write(work_dir, "grounded.asc", sheet)
+    layout = await _run(state_no_sim, path=str(asc), checks=["layout"])
+    (found,) = [f for f in layout["findings"] if f["rule_id"] == "attribute_text_overlap"]
+    assert found["subject"] == "R1"
+    assert found["evidence"]["detail"] == (
+        "R1's text '{Rload*2}' at (168,168) is drawn across the ground at (140,168)"
+    )
+
+
 async def test_quality_reports_a_part_giving_a_parameter_twice(
     state_no_sim, work_dir, asc_symbols
 ):

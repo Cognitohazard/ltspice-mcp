@@ -165,7 +165,7 @@
    "values_differ": []
   },
   "findings": {
-   "attribute_text_overlap": 4,
+   "attribute_text_overlap": 5,
    "label_island": 6
   }
  },
