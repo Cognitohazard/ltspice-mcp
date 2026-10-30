@@ -15046,6 +15046,22 @@
      }
     },
     {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (96,96)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (96,192)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 96,
+     "y": 192
+    },
+    {
      "kind": "wire_through_symbol",
      "message": "Wire (96,96)->(96,192) passes through R1's body",
      "points": [
@@ -15071,6 +15087,52 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "same_instance_bare.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,96)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_bare.asc",
+     "x": 96,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,192)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
    {
     "at": {
      "file": "same_instance_bare.asc",

@@ -482,6 +482,8 @@ class TestTheSignatureIsTheReferenceCircuit:
 TIE_A = PinAt((0, 0), 1, 0, "R1", "1")
 TIE_B = PinAt((0, 96), 1, 1, "R1", "2")
 STACKED = PinAt((0, 0), 1, 1, "R1", "2")
+#: Another part's pin on the point R1's stacked pins share.
+OTHER = PinAt((0, 0), 2, 0, "R2", "1")
 
 
 class TestNetsOverTerminals:
@@ -489,6 +491,7 @@ class TestNetsOverTerminals:
         nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 96))])
         assert nets.of_pin(TIE_A) != nets.of_pin(TIE_B)
         assert [run.ends for run in nets.dropped] == [(TIE_A, TIE_B)]
+        assert nets.unconnected(TIE_A) and nets.unconnected(TIE_B)
 
     def test_a_point_on_a_dropped_run_is_on_the_nets_of_both_its_pins(self) -> None:
         nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 48)), ((0, 48), (0, 96))])
@@ -500,10 +503,10 @@ class TestNetsOverTerminals:
         assert nets.dropped == ()
 
     def test_stacked_pins_of_one_part_alone_on_a_point_are_apart(self) -> None:
-        other = PinAt((0, 0), 2, 0, "R2", "1")
-        nets = nets_by_ltspice([TIE_A, STACKED, other], [], [])
-        assert nets.of_pin(STACKED) == nets.of_pin(other) != nets.of_pin(TIE_A)
+        nets = nets_by_ltspice([TIE_A, STACKED, OTHER], [], [])
+        assert nets.of_pin(STACKED) == nets.of_pin(OTHER) != nets.of_pin(TIE_A)
         assert len(nets.nets_at((0, 0))) == 2
+        assert nets.unconnected(TIE_A) and not nets.unconnected(STACKED)
 
     def test_two_parts_that_share_a_reference_stay_two_parts(self) -> None:
         one, two = PinAt((0, 0), 1, 0, "R1", "1"), PinAt((0, 96), 2, 0, "R1", "1")
@@ -522,3 +525,7 @@ class TestNetsOverTerminals:
         wires = [((0, 48), (96, 48)), ((48, 0), (48, 96)), ((48, 48), (48, 48))]
         nets = nets_by_ltspice([], [across, down], wires)
         assert nets.of_label(across) != nets.of_label(down)
+
+    def test_a_wire_on_a_pin_connects_it_wherever_the_wire_goes(self) -> None:
+        nets = nets_by_ltspice([TIE_A], [], [((0, 0), (64, 0))])
+        assert not nets.unconnected(TIE_A)

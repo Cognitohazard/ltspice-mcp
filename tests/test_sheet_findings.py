@@ -19,7 +19,6 @@ from ltspice_mcp.lib.sheet_findings import (
     Part,
     SheetView,
     findings,
-    floating_pins,
 )
 from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
 from ltspice_mcp.tools.verify import CHECK_ORDER
@@ -202,7 +201,7 @@ class TestAFloatingPin:
     """What LTspice was recorded doing."""
 
     def floating(self, view: SheetView) -> list[str]:
-        return [f"{part.ref}.{name}" for part, (name, _x, _y) in floating_pins(view)]
+        return [f"{one.refs[0]}.{one.facts['pin']}" for one in findings(view, ["floating_pin"])]
 
     def test_a_pin_on_nothing(self) -> None:
         view = SheetView(parts=(Part("R1", pins=(("1", 0, 0), ("2", 0, 96))),))
