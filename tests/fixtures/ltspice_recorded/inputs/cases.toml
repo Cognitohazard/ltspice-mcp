@@ -372,6 +372,22 @@ inputs = [
     "deck/vdmos_bulk_elsewhere.cir",
 ]
 
+[behaviour.options-solver]
+summary = "What .options solver does on each build: the solver line of the log, the raw's Command field, whether the samples change, and what a spelling the build does not take gets: a complaint and the Normal solver on LTspice 26, a fatal error on LTspice XVII, which has no such option."
+# No server code reads the solver yet. The recorder is what models it so far:
+# it takes the Solver setting out of every case as a key that changes a result.
+model = ["tests/ltspice_recorder.py"]
+# One transient, one spelling a deck. XVII's refusal of a word says it expected
+# a number, so solver_number is there to show that a number is refused too.
+inputs = [
+    "deck/solver_default.cir",
+    "deck/solver_norm.cir",
+    "deck/solver_alt.cir",
+    "deck/solver_alternate.cir",
+    "deck/solver_number.cir",
+    "deck/solver_unknown.cir",
+]
+
 # ---------------------------------------------------------------- raw files
 
 [behaviour.raw-transient]
@@ -400,9 +416,9 @@ model = ["lib/raw_header.py", "lib/raw_parser.py"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
-summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step."
+summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step; the same frequency named by a list, plain here and stepped under raw-stepped."
 model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
-inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir"]
+inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir", "raw/noise_list_one_freq.cir"]
 
 [behaviour.raw-op]
 summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
@@ -410,9 +426,9 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.raw-stepped]
-summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, and a stepped .ac at one frequency, which stores no frequency and one point a step."
+summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
 model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
-inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir"]
+inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
@@ -456,9 +472,9 @@ model = ["lib/log_parser.py", "lib/log_decode.py", "lib/encoding.py", "resources
 evidence = "every recorded log; a stepped temperature writes the one non-ASCII character (log/step_temp)"
 
 [behaviour.log-meas]
-summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, and the tables of a stepped run."
-model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py"]
-inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir"]
+summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
+model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py", "tools/analyze.py"]
+inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
@@ -534,7 +550,7 @@ model = ["lib/log_parser.py", "lib/metrics.py"]
 inputs = ["log/device_op_numdgt.cir", "log/device_op_numdgt_off.cir", "raw/op_save_device.cir"]
 
 [behaviour.log-diagnostics]
-summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage."
+summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage, a model parameter the device does not know."
 model = ["lib/log_parser.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
 inputs = [
     "log/err_unknown_directive.cir",
@@ -551,6 +567,7 @@ inputs = [
     "log/err_zero_resistance.cir",
     "log/err_no_analysis.cir",
     "log/warn_curly.cir",
+    "log/unknown_model_param.cir",
 ]
 
 [behaviour.log-convergence]

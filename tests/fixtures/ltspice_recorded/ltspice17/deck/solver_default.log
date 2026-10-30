@@ -1,0 +1,21 @@
+Circuit: * a nonlinear transient on the default solver
+
+.OP point found by inspection.
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 519
+traniter = 519
+tranpoints = 242
+accept = 237
+rejected = 5
+matrix size = 4
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

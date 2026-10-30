@@ -3524,6 +3524,204 @@
         ".raw"
       ]
     },
+    "deck/solver_alt": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_alt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_alt.cir": "6a8789022629c11d0f5694391f4f3b9e896d4e147c6b67a5cad8d164fed632ba"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_alt.log": {
+          "bytes": 360,
+          "sha256": "cff20561f94af0bff3c1ae169aa7578f52b0bae53819efb7e3b348165b2277d5"
+        },
+        "deck/solver_alt.raw": {
+          "bytes": 11086,
+          "sha256": "c29f647c046e272d1426e8b6355ffededeb8e4b5546f8f8e424a29271c80c2cc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_alternate": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_alternate.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_alternate.cir": "4a4572d8aa485a8528d8f30a99baed6bc34e4dc950f056c4c30a8de0c651bdec"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_alternate.log": {
+          "bytes": 412,
+          "sha256": "0019077c804eaf119e1311bcb4b91941bccbd7dc9055f86db8bda1acc9d636c9"
+        },
+        "deck/solver_alternate.raw": {
+          "bytes": 11058,
+          "sha256": "fa43fb7889f48713c796535e4aedf0a5551521f009ef32ffac792a08f1079f9a"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_default": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_default.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_default.cir": "27b35eed4681b11c4fa8490268110a173f905dd46b6c98995d3a1e9ff2e1faed"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_default.log": {
+          "bytes": 346,
+          "sha256": "974d873b5304856231a6370ef225ba8ac581e2ff363f0a4d91389e9e907703ab"
+        },
+        "deck/solver_default.raw": {
+          "bytes": 11054,
+          "sha256": "a2a219622ef728c0d4d5935771a0d4e61aeb41f0ba7b91f29a7381d629596d3f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_norm": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_norm.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_norm.cir": "4043787145d181220af21eec0e22db20bd77ccf08b989038e8c36a308d82399d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_norm.log": {
+          "bytes": 360,
+          "sha256": "0f48e6d5a59e13a3f935e66f6a3c30fc60bd8cb429f72d52302454b0550b6499"
+        },
+        "deck/solver_norm.raw": {
+          "bytes": 11048,
+          "sha256": "4e174ea4253d048f44be3b6c1456be329c7b5316d6bbfb1ce33d2560a33d2800"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_number": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_number.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_number.cir": "0be7cede599b9ee97e882160034534d8df5c22555615b6a10cc179decb9a74df"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_number.log": {
+          "bytes": 398,
+          "sha256": "d7d339c108d7abf700a33fbf3ed83aefc55706854b2eaee633ab8b33b07c275d"
+        },
+        "deck/solver_number.raw": {
+          "bytes": 11052,
+          "sha256": "83c70772256e8666f6d09f2b4dcbd5689b9ec14da4aba0c0d9dfe303530536a4"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_unknown": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_unknown.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_unknown.cir": "35eb84c44012a587856551382bccd25f4a4f7a931039d4c228135fef153df12b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_unknown.log": {
+          "bytes": 409,
+          "sha256": "3ce6aeae52159b6a60524aaf02cf249b41bae8901ae713b719838cb61ad8b95f"
+        },
+        "deck/solver_unknown.raw": {
+          "bytes": 11054,
+          "sha256": "35d200c6a5c176e771f817569ade073a7ea85e83cdbd758ccdfad986ad99fe6d"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/subckt_param_precedence": {
       "behaviour": "deck-semantics",
       "command": [
@@ -5736,6 +5934,35 @@
         ".raw"
       ]
     },
+    "log/meas_step_op": {
+      "behaviour": "log-meas",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_step_op.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_step_op.cir": "08fafeae72ed10a2e4fb13c53c76127a4c047485e89b9e13bff32fda9a8d747f"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_step_op.log": {
+          "bytes": 534,
+          "sha256": "41a26a9ef6a1ed981c7b4b674574c29d1d5b6307dd7064b51b51b1ef2a839a98"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".raw"
+      ]
+    },
     "log/meas_trig": {
       "behaviour": "log-meas-angle-unit",
       "command": [
@@ -6085,6 +6312,38 @@
         "SaveSubcircuitDeviceCurrents": "true",
         "SaveSubcircuitNodeVoltages": "true"
       },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/unknown_model_param": {
+      "behaviour": "log-diagnostics",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/unknown_model_param.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/unknown_model_param.cir": "ba810b64212441297136e72dc0981ffaacf6dced329a59b01a9d1e14e6fd2856"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/unknown_model_param.log": {
+          "bytes": 982,
+          "sha256": "68a960d587f54d04c44c330bdfc2ada434c05acfe426e33e3bc908143b329964"
+        },
+        "log/unknown_model_param.raw": {
+          "bytes": 846,
+          "sha256": "086d34c9c45c9127da615186d3ad6b92350e343ed63f23b6f1bc5028d98a6beb"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
       "stopped": false,
       "written": [
         ".log",
@@ -7238,6 +7497,39 @@
         ".raw"
       ]
     },
+    "raw/noise_list_one_freq": {
+      "behaviour": "raw-noise",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/noise_list_one_freq.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/noise_list_one_freq.cir": "9abdf2db6f640c762a77c78672c60d2209cf7cba34e6655845523607676d99ac"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/noise_list_one_freq.log": {
+          "bytes": 354,
+          "sha256": "0cbe33e20ed841c182f19b1a99617ca4676aab92d91cb5b77c15d7068afb87e0"
+        },
+        "raw/noise_list_one_freq.raw": {
+          "bytes": 830,
+          "sha256": "4ab0f513cf03f7aeb1bd70a41a72e6905e174f95c161bc6ee484d7ec0634c8bc"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "raw/noise_one_freq": {
       "behaviour": "raw-noise",
       "command": [
@@ -7625,6 +7917,72 @@
       "stopped": false,
       "written": [
         ".log",
+        ".raw"
+      ]
+    },
+    "raw/step_noise": {
+      "behaviour": "raw-stepped",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_noise.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_noise.cir": "5401a45166a15d8e44055e6a98854f16842f54c4a73692f284f44822862ab417"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_noise.log": {
+          "bytes": 502,
+          "sha256": "81d85b008dcb749aaa2a18bc48cd2bed5c4e8b427ab8999728668d561208ca19"
+        },
+        "raw/step_noise.raw": {
+          "bytes": 2310,
+          "sha256": "7ef4ba48f93bd3411b711b6d3c4062147081a375e9347d0e7cb48305d246c6f6"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/step_noise_list_one_freq": {
+      "behaviour": "raw-stepped",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/step_noise_list_one_freq.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/step_noise_list_one_freq.cir": "3b62298216715a2c899952e7f1a7b6ee6717488c5a765d8820e1797662bba651"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/step_noise_list_one_freq.log": {
+          "bytes": 488,
+          "sha256": "4c4bf89a7a0522dfbd501c790e1e19b7869d2c81a87223404368f58757a0d92c"
+        },
+        "raw/step_noise_list_one_freq.raw": {
+          "bytes": 880,
+          "sha256": "1ae2dc5e4f6326cdb9ec4583102248134e1aa9703d2ff312435de3aeae47dbfd"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
         ".raw"
       ]
     },
