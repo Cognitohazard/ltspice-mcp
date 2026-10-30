@@ -84,8 +84,11 @@ inputs = ["search/library_folder_bare.asc", "search/library_folder_named.asc", "
 [behaviour.same-instance-wire]
 summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line, and kept when a label, a ground flag, another part's pin or another wire's end is on it."
 model = ["lib/connectivity.py"]
+# same_instance_bare is same_instance_wire without its labels: with the wire
+# dropped, each pin is exported as unconnected.
 inputs = [
     "connectivity/same_instance_wire.asc",
+    "connectivity/same_instance_bare.asc",
     "connectivity/same_instance_detour.asc",
     "connectivity/same_instance_inline_vertex.asc",
     "connectivity/same_instance_label_inside.asc",
@@ -98,7 +101,7 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.shared-reference]
 summary = "Whether a build netlists a sheet on which two components share one reference, spelled the same and spelled in another case."
-model = ["lib/sheet.py"]
+model = ["lib/schematic_ops.py", "lib/sheet_findings.py"]
 inputs = ["connectivity/shared_reference.asc", "connectivity/shared_reference_case.asc"]
 extra = ["connectivity/res.asy"]
 

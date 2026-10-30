@@ -6000,6 +6000,16 @@
     "routed: joins its net by waypoint": 16
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_bare.asc": {
+   "proposals": 10,
+   "sha256": "7e1185409dfad23ba36c0f1c02831b4bbba7f3a5334c30c77987512d9b437c82",
+   "shapes": {
+    "refused: (#,#) touches no wire, component pin or net label. A coordinate endpoint must land on one; to end a wire at a free point, place a net label there first, and to turn a corner there, give it as a waypoint instead.": 2,
+    "refused: Refused to connect PIN to (#,#):\n  Wire overlap: the leg from (#,#) runs along the wire (#,#)->(#,#) it ends on; leave that wire at a right angle\n\nFix the route with different waypoints to avoid these issues.": 2,
+    "refused: Refused to connect PIN to PIN: this is a same-instance wire \u2014 it ties two pins of the same component R# (PIN and PIN). LTspice drops such a wire from the exported netlist, so the tie would have no electrical effect. To tie two pins of one component: route the wire so it bends out of line with the two pins (a waypoint that stays collinear with them is merged back into a straight wire and still dropped; the bend must leave that line), or drop the wire and give both pins the same net label via the edit_schematic add_net_label op (same-name labels merge into one net).": 4,
+    "routed": 2
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
    "proposals": 34,
    "sha256": "ce1fc688da8d39663c23e5aa860baadf5d1eeea558012c668d33413ca79ef47f",

@@ -14868,6 +14868,106 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_bare.asc": {
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "same_instance_bare.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) joins two pins of the same instance R1 and is not exported",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "dropped_wire",
+    "severity": "warning",
+    "subject": "R1"
+   }
+  ],
+  "edit": {
+   "warnings": [
+    {
+     "from": {
+      "x": 96,
+      "y": 96
+     },
+     "kind": "dropped_wire",
+     "message": "Wire (96,96)->(96,192) joins two pins of the same instance R1 and is not exported",
+     "ref": "R1",
+     "to": {
+      "x": 96,
+      "y": 192
+     }
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 2,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_bare.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_detour.asc": {
   "dropped_wire": [
    {
