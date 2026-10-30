@@ -12,9 +12,11 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     ResultError,
@@ -1680,6 +1682,87 @@ async def test_non_finite_sample_keeps_the_response_schema_conformant(
 
 
 @pytest.mark.asyncio
+async def test_inline_waveform_sends_its_axis_once_per_row(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Every trace of one plot is read at the same axis points, so a series
+    carrying its own copy of them sent the axis once per signal: half of a
+    two-signal reply was the same numbers twice."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    loaded = await load_raw_result(
+        state=state_no_sim, raw_path=raw, job_id=None, run_index=0, case_id=None
+    )
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "wave", "metric": "waveform", "signals": ["V(in)", "V(out)"]}],
+    )
+    value = data["results"]["wave"]["values"][0]["value"]
+    np.testing.assert_array_equal(value["x"], loaded.axis())
+    assert value["points_returned"] == len(value["x"])
+    for series, signal in zip(value["series"], ["V(in)", "V(out)"], strict=True):
+        assert set(series) == {"signal", "y"}
+        np.testing.assert_array_equal(np.float32(series["y"]), loaded.trace(signal))
+
+
+@pytest.mark.asyncio
+async def test_inline_samples_of_a_float32_trace_are_written_in_float32_form(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """LTspice stores a trace in 32 bits; widened to a double it printed as
+    seventeen digits (0.9999544620513916) where nine say the same float
+    (0.99995446). The short form reads back as the very same 32-bit value."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    loaded = await load_raw_result(
+        state=state_no_sim, raw_path=raw, job_id=None, run_index=0, case_id=None
+    )
+    trace = loaded.trace("V(out)")
+    assert trace.dtype == np.float32, "the fixture's premise: a 32-bit trace"
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "wave", "metric": "waveform", "signals": ["V(out)"]}],
+    )
+    (series,) = data["results"]["wave"]["values"][0]["value"]["series"]
+    np.testing.assert_array_equal(np.float32(series["y"]), trace)
+    for written, stored in zip(series["y"], trace, strict=True):
+        assert json.dumps(written) == str(stored)
+
+
+@pytest.mark.asyncio
+async def test_a_lean_row_leaves_the_snapshot_digest_to_include_fields(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A row named its file's 64-character digest, which the reply's
+    source_hashes already carried, and a waveform's value named it again with
+    the rest of the row's identity. The lean row keeps the identity a caller
+    reads; the digest is one include.fields path away."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    recipes = [
+        {"key": "wave", "metric": "waveform", "signals": ["V(out)"]},
+        {"key": "stats", "metric": "signal_stats", "signal": "V(out)"},
+    ]
+    lean = await _analyze(state_no_sim, raw, recipes)
+    for key in ("wave", "stats"):
+        (row,) = lean["results"][key]["values"]
+        assert "snapshot_id" not in row
+        assert row["circuit"] == "ltspice_tran_rc"
+    wave_value = lean["results"]["wave"]["values"][0]["value"]
+    assert not set(wave_value) & set(analyze_mod._IDENTITY_KEYS)
+    (digest,) = {entry["snapshot_id"] for entry in lean["source_hashes"]}
+
+    projected = await _analyze(
+        state_no_sim, raw, recipes, include={"fields": ["snapshot_id", "value"]}
+    )
+    for key in ("wave", "stats"):
+        (row,) = projected["results"][key]["values"]
+        assert row["snapshot_id"] == digest
+
+
+@pytest.mark.asyncio
 async def test_csv_waveform_states_that_max_points_is_inline_only(
     state_no_sim: SessionState,
     work_dir: Path,
@@ -1982,9 +2065,11 @@ async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
     work_dir: Path,
 ):
     """Lean-by-default: rows carry the scalar leaves of value and drop
-    null/empty attribution plus the per-row deck digest; include.fields is
-    the named opt-in that restores any dropped detail, up to the whole
-    block via fields=["value"]. Both row surfaces render identically."""
+    null/empty attribution plus the per-row deck and file digests (the
+    file digest stays on source_hashes, joined by the row's source label);
+    include.fields is the named opt-in that restores any dropped detail, up
+    to the whole block via fields=["value"]. Both row surfaces render
+    identically."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     include: dict[str, Any] = {"per_run": {"limit": 10}} if surface == "per_run" else {}
     data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], all_steps=True, include=include)
@@ -1994,9 +2079,10 @@ async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
     for row in rows:
         assert set(row) <= _FULL_ROW_KEYS
         assert row["plot_index"] == 0
-        assert row["snapshot_id"] == data["source_hashes"][0]["snapshot_id"]
+        assert row["source"] == data["source_hashes"][0]["label"]
         assert row["dialect"] == "ltspice"
         assert "deck_sha256" not in row
+        assert "snapshot_id" not in row
         assert not any(isinstance(item, (dict, list)) for item in row["value"].values()), (
             "default value must be scalar leaves only"
         )

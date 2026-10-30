@@ -471,10 +471,19 @@ def _receipt_surfaces(data: dict[str, Any]) -> list[list[Any]]:
     return surfaces
 
 
+#: Where a caller reads more of an attached waveform the receipt thinned.
+_THINNED_ATTACHED_ROUTE = (
+    "analyze_results over this job_id returns more, and format 'csv' writes every sample."
+)
+
+
 def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[str]:
     """Apply presentation rungs to either public receipt envelope.
 
-    Returns the blocks the trim emptied of content, for the rung's note.
+    Returns the blocks the trim emptied of content, for the rung's note. An
+    attached analysis's inline waveforms are then thinned to fit at every rung,
+    whatever ``max_points`` the request set: the receipt's rows preview what
+    ``analyze_results`` over the job returns, and that call sizes them.
     """
     emptied: list[str] = []
     if rung.trim:
@@ -484,6 +493,11 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[s
         result = _attached_result(data)
         if result is not None:
             emptied = [f"analysis.result.{key}" for key in analyze.trim_analysis(result)]
+            results = result.get("results")
+            if isinstance(results, dict):
+                analyze.fit_waveform_samples(
+                    data, results, rung.body_budget, list(results), _THINNED_ATTACHED_ROUTE
+                )
     return emptied
 
 

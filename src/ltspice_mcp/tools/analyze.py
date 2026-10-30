@@ -11,7 +11,7 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path, PurePath
@@ -816,6 +816,11 @@ def _scalar_leaves(value: dict[str, Any]) -> dict[str, Any]:
     return flat if flat else value
 
 
+#: Row keys the lean row leaves out: the value, rendered on its own below, and
+#: the two digests.
+_LEAN_ROW_DROPPED: frozenset[str] = frozenset({"value", "deck_sha256", "snapshot_id"})
+
+
 def _lean_row(
     row: dict[str, Any], lean_value: Callable[[dict[str, Any]], dict[str, Any]]
 ) -> dict[str, Any]:
@@ -823,13 +828,14 @@ def _lean_row(
 
     Drops attribution keys that carry nothing (null step_index, empty
     step_values — the row schema declares no required keys, so absent and
-    empty mean the same thing), drops the per-row deck digest (provenance,
-    reachable via include.fields), and renders ``value`` by the metric's own
+    empty mean the same thing), drops the per-row deck and file digests
+    (provenance, reachable via include.fields; the file digest is also on the
+    reply's source_hashes), and renders ``value`` by the metric's own
     ``lean_value`` (see _LEAN_VALUES).
     """
     out: dict[str, Any] = {}
     for key, item in row.items():
-        if key == "value" or key == "deck_sha256":
+        if key in _LEAN_ROW_DROPPED:
             continue
         if item is None or item == {} or item == []:
             continue
@@ -1738,10 +1744,29 @@ def _artifact_estimate(recipe: Recipe, runs: list[_ResolvedRun]) -> float:
     return 0.05 + size / 25_000_000 * max(1, len(recipe.signals))
 
 
+def _sample_list(samples: np.ndarray, *, single: bool) -> list[float]:
+    """``samples`` as wire floats, each in the shortest form of its own precision.
+
+    A 32-bit sample widened to a double prints seventeen digits of which nine
+    are the value (0.9999544620513916 for 0.99995446). Writing it in its 32-bit
+    shortest form reads back as the very same 32-bit value, so nothing is lost.
+    ``single`` says the samples hold 32-bit values, which decimation does not
+    see: it returns doubles, but only ever ones it picked from the samples.
+    """
+    if not single:
+        return samples.tolist()
+    return samples.astype(np.float32).astype(str).astype(np.float64).tolist()
+
+
 def _inline_series(
     axis: np.ndarray, wave: np.ndarray, analysis: str, limit: int
-) -> dict[str, Any]:
-    """Render resident samples, using AC magnitude/phase only for AC plots."""
+) -> tuple[list[float], dict[str, Any]]:
+    """Render resident samples, using AC magnitude/phase only for AC plots.
+
+    Returns the axis points and the components read at them. The points are
+    the axis's alone (decimation buckets the axis, never the trace), so every
+    trace of one plot returns the same ones.
+    """
     if not np.iscomplexobj(wave):
         components = {"y": wave}
     elif analysis in AC_SHAPED:
@@ -1754,10 +1779,11 @@ def _inline_series(
     x = axis
     values: dict[str, Any] = {}
     for name, samples in components.items():
+        single = samples.dtype == np.float32
         if len(axis) > limit:
             x, samples = downsample_minmax(axis, samples, limit)
-        values[name] = samples.tolist()
-    return {"x": x.tolist(), **values}
+        values[name] = _sample_list(samples, single=single)
+    return _sample_list(x, single=x.dtype == np.float32), values
 
 
 async def _waveform(
@@ -1782,6 +1808,7 @@ async def _waveform(
                 "This plot has no sampled axis; use inspect results table or CSV export."
             )
         values: list[dict[str, Any]] = []
+        x: list[float] = []
         total_max = 0
         point_limit = min(recipe.max_points, state.config.max_points_returned)
         for signal_input in recipe.signals:
@@ -1796,16 +1823,16 @@ async def _waveform(
                 )
                 axis, wave = axis[lo:hi], wave[lo:hi]
             total_max = max(total_max, len(axis))
-            series = _inline_series(axis, wave, raw.descriptor.analysis, point_limit)
-            values.append({"signal": signal.name, **series})
+            # Every trace is read on the same axis through the same window, so
+            # the axis is sent once beside the series rather than in each.
+            x, components = _inline_series(axis, wave, raw.descriptor.analysis, point_limit)
+            values.append({"signal": signal.name, **components})
         return (
             {
                 "format": "inline",
+                "x": x,
                 "series": values,
-                "points_returned": max(
-                    (len(series["x"]) for series in values),
-                    default=0,
-                ),
+                "points_returned": len(x),
                 "points_total": total_max,
                 **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
                     _IDENTITY_KEYS
@@ -2084,10 +2111,21 @@ def _whole(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def _without_row_identity(value: dict[str, Any]) -> dict[str, Any]:
+    """A waveform or plot value without the run identity it carries.
+
+    Those values name their run inside themselves (``_artifact_record`` reads
+    the row's identity back out of them), so on a row that already names it the
+    copy in the value says everything twice, digests included.
+    """
+    return {key: item for key, item in value.items() if key not in _IDENTITY_KEYS}
+
+
 # How the answer channel renders a metric's value; a metric not listed keeps
 # its scalar leaves (_scalar_leaves). Applied to the lean row only, never to a
 # projected one. A metric whose row value IS its nested structure keeps it
-# whole. A waveform's value is the curve the caller asked for. A keyed metric's
+# whole. A waveform's value is the curve the caller asked for, less the run
+# identity the row around it already states. A keyed metric's
 # value is a map addressed by name — and operating_point's only FLAT leaves are
 # ``step``/``step_count``/``device``, so leaning it returns the row's
 # bookkeeping and drops every number: a bias-point read that answers "complete"
@@ -2095,7 +2133,8 @@ def _whole(value: dict[str, Any]) -> dict[str, Any]:
 # new keyed metric cannot be added without this rule following it. A
 # measurements value sheds the stats block its 'measured' map restates.
 _LEAN_VALUES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "waveform": _whole,
+    "waveform": _without_row_identity,
+    "plot": lambda value: _scalar_leaves(_without_row_identity(value)),
     **dict.fromkeys(_KEYED_EXTRACTORS, _whole),
     "measurements": _measurements_lean,
 }
@@ -3642,11 +3681,158 @@ def trim_analysis(data: dict[str, Any], *, keep_provenance: bool = False) -> lis
     return response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
 
 
+#: The fewest points a budget thins an inline series to: sixteen buckets, each
+#: its minimum and maximum, still draw the shape of a transient.
+THIN_FLOOR_POINTS = 32
+
+_THINNED_WARNING = (
+    "Inline series thinned to {shown} of {total} points per signal, keeping each "
+    "bucket's minimum and maximum, to fit the response budget. {route}"
+)
+
+
+def _sample_rows(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The rows of one rendered waveform entry whose value carries inline samples."""
+    rows = list(entry.get("values") or [])
+    per_run = entry.get("per_run")
+    if isinstance(per_run, dict):
+        rows.extend(per_run.get("items") or [])
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and isinstance(value := row.get("value"), dict)
+        and value.get("format") == "inline"
+        and isinstance(value.get("x"), list)
+        and value["x"]
+        and isinstance(value.get("series"), list)
+    ]
+
+
+def _thinned(value: dict[str, Any], limit: int) -> dict[str, Any]:
+    """``value``'s inline samples decimated again, to at most ``limit`` points.
+
+    Bucketing min/max pairs by their minimum and maximum keeps every extreme the
+    first decimation kept. The samples kept are ones the value already held, so
+    their written form does not change.
+    """
+    if len(value["x"]) <= limit:
+        return value
+    x = np.asarray(value["x"], dtype=float)
+    series = [
+        {
+            name: (
+                downsample_minmax(x, np.asarray(item, dtype=float), limit)[1].tolist()
+                if isinstance(item, list)
+                else item
+            )
+            for name, item in entry.items()
+        }
+        for entry in value["series"]
+    ]
+    kept = downsample_minmax(x, x, limit)[0]
+    return {**value, "x": kept.tolist(), "series": series, "points_returned": len(kept)}
+
+
+def fit_waveform_samples(
+    page: dict[str, Any],
+    results: dict[str, Any],
+    body_budget: int,
+    keys: Iterable[str],
+    route: str,
+) -> None:
+    """Thin the inline waveform samples of ``results``' ``keys`` until ``page`` fits.
+
+    ``results`` is the results map of an analysis envelope inside ``page``: the
+    envelope itself, or a receipt's attached analysis. The samples of an inline
+    waveform are already a bounded min/max decimation, so drawing it with fewer
+    buckets is presentation, and cuts no fact; ``points_total`` still counts
+    every sample. One point limit caps every series, at the largest that fits,
+    and never below :data:`THIN_FLOOR_POINTS`. A row's value is replaced, never
+    edited, because a rendered row shares its value with the record behind it.
+    Each recipe thinned says so in its warnings, with ``route`` to the rest.
+    """
+    keys = tuple(keys)
+    targets = [
+        (key, row, row["value"])
+        for key in keys
+        if isinstance(entry := results.get(key), dict) and entry.get("metric") == "waveform"
+        for row in _sample_rows(entry)
+    ]
+    if not targets:
+        return
+    measured = response_budget.estimate_tokens(page)
+    if measured <= body_budget:
+        return
+    costs = [
+        (len(value["x"]), response_budget.estimate_tokens([value["x"], value["series"]]))
+        for _key, _row, value in targets
+    ]
+    widest = max(count for count, _tokens in costs)
+    if widest <= THIN_FLOOR_POINTS:
+        return
+    room = body_budget - (measured - sum(tokens for _count, tokens in costs))
+    keyed = {key: [(row, original) for at, row, original in targets if at == key] for key in keys}
+    warnings = {key: list(results[key].get("warnings", [])) for key, rows in keyed.items() if rows}
+
+    def priced(limit: int) -> bool:
+        return sum(tokens * min(count, limit) / count for count, tokens in costs) <= room
+
+    def fits(limit: int) -> bool:
+        # The warning a thinned recipe carries is part of the page it fits.
+        for key, rows in keyed.items():
+            if not rows:
+                continue
+            for row, original in rows:
+                row["value"] = _thinned(original, limit)
+            entry = results[key]
+            entry["warnings"] = list(warnings[key])
+            if any(row["value"] is not original for row, original in rows):
+                entry["warnings"].append(
+                    _THINNED_WARNING.format(
+                        shown=max(row["value"]["points_returned"] for row, _original in rows),
+                        total=max(original["points_total"] for _row, original in rows),
+                        route=route,
+                    )
+                )
+        return response_budget.estimate_tokens(page) <= body_budget
+
+    start = response_budget.largest_fitting(widest, priced, floor=THIN_FLOOR_POINTS)
+    fits(response_budget.largest_fitting(start, fits, floor=THIN_FLOOR_POINTS))
+
+
+#: Where a caller reads more of a thinned waveform, by the rung that thinned it.
+#: Below the answer rung only an unsized waveform is thinned, and the caller
+#: may have set no budget, so the route is the recipe's own arguments.
+_THINNED_ROUTE_UNSIZED = "Set max_points to keep a count, or format 'csv' to write every sample."
+_THINNED_ROUTE_ANY = "A larger 'budget' keeps more, and format 'csv' writes every sample."
+
+
+def unsized_waveforms(recipes: Iterable[Recipe]) -> frozenset[str]:
+    """The keys of the inline waveform recipes whose point count the caller left at
+    its default, which a budget may thin below the answer rung.
+
+    Read off the value, because a recipe is re-validated from a stored dump that
+    fills in every default, so whether the caller wrote ``max_points`` is gone
+    by the time it is rendered. Any other count is the caller's opt-in.
+    """
+    default = WaveformRecipe.model_fields["max_points"].default
+    return frozenset(
+        recipe.key
+        for recipe in recipes
+        if isinstance(recipe, WaveformRecipe)
+        and recipe.format == "inline"
+        and recipe.max_points == default
+    )
+
+
 def _degrade_analysis(
     data: dict[str, Any],
     rung: response_budget.Rung,
     *,
     preserve_provenance: bool,
+    waveforms: frozenset[str] = frozenset(),
+    unsized: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Apply the budget ladder's in-place trim rung to this envelope.
 
@@ -3654,6 +3840,12 @@ def _degrade_analysis(
     rung and the shrink rung are not here: revoking an opt-in changes what gets
     computed, and shrinking a page has to happen before its cursor is minted,
     so both are inputs to :func:`_assemble` instead.
+
+    Then thins inline waveform samples until the page fits: below the answer
+    rung only the ``unsized`` ones, whose point count is the server's default
+    rather than the caller's, and from the answer rung on every one of
+    ``waveforms``. Thinning a row's samples moves no cursor, so it can follow
+    assembly where shrinking a page cannot.
     """
     if not rung.trim:
         return []
@@ -3663,7 +3855,16 @@ def _degrade_analysis(
     # Once the answer rung has revoked the opt-in, emptying the echo is the
     # ladder working as specified, not a second revocation.
     keep = preserve_provenance and not rung.answer_channel
-    return trim_analysis(data, keep_provenance=keep)
+    cut = trim_analysis(data, keep_provenance=keep)
+    if rung.answer_channel:
+        fit_waveform_samples(
+            data, data["results"], rung.body_budget, waveforms, _THINNED_ROUTE_ANY
+        )
+    else:
+        fit_waveform_samples(
+            data, data["results"], rung.body_budget, unsized, _THINNED_ROUTE_UNSIZED
+        )
+    return cut
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
@@ -3696,7 +3897,20 @@ async def _negotiate_analysis(
     base = _Limits.of(a.include)
     text = ""
     rendered: dict[str, Any] = {}
-    degrade = functools.partial(_degrade_analysis, preserve_provenance=a.include.provenance)
+    waveforms = frozenset(
+        unit.key for unit in a.processed if isinstance(unit.recipe, WaveformRecipe)
+    )
+    degrade = functools.partial(
+        _degrade_analysis,
+        preserve_provenance=a.include.provenance,
+        waveforms=waveforms,
+        # Rows projected by include.fields are the caller's own opt-in.
+        unsized=(
+            frozenset()
+            if a.include.fields is not None
+            else unsized_waveforms(unit.recipe for unit in a.processed)
+        ),
+    )
 
     def candidate(limits: _Limits, rung: response_budget.Rung) -> response_budget.Rendered:
         data, line = _assemble(a, rung, limits)

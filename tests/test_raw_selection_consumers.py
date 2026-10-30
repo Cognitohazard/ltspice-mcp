@@ -473,7 +473,9 @@ async def test_recorded_analysis_exports_selected_native_table(state_no_sim, wor
     row = data["results"]["quantities"]["values"][0]
     assert row["plot_index"] == 1
     assert row["dialect"] == "ngspice"
-    assert row["snapshot_id"] == data["source_hashes"][0]["snapshot_id"]
+    # The row reaches its snapshot through its source label.
+    assert row["source"] == data["source_hashes"][0]["label"]
+    assert data["source_hashes"][0]["snapshot_id"]
 
     def read_csv():
         with Path(row["value"]["artifact"]["path"]).open(newline="", encoding="utf-8") as stream:
