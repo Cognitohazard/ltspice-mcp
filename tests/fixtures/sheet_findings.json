@@ -15834,6 +15834,253 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_waypoint_on_wire.asc": {
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "same_instance_waypoint_on_wire.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (32,144) meets no pin, net label, or other wire",
+     "x": 32,
+     "y": 144
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (160,144) meets no pin, net label, or other wire",
+     "x": 160,
+     "y": 144
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,144) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 144
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,144)->(96,192) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 144
+      },
+      {
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 144
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (32,144)->(160,144) passes through R1's body",
+     "points": [
+      {
+       "x": 32,
+       "y": 144
+      },
+      {
+       "x": 160,
+       "y": 144
+      }
+     ],
+     "ref": "R1",
+     "x": 32,
+     "y": 144
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 2,
+    "pins_wired": 2,
+    "wire_segments": 3
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_waypoint_on_wire.asc",
+     "x": 32,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       144
+      ]
+     ],
+     "detail": "Wire end at (32,144) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(32,144)"
+   },
+   {
+    "at": {
+     "file": "same_instance_waypoint_on_wire.asc",
+     "x": 160,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       160,
+       144
+      ]
+     ],
+     "detail": "Wire end at (160,144) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(160,144)"
+   },
+   {
+    "at": {
+     "file": "same_instance_waypoint_on_wire.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,144) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_waypoint_on_wire.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,144)->(96,192) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_waypoint_on_wire.asc",
+     "x": 32,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       144
+      ],
+      [
+       160,
+       144
+      ]
+     ],
+     "detail": "Wire (32,144)->(160,144) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_wire.asc": {
   "dropped_wire": [
    {
@@ -16500,6 +16747,66 @@
     "pins_total": 6,
     "pins_wired": 3,
     "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/wire_ends_meeting_on_wire_interior.asc": {
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "wire_ends_meeting_on_wire_interior.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "net_with_two_names",
+    "severity": "observation",
+    "subject": "(96,96)"
+   }
+  ],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "net_with_two_names",
+     "message": "One net carries labels ['a', 'b']; LTspice gives the node one of these names, so a directive or probe that uses another may not find it",
+     "names": [
+      "a",
+      "b"
+     ],
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 192,
+       "y": 48
+      }
+     ],
+     "x": 96,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 3,
+    "pins_total": 6,
+    "pins_wired": 3,
+    "wire_segments": 3
    }
   },
   "verify": []
