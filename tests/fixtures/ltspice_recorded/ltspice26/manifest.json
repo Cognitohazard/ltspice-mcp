@@ -3689,6 +3689,186 @@
         ".raw"
       ]
     },
+    "deck/solver_setting_0": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_setting_0.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_default.cir": "27b35eed4681b11c4fa8490268110a173f905dd46b6c98995d3a1e9ff2e1faed"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_setting_0.log": {
+          "bytes": 350,
+          "sha256": "6325b9a3c8a107c7b67185d5f35d5f0e462e7e6770cbb505df3fbe101b1442db"
+        },
+        "deck/solver_setting_0.raw": {
+          "bytes": 11058,
+          "sha256": "96253e8c92693f56b092f1487166933f1119cbe6b9f01e8e1ec7e376468feb10"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "Solver": "0"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_setting_1": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_setting_1.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_default.cir": "27b35eed4681b11c4fa8490268110a173f905dd46b6c98995d3a1e9ff2e1faed"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_setting_1.log": {
+          "bytes": 353,
+          "sha256": "914143944061b62f790d5a2e4629b3991f0f642e755008af3992a062cb474178"
+        },
+        "deck/solver_setting_1.raw": {
+          "bytes": 11098,
+          "sha256": "1aaf3b046139e1feb3f14cb295fb3e98289b594a0cddfb8d2307da5a5f44f6e9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "Solver": "1"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_setting_2": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_setting_2.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_default.cir": "27b35eed4681b11c4fa8490268110a173f905dd46b6c98995d3a1e9ff2e1faed"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_setting_2.log": {
+          "bytes": 353,
+          "sha256": "97666f7ab3b68dac3477da506e5775050f25b40bd130fc3e4082843f4e6fa4c3"
+        },
+        "deck/solver_setting_2.raw": {
+          "bytes": 11098,
+          "sha256": "72f7988753e276da60998c9dc6e80752ee782851d1ce6c2244cbf5712094be1c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "Solver": "2"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_setting_alt": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_setting_alt.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_default.cir": "27b35eed4681b11c4fa8490268110a173f905dd46b6c98995d3a1e9ff2e1faed"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_setting_alt.log": {
+          "bytes": 354,
+          "sha256": "9bb388dcdf5b9c7c9b65017b430d62bf21bc3a29d5243cc318146d66f83f55d5"
+        },
+        "deck/solver_setting_alt.raw": {
+          "bytes": 11062,
+          "sha256": "c2b06cffba5d9a075fcb652dd8f3060d3cfed925fcc68051fe50c092597c4ef4"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "Solver": "alt"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/solver_setting_over_norm": {
+      "behaviour": "options-solver",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/solver_setting_over_norm.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/solver_norm.cir": "4043787145d181220af21eec0e22db20bd77ccf08b989038e8c36a308d82399d"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/solver_setting_over_norm.log": {
+          "bytes": 386,
+          "sha256": "b156449354192136768a874f12d0f7cc6739b4db6d379fb367fa789728abe27e"
+        },
+        "deck/solver_setting_over_norm.raw": {
+          "bytes": 11074,
+          "sha256": "898ab655ded22b13f289766484a3b9280078705f94bb2f84de785ce2713c34aa"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "Solver": "1"
+      },
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/solver_unknown": {
       "behaviour": "options-solver",
       "command": [

@@ -67,6 +67,12 @@ LOCAL_NAMES = [
 ]
 
 
+#: XVII names itself only in a raw's Command field, and on the Alternate solver
+#: that field ends with the solver. The build is the same one, but
+#: ``reported_build`` reads the whole field as its name.
+SOLVER_IN_THE_BUILD_NAME_ON_THE_SERVER_ONLY = {("ltspice17", "deck/solver_setting_1")}
+
+
 def scrubber() -> Scrubber:
     return Scrubber.for_run(Path(WORK), home=Path(HOME))
 
@@ -425,7 +431,10 @@ class TestCommittedRecordings:
                 continue  # an export, or a case that kept only its raw
             detected = reported_build(log, raw if raw.is_file() and raw.stat().st_size else None)
             if detected is not None:
-                assert detected == manifest["reported_build"], case_id
+                expected = manifest["reported_build"]
+                if (build, case_id) in SOLVER_IN_THE_BUILD_NAME_ON_THE_SERVER_ONLY:
+                    expected += " -- Alternate Solver"
+                assert detected == expected, case_id
                 named += 1
         assert named > 50
 
@@ -469,6 +478,36 @@ def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tm
     )
 
 
+class TestSettingsSwitch:
+    """A build ignores ``-ini`` when the deck's path holds the letters ``ini``."""
+
+    BUILD = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "current", None)
+    SETTINGS = Path("C:/rec/case.ini")
+
+    def _case(self, *, settings: bool = True) -> recorder.Case:
+        return recorder.Case("raw/x", "b", "run", "raw/x.cir", settings=settings)
+
+    @pytest.mark.parametrize(
+        "deck",
+        ["C:/rec/x_ini0.cir", "C:/rec/mini.cir", "C:/rec/MINI.cir", "D:/Gemini/rec/x.cir"],
+    )
+    def test_a_deck_whose_path_holds_them_is_refused(self, deck: str):
+        with pytest.raises(RecorderError, match="ignores -ini"):
+            recorder._command(self.BUILD, self._case(), Path(deck), self.SETTINGS)
+
+    def test_the_letters_apart_are_not(self):
+        command = recorder._command(
+            self.BUILD, self._case(), Path("C:/rec/in_i.cir"), self.SETTINGS
+        )
+        assert command[-2:] == ["-ini", str(self.SETTINGS)]
+
+    def test_a_run_that_names_no_settings_file_has_no_switch_to_lose(self):
+        command = recorder._command(
+            self.BUILD, self._case(settings=False), Path("C:/rec/mini.cir"), self.SETTINGS
+        )
+        assert "-ini" not in command
+
+
 def _menu_item(flags: int, text: str, command: int | None = None) -> bytes:
     """One item of a classic menu template, the form both builds' menus are in."""
     head = flags.to_bytes(2, "little")
@@ -504,7 +543,7 @@ class TestSaveCases:
     def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path):
         case = self._case(tmp_path)
         build = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "modern", None)
-        deck, ini = tmp_path / "work" / case.work_name, tmp_path / "x.ini"
+        deck, ini = Path("C:/rec") / case.work_name, tmp_path / "x.ini"
         assert recorder._command(build, case, deck, ini) == [
             str(build.exe),
             deck.as_posix(),

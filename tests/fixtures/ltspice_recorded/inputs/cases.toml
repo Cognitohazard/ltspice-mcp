@@ -373,7 +373,7 @@ inputs = [
 ]
 
 [behaviour.options-solver]
-summary = "What .options solver does on each build: the solver line of the log, the raw's Command field, whether the samples change, and what a spelling the build does not take gets: a complaint and the Normal solver on LTspice 26, a fatal error on LTspice XVII, which has no such option."
+summary = "What .options solver and the Solver setting do on each build: the solver line of the log, the raw's Command field, whether the samples change, and what a spelling the build does not take gets: a complaint and the Normal solver on LTspice 26, a fatal error on LTspice XVII, which has no such option. In the settings file, 0 or no key is Normal and 1 is Alternate on both builds, a word is Normal, 2 is Alternate on LTspice 26 and crashes LTspice XVII, and a deck's .options outranks the setting on LTspice 26."
 # No server code reads the solver yet. The recorder is what models it so far:
 # it takes the Solver setting out of every case as a key that changes a result.
 model = ["tests/ltspice_recorder.py"]
@@ -387,6 +387,11 @@ inputs = [
     "deck/solver_number.cir",
     "deck/solver_unknown.cir",
 ]
+
+[behaviour.settings-file-ignored]
+summary = "That a build ignores -ini, with no error, when the deck's path holds the letters ini, in either case, in the deck's name or in any folder above it, and runs on the settings file of the person recording. The path to the executable does not count."
+model = ["tests/ltspice_recorder.py"]
+unrecordable = "What such a run shows is the settings of the person recording, which a recording must not depend on. It was looked at on LTspice 26.1.1 and XVII 17.0.37, by running log/meas_trig.cir with RadianMeasure set in the settings copy: under the names x_ini0, ini, mini and MINI, and under a folder holding the letters, both builds ignored the copy, and under the name in_i both read it. On LTspice 26 the log of such a run was the log of a run on the user's own settings with no -ini at all. The server's own launch with -ini (lib/controlled_ltspice.py) also sets APPDATA to the folder of a file named LTspice.ini, which a build reads instead, so it is not affected: that launch was looked at on LTspice 26.1.1, on a deck named x_ini0."
 
 # ---------------------------------------------------------------- raw files
 
@@ -1131,3 +1136,38 @@ behaviour = "raw-fra"
 source = "raw/fra_numdgt7.cir"
 keep = ["log", "raw", "fra_1.raw"]
 builds = ["current"]
+
+# The Solver setting, which every other case leaves out. The transient is
+# deck/solver_default, so its samples say which solver ran. solver_setting_alt
+# gives the setting a word .options takes, and solver_setting_over_norm a deck
+# that names the other solver. On LTspice XVII that deck stops at its .options
+# line, and a setting of 2 crashes the build, leaving an empty log.
+[[case]]
+id = "deck/solver_setting_0"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "0" }
+
+[[case]]
+id = "deck/solver_setting_1"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "1" }
+
+[[case]]
+id = "deck/solver_setting_2"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "2" }
+
+[[case]]
+id = "deck/solver_setting_alt"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "alt" }
+
+[[case]]
+id = "deck/solver_setting_over_norm"
+behaviour = "options-solver"
+source = "deck/solver_norm.cir"
+ini = { Solver = "1" }

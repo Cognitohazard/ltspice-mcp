@@ -258,6 +258,11 @@ Command-line details:
   without running anything and XVII opens its window.
 - The settings copy is never empty. A build started on an empty one behaves as
   on first launch, and XVII then runs its updater.
+- `-ini` is ignored, with no error, when the deck's path holds the letters
+  `ini` in either case, in its name or in any folder above it. The build then
+  runs on the recording user's own settings, so the recorder refuses such a
+  path: rename the case, or pass `--work-dir` to record somewhere else. The
+  path to the executable does not count.
 - `-ascii` is ignored when a settings file is also named, and when the deck's
   file name contains "ascii". So the two cases that test it
   (`raw/tran_as_text`, `raw/ac_as_text`) run on the recording user's own

@@ -21,12 +21,13 @@ given its panes with its own menu commands, and its plot settings are saved
 addition is a trailing ``-ini <file>``: a recording must not depend on the
 settings of the person recording, so each case runs against a copy of the
 build's settings file with the keys that change a result removed
-(``BEHAVIOUR_KEYS``), which leaves the build on its own defaults. Two things
+(``BEHAVIOUR_KEYS``), which leaves the build on its own defaults. Three things
 about that switch were learned the hard way. It goes after the input: given
 first, LTspice 26 exits 0 having run nothing, and LTspice XVII opens its
-window instead of running the batch. And the copy is never an empty file: a
+window instead of running the batch. The copy is never an empty file: a
 build that starts with one behaves as on first launch, and LTspice XVII then
-runs its updater.
+runs its updater. And the input's path never holds the letters ``ini``: a
+build then ignores the switch (``refuse_unread_settings``).
 
 **Nothing from the recording machine is kept.** Logs, exports and raw headers
 embed the working directory, the home directory, the date and how long the run
@@ -1256,6 +1257,21 @@ class CaseResult:
     defaults: dict[str, str] = field(default_factory=dict)
 
 
+def refuse_unread_settings(deck: Path, case_id: str) -> None:
+    """Refuse to start a build on ``deck`` with a settings file it would not read.
+
+    A build ignores ``-ini``, with no error, when the deck's path holds the
+    letters ``ini``, in either case, in the deck's name or in any folder above
+    it. It then runs on the recording user's own settings. The path to the
+    executable does not count.
+    """
+    if "ini" in deck.as_posix().casefold():
+        raise RecorderError(
+            f"{case_id}: a build ignores -ini when the deck's path holds 'ini'; rename the "
+            "case, or record under a path without those letters (--work-dir)"
+        )
+
+
 def _command(build: Build, case: Case, deck: Path, ini: Path) -> list[str]:
     # A plot case runs in the window, which a batch run (-b) never opens, and
     # a save case only opens its sheet there.
@@ -1267,7 +1283,10 @@ def _command(build: Build, case: Case, deck: Path, ini: Path) -> list[str]:
         mode = []
     else:
         mode = ["-Run", "-b"]
-    settings = ["-ini", str(ini)] if case.settings else []
+    settings: list[str] = []
+    if case.settings:
+        refuse_unread_settings(deck, case.case_id)
+        settings = ["-ini", str(ini)]
     return [str(build.exe), *mode, deck.as_posix(), *case.switches, *settings]
 
 

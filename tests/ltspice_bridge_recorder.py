@@ -95,6 +95,7 @@ from tests.ltspice_recorder import (
     drawn_traces,
     neutral_settings,
     private_strings,
+    refuse_unread_settings,
     sha256_bytes,
     unavailable_reason,
 )
@@ -864,6 +865,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         recording = _Recording(scrub)
         sheets: dict[str, bytes] = {}
         first = work / f"{names[0]}.asc"
+        refuse_unread_settings(first, names[0])
 
         with BridgeSession(command) as session:
             recording.call(session, "no LTspice is running", "status")
