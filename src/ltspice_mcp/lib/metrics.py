@@ -27,7 +27,7 @@ import asyncio
 import contextlib
 import math
 import re
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
@@ -751,6 +751,8 @@ def apply_when_axis_swap(
 def aggregate_log_measurements(
     meas_data: MeasurementsOutput,
     netlist: Path | None = None,
+    *,
+    kinds: dict[str, str] | None = None,
 ) -> tuple[
     dict[str, list[float | None]],
     dict[str, AggregatedField],
@@ -765,7 +767,8 @@ def aggregate_log_measurements(
 
     Returns ``(flat_values, axis_map, steps_label, at_map)`` — ``at_map`` is the
     per-step ``at`` list per name (unswapped), so the caller can echo the
-    reported point for a single-sample read the swap can't classify.
+    reported point for a single-sample read the swap can't classify. ``kinds``
+    is the deck's measurement kinds when the caller has read them already.
     """
     measurements = meas_data.get("measurements", {})
     if not measurements:
@@ -789,7 +792,9 @@ def aggregate_log_measurements(
             at_map[name] = [float(at_field)]
         else:
             at_map[name] = []
-    axis_map = apply_when_axis_swap(flat_values, at_map, meas_kinds_from_netlist(netlist))
+    if kinds is None:
+        kinds = meas_kinds_from_netlist(netlist)
+    axis_map = apply_when_axis_swap(flat_values, at_map, kinds)
     steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     return flat_values, axis_map, steps_label, at_map
 
@@ -820,6 +825,25 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
         row["values"] = [row["values"]]
         one[name] = row
     return {**meas_data, "measurements": one, "step_count": 1}
+
+
+def measurement_step_values(
+    meas_data: MeasurementsOutput, step_rows: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The stepped values of each row of a log's measurement tables, from the
+    log's ``.step`` lines (``step_rows``), row ``n`` the ``n``-th
+    (:func:`measurements_at_step`); one empty row for an unstepped log.
+    Tables whose rows the lines do not number are refused."""
+    count = max(meas_data.get("step_count") or 0, 1)
+    step_values = list(step_rows) or [{}]
+    if len(step_values) != count:
+        raise ResultError(
+            f"The log's measurement tables hold {count} steps and its .step lines "
+            f"name {len(step_rows)}, so a row cannot be paired with its step. Leave out "
+            "'step' and 'all_steps' to read statistics over every row, or read the "
+            "rows in order with api.measurements."
+        )
+    return step_values
 
 
 _RE_NOISE_HEAD = re.compile(r"^[ \t]*\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
@@ -1028,50 +1052,83 @@ async def measurements(
 ) -> MetricValue:
     """Aggregated .MEAS results from the run's log, keyed by measurement name:
     over every step, or with ``step`` over that step's row alone."""
+    (value,) = await measurement_rows(source, recipe, [step], state, measurement=measurement)
+    return value
+
+
+async def measurement_rows(
+    source: services.AnalysisSource,
+    recipe: MeasurementsRecipe,
+    steps: Sequence[int | None],
+    state: SessionState,
+    *,
+    measurement: str | None = None,
+) -> list[MetricValue]:
+    """The measurements recipe's value at each of ``steps``, from one read of
+    the run's log: ``None`` aggregates every step, an index reads that step's
+    row (:func:`measurements_at_step`). The deck and the build that wrote the
+    run are read once for all of them."""
     logs = await services.load_logs(source, state)
     whole = logs.value("measurements")
     if whole is None or source.log is None:
         raise ResultError("source has no log artifact for .MEAS results")
-    parsed = whole if step is None else measurements_at_step(whole, step)
-    flat_values, axis_map, _steps_label, at_map = await services.bounded_parse(
-        source.log,
-        lambda: aggregate_log_measurements(parsed, source.netlist),
-    )
-    stats = run_compute(
-        compute_measurement_stats,
-        flat_values,
-        histogram_bins=recipe.histogram_bins,
-        measurement=measurement,
-    )
-    # Surface which field each stat block was computed from so a downstream
-    # consumer can tell "this is the level (constant)" from "this is the
-    # WHEN-clause crossing frequency".
-    for name, entry in stats.items():
-        entry["aggregated_field"] = axis_map.get(name, "value")
-        # n=1 can't trigger the variation-based WHEN swap, so a single-run .meas
-        # with an AT/crossing would report only its value. Echo the reported
-        # ``at`` too — callers use this to "read my .meas", and the
-        # time/frequency is often the answer they want.
-        if entry["aggregated_field"] == "value" and entry.get("total_count") == 1:
-            crossings = [a for a in at_map.get(name, []) if a is not None]
-            if crossings:
-                entry["at"] = crossings[0]
-    if recipe.names is not None:
-        stats = {name: entry for name, entry in stats.items() if name in recipe.names}
-    data: MetricValue = {"stats": stats}
-    observations = await _zeros_a_failed_step_prints(source, whole, set(stats), step)
-    if observations:
-        data["observations"] = observations
-    return data
+    tables = [whole if step is None else measurements_at_step(whole, step) for step in steps]
+    netlist = source.netlist
+
+    def aggregate_each() -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
+        kinds = meas_kinds_from_netlist(netlist)
+        rows = []
+        for table in tables:
+            flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(
+                table, kinds=kinds
+            )
+            stats = run_compute(
+                compute_measurement_stats,
+                flat_values,
+                histogram_bins=recipe.histogram_bins,
+                measurement=measurement,
+            )
+            rows.append((stats, axis_map, at_map))
+        return rows
+
+    aggregated = await services.bounded_parse(source.log, aggregate_each)
+    values: list[MetricValue] = []
+    for stats, axis_map, at_map in aggregated:
+        # Surface which field each stat block was computed from so a downstream
+        # consumer can tell "this is the level (constant)" from "this is the
+        # WHEN-clause crossing frequency".
+        for name, entry in stats.items():
+            entry["aggregated_field"] = axis_map.get(name, "value")
+            # n=1 can't trigger the variation-based WHEN swap, so a single-run
+            # .meas with an AT/crossing would report only its value. Echo the
+            # reported ``at`` too — callers use this to "read my .meas", and
+            # the time/frequency is often the answer they want.
+            if entry["aggregated_field"] == "value" and entry.get("total_count") == 1:
+                crossings = [a for a in at_map.get(name, []) if a is not None]
+                if crossings:
+                    entry["at"] = crossings[0]
+        if recipe.names is not None:
+            stats = {name: entry for name, entry in stats.items() if name in recipe.names}
+        values.append({"stats": stats})
+    zeros = await _zeros_a_failed_step_prints(source, whole, set(values[0]["stats"]))
+    if zeros is not None:
+        build, zero_steps = zeros
+        for step, data in zip(steps, values, strict=True):
+            at_step = {
+                name: [index for index in indices if step in (None, index)]
+                for name, indices in zero_steps.items()
+            }
+            at_step = {name: indices for name, indices in at_step.items() if indices}
+            if at_step:
+                data["observations"] = [_zero_or_failed(build, at_step)]
+    return values
 
 
 async def _zeros_a_failed_step_prints(
-    source: services.AnalysisSource,
-    parsed: MeasurementsOutput,
-    names: set[str],
-    step: int | None = None,
-) -> list[dict[str, Any]]:
-    """Name the steps that read exactly 0 on a build that prints 0 for a failure.
+    source: services.AnalysisSource, parsed: MeasurementsOutput, names: set[str]
+) -> tuple[str, dict[str, list[int]]] | None:
+    """The build and the steps that read exactly 0, by measurement, when the
+    build prints 0 for a failure; None otherwise.
 
     In a stepped measurement table LTspice 24 and later print ``failed`` for a
     step whose measurement could not be taken; LTspice XVII and earlier print
@@ -1079,45 +1136,44 @@ async def _zeros_a_failed_step_prints(
     build is the one the run named in its own output: as the job's case
     recorded it, or for a bare path, read from the head of its log or raw.
     Every exact zero is named, as a fact for the caller to weigh: a true zero
-    and a failure read the same here. With ``step``, only that step is read.
+    and a failure read the same here.
     """
     measurements = parsed.get("measurements") or {}
     if (parsed.get("step_count") or 0) < 2 or not measurements:
-        return []
-
-    def zero_steps(values: list[float | None]) -> list[int]:
-        read = range(len(values)) if step is None else range(step, min(step + 1, len(values)))
-        return [index for index in read if values[index] == 0]
-
+        return None
     zeros = {
-        name: zero_steps(entry.get("values") or [])
+        name: [index for index, value in enumerate(entry.get("values") or []) if value == 0]
         for name, entry in measurements.items()
         if name in names
     }
     zeros = {name: steps for name, steps in zeros.items() if steps}
     if not zeros:
-        return []
+        return None
     build = source.simulator_version or await asyncio.to_thread(
         reported_build, source.log, source.raw
     )
     if build is None or not is_cp1252_ltspice_build(build):
-        return []
+        return None
+    return build, zeros
+
+
+def _zero_or_failed(build: str, zeros: dict[str, list[int]]) -> dict[str, Any]:
+    """The observation naming the steps that read 0 on a build that prints 0
+    for a failure (:func:`_zeros_a_failed_step_prints`)."""
     listed = "; ".join(
         f"{name} at step(s) {', '.join(map(str, steps))}" for name, steps in zeros.items()
     )
-    return [
-        {
-            "code": "measurement_zero_or_failed",
-            "kind": "value",
-            "detail": (
-                f"This run was written by {build}, which prints 0 in a stepped "
-                f"measurement table for a step whose measurement failed, where "
-                f"LTspice 24 and later print 'failed'. These read exactly 0 and "
-                f"may be failures: {listed} (0-based steps)."
-            ),
-            "evidence": {"build": build, "zero_steps": zeros},
-        }
-    ]
+    return {
+        "code": "measurement_zero_or_failed",
+        "kind": "value",
+        "detail": (
+            f"This run was written by {build}, which prints 0 in a stepped "
+            f"measurement table for a step whose measurement failed, where "
+            f"LTspice 24 and later print 'failed'. These read exactly 0 and "
+            f"may be failures: {listed} (0-based steps)."
+        ),
+        "evidence": {"build": build, "zero_steps": zeros},
+    }
 
 
 async def value(

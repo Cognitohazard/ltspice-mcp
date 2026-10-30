@@ -1188,7 +1188,7 @@ class ApiMethodsMixin(ABC):
         response analysis's results, ``"op"`` a transient's operating point.
         ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
-        path = _older_spelling(path, raw_path=raw_path)
+        path = _older_spelling(path, "raw_path", raw_path)
         _one_source(path, job_id, run_index, case_id, other_raw=other_raw)
         if type(plot_index) is not int or plot_index < 0:
             raise ApiValidationError("plot_index must be a nonnegative integer")
@@ -1223,7 +1223,7 @@ class ApiMethodsMixin(ABC):
         """Return detached ``.meas`` facts from a log or one experiment case,
         with what the read says of them in ``.observations``. ``log_path`` is
         the older spelling of ``path``, still accepted."""
-        path = _older_spelling(path, log_path=log_path)
+        path = _older_spelling(path, "log_path", log_path)
         return measurements_of(
             *self._log_section("measurements", path, job_id, run_index, case_id)
         )
@@ -1250,7 +1250,7 @@ class ApiMethodsMixin(ABC):
         ``load_raw(...).value("@m1[gm]")``. ``log_path`` is the older
         spelling of ``path``, still accepted.
         """
-        path = _older_spelling(path, log_path=log_path)
+        path = _older_spelling(path, "log_path", log_path)
         return device_op_points_of(
             *self._log_section("device_op", path, job_id, run_index, case_id)
         )
@@ -1282,14 +1282,13 @@ class ApiMethodsMixin(ABC):
 _PathArg = TypeVar("_PathArg", bound="str | os.PathLike[str] | None")
 
 
-def _older_spelling(path: _PathArg, **older: _PathArg) -> _PathArg:
-    """``path``, or the one older keyword given in its place; both is refused."""
-    ((name, value),) = older.items()
-    if value is None:
+def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
+    """``path``, or the older keyword ``name`` given in its place; both is refused."""
+    if older is None:
         return path
     if path is not None:
         raise TypeError(f"Give path or {name}, not both")
-    return value
+    return older
 
 
 def _one_source(

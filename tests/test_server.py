@@ -363,7 +363,6 @@ class TestServerDispatch:
             ),
             ("edit_schematic", {"target": "sheet.asc", "ops": []}, "target"),
         ],
-        ids=["raw_file", "raw_path", "log_path", "target"],
     )
     async def test_a_retired_file_argument_names_its_replacement(
         self, state_no_sim: SessionState, tool: str, arguments: dict[str, Any], old: str

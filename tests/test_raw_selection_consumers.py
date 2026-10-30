@@ -112,20 +112,17 @@ def test_an_empty_job_id_is_refused_beside_a_path(model, payload):
 
 
 @pytest.mark.parametrize(
-    ("selection", "refusal"),
-    [
-        ({"other_raw": "op"}, "job_id"),
-        ({"runs": {"case_ids": ["case-0"]}}, "job_id"),
-    ],
+    "selection",
+    [{"other_raw": "op"}, {"runs": {"case_ids": ["case-0"]}}],
     ids=["other_raw", "case_ids"],
 )
-def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, selection, refusal):
+def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, selection):
     """Taken as absent where a source was counted and as given where a case
     selection was checked, an empty job_id let other_raw past beside a raw
     path and failed a case selection with an internal error."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     for job_id in ({"job_id": ""}, {}):
-        with pytest.raises(ApiValidationError, match=refusal if job_id else "experiment job"):
+        with pytest.raises(ApiValidationError, match="job_id" if job_id else "experiment job"):
             SyncApi(state_no_sim).analyze_results(
                 sources=[{"path": str(raw), "label": "a", **job_id, **selection}],
                 recipes=[{"metric": "summary", "key": "s"}],
@@ -133,14 +130,14 @@ def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, sele
 
 
 @pytest.mark.parametrize(
-    ("path", "kind"),
-    [("run.raw", "raw"), ("run.qraw", "raw"), ("run.log", "log"), ("RUN.LOG", "log")],
+    ("path", "is_log"),
+    [("run.raw", False), ("run.qraw", False), ("run.log", True), ("RUN.LOG", True)],
 )
-def test_a_source_path_is_read_by_its_suffix(path, kind):
+def test_a_source_path_is_read_by_its_suffix(path, is_log):
     """A .log, in any case, is read alone; any other file as a RAW with the
     .log of its name."""
     source = analyze.AnalyzeSourceInput.model_validate({"path": path})
-    assert (source.raw_path, source.log_path) == ((path, None) if kind == "raw" else (None, path))
+    assert source.is_log is is_log
     assert source.label == Path(path).stem
 
 

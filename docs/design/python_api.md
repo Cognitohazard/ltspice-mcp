@@ -540,9 +540,11 @@ not read, even when one exists. Log views take no `plot_index`. In analysis,
 including attached analysis, an omitted plot selector selects plot zero; this
 applies only to RAW recipes. Whole-log measurements give statistics over every
 step, or with `step` or `all_steps` each step's row with its `step_values`.
-`load_raw` takes the older spelling `raw_path`, and `measurements` and
-`device_op_points` the older `log_path`, in place of `path`; giving both is
-refused. A malformed or missing RAW fails
+The six operations take exactly what their tools take, so an argument a tool
+renamed is refused there with the name that replaced it. The helpers keep an
+older keyword they had, as `wait` keeps `timeout`: `load_raw` takes
+`raw_path`, and `measurements` and `device_op_points` take `log_path`, in
+place of `path`; giving both is refused. A malformed or missing RAW fails
 only the RAW recipes. A result set's manifest records, for each source,
 whether its RAW, log and console files existed and a hash of each one's
 content, so an empty file is distinguishable from a missing one. A new call

@@ -177,20 +177,16 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
     )
 
     @property
-    def raw_path(self) -> str | None:
-        """``path`` when it names a results file, read with the log of its name."""
-        return self.path if self.path and not _names_a_log(self.path) else None
-
-    @property
-    def log_path(self) -> str | None:
-        """``path`` when it names a log, read alone."""
-        return self.path if self.path and _names_a_log(self.path) else None
+    def is_log(self) -> bool:
+        """``path`` names a log, read alone; any other path names a RAW, read
+        with the ``.log`` of its name."""
+        return bool(self.path) and _names_a_log(str(self.path))
 
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
         if bool(self.job_id) == bool(self.path):
             raise ValueError("provide exactly one of job_id or path")
-        if self.log_path is not None and self.plot_index is not None:
+        if self.is_log and self.plot_index is not None:
             raise ValueError("a .log path does not select a RAW plot")
         if isinstance(self.runs, list):
             if not self.runs:
@@ -998,8 +994,8 @@ async def _resolve_sources(
     source_jobs: dict[str, str | None] = {}
     observations: list[Observation] = []
     for source_input in inputs:
-        imported_path = source_input.raw_path or source_input.log_path
-        if imported_path is not None:
+        imported_path = source_input.path
+        if imported_path:
             requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
             for index in sorted(requested_indices - {0}):
                 missing.append(
@@ -1016,8 +1012,8 @@ async def _resolve_sources(
             try:
                 resolved = services.resolve_analysis_source(
                     state,
-                    raw_file=source_input.raw_path,
-                    log_file=source_input.log_path,
+                    raw_file=None if source_input.is_log else imported_path,
+                    log_file=imported_path if source_input.is_log else None,
                     plot_index=source_input.plot_index or 0,
                     dialect=source_input.dialect,
                 )
@@ -1060,7 +1056,7 @@ async def _resolve_sources(
                 Observation(
                     code=(
                         "raw_path_without_deck_provenance"
-                        if source_input.raw_path is not None
+                        if not source_input.is_log
                         else "log_path_without_deck_provenance"
                     ),
                     kind="provenance",
@@ -1577,6 +1573,19 @@ class StepSelection(NamedTuple):
             "all_steps": self.all_steps,
         }
 
+    def plan(self, count: int, step_values: Sequence[Mapping[str, Any]]) -> StepPlan:
+        """The steps this choice reads of a run of ``count`` steps, each with
+        its stepped values: every step, the one ``step`` picks, or the first."""
+        if self.all_steps:
+            return [
+                (index, dict(step_values[index]) if index < len(step_values) else {})
+                for index in range(count)
+            ]
+        if self.step is None:
+            return [(0, dict(step_values[0]) if step_values else {})]
+        index = self.step.pick(step_values)
+        return [(index, dict(step_values[index]))]
+
 
 #: A resolved step plan: ``(step index, that step's axis values)`` per step.
 StepPlan = list[tuple[int, dict[str, Any]]]
@@ -1615,19 +1624,8 @@ async def _build_step_plan(
     state: SessionState,
 ) -> _RawStepPlan:
     raw = await services.load_raw(source, state)
-    count = get_step_count(raw)
     step_values = [dict(step.parameters) for step in raw.descriptor.steps]
-    if steps.all_steps:
-        plan = [
-            (index, step_values[index] if index < len(step_values) else {})
-            for index in range(count)
-        ]
-    elif steps.step is None:
-        plan = [(0, step_values[0] if step_values else {})]
-    else:
-        index = steps.step.pick(step_values)
-        plan = [(index, step_values[index])]
-    return _RawStepPlan(plan, raw.descriptor)
+    return _RawStepPlan(steps.plan(get_step_count(raw), step_values), raw.descriptor)
 
 
 async def _measurement_step_plan(
@@ -1635,15 +1633,10 @@ async def _measurement_step_plan(
     source: services.AnalysisSource,
     state: SessionState,
 ) -> list[tuple[int | None, dict[str, Any]]]:
-    """The steps the measurements recipe reads of one source's log.
-
-    With no step chosen it reads them all at once, as statistics over every
-    step. A chosen step, or each step, is read as its row of the log's tables,
-    with the stepped values the log's ``.step`` line for it gives: row ``n``
-    is the step of the ``n``-th line on both LTspice builds
-    (``metrics.measurements_at_step``). A stepped table whose rows the
-    ``.step`` lines do not number is refused.
-    """
+    """The steps the measurements recipe reads of one source's log: with no
+    step chosen, every step at once, as statistics over them; else the chosen
+    rows, each with the stepped values of its ``.step`` line
+    (``metrics.measurement_step_values``)."""
     if steps.step is None and not steps.all_steps:
         return [(None, {})]
     logs = await services.load_logs(source, state)
@@ -1651,34 +1644,19 @@ async def _measurement_step_plan(
     if not parsed or not parsed["measurements"]:
         # The metric reads the log again and says why it holds no results.
         return [(0, {})]
-    count = max(parsed["step_count"], 1)
-    named: list[dict[str, Any]] = logs.value("steps") or []
-    if len(named) not in (0, count) or (not named and count > 1):
-        raise ResultError(
-            f"The log's measurement tables hold {count} steps and its .step lines "
-            f"name {len(named)}, so a row cannot be paired with its step. Leave out "
-            "'step' and 'all_steps' to read statistics over every row, or read the "
-            "rows in order with api.measurements."
-        )
-    step_values = named or [{}]
-    if steps.all_steps:
-        return [(index, step_values[index]) for index in range(count)]
-    assert steps.step is not None
-    index = steps.step.pick(step_values)
-    return [(index, step_values[index])]
+    step_values = metrics.measurement_step_values(parsed, logs.value("steps") or [])
+    return list(steps.plan(len(step_values), step_values))
 
 
 async def _adapter_value(
     recipe: Recipe,
     source: services.AnalysisSource,
-    step: int | None,
+    step: int,
     state: SessionState,
 ) -> dict[str, Any]:
-    """One recipe's value, read by the metric function registered for its class.
-
-    RAW recipes use ``lib.metrics.METRICS``. Whole-log measurements call its
-    existing measurement function with a nullable step, independently of RAW
-    planning. Every recipe class must still have a registered metric.
+    """One RAW recipe's value, read by the metric function registered for its
+    class in ``lib.metrics.METRICS``. Whole-log measurements are read for
+    every step of a source at once (``metrics.measurement_rows``).
 
     Non-finite floats are nulled here rather than inside the metric, because
     that substitution is a property of what can cross the wire — a caller
@@ -1686,9 +1664,6 @@ async def _adapter_value(
     this edge also keeps the substitution note attached to the value it
     describes rather than to the whole response.
     """
-    if isinstance(recipe, MeasurementsRecipe):
-        return sanitize_payload(await metrics.measurements(source, recipe, step, state))
-    assert step is not None
     return sanitize_payload(await metrics.METRICS[type(recipe)](source, recipe, step, state))
 
 
@@ -2409,18 +2384,17 @@ async def _evaluate_item(
                             "dialect": run.source.dialect,
                         },
                     )
-                    for step, step_values in await _measurement_step_plan(
-                        steps, run.source, state
-                    ):
-                        value = _promote_headlines(
-                            recipe.metric, await _adapter_value(recipe, run.source, step, state)
-                        )
+                    plan = await _measurement_step_plan(steps, run.source, state)
+                    values = await metrics.measurement_rows(
+                        run.source, recipe, [step for step, _ in plan], state
+                    )
+                    for (step, step_values), value in zip(plan, values, strict=True):
                         records.append(
                             Record(
                                 manifest_id=run.manifest_id,
                                 source=run.label,
                                 identity=_identity(log_source, step, step_values, plot_index=None),
-                                value=value,
+                                value=_promote_headlines(recipe.metric, sanitize_payload(value)),
                             )
                         )
                     continue
