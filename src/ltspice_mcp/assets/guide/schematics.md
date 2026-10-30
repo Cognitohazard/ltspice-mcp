@@ -229,16 +229,19 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   `pins_wired` and `pins_label_only` out of `pins_total`. A high
   `pins_label_only` with `wire_segments` near zero means you tagged pins with
   net-labels instead of drawing wires. Such a sheet connects only through its
-  label names, which the profile does not check. Draw wires with the
-  `wire_pins` op for local nets; reserve net-labels for ground, power rails,
-  and distant nets. Also heed the sheet findings in `warnings`. They are the
+  label names, which the profile does not check. A pin with a short wire to
+  a label counts as wired, so a net joined only through labels on stubs does
+  not show here either. Draw wires with the `wire_pins` op for local nets,
+  a supply included: wire it to the parts it feeds when they are near.
+  Reserve net-labels for ground and for nets that would otherwise cross the
+  sheet. Also heed the sheet findings in `warnings`. They are the
   findings `verify_circuit` reports for the same sheet (a floating pin, a
   loose wire end, parts that overlap, a wire through a part, a label or text
   inside one, a part's name or value drawn across a wire, another part or
   other text, a wire LTspice leaves out of the netlist), returned by the edit
   that caused them. A part's text moves with the part and no op moves the text
-  alone, so move the part (`move_component`, or `move` for a region) or the
-  item its text crosses.
+  alone, so move the part (`move` with `drag: true`, below) or the item its
+  text crosses.
 - **On an existing sheet, the reply lists only your edit's findings.**
   `warnings` lists only the findings your ops made or changed, and
   `wiring.label_only_pins` only the pins of parts they rewired or named. A
@@ -252,9 +255,13 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
 **Moving what is drawn:** the `move` op shifts parts, wires, labels and
 texts by one offset (`dx`, `dy`), chosen by name or by a `region`. With
 `drag: true`, other wires' ends and the labels and grounds on a moved pin move
-with it, so they stay attached. A wire dragged off its axis turns diagonal,
-and the sheet findings report it (`diagonal_wire`). To move one part to a
-position, or to turn it, use `move_component`.
+with it, so they stay attached. To move one part with the labels and grounds
+on its pins, name it in `references` with `drag: true`; there is no need to
+remove and add it again. A label at the far end of a wire from the pin is not
+on the pin, so it stays, and the wire stretches to it. A wire dragged off its
+axis turns diagonal, and the sheet findings report it (`diagonal_wire`).
+`move_component` places one part at a position or turns it, and moves the
+part alone: the wires and labels at its old pins stay where they were.
 
 **Ground and net labels:**
 - **Ground**: give each grounded pin its own ground (`0`) label with an

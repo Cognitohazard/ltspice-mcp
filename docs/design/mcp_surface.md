@@ -1434,9 +1434,11 @@ revision. The export block's `sha256` is the netlist's.
 
 The layout check reads a part's attribute text where LTspice draws it, with
 its extent estimated from the font's widths rather than measured off its
-glyphs. `attribute_text_overlap` reports text that a wire or a line another
-part draws passes through, or that lies over a rectangle or circle another
-part draws or over other text, by more than the estimate's slack. Comments,
+glyphs. `attribute_text_overlap` reports text that a wire, a line another
+part draws or a ground flag passes through, or that lies over a rectangle or
+circle another part draws or over other text, by more than the estimate's
+slack. A ground flag is taken as the triangle the render draws, turned as
+LTspice turns it; its size is the render's and is not recorded. Comments,
 directives and labels are checked only where attribute text crosses them, and
 the layout check reports this limit in `observations`. No op moves a part's
 text apart from the part, so the remedy is to move the part or the item its

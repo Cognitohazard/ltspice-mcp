@@ -5639,6 +5639,25 @@
      "y": 232
     },
     {
+     "across": "ground",
+     "kind": "attribute_text_overlap",
+     "message": "M2's text 'NMOS_MOD' at (1176,232) is drawn across the ground at (1280,240)",
+     "points": [
+      {
+       "x": 1176,
+       "y": 232
+      },
+      {
+       "x": 1280,
+       "y": 240
+      }
+     ],
+     "ref": "M2",
+     "text": "NMOS_MOD",
+     "x": 1176,
+     "y": 232
+    },
+    {
      "kind": "label_island",
      "message": "Net 'inn' is connected by 2 net-label stubs and no drawn wire segment",
      "net": "inn",
@@ -5859,6 +5878,33 @@
     "rule_id": "attribute_text_overlap",
     "severity": "observation",
     "subject": "M2 & Itail"
+   },
+   {
+    "at": {
+     "file": "diff_pair_labelled.asc",
+     "x": 1176,
+     "y": 232
+    },
+    "evidence": {
+     "coords": [
+      [
+       1176,
+       232
+      ],
+      [
+       1280,
+       240
+      ]
+     ],
+     "detail": "M2's text 'NMOS_MOD' at (1176,232) is drawn across the ground at (1280,240)",
+     "refs": [
+      "M2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "M2"
    },
    {
     "at": {

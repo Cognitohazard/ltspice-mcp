@@ -714,6 +714,22 @@ class TestHowTheSheetReads:
             == []
         )
 
+    def test_attribute_text_across_a_ground(self) -> None:
+        """A ground flag is drawn, so a part's name or value under it is as
+        hidden as under a wire; one beside the text is not across it."""
+        value = Part("R1", text_extents=((0, 0, "10k", BBox(0, -8, 60, 14)),))
+        over = (40, 0, ((34, 0), (46, 0), (40, 10)))
+        beside = (100, 0, ((94, 0), (106, 0), (100, 10)))
+        (found,) = only(
+            SheetView(parts=(value,), grounds=(over, beside)), "attribute_text_overlap"
+        )
+        assert found.detail == "R1's text '10k' at (0,0) is drawn across the ground at (40,0)"
+        assert (found.refs, found.points, found.facts) == (
+            ("R1",),
+            ((0, 0), (40, 0)),
+            {"text": "10k", "across": "ground"},
+        )
+
     def test_text_at_one_anchor(self) -> None:
         view = SheetView(texts=((16, 16, ".op"), (16, 16, ".tran 1"), (16, 32, "a note")))
         (found,) = only(view, "stacked_directive")

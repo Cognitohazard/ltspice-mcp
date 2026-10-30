@@ -934,4 +934,7 @@ def sheet_view(scene: Scene) -> SheetView:
         labels=tuple((flag.x, flag.y, flag.text) for flag in scene.flags),
         texts=tuple((d.x, d.y, d.lines[0]) for d in scene.directives),
         text_extents=scene.sheet_text_extents(),
+        grounds=tuple(
+            (flag.x, flag.y, ground_polygon(flag)) for flag in scene.flags if flag.is_ground
+        ),
     )

@@ -33,6 +33,7 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
@@ -208,7 +209,8 @@ _RULES = (
         "attribute_text_overlap",
         "drawing",
         "part",
-        "A part's attribute text drawn across a wire, another part's body, or other text.",
+        "A part's attribute text drawn across a wire, another part's body, a ground, "
+        "or other text.",
         check="layout",
     ),
     Rule(
@@ -339,7 +341,8 @@ class SheetView:
     ``wires`` are ``(x1, y1, x2, y2)``, ``labels`` are ``(x, y, name)`` with
     ground among them, and ``texts`` are the sheet's directives and comments as
     ``(x, y, first line)``. ``text_extents`` are the labels', directives' and
-    comments' text as drawn, as ``(x, y, first line, extent)``.
+    comments' text as drawn, as ``(x, y, first line, extent)``, and
+    ``grounds`` the ground flags as drawn, as ``(x, y, corners)``.
     """
 
     parts: tuple[Part, ...] = ()
@@ -347,6 +350,7 @@ class SheetView:
     labels: tuple[tuple[int, int, str], ...] = ()
     texts: tuple[tuple[int, int, str], ...] = ()
     text_extents: tuple[tuple[int, int, str, BBox], ...] = ()
+    grounds: tuple[tuple[int, int, tuple[Point, ...]], ...] = ()
 
 
 class _Index:
@@ -1003,6 +1007,11 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
             if other_index != index and _draws_over(other, body, core)
         ]
         across += [
+            (f"the ground at {_at((x, y))}", (), ((x, y),), {"across": "ground"}, ("ground", x, y))
+            for x, y, corners in ix.view.grounds
+            if any(_through(a, b, core) for a, b in itertools.pairwise((*corners, corners[0])))
+        ]
+        across += [
             (
                 (f"{owner.name}'s text" if owner else "the text")
                 + f" {other_text!r} at {_at(other_at)}",
@@ -1169,9 +1178,12 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       them that an ordinary wire to a nearer pin crosses.
     - ``attribute_text_overlap``: a part's attribute text, laid out as
       LTspice lays it out with its extent estimated from LTspice's font,
-      that a wire or a line another part draws passes through, or that shares
-      an area with a rectangle or circle another part draws or with other
-      text, by more than the estimate's slack (:func:`_core`).
+      that a wire, a line another part draws or a side of a ground flag's
+      triangle passes through, or that shares an area with a rectangle or
+      circle another part draws or with other text, by more than the
+      estimate's slack (:func:`_core`). The ground's triangle is the one the
+      render draws (``schematic_scene.ground_polygon``), turned as LTspice
+      turns it; its size is the render's, not measured off LTspice.
     - ``label_over_component``: a label strictly inside a part's box and on no
       pin. A label on a pin, any part's, is the ordinary flag.
     - ``text_in_symbol_body``: text anchored inside what another part draws:
