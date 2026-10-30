@@ -12,9 +12,11 @@ recorded ones.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import shutil
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ import jsonschema
 import pytest
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
+from ltspice_mcp.lib.ltspice_bridge import BridgeSession
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
@@ -36,6 +39,8 @@ from tests._ltspice_window import (
     read_world,
     write_world,
 )
+from tests.conftest import LIVENESS_S, await_until, written
+from tests.fake_ltspice_bridge import silence_of
 from tests.ltspice_bridge_recorder import FIXTURES, INPUTS
 
 #: The stand-in bridge runs under this interpreter, which is what a message names.
@@ -65,6 +70,20 @@ def store_as_utf8(sheet: Path) -> str:
     return decode_windows_1252(stored)
 
 
+class _KeptSessions(OpenWindows):
+    """The windows behind the stand-in bridge, each bridge session kept as it
+    starts, so that a test can have the one in progress pass its deadline."""
+
+    def __init__(self, command: list[str]) -> None:
+        super().__init__(command, timeout=LIVENESS_S)
+        self.sessions: list[BridgeSession] = []
+
+    def _session(self) -> BridgeSession:
+        session = super()._session()
+        self.sessions.append(session)
+        return session
+
+
 class Window:
     """One LTspice window, as the stand-in bridge reports it."""
 
@@ -82,6 +101,20 @@ class Window:
     def answers_within(self, seconds: float) -> None:
         """Give the bridge ``seconds`` for a whole session, for a test of the deadline."""
         self._state.open_windows = OpenWindows(fake_command(self._world), timeout=seconds)
+
+    async def silent_until_the_deadline(self, call: Coroutine[Any, Any, dict]) -> dict:
+        """Run ``call`` under the liveness cap, and have the session's deadline
+        pass once the bridge has gone silent (``silence_of``), and not before."""
+        windows = _KeptSessions(fake_command(self._world))
+        self._state.open_windows = windows
+        running = asyncio.create_task(call)
+        silent = written(silence_of(self._world), str)
+        await await_until(lambda: running.done() or silent(), what="the bridge to go silent")
+        if not running.done():
+            [waiting] = [session for session in windows.sessions if not session._ended]
+            # What the session's watchdog does when its deadline passes.
+            await asyncio.to_thread(waiting._expire)
+        return await running
 
     def closes(self) -> None:
         write_world(self._world, [])
@@ -261,11 +294,12 @@ async def test_a_new_sheet_asks_no_window(asc_state: SessionState, work_dir: Pat
 async def test_a_window_that_cannot_be_updated_is_reported_and_the_commit_stands(
     asc_state: SessionState, asc_file: Path, window: Window
 ):
+    """The bridge never answers the request that hands the window the committed
+    sheet; only that request meets the deadline, not the ones before it."""
     window.shows(asc_file, as_ltspice_reads(asc_file), silent_on="set_design_content")
-    window.answers_within(1.0)  # timing: the deadline under test
     before = file_bytes(asc_file)
 
-    data = await edit(asc_state, asc_file)
+    data = await window.silent_until_the_deadline(edit(asc_state, asc_file))
 
     assert data["outcome"] == "complete"
     assert data["commit_state"] == "committed"
@@ -276,7 +310,7 @@ async def test_a_window_that_cannot_be_updated_is_reported_and_the_commit_stands
             "pid": PID,
             "version": "26.1.1",
             "shown": False,
-            "reason": f"{BRIDGE_PROGRAM} did not answer within 1 s and was ended",
+            "reason": f"{BRIDGE_PROGRAM} did not answer within {LIVENESS_S:g} s and was ended",
         }
     ]
     assert "could not be updated" in data["hint"]
@@ -287,6 +321,9 @@ async def test_a_bridge_that_cannot_say_does_not_stop_the_edit(
     asc_state: SessionState, asc_file: Path, window: Window
 ):
     window.shows(asc_file, as_ltspice_reads(asc_file), silent_on="status")
+    # The deadline is the whole session's, its start included, and status is
+    # the first request the session makes: a deadline that falls sooner, while
+    # the bridge is still starting, ends the session the same way.
     window.answers_within(1.0)  # timing: the deadline under test
 
     data = await edit(asc_state, asc_file)

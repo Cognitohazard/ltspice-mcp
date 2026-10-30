@@ -28,7 +28,10 @@ which stands in for the window's frame and keeps the same file). A sheet whose
 text was replaced is listed under ``unsaved``: LTspice asks before closing one.
 
 ``silent_on`` names a tool this program stops answering at, for the tests of a
-bridge that hangs. A replaced design is written back to the world. One tool is
+bridge that hangs. As it stops it writes that tool's name beside the world
+(``silence_of``), so a test can tell that every request before it was answered
+and the session is now waiting on the one that never will be. A replaced
+design is written back to the world. One tool is
 not the bridge's: ``where_am_i`` answers with the Windows desktop this program
 runs on, for the tests of where the server starts it.
 
@@ -74,6 +77,11 @@ def own_desktop() -> str:
     desktop = user.GetThreadDesktop(kernel.GetCurrentThreadId())
     user.GetUserObjectInformationW(desktop, 2, name, ctypes.sizeof(name), None)
     return name.value
+
+
+def silence_of(world: Path) -> Path:
+    """Where this program, run against ``world``, names the tool it has gone silent on."""
+    return world.with_name(f"{world.stem}.silent")
 
 
 def _kind(path: str) -> str:
@@ -247,6 +255,7 @@ class Bridge:
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._load().get("silent_on") == name:
             # Never answers, as a bridge that has stopped: the caller's deadline ends it.
+            silence_of(self._world).write_text(name, encoding="utf-8")
             threading.Event().wait()
         if name == "where_am_i":
             return {"desktop": own_desktop()}
