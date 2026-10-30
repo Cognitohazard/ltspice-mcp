@@ -40,6 +40,7 @@ from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.raw_parser import other_raw_path
+from ltspice_mcp.lib.sheet_results import run_by_ltspice
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -551,6 +552,23 @@ async def render_run_receipt(
     return result
 
 
+def _results_in_the_job_folder(job_id: str, sheets: list[str]) -> dict[str, Any]:
+    """Say that a sheet's run left its results in the job folder, not beside
+    the sheet, where LTspice's own window opens a sheet's results."""
+    named = ", ".join(sheets)
+    return {
+        "code": "results_not_beside_sheet",
+        "kind": "provenance",
+        "detail": (
+            f"The results of {named} are in the job folder; nothing was written beside "
+            "the sheet. LTspice's window opens a sheet's results from beside it, under "
+            f'its name, so it does not show these. jobs(action="place_beside_sheet", '
+            f'job_id="{job_id}", case_id=...) copies a case\'s there.'
+        ),
+        "evidence": {"sheets": sheets},
+    }
+
+
 def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
     """Project durable accounting into the shared progress fact.
 
@@ -1041,6 +1059,15 @@ def snapshot_receipt(
             live = live_progress.get(case.case_id)
             if live is not None:
                 observations.append(copy.deepcopy(live))
+    sheets = sorted(
+        {
+            case.circuit_path.name
+            for case in job.cases
+            if case.status == "produced" and case.circuit_path.suffix.lower() == ".asc"
+        }
+    )
+    if sheets and run_by_ltspice(job.simulator):
+        observations.append(_results_in_the_job_folder(job.job_id, sheets))
 
     analysis = job.analysis
     return ReceiptSnapshot(

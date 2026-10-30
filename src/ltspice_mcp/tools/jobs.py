@@ -33,6 +33,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
     IdempotencyConflictError,
@@ -43,13 +44,17 @@ from ltspice_mcp.lib.experiment_runner import (
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     Completeness,
+    ExperimentCase,
     ExperimentJob,
 )
+from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
+from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.recovery_records import RecoveryError
+from ltspice_mcp.lib.sheet_results import place_beside_sheet, run_by_ltspice
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
@@ -107,8 +112,9 @@ class JobsInput(ToolInput):
             "'status' snapshots a job; 'wait' blocks until it finishes or "
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
             "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
-            "cases of a recoverable job. Each action takes only its "
-            "own fields, listed below."
+            "cases of a recoverable job; 'place_beside_sheet' copies a case's "
+            "results beside its sheet. Each action takes only its own fields, "
+            "listed below."
         ),
     )
     budget: int | None = Field(
@@ -299,6 +305,16 @@ class JobsRunsInput(_AddressedJobsInput):
     )
 
 
+class JobsPlaceBesideSheetInput(_AddressedJobsInput):
+    """Copy a finished case's results beside its sheet, where LTspice opens a sheet's."""
+
+    action: Literal["place_beside_sheet"]  # pyright: ignore[reportIncompatibleVariableOverride]
+    case_id: str | None = Field(
+        default=None,
+        description="The case to place; may be omitted when the job ran one case.",
+    )
+
+
 #: One jobs call: the action models, told apart by ``action``. Discriminated
 #: rather than a plain union so an unknown action is one error naming the
 #: legal ones, and a known action with a bad field reports against that action
@@ -309,7 +325,8 @@ JobsAction: TypeAlias = Annotated[
     | JobsCancelInput
     | JobsListInput
     | JobsRunsInput
-    | JobsResumeInput,
+    | JobsResumeInput
+    | JobsPlaceBesideSheetInput,
     Field(discriminator="action"),
 ]
 
@@ -571,6 +588,48 @@ def _jobs_page_schema(
     }
 
 
+_PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {"const": "place_beside_sheet"},
+        **_JOBS_COMMON_PROPERTIES,
+        "job_id": {"type": ["string", "null"]},
+        "request_id": {"type": ["string", "null"]},
+        "status": JOB_STATUS_SCHEMA,
+        "case_id": {"type": "string"},
+        "sheet": {"type": "string"},
+        "files": {
+            "type": "array",
+            "description": "Each file copied beside the sheet, and whether it replaced one there.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "from": {"type": "string"},
+                    "to": {"type": "string"},
+                    "replaced": {"type": "boolean"},
+                },
+                "required": ["from", "to", "replaced"],
+            },
+        },
+        "assignments": {
+            "type": "object",
+            "description": "What the case's variations set, which the sheet does not show.",
+        },
+    },
+    "required": [
+        *_JOBS_COMMON_REQUIRED,
+        "job_id",
+        "request_id",
+        "status",
+        "case_id",
+        "sheet",
+        "files",
+        "assignments",
+    ],
+    "additionalProperties": False,
+}
+
+
 JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
     # MCP requires outputSchema to be an object schema at the top level;
     # Claude Code rejects the whole tools/list response when it is not.
@@ -589,6 +648,7 @@ JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
         _jobs_page_schema("list", _CIRCUIT_GROUP_SCHEMA, addressed=False),
         _jobs_page_schema("runs", RUN_RECORD_SCHEMA, addressed=True),
         _jobs_receipt_schema("resume"),
+        _PLACE_BESIDE_SHEET_SCHEMA,
     ],
 }
 
@@ -844,6 +904,114 @@ async def _await_foreign_experiment_cancellation(
     return current
 
 
+async def _place_case_beside_sheet(
+    job: ExperimentJob, case_id: str | None, state: SessionState
+) -> dict[str, Any]:
+    """Copy one finished case's results beside the sheet it ran
+    (``sheet_results.place_beside_sheet``), under the sheet's lock.
+
+    Refused where LTspice's window could not take them as the sheet's own: a
+    case with no results, a netlist's run, a run of another simulator, and a
+    sheet changed since the job read it, whose results would not match it.
+    """
+    case = _case_to_place(job, case_id)
+    if case.status != "produced" or case.raw_file is None:
+        raise _JobsActionError(
+            "case_not_produced",
+            f"Case {case.case_id} of job {job.job_id} has no results to place (status "
+            f"{case.status}).",
+            stage="resolution",
+        )
+    if case.circuit_path.suffix.lower() != ".asc":
+        raise _JobsActionError(
+            "not_a_sheet",
+            f"Case {case.case_id} ran {case.circuit_path.name}, a netlist. LTspice keeps "
+            "results beside a sheet; read a netlist's from the job.",
+            stage="resolution",
+        )
+    if not run_by_ltspice(job.simulator):
+        raise _JobsActionError(
+            "not_ltspice",
+            f"Job {job.job_id} ran on {job.simulator}; LTspice's window opens a sheet's "
+            "results only as LTspice writes them.",
+            stage="resolution",
+        )
+    sheet = await asyncio.to_thread(safe_path, str(case.circuit_path), state)
+    ran = next((source.sha256 for source in job.sources if source.circuit == case.circuit), None)
+    raw = case.raw_file
+    others = {kind: other_raw_path(raw, kind) for kind in case.other_raws}
+
+    def place() -> list[dict[str, Any]]:
+        if not raw.is_file():
+            raise _JobsActionError(
+                "results_missing",
+                f"Case {case.case_id}'s results are not there any more ({raw}).",
+                stage="resolution",
+            )
+        if not sheet.is_file():
+            raise _JobsActionError(
+                "sheet_missing", f"{sheet} is not there any more.", stage="resolution"
+            )
+        if ran is not None and sha256_file(sheet) != ran:
+            raise _JobsActionError(
+                "sheet_changed",
+                f"{sheet.name} has changed since job {job.job_id} ran it, so these results "
+                "would not match it. Run the sheet again and place that run's.",
+                stage="resolution",
+            )
+        return place_beside_sheet(sheet, raw, case.log_file, others)
+
+    async with circuit_file_lock(sheet):
+        # The check and the copy are one unit off the loop, shielded so a
+        # cancelled call cannot leave a sheet with some of a run's files.
+        files = await asyncio.shield(asyncio.to_thread(place))
+    return {
+        "case_id": case.case_id,
+        "sheet": str(sheet),
+        "files": files,
+        "assignments": dict(case.assignments),
+    }
+
+
+def _case_to_place(job: ExperimentJob, case_id: str | None) -> ExperimentCase:
+    """The case ``case_id`` names, or the job's only case when it names none."""
+    if case_id is None:
+        if len(job.cases) == 1:
+            return job.cases[0]
+        listed = ", ".join(case.case_id for case in job.cases[:5])
+        more = ", ..." if len(job.cases) > 5 else ""
+        raise _JobsActionError(
+            "case_id_required",
+            f"Job {job.job_id} ran {len(job.cases)} cases; name one with case_id "
+            f"({listed}{more}).",
+            stage="resolution",
+        )
+    case = next((case for case in job.cases if case.case_id == case_id), None)
+    if case is None:
+        raise _JobsActionError(
+            "case_not_found",
+            f"Experiment job {job.job_id!r} has no case matching case_id={case_id!r}",
+            stage="resolution",
+        )
+    return case
+
+
+def _placed_hint(placed: dict[str, Any]) -> str:
+    """What the caller needs to know after results are placed beside a sheet."""
+    hint = (
+        f"LTspice opens {Path(placed['sheet']).name}'s results from beside it; a click on a "
+        "net in the sheet plots it once they are opened from the sheet. LTspice reads "
+        "results only when it opens them, so a plot of the earlier ones already open "
+        "shows them until it is opened again; plot_waveform(in_ltspice=true) reopens it."
+    )
+    if placed["assignments"]:
+        hint += (
+            " This case ran with values its variations set, which the sheet does not "
+            "show: see assignments."
+        )
+    return hint
+
+
 async def _cancel_jobs_target(
     job: ExperimentJob,
     args: JobsCancelInput,
@@ -993,6 +1161,10 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
         )
     if isinstance(args, JobsRunsInput):
         common["dialect"] = None
+    if isinstance(args, JobsPlaceBesideSheetInput):
+        for key in ("items", "total", "returned", "truncated", "next_cursor"):
+            common.pop(key)
+        common.update(case_id=args.case_id or "", sheet="", files=[], assignments={})
     return common
 
 
@@ -1059,6 +1231,7 @@ class JobsEvaluation:
     replayed: bool = False
     control_token: str | None = None
     head_job_id: str | None = None
+    placed: dict[str, Any] | None = None
 
     @property
     def is_error(self) -> bool:
@@ -1140,6 +1313,15 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
         assert isinstance(args, _AddressedJobsInput)
         job = await _resolve_jobs_target(args, state)
         request_id = job.request_id
+
+        if isinstance(args, JobsPlaceBesideSheetInput):
+            return JobsEvaluation(
+                args=args,
+                job_id=job.job_id,
+                request_id=request_id,
+                status=job.status,
+                placed=await _place_case_beside_sheet(job, args.case_id, state),
+            )
 
         if isinstance(args, JobsCancelInput):
             receipts = await _cancel_jobs_target(job, args, state)
@@ -1320,6 +1502,24 @@ def render_jobs_data(
             f"Cancellation acknowledged for job {evaluation.job_id}"
         )
 
+    if isinstance(args, JobsPlaceBesideSheetInput):
+        assert evaluation.placed is not None
+        placed = evaluation.placed
+        place_failures: list[Any] = []
+        data = {
+            "action": "place_beside_sheet",
+            "outcome": outcome_of(place_failures),
+            "job_id": evaluation.job_id,
+            "request_id": evaluation.request_id,
+            "status": evaluation.status,
+            **placed,
+            "observations": [],
+            "warnings": [],
+            "failures": place_failures,
+            "hint": _placed_hint(placed),
+        }
+        return data, f"Placed case {placed['case_id']}'s results beside {placed['sheet']}"
+
     snapshot = evaluation.snapshot
     assert snapshot is not None  # every remaining action snapshots its job
 
@@ -1402,7 +1602,9 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         "with no circuit is the recently-touched-circuits view for picking up "
         "work from an earlier session."
         " 'resume' creates a child of a terminal recoverable head, preserving "
-        "produced cases; use a new resume_request_id for each retry."
+        "produced cases; use a new resume_request_id for each retry. "
+        "'place_beside_sheet' copies a case's results beside the .asc it ran, "
+        "where LTspice's window opens them."
     ),
     input_model=JobsInput,
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,

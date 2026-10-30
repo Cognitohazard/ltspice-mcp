@@ -14,7 +14,7 @@ document needs fixing.
 | Plane | Tool | One-line contract |
 |-|-|-|
 | EXECUTE | `run_experiments` | circuits x declared variations; durable idempotent receipt (plus inline results when the job finishes within `execution.wait_s`); preflight lint; runs read copies of the inputs taken at submission, with their hashes |
-| EXECUTE | `jobs` | status / long-poll wait / cancel / resume / list / runs over receipts; resume continues the latest job of a recoverable job's resume chain, named by `job_id` |
+| EXECUTE | `jobs` | status / long-poll wait / cancel / resume / list / runs over receipts; resume continues the latest job of a recoverable job's resume chain, named by `job_id`; place_beside_sheet copies a case's results beside the sheet it ran |
 | UNDERSTAND | `analyze_results` | runs a batch of recipes over runs and returns typed values with case and step identity, attributed reductions and spec verdicts; replies are bounded and can be continued |
 | UNDERSTAND | `inspect` | reads: capabilities, symbols (list and detail), net trace, components, models, result facts, the guide, and the reference entries for the tools' arguments, recipes, ops and other branches |
 | AUTHOR | `edit_schematic` | applies a batch of typed ops to a sheet (blank or existing) as one transaction; committing to an existing file needs its current `expected_sha256`; returns pin and net tables, per-op results and findings |
@@ -25,7 +25,12 @@ and does not use the envelope. Its reply summarizes each plotted trace:
 minimum and maximum with their positions, first and final value, and on a
 transient the time-weighted mean. `attach_plot` adds a PNG of the chart for a
 vision model. Traces are split into panels by declared
-unit, or by the caller's `panels`.
+unit, or by the caller's `panels`. A plot with no sampled axis (an operating
+point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
+a step) has no chart: it is refused with `no_axis`, which says what the plot
+holds and where its values are read, and with `in_ltspice` it is opened in
+LTspice without a chart, with no traces named for it and a `no_chart`
+observation.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
@@ -663,6 +668,12 @@ the receipt is built, and is never stored in the job record. If `points` does
 not change between two reads while `running_s` grows, the case is not
 advancing; the caller decides whether to cancel it.
 
+**A sheet's results.** A run writes its results to the job's own folder, never
+beside the sheet it ran, where LTspice's window opens a sheet's results. A
+receipt of a job that ran an `.asc` in LTspice contains one
+`results_not_beside_sheet` observation naming the sheets of its produced cases and
+`jobs(action="place_beside_sheet")`, which copies a case's results there.
+
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, attempt?}`. Every key is optional because a
@@ -740,6 +751,7 @@ RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
  retry_failed?, retry_cancelled?, wait_s?}
 {action: "list",   circuit?: path, limit? (capped at 50), cursor?}
 {action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
+{action: "place_beside_sheet", job_id | request_id, case_id?}
 ```
 
 An action on one job takes `job_id`, `request_id` or both; when both are given
@@ -766,6 +778,19 @@ accepts `budget`. The input schema declares one branch per action, keyed by
   activity first, each `{job_id, status, request_id, finished_at}`, and
   `recent_jobs_total` counts them all.
 - `runs` returns a page of `RunRecord` rows.
+- `place_beside_sheet` copies one case's results beside the `.asc` it ran,
+  under the sheet's name, where LTspice keeps a sheet's own results and opens
+  them from: the raw, the log, and each other raw the run wrote
+  (`<sheet>.op.raw`). It returns `{case_id, sheet, files, assignments}`, with
+  one `{from, to, replaced}` per file copied; `assignments` is what the
+  case's variations set, which the sheet does not show. `case_id` may be left
+  out of a job that ran one case (otherwise `case_id_required`). The copy is
+  made under the sheet's lock, and the job keeps its own. A case that
+  produced no results (`case_not_produced`) or whose results are no longer
+  there (`results_missing`), a netlist's run (`not_a_sheet`),
+  another simulator's run (`not_ltspice`), and a sheet that is missing
+  (`sheet_missing`) or changed since the job read it (`sheet_changed`) are
+  refused, and nothing is written. The sheet's `.plt` is left as it is.
 
 `wait` blocks for at most `timeout_s`, up to 300 s per call. A timeout is not
 a failure; the response has `timed_out` set and the job keeps running.

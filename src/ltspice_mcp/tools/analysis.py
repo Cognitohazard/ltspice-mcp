@@ -29,9 +29,7 @@ import contextlib
 import csv
 import json
 import math
-import os
 import re
-import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -44,6 +42,7 @@ from pydantic import Field
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     NetlistError,
+    NoAxisError,
     ResultError,
 )
 from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, plot_settings, services
@@ -52,6 +51,7 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -79,7 +79,8 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import StepSelector
-from ltspice_mcp.lib.result_kinds import AC_SHAPED
+from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
+from ltspice_mcp.lib.sheet_results import place_beside_sheet
 from ltspice_mcp.lib.signal_analysis import (
     TraceStats,
     downsample_minmax,
@@ -1190,12 +1191,18 @@ def _write_panes(
     they are written under the lock an edit takes for them, held for this
     write alone.
     """
+    if not panes:
+        # Asked for only by a plot with no sampled axis to draw traces against.
+        return (
+            "No traces are named for it: how LTspice reads the plot settings of a "
+            "plot with no sampled axis is not recorded."
+        )
     target = plot_settings.plot_settings_path(results)
     try:
         with file_lock(Store.circuit_lock(target)) if of_a_sheet else contextlib.nullcontext():
             kept = plot_settings.write_beside(results, plot_name, panes)
     except (NetlistError, OSError) as error:
-        return f"the plot settings could not be written ({error})."
+        return f"The plot settings could not be written ({error})."
     if kept is None:
         report["plot_settings"] = str(target)
         return None
@@ -1263,16 +1270,9 @@ def _place_beside_sheet(sheet: Path, results: Path, log: Path | None) -> None:
     """Put a run's results and log beside ``sheet`` under its name.
 
     That is where LTspice keeps a sheet's own results and where its Visible
-    Traces command looks for them. What is there is the last run's and is
-    replaced, as a run in LTspice replaces it; each file whole or not at all.
+    Traces command looks for them (``sheet_results.place_beside_sheet``).
     """
-    for source, target in ((results, results_beside(sheet)), (log, sheet.with_suffix(".log"))):
-        if source is None or not source.is_file():
-            continue
-        if target.exists() and os.path.samefile(source, target):
-            continue
-        with source.open("rb") as read, atomic_write(target, mode="wb", durable=False) as write:
-            shutil.copyfileobj(read, write)
+    place_beside_sheet(sheet, results, log)
 
 
 def _show_from_sheet(
@@ -1319,6 +1319,65 @@ def _show_from_sheet(
     _say_shown(report, shown, _TIED_NOTE if shown.tied else _ALONE_NOTE, left_alone)
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
+
+
+def _why_no_axis(descriptor: PlotDescriptor) -> str:
+    """What a plot with no sampled axis holds instead, for a reply to say."""
+    kind = kind_named(descriptor.stepped_kind)
+    if kind is not None and kind.stepping == "point_a_step":
+        return (
+            f"it holds one point a step, the stepped {', '.join(descriptor.step_variables)} first"
+        )
+    if kind is not None:
+        return "it holds one point, and nothing in it says which step that is"
+    return f"its {descriptor.analysis} results are one table of values"
+
+
+async def _show_without_chart(
+    args: PlotWaveformInput,
+    state: SessionState,
+    source: services.AnalysisSource,
+    raw: DecodedRaw,
+    circuit: Path | None,
+):
+    """Open a plot with no sampled axis in LTspice, with no chart of it here.
+
+    The chart needs an axis to draw against; LTspice's window takes the run as
+    it is, from its sheet where it has one, as any other run is shown. No
+    traces are named for it (``_write_panes``), and what the window draws of
+    it is not recorded, which the reply says.
+    """
+    assert source.raw is not None
+    shown = await asyncio.to_thread(
+        _show_in_ltspice,
+        state,
+        source.raw,
+        circuit,
+        source.log,
+        raw.descriptor.original_plot_name,
+        [],
+    )
+    observations = list(await asyncio.to_thread(services.read_observations, source, raw))
+    observations.append(
+        {
+            "code": "no_chart",
+            "kind": "coverage",
+            "detail": (
+                f"No chart was drawn: this plot has no sampled axis "
+                f"({_why_no_axis(raw.descriptor)}). What LTspice's window draws of it is "
+                "not recorded."
+            ),
+        }
+    )
+    data: dict[str, Any] = {
+        "analysis_type": raw.descriptor.analysis,
+        "plot_index": raw.plot_index,
+        "descriptor": asdict(raw.descriptor),
+        "ltspice": shown,
+        "observations": observations,
+    }
+    lines = [_ltspice_line(shown), *format_observations(observations)]
+    return format_response("\n".join(lines), data, args.format)
 
 
 def _ltspice_line(report: Mapping[str, Any]) -> str:
@@ -1486,9 +1545,19 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     raw = await services.load_raw(source, state)
     assert raw_path is not None
+    # An other raw is not the case's results: shown on its own, as its path
+    # would be, never as the results beside the case's sheet.
+    circuit = case.circuit_path if case is not None and args.other_raw is None else None
     sampled = raw.descriptor.axis
     if sampled is None:
-        raise ResultError("This plot has no sampled axis; use inspect results table instead.")
+        if not args.in_ltspice:
+            raise NoAxisError(
+                f"This plot has no sampled axis to chart: {_why_no_axis(raw.descriptor)}. "
+                "analyze_results' value metric or inspect(kind='results', view='table') "
+                "reads its values, and in_ltspice=true opens it in LTspice without a chart.",
+                show_hint=False,
+            )
+        return await _show_without_chart(args, state, source, raw, circuit)
     # Refuse unsupported coordinates before building a plot.
     guarded_axis(raw, 0)
 
@@ -1636,9 +1705,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
             _show_in_ltspice,
             state,
             raw_path,
-            # An other raw is not the case's results: shown on its own, as its
-            # path would be, never as the results beside the case's sheet.
-            case.circuit_path if case is not None and args.other_raw is None else None,
+            circuit,
             source.log,
             raw.descriptor.original_plot_name,
             [[sig.name for sig in group] for group in plan.groups if group],

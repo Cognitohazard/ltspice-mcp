@@ -672,7 +672,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # measured 5,187 characters. The budget pointer names its guide section:
     # measured 5,203.
     # Resume adds selection, authority and dwell fields.
-    "jobs": 6800,
+    # place_beside_sheet is a seventh action, a branch with one field of its
+    # own (case_id), and a sentence in the description: measured 7,442.
+    "jobs": 7450,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
