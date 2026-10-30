@@ -33,7 +33,7 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
 | what the user has open in LTspice, and which sheet is in front | `inspect(kind="open_in_ltspice")` |
 | LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(kind="simulator_docs")`, then `name=` one of them |
-| create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
+| create or mutate an `.asc` | `edit_schematic(path=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 | open a sheet in the user's own LTspice, when they ask to see it there | `verify_circuit(path=…, in_ltspice=true)` |
 
@@ -210,7 +210,7 @@ itself or the `.log` beside it, and are not read again later. Guide section
 To read a log that has no RAW, use the `measurements` recipe:
 
 ```json
-{"sources": [{"log_path": "result.log", "label": "imported"}],
+{"sources": [{"path": "result.log", "label": "imported"}],
  "recipes": [{"metric": "measurements", "key": "meas"}]}
 ```
 
@@ -222,10 +222,10 @@ with that step's `step_values`. Row n of a stepped `.meas` table belongs to
 the step on the log's n-th `.step` line, and a log whose `.step` lines do not
 number its rows (LTspice writes none for a stepped `.op`) is refused. In a
 request that also has RAW recipes, a missing or malformed RAW fails only those
-recipes, and the `measurements` recipe still returns its values. A `log_path`
-source does not look for a RAW beside the log. A `raw_path` source reads the
-RAW and the `.log` of the same name, so use it to read both from imported
-files.
+recipes, and the `measurements` recipe still returns its values. A source's
+`path` names the file it reads: a `.log` is read alone, without looking for a
+RAW beside it, and any other file is read as a RAW with the `.log` of the same
+name, so name the RAW to read both from imported files.
 
 For pages of log values as printed, use
 `inspect(queries=[{"kind": "results", "path": "result.log", "view": "measurements"}])`

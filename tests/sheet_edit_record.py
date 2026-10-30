@@ -52,6 +52,7 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.errors import LTSpiceMCPError
 from ltspice_mcp.lib import asc_document
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.tools import schematic_edit
@@ -197,7 +198,7 @@ def key_of(
         with contextlib.suppress(Exception):
             names |= {part.symbol for part in asc_document.parse_asc(before).symbols}
             form = sheet_form(before)
-    arguments = {**args.model_dump(mode="json"), "target": target.name}
+    arguments = {**args.model_dump(mode="json"), "path": target.name}
     beside = [
         [path.name, _digest_of(path)]
         for path in sorted(target.parent.iterdir(), key=lambda p: p.name)
@@ -242,8 +243,9 @@ _evaluate = schematic_edit._evaluate_edit_schematic  # pyright: ignore[reportPri
 
 async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool = False) -> Any:
     try:
-        target = safe_path(args.target, state)
-    except Exception:
+        target = safe_path(args.path, state)
+    except (LTSpiceMCPError, OSError, ValueError):
+        # A path the call is refused for: the edit answers that itself.
         return await _evaluate(args, state, present_mcp_views=present_mcp_views)
     folders = (target.parent, Path(state.working_dir))
     before = target.read_bytes() if target.is_file() else None

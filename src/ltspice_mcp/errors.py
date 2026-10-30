@@ -13,13 +13,16 @@ def compact_validation_error(
     *,
     field_owners: Mapping[str, Sequence[str]] | None = None,
     nested: Mapping[str, Sequence[str]] | None = None,
+    renamed: Mapping[str, str] | None = None,
 ) -> str:
     """Render validation failures without input echoes or documentation URLs.
 
     An unknown top-level field is referred to where it is taken: ``nested``
     maps a field to its place inside this tool's own arguments (``path`` to
     ``circuits[].path``), named first, and ``field_owners`` to the tools
-    that take it at their top level.
+    that take it at their top level. An unknown field at any depth that is
+    a name this tool retired is referred to the one that replaced it, by
+    ``renamed``.
     """
     if not isinstance(exc, ValidationError):
         return str(exc)
@@ -28,6 +31,7 @@ def compact_validation_error(
     entries: list[tuple[tuple[object, ...], str, str]] = []
     seen: set[tuple[tuple[object, ...], str, str]] = set()
     referral_fields: list[str] = []
+    retired: list[str] = []
     for error in exc.errors(include_url=False, include_input=False):
         loc = tuple(error["loc"])
         error_type = error["type"]
@@ -37,6 +41,15 @@ def compact_validation_error(
             continue
         seen.add(key)
         entries.append(key)
+        if (
+            error_type == "extra_forbidden"
+            and loc
+            and isinstance(loc[-1], str)
+            and loc[-1] in (renamed or {})
+            and loc[-1] not in retired
+        ):
+            retired.append(loc[-1])
+            continue
         if (
             error_type == "extra_forbidden"
             and len(loc) == 1
@@ -55,6 +68,8 @@ def compact_validation_error(
         rendered.append(f"… and {remaining} more")
     text = "; ".join(rendered) or "Validation failed"
 
+    for field in retired:
+        text += f" {field!r} is now {(renamed or {})[field]!r}."
     for field in referral_fields:
         if nested and nested.get(field):
             text += f" This tool takes {field!r} as {' or '.join(nested[field])}."

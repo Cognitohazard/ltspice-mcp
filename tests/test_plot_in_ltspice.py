@@ -145,7 +145,7 @@ async def test_the_run_is_opened_in_ltspice_with_its_traces_named(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"] == {
         "shown": True,
@@ -189,7 +189,7 @@ async def test_results_already_open_are_closed_and_opened_again_to_draw_the_trac
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [a_window(panes=[str(raw)])])
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     shown = data["ltspice"]
     assert shown["shown"] is True
@@ -211,7 +211,7 @@ async def test_the_results_of_another_run_of_that_name_are_left_open(
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [a_window(panes=[str(other)], plot_in_front=True)])
 
-    first = (await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True))[
+    first = (await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True))[
         "ltspice"
     ]
 
@@ -223,7 +223,7 @@ async def test_the_results_of_another_run_of_that_name_are_left_open(
     # With both open and the other one in front, the one asked for is the one closed.
     put_windows(state_no_sim, world, [a_window(panes=[str(other), str(raw)], plot_in_front=True)])
 
-    again = (await plot(state_no_sim, raw_file=str(raw), signals=["V(in)"], in_ltspice=True))[
+    again = (await plot(state_no_sim, path=str(raw), signals=["V(in)"], in_ltspice=True))[
         "ltspice"
     ]
 
@@ -241,7 +241,7 @@ async def test_results_open_on_their_own_that_will_not_close_are_reported(
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [a_window(panes=[str(raw)])], frame_keeps_panes=True)
 
-    shown = (await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True))[
+    shown = (await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True))[
         "ltspice"
     ]
 
@@ -261,7 +261,7 @@ async def test_nothing_is_closed_while_ltspice_waits_on_a_box_of_its_own(
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [a_window(panes=[str(raw)])], box_up=True)
 
-    shown = (await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True))[
+    shown = (await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True))[
         "ltspice"
     ]
 
@@ -281,7 +281,7 @@ async def test_named_panels_become_panes(
 
     data = await plot(
         state_no_sim,
-        raw_file=str(raw),
+        path=str(raw),
         panels=[["V(out)"], ["V(in)"]],
         in_ltspice=True,
         open=False,
@@ -301,7 +301,7 @@ async def test_settings_saved_from_ltspice_are_left_as_they_are(
     raw.with_suffix(".plt").write_bytes(saved)
     one_window(state_no_sim, tmp_path / "world.json")
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
     assert data["ltspice"]["plot_settings"] is None
@@ -324,9 +324,9 @@ async def test_settings_written_before_are_replaced(
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     one_window(state_no_sim, tmp_path / "world.json")
-    await plot(state_no_sim, raw_file=str(raw), signals=["V(in)"], in_ltspice=True)
+    await plot(state_no_sim, path=str(raw), signals=["V(in)"], in_ltspice=True)
 
-    await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert [pane.traces for pane in panes_of(raw.with_suffix(".plt"))] == [("V(out)",)]
 
@@ -342,7 +342,7 @@ async def test_the_panes_of_another_analysis_are_kept(
     write(raw.with_suffix(".plt"), write_plot_settings(with_panes(PlotSettings(), "ac", ac_panes)))
     one_window(state_no_sim, tmp_path / "world.json")
 
-    await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert panes_of(raw.with_suffix(".plt"), SECTION_NAMES["ac"]) == ac_panes
     assert [pane.traces for pane in panes_of(raw.with_suffix(".plt"))] == [("V(out)",)]
@@ -354,7 +354,7 @@ async def test_an_ac_run_is_given_the_scales_ltspice_gives_one(
     raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
     one_window(state_no_sim, tmp_path / "world.json")
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
     assert panes_of(raw.with_suffix(".plt"), SECTION_NAMES["ac"]) == (
@@ -378,7 +378,7 @@ async def test_a_dc_sweep_and_a_noise_run_open_with_their_traces_too(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=[signal], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=[signal], in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
     assert data["ltspice"]["plot_settings"] == str(raw.with_suffix(".plt"))
@@ -398,7 +398,7 @@ async def test_a_run_whose_plot_settings_are_not_recorded_is_opened_without_any(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, raw_file=str(raw), dialect="ngspice", in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), dialect="ngspice", in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
     assert data["ltspice"]["plot_settings"] is None
@@ -415,7 +415,7 @@ async def test_with_no_window_open_nothing_is_started_and_the_traces_are_still_w
     world = tmp_path / "world.json"
     put_windows(state_no_sim, world, [])
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"]["shown"] is False
     assert data["ltspice"]["reason"] == "no LTspice window is open, and none is started for this"
@@ -431,7 +431,7 @@ async def test_where_windows_cannot_be_reached_it_says_so_and_writes_nothing(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     state_no_sim.open_windows = OpenWindows(None, unavailable="needs the server on Windows itself")
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"] == {
         "shown": False,
@@ -450,7 +450,7 @@ async def test_without_the_argument_ltspice_is_not_asked(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], open=False)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], open=False)
 
     assert "ltspice" not in data
     assert not raw.with_suffix(".plt").exists()
@@ -558,7 +558,7 @@ async def test_results_beside_the_sheet_of_their_name_are_opened_from_it(
     world = tmp_path / "world.json"
     one_window(state_no_sim, world)
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
     assert data["ltspice"]["sheet"] == str(sheet)
@@ -1112,7 +1112,7 @@ async def test_with_no_window_open_ltspice_is_started_for_a_run(
     start = FakeStart(world)
     put_windows(state_no_sim, world, [], start=start)
 
-    data = await plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], in_ltspice=True)
+    data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     shown = data["ltspice"]
     assert shown["shown"] is True

@@ -47,7 +47,7 @@ async def _analyze(
     state: SessionState, raw: Path, recipes: list[dict[str, Any]]
 ) -> dict[str, Any]:
     args = AnalyzeResultsInput.model_validate(
-        {"sources": [{"raw_path": str(raw), "label": "dut"}], "recipes": recipes}
+        {"sources": [{"path": str(raw), "label": "dut"}], "recipes": recipes}
     )
     result = await handle_analyze_results(args, state)
     assert result.structured_content is not None

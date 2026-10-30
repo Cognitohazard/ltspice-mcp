@@ -464,7 +464,7 @@ def resolve_analysis_source(
             plot_index=plot_index,
             console=log.with_suffix(".exe.log"),
         )
-    raise ResultError("Provide one analysis source: raw_file, log_file, or job_id")
+    raise ResultError("Provide one analysis source: a path or a job_id")
 
 
 def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:

@@ -1064,7 +1064,7 @@ class TestExportEncoding:
         result = await handle_edit_schematic(
             EditSchematicInput.model_validate(
                 {
-                    "target": str(sheet),
+                    "path": str(sheet),
                     "expected_sha256": sha_of(sheet),
                     "ops": [
                         {"op": "set_component_value", "reference": "R1", "value": f"2{MICRO}"}
@@ -1191,7 +1191,7 @@ class TestExportEncoding:
         result = await handle_edit_schematic(
             EditSchematicInput.model_validate(
                 {
-                    "target": str(sheet),
+                    "path": str(sheet),
                     "expected_sha256": hashlib.sha256(sheet.read_bytes()).hexdigest(),
                     "ops": [
                         {"op": "set_component_value", "reference": "R1", "value": f"2{MICRO}"}

@@ -408,22 +408,20 @@ class TestErrors:
     async def test_empty_signals_rejected(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match="at least one signal"):
-            await handle_plot_waveform(
-                PlotWaveformInput(raw_file=str(raw), signals=[]), state_no_sim
-            )
+            await handle_plot_waveform(PlotWaveformInput(path=str(raw), signals=[]), state_no_sim)
 
     async def test_axis_as_signal_rejected(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match="sweep axis"):
             await handle_plot_waveform(
-                PlotWaveformInput(raw_file=str(raw), signals=["time"]), state_no_sim
+                PlotWaveformInput(path=str(raw), signals=["time"]), state_no_sim
             )
 
     async def test_op_raw_refused(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "op_extreme_node")
         with pytest.raises(ResultError, match="inspect results table"):
             await handle_plot_waveform(
-                PlotWaveformInput(raw_file=str(raw), signals="all"), state_no_sim
+                PlotWaveformInput(path=str(raw), signals="all"), state_no_sim
             )
 
 
@@ -434,7 +432,7 @@ class TestErrors:
 class TestRender:
     async def test_transient_single_panel(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert data["analysis_type"] == "transient"
         assert data["panels"] == 1
         assert data["opened"] is False  # open=False
@@ -454,14 +452,14 @@ class TestRender:
         raw = stage_recorded_fixture(project_dir, "ltspice_tran_rc")
         before = sorted(p.name for p in project_dir.iterdir())  # noqa: ASYNC240
 
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
 
         assert sorted(p.name for p in project_dir.iterdir()) == before  # noqa: ASYNC240
         assert Path(data["path"]).parent == state_no_sim.store.plots_dir
 
     async def test_ac_bode_dual_panel(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert data["analysis_type"] == "ac"
         assert data["panels"] == 2  # stacked magnitude + phase
         blob = _data_blob(_read(Path(data["path"])))
@@ -494,7 +492,7 @@ class TestRender:
             ).encode("ascii")
         )
 
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
 
         (trace,) = data["traces"]
         assert trace["phase_final_deg"] < -180
@@ -507,7 +505,7 @@ class TestRender:
         # Single-trace AC + annotate=True -> the spec carries corner markers near
         # the RC corner plus a non-minimum-phase flag.
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], annotate=True)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], annotate=True)
         blob = _data_blob(_read(Path(data["path"])))
         anns = blob["annotations"]
         assert isinstance(anns, list) and len(anns) >= 1
@@ -523,7 +521,7 @@ class TestRender:
 
     async def test_ac_annotate_off_omits_markers(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], annotate=False)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], annotate=False)
         blob = _data_blob(_read(Path(data["path"])))
         # No annotation keys when annotate is off (or an empty list at most).
         assert not blob.get("annotations")
@@ -531,13 +529,13 @@ class TestRender:
 
     async def test_dc_sweep(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_dc_div")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert data["analysis_type"] == "dc"
         assert _data_blob(_read(Path(data["path"])))["panels"][0]["x_scale"] == "linear"
 
     async def test_noise_log_axis(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals="all")
+        data = await _plot(state_no_sim, path=str(raw), signals="all")
         assert data["analysis_type"] == "noise"
         assert _data_blob(_read(Path(data["path"])))["panels"][0]["x_scale"] == "log"
 
@@ -545,7 +543,7 @@ class TestRender:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert data["n_steps"] > 1
         assert data["steps_plotted"] == data["n_steps"]
         assert data["series_count"] == data["n_steps"]  # one trace per step
@@ -567,13 +565,13 @@ class TestRender:
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         with pytest.raises(ResultError, match="cells"):
             await handle_plot_waveform(
-                PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
+                PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False),
                 state_no_sim,
             )
 
     async def test_single_step_selection(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], step=1)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], step=1)
         assert data["steps_plotted"] == 1
         assert data["series_count"] == 1
 
@@ -582,14 +580,14 @@ class TestRender:
     ):
         # Null, as analyze_results and inspect take it.
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], plot_index=None)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], plot_index=None)
         assert data["plot_index"] == 0
 
     async def test_max_points_downsamples_and_observes(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], max_points=20)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], max_points=20)
         assert data["downsampled"] is True
         assert all(n <= 22 for n in data["points_per_series"])
         assert any(o["code"] == "downsampled" for o in data["observations"])
@@ -597,7 +595,7 @@ class TestRender:
     async def test_json_format_passes_schema(self, state_no_sim: SessionState, work_dir: Path):
         # The autouse conformance hook validates structuredContent vs output_schema.
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], format="json")
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], format="json")
         assert {"path", "analysis_type", "opened", "observations"} <= data.keys()
 
 
@@ -617,7 +615,7 @@ class TestDeliveryAndSecurity:
 
         monkeypatch.setattr(desktop, "open_in_desktop", fake_open)
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], open=True)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], open=True)
         assert data["opened"] is True
         assert data["opener"] == "explorer.exe"
         assert seen["path"] == Path(data["path"])
@@ -636,7 +634,7 @@ class TestDeliveryAndSecurity:
         outside.mkdir()
         symlink_or_skip(project_dir / ".ltspice-mcp", outside)
 
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
 
         assert Path(data["path"]).parent == state_no_sim.store.plots_dir
         assert list(outside.iterdir()) == []
@@ -671,7 +669,7 @@ class TestDeliveryAndSecurity:
         # Never silently dropped beside a raw_file: a case id names a run of a
         # job, and a bare raw path is not one.
         with pytest.raises(ResultError, match="case_id"):
-            await _plot(state_no_sim, raw_file=str(raw), case_id="case-0000", signals=["V(out)"])
+            await _plot(state_no_sim, path=str(raw), case_id="case-0000", signals=["V(out)"])
 
 
 def _widget_spec(result) -> dict | None:
@@ -715,7 +713,7 @@ class TestWidgetDelivery:
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         # open=True, but a UI host must NOT trigger the local opener.
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=True), state_no_sim
         )
         assert opens == []  # no local open on a UI host
 
@@ -740,7 +738,7 @@ class TestWidgetDelivery:
         monkeypatch.setattr(desktop, "open_in_desktop", lambda p: (True, "x"))
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
         )
         spec = _widget_spec(result)
         assert spec is not None
@@ -756,7 +754,7 @@ class TestWidgetDelivery:
         monkeypatch.setattr(desktop, "open_in_desktop", lambda p: (True, "x"))
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], max_points=500, open=False),
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], max_points=500, open=False),
             state_no_sim,
         )
         spec = _widget_spec(result)
@@ -779,7 +777,7 @@ class TestWidgetDelivery:
         monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=True), state_no_sim
         )
         assert _widget_spec(result) is None  # no widget
         assert result.structured_content["delivery"] == "terminal"  # fell back
@@ -794,7 +792,7 @@ class TestWidgetDelivery:
         monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", lambda: None)
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
         )
         assert _widget_spec(result) is None
         assert result.meta is None
@@ -875,7 +873,7 @@ class TestTraceSummary:
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         # max_points=20 decimates the plotted series; the summary must still be
         # read from the full-resolution data, not the decimated copy.
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], max_points=20)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], max_points=20)
         assert data["downsampled"] is True
         t, y = await _raw_series(state_no_sim, raw, "V(out)")
         want = compute_signal_stats(t, y)
@@ -901,7 +899,7 @@ class TestTraceSummary:
         t, y = await _raw_series(state_no_sim, raw, "V(out)")
         mid = len(t) // 2
         t_end = f"{float(t[mid]):.12g}"
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], t_end=t_end)
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], t_end=t_end)
         (trace,) = data["traces"]
         hi = int(np.searchsorted(t, float(t_end), side="right"))
         want = compute_signal_stats(t[:hi], y[:hi])
@@ -914,7 +912,7 @@ class TestTraceSummary:
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
         )
         text = result.content[0].text
         final = result.structured_content["traces"][0]["final"]
@@ -923,7 +921,7 @@ class TestTraceSummary:
 
     async def test_each_step_is_its_own_trace(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert [t["step"] for t in data["traces"]] == list(range(data["n_steps"]))
         _, y1 = await _raw_series(state_no_sim, raw, "V(out)", step=1)
         assert data["traces"][1]["final"] == pytest.approx(float(y1[-1]))
@@ -936,7 +934,7 @@ class TestTraceSummary:
         # analyze_results takes picks the step whose r is nearest the value.
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         data = await _plot(
-            state_no_sim, raw_file=str(raw), signals=["V(out)"], step={"axis": "r", "value": "25"}
+            state_no_sim, path=str(raw), signals=["V(out)"], step={"axis": "r", "value": "25"}
         )
         (trace,) = data["traces"]
         assert trace["step"] == 1
@@ -950,7 +948,7 @@ class TestTraceSummary:
 
         monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert data["n_steps"] > 2
         assert len(data["traces"]) == 2
         assert data["traces_truncated"] == data["n_steps"]
@@ -961,7 +959,7 @@ class TestTraceSummary:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         axis, wave = await _raw_series(state_no_sim, raw, "V(out)")
         f, h = prepare_ac_arrays(axis, wave)
         mag = safe_magnitude_db(h)
@@ -980,7 +978,7 @@ class TestTraceSummary:
 
     async def test_sweeps_report_no_mean(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_dc_div")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         (trace,) = data["traces"]
         assert "mean" not in trace
         _, y = await _raw_series(state_no_sim, raw, "V(out)")
@@ -993,7 +991,7 @@ class TestTraceSummary:
         monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"]), state_no_sim
         )
         assert result.structured_content["delivery"] == "ui"
         (trace,) = result.structured_content["traces"]
@@ -1009,7 +1007,7 @@ class TestPanelLayout:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)", "I(C1)", "V(in)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)", "I(C1)", "V(in)"])
         assert data["panels"] == 2
         blob = _data_blob(_read(Path(data["path"])))
         assert _series_labels(blob) == [["V(out)", "V(in)"], ["I(C1)"]]
@@ -1024,16 +1022,14 @@ class TestPanelLayout:
 
     async def test_one_unit_is_one_panel(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(in)", "V(out)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(in)", "V(out)"])
         assert data["panels"] == 1
 
     async def test_explicit_panels_are_drawn_as_named(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(
-            state_no_sim, raw_file=str(raw), panels=[["V(out)"], ["V(in)", "I(C1)"]]
-        )
+        data = await _plot(state_no_sim, path=str(raw), panels=[["V(out)"], ["V(in)", "I(C1)"]])
         assert data["signals"] == ["V(out)", "V(in)", "I(C1)"]
         assert data["panels"] == 2
         blob = _data_blob(_read(Path(data["path"])))
@@ -1046,7 +1042,7 @@ class TestPanelLayout:
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match="'V\\(out\\)', which no panel plots"):
-            await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], panels=[["V(in)"]])
+            await _plot(state_no_sim, path=str(raw), signals=["V(out)"], panels=[["V(in)"]])
 
     async def test_signals_the_panels_plot_are_accepted_beside_them(
         self, state_no_sim: SessionState, work_dir: Path
@@ -1054,7 +1050,7 @@ class TestPanelLayout:
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         data = await _plot(
             state_no_sim,
-            raw_file=str(raw),
+            path=str(raw),
             signals=["v(out)", "V(in)"],
             panels=[["V(out)"], ["V(in)", "I(C1)"]],
         )
@@ -1067,11 +1063,11 @@ class TestPanelLayout:
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match="more than one panel"):
-            await _plot(state_no_sim, raw_file=str(raw), panels=[["V(out)"], ["v(out)", "V(in)"]])
+            await _plot(state_no_sim, path=str(raw), panels=[["V(out)"], ["v(out)", "V(in)"]])
 
     async def test_ac_gets_a_bode_pair_per_unit(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)", "I(C1)"])
+        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)", "I(C1)"])
         assert data["panels"] == 4
         blob = _data_blob(_read(Path(data["path"])))
         assert _series_labels(blob) == [["V(out)"], ["V(out)"], ["I(C1)"], ["I(C1)"]]
@@ -1084,7 +1080,7 @@ class TestPanelLayout:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
-        data = await _plot(state_no_sim, raw_file=str(raw), signals="all")
+        data = await _plot(state_no_sim, path=str(raw), signals="all")
         units = {t["signal"]: t["unit"] for t in data["traces"]}
         # The raw spells its noise traces in lower case.
         assert units["v(onoise)"] == "V/√Hz"
@@ -1112,7 +1108,7 @@ class TestAttachedImage:
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
             PlotWaveformInput(
-                raw_file=str(raw), signals=["V(out)", "I(C1)"], open=False, attach_plot=True
+                path=str(raw), signals=["V(out)", "I(C1)"], open=False, attach_plot=True
             ),
             state_no_sim,
         )
@@ -1132,7 +1128,7 @@ class TestAttachedImage:
     async def test_no_image_unless_asked(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
         )
         assert _images(result) == []
         assert "image" not in result.structured_content
@@ -1145,13 +1141,11 @@ class TestAttachedImage:
         state_no_sim.config.attach_plot = True
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
         attached = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
         )
         assert len(_images(attached)) == 1
         declined = await handle_plot_waveform(
-            PlotWaveformInput(
-                raw_file=str(raw), signals=["V(out)"], open=False, attach_plot=False
-            ),
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False, attach_plot=False),
             state_no_sim,
         )
         assert _images(declined) == []
@@ -1159,7 +1153,7 @@ class TestAttachedImage:
     async def _plot_asking_for_an_image(self, state: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         return await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False, attach_plot=True),
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False, attach_plot=True),
             state,
         )
 
@@ -1200,7 +1194,7 @@ class TestAttachedImage:
         monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], attach_plot=True),
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], attach_plot=True),
             state_no_sim,
         )
         assert _widget_spec(result) is not None
@@ -1217,7 +1211,7 @@ class TestOpenDefault:
         state_no_sim.config.open_plot = False
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         result = await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"]), state_no_sim
         )
         assert opens == []
         sc = result.structured_content
@@ -1231,7 +1225,7 @@ class TestOpenDefault:
         state_no_sim.config.open_plot = False
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=True), state_no_sim
         )
         assert len(opens) == 1
 
@@ -1240,6 +1234,6 @@ class TestOpenDefault:
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         await handle_plot_waveform(
-            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+            PlotWaveformInput(path=str(raw), signals=["V(out)"]), state_no_sim
         )
         assert len(opens) == 1

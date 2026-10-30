@@ -365,7 +365,7 @@ def _operations() -> tuple[_Operation, ...]:
             model=schematic_edit.EditSchematicInput,
             example=(
                 "api.edit_schematic(\n"
-                '    target="opamp.asc",\n'
+                '    path="opamp.asc",\n'
                 '    expected_sha256="<from inspect or a previous edit>",\n'
                 '    ops=[{"op": "set_component_value", "reference": "I1", "value": "30u"}],\n'
                 ")"

@@ -49,7 +49,7 @@ async def test_drive_does_not_retain_artifacts_evicted_from_result_cache(
     response = await analyze.handle_analyze_results(
         analyze.AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(path)} for path in (raw, other)],
+                "sources": [{"path": str(path)} for path in (raw, other)],
                 "recipes": [{"key": "loop", "metric": "bode_filter", "signal": "V(out)"}],
                 "all_steps": True,
                 "include": {"per_run": True},
@@ -104,7 +104,7 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
 
     monkeypatch.setattr(parser_service, "run_parser_sync", record_worker)
     request = {
-        "sources": [{"raw_path": str(raw), "label": f"corner{index}"} for index in range(15)],
+        "sources": [{"path": str(raw), "label": f"corner{index}"} for index in range(15)],
         "recipes": [{"key": "loop", "metric": "bode_filter", "signal": "V(out)"}],
         "all_steps": True,
         "budget": response_budget.BUDGET_MIN_TOKENS,
@@ -171,8 +171,8 @@ async def test_capture_and_verification_share_bytes_but_keep_plot_selection(
     request = analyze.AnalyzeResultsInput.model_validate(
         {
             "sources": [
-                {"raw_path": str(raw), "plot_index": 0},
-                {"raw_path": str(raw), "plot_index": 1},
+                {"path": str(raw), "plot_index": 0},
+                {"path": str(raw), "plot_index": 1},
             ],
             "recipes": [{"metric": "measurements", "key": "meas"}],
         }
@@ -215,7 +215,7 @@ async def test_unlabelled_log_continuation_echo_keeps_the_immutable_record(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     raw.unlink()
     request = {
-        "sources": [{"log_path": str(raw.with_suffix(".log")), "runs": list(range(121))}],
+        "sources": [{"path": str(raw.with_suffix(".log")), "runs": list(range(121))}],
         "recipes": [{"metric": "measurements", "key": "meas"}],
         "include": {"provenance": True, "per_run": True},
     }
@@ -250,7 +250,7 @@ async def test_stepped_plot_keeps_its_distinct_axes_without_union_facts(
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     response = await analysis.handle_plot_waveform(
-        analysis.PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
+        analysis.PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False),
         state_no_sim,
     )
     data = response.structured_content

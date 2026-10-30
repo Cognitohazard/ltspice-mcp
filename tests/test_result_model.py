@@ -70,18 +70,18 @@ class TestExactlyOneSource:
     """
 
     @pytest.mark.parametrize(
-        ("raw_file", "job_id"),
+        ("path", "job_id"),
         [("x.raw", "b1"), (None, None), ("", None)],
         ids=["both", "neither", "empty"],
     )
-    def test_refused(self, state_no_sim: SessionState, raw_file: str | None, job_id: str | None):
+    def test_refused(self, state_no_sim: SessionState, path: str | None, job_id: str | None):
         with pytest.raises(ResultError, match="exactly one"):
-            _direct_source(raw_file, job_id, state_no_sim)
+            _direct_source(path, job_id, state_no_sim)
 
     @pytest.mark.parametrize("spelling", ["", "  "])
     def test_a_blank_path_arrives_as_absent(self, state_no_sim: SessionState, spelling: str):
         # The input model strips whitespace, so a blank path reaches the
         # resolver as "" — which the check above reads as no source at all.
-        args = PlotWaveformInput(raw_file=spelling)
+        args = PlotWaveformInput(path=spelling)
         with pytest.raises(ResultError, match="exactly one"):
-            _direct_source(args.raw_file, args.job_id, state_no_sim)
+            _direct_source(args.path, args.job_id, state_no_sim)

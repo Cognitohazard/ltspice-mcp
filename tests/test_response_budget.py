@@ -141,8 +141,7 @@ def _wide_args(raw: Path, **extra: Any) -> AnalyzeResultsInput:
     return AnalyzeResultsInput.model_validate(
         {
             "sources": [
-                {"raw_path": str(raw), "label": f"corner{index:02d}"}
-                for index in range(_WIDE_SOURCES)
+                {"path": str(raw), "label": f"corner{index:02d}"} for index in range(_WIDE_SOURCES)
             ],
             "recipes": [_WIDE_RECIPE],
             "all_steps": True,
@@ -174,7 +173,7 @@ async def _spec_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[s
         AnalyzeResultsInput.model_validate(
             {
                 "sources": [
-                    {"raw_path": str(raw), "label": f"corner{index:02d}"}
+                    {"path": str(raw), "label": f"corner{index:02d}"}
                     for index in range(_WIDE_SOURCES)
                 ],
                 "recipes": [_SPEC_RECIPE],
@@ -439,7 +438,7 @@ class TestAnalysisBudget:
         ]
         args = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": recipes,
                 "budget": response_budget.BUDGET_MIN_TOKENS,
             }
@@ -679,7 +678,7 @@ class TestAnalysisBudget:
         request error, so the caller learns the floor instead of guessing."""
         with pytest.raises(Exception, match="greater than or equal to 500"):
             AnalyzeResultsInput.model_validate(
-                {"sources": [{"raw_path": "x.raw"}], "recipes": [_WIDE_RECIPE], "budget": 1}
+                {"sources": [{"path": "x.raw"}], "recipes": [_WIDE_RECIPE], "budget": 1}
             )
 
 
@@ -832,7 +831,7 @@ class TestServerDefaultBudget:
         state_no_sim.config.default_budget = 500
         args = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     _WIDE_RECIPE,
                     {"key": "absent", "metric": "bode_filter", "signal": "V(nope)"},

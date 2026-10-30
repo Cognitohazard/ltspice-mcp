@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakValueDictionary
 
@@ -136,27 +136,28 @@ class CaseSelection(NotedModel):
         return self
 
 
+def _names_a_log(path: str) -> bool:
+    """A source path ending ``.log``, in any case, is a log read alone."""
+    return PurePath(path).suffix.casefold() == ".log"
+
+
 class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     job_id: str | None = Field(
         default=None,
         min_length=1,
         description=(
             "Analyze the results of a job this server ran. Exactly one of "
-            "job_id, raw_path or log_path. A job still running is reported under "
+            "job_id or path. A job still running is reported under "
             "coverage.missing_cases instead of failing the call."
         ),
     )
-    raw_path: str | None = Field(
+    path: str | None = Field(
         default=None,
         description=(
-            "Analyze a .raw file this server did not run. It has no job "
-            "provenance, so its rows carry deck_sha256: null. Exactly one of "
-            "job_id, raw_path or log_path."
+            "Analyze a file this server did not run: a .raw, read with the .log "
+            "of its name, or a .log alone for its .meas results. Its rows carry "
+            "deck_sha256: null. Exactly one of job_id or path."
         ),
-    )
-    log_path: str | None = Field(
-        default=None,
-        description="Imported log for whole-log measurements; exactly one of job_id, raw_path or log_path. No RAW sibling is read.",
     )
     runs: Literal["all"] | list[int] | CaseSelection = Field(
         default="all",
@@ -171,16 +172,26 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
         description=(
             "Short unique name for this source; it tags every returned row and is "
             "what a recipe's own 'sources' list refers to. Name the condition "
-            "('nominal', 'hot'). Default: the job_id, or the raw file's stem."
+            "('nominal', 'hot'). Default: the job_id, or the file's stem."
         ),
     )
 
+    @property
+    def raw_path(self) -> str | None:
+        """``path`` when it names a results file, read with the log of its name."""
+        return self.path if self.path and not _names_a_log(self.path) else None
+
+    @property
+    def log_path(self) -> str | None:
+        """``path`` when it names a log, read alone."""
+        return self.path if self.path and _names_a_log(self.path) else None
+
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
-        if sum(bool(value) for value in (self.job_id, self.raw_path, self.log_path)) != 1:
-            raise ValueError("provide exactly one of job_id, raw_path or log_path")
+        if bool(self.job_id) == bool(self.path):
+            raise ValueError("provide exactly one of job_id or path")
         if self.log_path is not None and self.plot_index is not None:
-            raise ValueError("log_path does not select a RAW plot")
+            raise ValueError("a .log path does not select a RAW plot")
         if isinstance(self.runs, list):
             if not self.runs:
                 raise ValueError("runs must be 'all' or a non-empty list")
@@ -195,7 +206,7 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
             # AnalyzeResultsInput makes a repeat unique.
-            derived = self.job_id or Path(str(self.raw_path or self.log_path)).stem
+            derived = self.job_id or Path(str(self.path)).stem
             object.__setattr__(self, "label", derived)
         return self
 

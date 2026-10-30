@@ -315,7 +315,7 @@ class TestWirePinsZeroLength:
         result = await handle_edit_schematic(
             EditSchematicInput.model_validate(
                 {
-                    "target": asc_file.name,
+                    "path": asc_file.name,
                     "expected_sha256": hashlib.sha256(asc_file.read_bytes()).hexdigest(),
                     "dry_run": True,
                     "ops": [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.1"}],

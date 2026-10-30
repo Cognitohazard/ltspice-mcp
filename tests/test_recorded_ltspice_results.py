@@ -449,7 +449,7 @@ class TestSteppedRuns:
         raw = rec.stage_run(build, "raw/step_ac_one_freq", work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
             }
         )
@@ -566,9 +566,7 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     points, gap = COMPRESSION[build, case_id]
     request = AnalyzeResultsInput.model_validate(
         {
-            "sources": [
-                {"raw_path": str(rec.stage_run(build, case_id, work_dir)), "label": "dut"}
-            ],
+            "sources": [{"path": str(rec.stage_run(build, case_id, work_dir)), "label": "dut"}],
             "recipes": [
                 {"key": "v", "metric": "value", "expr": "V(out)", "at": "1m"},
                 {"key": "s", "metric": "signal_stats", "signal": "V(out)"},
@@ -659,7 +657,7 @@ async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
         value = row["value"]
         assert (value["actual_x"], value["actual_x_source"]) == (100e3, "deck")
         assert value["magnitude_linear"] == pytest.approx(abs(gain), rel=1e-5)
-    by_path = await values({"raw_path": str(raw)})
+    by_path = await values({"path": str(raw)})
     assert all("actual_x" not in row["value"] for row in by_path)
 
 
@@ -672,9 +670,7 @@ async def test_a_one_frequency_noise_is_read_a_step_at_a_time(
     r through the RC low-pass (100 nF) at 1 kHz, at 27 °C."""
     request = AnalyzeResultsInput.model_validate(
         {
-            "sources": [
-                {"raw_path": str(rec.stage_run(build, "raw/step_noise_one_freq", work_dir))}
-            ],
+            "sources": [{"path": str(rec.stage_run(build, "raw/step_noise_one_freq", work_dir))}],
             "all_steps": True,
             "recipes": [{"key": "n", "metric": "value", "expr": "V(onoise)"}],
             "include": {"per_run": True},
@@ -701,7 +697,7 @@ async def test_a_measurements_only_call_reports_a_transient_compression_left_coa
     raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
     request = AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"raw_path": str(raw), "label": "dut"}],
+            "sources": [{"path": str(raw), "label": "dut"}],
             "recipes": [{"key": "m", "metric": "measurements"}],
         }
     )
@@ -724,7 +720,7 @@ async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
     _, gap = COMPRESSION[build, "raw/compress_1mv"]
     raw = rec.stage_run(build, "raw/compress_1mv", work_dir)
     plot = await analysis.handle_plot_waveform(
-        analysis.PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
+        analysis.PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False),
         state_no_sim,
     )
     listed = await inspect_one(
@@ -1043,7 +1039,7 @@ class TestMeasurements:
         log = work_dir / Path(case_id).with_suffix(".log").name
         log.write_bytes(rec.recorded(build, f"{case_id}.log").read_bytes())
         return SyncApi(state).analyze_results(
-            sources=[{"log_path": str(log), "label": "log"}],
+            sources=[{"path": str(log), "label": "log"}],
             recipes=[{"metric": "measurements", "key": "meas"}],
             include={"per_run": True},
             **selection,
@@ -1138,14 +1134,14 @@ class TestMeasurements:
         kept = (line for line in text.splitlines(keepends=True) if not line.startswith(".step"))
         log.write_bytes(encode_spice_text("".join(kept), codec))
         reply = SyncApi(state_no_sim).analyze_results(
-            sources=[{"log_path": str(log), "label": "log"}],
+            sources=[{"path": str(log), "label": "log"}],
             recipes=[{"metric": "measurements", "key": "meas"}],
             all_steps=True,
         )
         (failure,) = reply["failures"]
         assert "hold 3 steps and its .step lines name 0" in failure["message"]
         whole = SyncApi(state_no_sim).analyze_results(
-            sources=[{"log_path": str(log), "label": "log"}],
+            sources=[{"path": str(log), "label": "log"}],
             recipes=[{"metric": "measurements", "key": "meas", "names": ["s_max"]}],
             include={"fields": ["value"]},
         )
@@ -1507,7 +1503,7 @@ class TestDeviceOperatingPoints:
         raw = rec.stage_run(build, _device_op_case(build, numdgt=True), work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     {"key": "op", "metric": "operating_point"},
                     {"key": "gm", "metric": "value", "expr": "m1.gm"},
@@ -1667,7 +1663,7 @@ class TestSubcircuitDeviceNames:
         names = {"node": "V(xa.xin.mid)", "drain": "Id(xa.xin.mtail)", "port": "Ix(xb.top)"}
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     {"key": key, "metric": "value", "expr": expr, "at": "1u"}
                     for key, expr in names.items()
@@ -1701,7 +1697,7 @@ class TestSubcircuitDeviceNames:
         raw = rec.stage_run(build, self._table_case(build, saved=True), work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [{"key": "mid", "metric": "value", "expr": "V(xa.xin.mid)"}],
             }
         )
@@ -1718,7 +1714,7 @@ class TestSubcircuitDeviceNames:
         raw = rec.stage_run(build, self._table_case(build, saved=True), work_dir)
         request = AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "sources": [{"path": str(raw), "label": "dut"}],
                 "recipes": [
                     {"key": "all", "metric": "operating_point"},
                     {"key": "tail", "metric": "operating_point", "device": "xa.xin.mtail"},
@@ -2054,7 +2050,7 @@ async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: 
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
     with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
         await analysis.handle_plot_waveform(
-            analysis.PlotWaveformInput(raw_file=str(raw), other_raw="fra_1", open=False),
+            analysis.PlotWaveformInput(path=str(raw), other_raw="fra_1", open=False),
             state_no_sim,
         )
     with pytest.raises(ValidationError, match="other_raw require job_id"):
@@ -2082,7 +2078,7 @@ class TestCompareRuns:
     signal by signal, the tolerance left to the caller."""
 
     def _load(self, state: SessionState, build: str, case_id: str, directory: Path):
-        return SyncApi(state).load_raw(raw_path=rec.stage_run(build, case_id, directory / build))
+        return SyncApi(state).load_raw(path=rec.stage_run(build, case_id, directory / build))
 
     @pytest.mark.parametrize("build", rec.BUILDS)
     def test_a_compressed_run_is_read_along_its_lines(

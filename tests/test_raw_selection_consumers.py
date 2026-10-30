@@ -22,8 +22,8 @@ from tests.test_log_consumer_migration import forbid_parent_reads
 @pytest.mark.parametrize(
     ("model", "payload"),
     [
-        (analyze.AnalyzeSourceInput, {"raw_path": "results.raw", "label": "selected"}),
-        (analysis.PlotWaveformInput, {"raw_file": "results.raw", "open": False}),
+        (analyze.AnalyzeSourceInput, {"path": "results.raw", "label": "selected"}),
+        (analysis.PlotWaveformInput, {"path": "results.raw", "open": False}),
         (experiments.AttachedAnalysis, {"recipes": [{"key": "summary", "metric": "summary"}]}),
     ],
 )
@@ -86,8 +86,8 @@ def test_csv_axis_label_uses_selected_descriptor():
 @pytest.mark.parametrize(
     ("model", "payload"),
     [
-        (analyze.AnalyzeSourceInput, {"raw_path": "results.raw", "label": "selected"}),
-        (analysis.PlotWaveformInput, {"raw_file": "results.raw", "open": False}),
+        (analyze.AnalyzeSourceInput, {"path": "results.raw", "label": "selected"}),
+        (analysis.PlotWaveformInput, {"path": "results.raw", "open": False}),
         (experiments.AttachedAnalysis, {"recipes": [{"key": "summary", "metric": "summary"}]}),
         (inspect_tools.ResultsQuery, {"kind": "results", "path": "results.raw"}),
     ],
@@ -100,8 +100,8 @@ def test_plot_index_is_strict_on_every_input(model, payload, plot_index):
 @pytest.mark.parametrize(
     ("model", "payload"),
     [
-        (analyze.AnalyzeSourceInput, {"raw_path": "results.raw", "label": "selected"}),
-        (analysis.PlotWaveformInput, {"raw_file": "results.raw", "open": False}),
+        (analyze.AnalyzeSourceInput, {"path": "results.raw", "label": "selected"}),
+        (analysis.PlotWaveformInput, {"path": "results.raw", "open": False}),
         (inspect_tools.ResultsQuery, {"kind": "results", "path": "results.raw"}),
     ],
 )
@@ -127,9 +127,26 @@ def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, sele
     for job_id in ({"job_id": ""}, {}):
         with pytest.raises(ApiValidationError, match=refusal if job_id else "experiment job"):
             SyncApi(state_no_sim).analyze_results(
-                sources=[{"raw_path": str(raw), "label": "a", **job_id, **selection}],
+                sources=[{"path": str(raw), "label": "a", **job_id, **selection}],
                 recipes=[{"metric": "summary", "key": "s"}],
             )
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [("run.raw", "raw"), ("run.qraw", "raw"), ("run.log", "log"), ("RUN.LOG", "log")],
+)
+def test_a_source_path_is_read_by_its_suffix(path, kind):
+    """A .log, in any case, is read alone; any other file as a RAW with the
+    .log of its name."""
+    source = analyze.AnalyzeSourceInput.model_validate({"path": path})
+    assert (source.raw_path, source.log_path) == ((path, None) if kind == "raw" else (None, path))
+    assert source.label == Path(path).stem
+
+
+def test_a_log_source_selects_no_plot():
+    with pytest.raises(ValidationError, match=r"a \.log path does not select a RAW plot"):
+        analyze.AnalyzeSourceInput.model_validate({"path": "run.log", "plot_index": 0})
 
 
 def test_api_validates_selection_before_loading(state_no_sim):
@@ -404,7 +421,7 @@ async def test_recorded_analysis_exports_selected_native_table(state_no_sim, wor
         {
             "sources": [
                 {
-                    "raw_path": str(path),
+                    "path": str(path),
                     "label": "integrated",
                     "plot_index": 1,
                     "dialect": "ngspice",
@@ -442,7 +459,7 @@ async def test_recorded_analysis_exports_selected_native_table(state_no_sim, wor
 def test_analysis_cursor_request_identity_includes_selection():
     payload = {
         "sources": [
-            {"raw_path": "noise.raw", "label": "noise", "plot_index": 0, "dialect": "ngspice"}
+            {"path": "noise.raw", "label": "noise", "plot_index": 0, "dialect": "ngspice"}
         ],
         "recipes": [{"key": "summary", "metric": "summary"}],
     }

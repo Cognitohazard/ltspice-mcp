@@ -1169,7 +1169,7 @@ class ApiMethodsMixin(ABC):
 
     def load_raw(
         self,
-        raw_path: str | os.PathLike[str] | None = None,
+        path: str | os.PathLike[str] | None = None,
         *,
         job_id: str | None = None,
         run_index: int = 0,
@@ -1177,6 +1177,7 @@ class ApiMethodsMixin(ABC):
         plot_index: int = 0,
         dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
         other_raw: OtherRawKind | None = None,
+        raw_path: str | os.PathLike[str] | None = None,
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
@@ -1184,9 +1185,11 @@ class ApiMethodsMixin(ABC):
         (``help(r)``).
         ``other_raw`` reads the case's other raw of that kind, as its run row's
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
-        response analysis's results, ``"op"`` a transient's operating point."""
+        response analysis's results, ``"op"`` a transient's operating point.
+        ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
-        _one_source("raw_path", raw_path, job_id, run_index, case_id, other_raw=other_raw)
+        path = _older_spelling(path, raw_path=raw_path)
+        _one_source(path, job_id, run_index, case_id, other_raw=other_raw)
         if type(plot_index) is not int or plot_index < 0:
             raise ApiValidationError("plot_index must be a nonnegative integer")
         if dialect is not None and dialect not in ("ltspice", "ngspice", "qspice", "xyce"):
@@ -1196,7 +1199,7 @@ class ApiMethodsMixin(ABC):
         return self._marshal(
             load_raw_result(
                 state=self._state,
-                raw_path=None if raw_path is None else os.fspath(raw_path),
+                raw_path=None if path is None else os.fspath(path),
                 job_id=job_id,
                 run_index=run_index,
                 case_id=case_id,
@@ -1210,25 +1213,29 @@ class ApiMethodsMixin(ABC):
 
     def measurements(
         self,
-        log_path: str | Path | None = None,
+        path: str | Path | None = None,
         *,
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
+        log_path: str | Path | None = None,
     ) -> LogResult[Any]:
         """Return detached ``.meas`` facts from a log or one experiment case,
-        with what the read says of them in ``.observations``."""
+        with what the read says of them in ``.observations``. ``log_path`` is
+        the older spelling of ``path``, still accepted."""
+        path = _older_spelling(path, log_path=log_path)
         return measurements_of(
-            *self._log_section("measurements", log_path, job_id, run_index, case_id)
+            *self._log_section("measurements", path, job_id, run_index, case_id)
         )
 
     def device_op_points(
         self,
-        log_path: str | Path | None = None,
+        path: str | Path | None = None,
         *,
         job_id: str | None = None,
         run_index: int = 0,
         case_id: str | None = None,
+        log_path: str | Path | None = None,
     ) -> LogResult[dict[str, float | None]]:
         """Return the semiconductor operating points of a log or one experiment
         case, by device and parameter: ``ops["m1"]["gm"]``, with what the read
@@ -1240,27 +1247,29 @@ class ApiMethodsMixin(ABC):
         by its path (``ops["xa.xin.mtail"]``), whichever build named it in the
         table. Empty when the log has no such table, as an ngspice log never
         does: ngspice's are traces of its raw, read with
-        ``load_raw(...).value("@m1[gm]")``.
+        ``load_raw(...).value("@m1[gm]")``. ``log_path`` is the older
+        spelling of ``path``, still accepted.
         """
+        path = _older_spelling(path, log_path=log_path)
         return device_op_points_of(
-            *self._log_section("device_op", log_path, job_id, run_index, case_id)
+            *self._log_section("device_op", path, job_id, run_index, case_id)
         )
 
     def _log_section(
         self,
         name: LogSectionName,
-        log_path: str | Path | None,
+        path: str | Path | None,
         job_id: str | None,
         run_index: int,
         case_id: str | None,
     ) -> tuple[Any, tuple[dict[str, Any], ...]]:
         self._check_process_and_thread()
-        _one_source("log_path", log_path, job_id, run_index, case_id)
+        _one_source(path, job_id, run_index, case_id)
         return self._marshal(
             load_log_section(
                 name,
                 state=self._state,
-                log_path=log_path,
+                log_path=path,
                 job_id=job_id,
                 run_index=run_index,
                 case_id=case_id,
@@ -1270,8 +1279,20 @@ class ApiMethodsMixin(ABC):
         )
 
 
+_PathArg = TypeVar("_PathArg", bound="str | os.PathLike[str] | None")
+
+
+def _older_spelling(path: _PathArg, **older: _PathArg) -> _PathArg:
+    """``path``, or the one older keyword given in its place; both is refused."""
+    ((name, value),) = older.items()
+    if value is None:
+        return path
+    if path is not None:
+        raise TypeError(f"Give path or {name}, not both")
+    return value
+
+
 def _one_source(
-    path_name: str,
     path: object,
     job_id: str | None,
     run_index: int,
@@ -1282,7 +1303,7 @@ def _one_source(
     """Refuse a read that names both or neither of a file and a job, or a case
     selector without a job."""
     if (path is None) == (job_id is None):
-        raise TypeError(f"Pass exactly one of {path_name} or job_id")
+        raise TypeError("Pass exactly one of path or job_id")
     if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
         raise TypeError("run_index, case_id and other_raw are only valid with job_id")
 

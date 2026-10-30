@@ -18,7 +18,7 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
   cases run in parallel.
 - Use `run_experiments` for LTspice, for sweeps, corners and Monte Carlo, and
   for jobs that outlive a call. You may also make a quick one-off ngspice run
-  yourself and read its raw with `analyze_results` (a `raw_path` source) or
+  yourself and read its raw with `analyze_results` (a `path` source) or
   `api.load_raw(path)`.
 - Check a new deck with `verify_circuit` and `checks: ["syntax"]` before a
   sweep.

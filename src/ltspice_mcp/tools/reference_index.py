@@ -571,7 +571,7 @@ def _sources() -> tuple[_Source, ...]:
         _Source(
             tool="edit_schematic",
             family="op",
-            call='edit_schematic(target="sheet.asc", ops=[{{"op": "{name}", ...}}])',
+            call='edit_schematic(path="sheet.asc", ops=[{{"op": "{name}", ...}}])',
             branches=_union_branches(SchematicOp, "op"),
             discriminator="op",
         ),
@@ -892,6 +892,14 @@ def table_of_contents(tools: frozenset[str] | None = None) -> list[dict[str, Any
 
 _REFERENCE_DESCRIPTION_CHARS = 160
 
+#: Arguments a tool renamed, by tool and old name: a call that still sends
+#: one is told the name that replaced it.
+RENAMED_ARGUMENTS: dict[str, dict[str, str]] = {
+    "plot_waveform": {"raw_file": "path"},
+    "analyze_results": {"raw_path": "path", "log_path": "path"},
+    "edit_schematic": {"target": "path"},
+}
+
 
 def validation_error_detail(
     tool: str,
@@ -911,6 +919,7 @@ def validation_error_detail(
         exc,
         field_owners=field_owners,
         nested=None if field_owners is None else _nested_fields(tool),
+        renamed=RENAMED_ARGUMENTS.get(tool),
     )
     if not isinstance(exc, ValidationError):
         return detail

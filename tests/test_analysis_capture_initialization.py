@@ -53,7 +53,7 @@ async def test_console_mutation_cannot_rebind_relay_to_new_manifest(
     response = await analyze.handle_analyze_results(
         analyze.AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"log_path": str(raw.with_suffix(".log")), "label": "log"}],
+                "sources": [{"path": str(raw.with_suffix(".log")), "label": "log"}],
                 "recipes": [{"metric": "measurements", "key": "meas"}],
                 "include": {"provenance": True},
             }
@@ -88,7 +88,7 @@ async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
     raw.unlink()
     request = analyze.AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"log_path": str(raw.with_suffix(".log")), "label": "log"}],
+            "sources": [{"path": str(raw.with_suffix(".log")), "label": "log"}],
             "recipes": [{"metric": "measurements", "key": "meas"}],
             "include": {"per_run": True},
         }
@@ -147,7 +147,7 @@ async def test_optional_signal_inventory_does_not_start_after_call_budget(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     request = analyze.AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"raw_path": str(raw), "label": "log"}],
+            "sources": [{"path": str(raw), "label": "log"}],
             "recipes": [{"metric": "measurements", "key": "meas"}],
             "include": {"signals_available": True, "per_run": True},
         }

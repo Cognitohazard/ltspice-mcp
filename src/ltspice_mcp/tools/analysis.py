@@ -112,7 +112,7 @@ from ltspice_mcp.tools._schema import schema_from_typeddict
 
 
 def _direct_source(
-    raw_file: str | None,
+    path: str | None,
     job_id: str | None,
     state: SessionState,
     *,
@@ -121,30 +121,30 @@ def _direct_source(
 ) -> services.AnalysisSource:
     """The source a direct call names, refusing an ambiguous or empty pair.
 
-    A user-supplied ``raw_file`` is untrusted input → validated via
-    ``safe_path``. Truthiness, not identity: an empty/whitespace raw_file
+    A user-supplied ``path`` is untrusted input → validated via
+    ``safe_path``. Truthiness, not identity: an empty/whitespace path
     (StrictModel strips to "") must count as absent, else it slips past and
     safe_path("") resolves to the working dir → a confusing "not a valid .raw"
     error downstream.
     """
-    if bool(raw_file) == bool(job_id):
+    if bool(path) == bool(job_id):
         # Complete redirect, so no generic hint: the analysis tools read an
         # existing result — a caller holding only a netlist runs it first.
         raise ResultError(
-            "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
+            "Pass exactly one of 'path' or 'job_id'. Analysis tools read "
             "an existing result — if you only have a netlist, run_experiments "
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
-    # Only ``raw_file`` is forwarded: an experiment's runs are case-addressed,
+    # Only ``path`` is forwarded: an experiment's runs are case-addressed,
     # so ``_experiment_case`` has already answered every call that named a job.
     return services.resolve_analysis_source(
-        state, raw_file=raw_file, plot_index=plot_index, dialect=dialect
+        state, raw_file=path, plot_index=plot_index, dialect=dialect
     )
 
 
 async def _experiment_case(
-    raw_file: str | None,
+    path: str | None,
     job_id: str | None,
     run_index: int,
     case_id: str | None,
@@ -156,10 +156,10 @@ async def _experiment_case(
 
     Experiment runs are addressed by case, never through ``resolve_run`` — the
     same split ``Api.load_raw`` makes. ``case_id`` and ``other_raw`` only mean
-    something here, so they are refused beside a raw_file. raw_file together with job_id is left to
-    ``_direct_source``'s exclusivity error.
+    something here, so they are refused beside a path. A path together with
+    job_id is left to ``_direct_source``'s exclusivity error.
     """
-    job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
+    job = await services.resolve_job_async(job_id, state) if job_id and not path else None
     if job is not None:
         return services.experiment_run_context(
             job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
@@ -974,15 +974,15 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
 
 
 class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
-    raw_file: str | None = Field(
+    path: str | None = Field(
         default=None,
-        description="Path to .raw result file. Pass this or job_id (a job run), not both.",
+        description="Path to a .raw result file. Pass this or job_id (a job run), not both.",
     )
     job_id: str | None = Field(
         default=None,
         min_length=1,
         description=(
-            "Plot one run of a finished job instead of a raw_file path; pick "
+            "Plot one run of a finished job instead of a path; pick "
             "the run with run_index (or case_id for an experiment)."
         ),
     )
@@ -1458,7 +1458,7 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
 )
 async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     case = await _experiment_case(
-        args.raw_file, args.job_id, args.run_index, args.case_id, state, other_raw=args.other_raw
+        args.path, args.job_id, args.run_index, args.case_id, state, other_raw=args.other_raw
     )
     if case is not None:
         source = services.source_for_run(
@@ -1468,7 +1468,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         netlist: Path | None = case.netlist
     else:
         source = _direct_source(
-            args.raw_file,
+            args.path,
             args.job_id,
             state,
             plot_index=args.plot_index or 0,

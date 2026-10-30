@@ -412,7 +412,7 @@ preview mode, and the only way to get paging identical to the MCP tools'.
 ## 8. Result primitives
 
 ```python
-raw = api.load_raw(raw_path=..., plot_index=0, dialect=None)  # XOR: raw_path | job_id
+raw = api.load_raw(path, plot_index=0, dialect=None)  # XOR: path | job_id
 raw = api.load_raw(job_id=..., run_index=0, case_id=None, other_raw=None)  # "fra_1" | "op"
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
@@ -425,7 +425,7 @@ raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differen
 raw.analysis_type; raw.dialect; raw.source          # provenance
 raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform
 api.measurements(job_id=..., run_index=0, case_id=None)
-api.measurements(log_path="result.log")  # XOR: log_path | job_id; RAW is optional
+api.measurements("result.log")  # XOR: path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
 ops.observations               # a log reader's dict (LogResult) says the same of its log
 ```
@@ -505,7 +505,7 @@ facts = api.inspect(queries=[{
     "kind": "results", "view": "native_tables", "path": "result.log",
 }])
 measured = api.analyze_results(
-    sources=[{"log_path": "result.log", "label": "imported"}],
+    sources=[{"path": "result.log", "label": "imported"}],
     recipes=[{"metric": "measurements", "key": "meas"}],
 )
 ```
@@ -535,12 +535,14 @@ number for is counted rather than skipped. Its reduced rows include
 and `fail_count` and is `"indeterminate"` unless `allow_incomplete` is set.
 The API returns the same dict as the MCP result.
 
-A `log_path` source reads only the log; a `.raw` beside it is not read, even
-when one exists. Log views take no `plot_index`. In analysis, including
-attached analysis, an omitted plot selector selects plot zero; this applies
-only to RAW recipes. Whole-log
-measurements run once per source and reject `step`/`all_steps`; RAW recipes in
-the same batch can still use those selectors. A malformed or missing RAW fails
+A source whose `path` is a `.log` reads only the log; a `.raw` beside it is
+not read, even when one exists. Log views take no `plot_index`. In analysis,
+including attached analysis, an omitted plot selector selects plot zero; this
+applies only to RAW recipes. Whole-log measurements give statistics over every
+step, or with `step` or `all_steps` each step's row with its `step_values`.
+`load_raw` takes the older spelling `raw_path`, and `measurements` and
+`device_op_points` the older `log_path`, in place of `path`; giving both is
+refused. A malformed or missing RAW fails
 only the RAW recipes. A result set's manifest records, for each source,
 whether its RAW, log and console files existed and a hash of each one's
 content, so an empty file is distinguishable from a missing one. A new call

@@ -406,7 +406,7 @@ async def test_analyze_source_refusal_is_path_denied_with_the_guidance(
     result = await handle_analyze_results(
         AnalyzeResultsInput.model_validate(
             {
-                "sources": [{"raw_path": str(box.deck.with_suffix(".raw")), "label": "out"}],
+                "sources": [{"path": str(box.deck.with_suffix(".raw")), "label": "out"}],
                 "recipes": [{"key": "s", "metric": "summary"}],
             }
         ),
@@ -485,7 +485,7 @@ def test_an_explicit_api_sandbox_outranks_a_config_file_written_later(tmp_path: 
 
 def _refusal_note(api: Api, raw: Path) -> str:
     with pytest.raises(PathSecurityError) as refused:
-        api.load_raw(raw_path=raw)
+        api.load_raw(path=raw)
     return "\n".join(getattr(refused.value, "__notes__", []))
 
 
