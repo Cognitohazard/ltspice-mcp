@@ -66,6 +66,18 @@ sheet in LTspice and you show the run again. A netlist's run has no sheet to
 tie to and opens as a separate plot; it is also closed and reopened if it was
 already open.
 
+A run's results stay in the job's folder, which LTspice never looks in, so a
+sheet's run leaves nothing beside the sheet; its receipt says so
+(`results_not_beside_sheet`). When the user wants a run as the sheet's own
+results, to open it in LTspice themselves, `jobs(action="place_beside_sheet",
+job_id=..., case_id=...)` copies that case's results beside the sheet under
+its name, replacing any there, without opening anything. It refuses a case
+whose sheet has changed since the run, since the results would not match it.
+A case with variations shows values the sheet does not; the reply's
+`assignments` lists them, so tell the user. A plot with no sampled axis (a
+stepped `.op`, say) has no chart, and `plot_waveform(..., in_ltspice=true)`
+still puts it beside the sheet and opens it there, with no traces named.
+
 LTspice ships its own MCP server, which a session may have beside this one
 (its tools include `set_design_content` and `start_simulation`). It acts on
 the copy in the LTspice window instead of the file. Make edits with

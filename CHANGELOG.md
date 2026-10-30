@@ -18,6 +18,15 @@ tool-surface changes.
   reported as a wire LTspice leaves out (`dropped_wire`) by `verify_circuit`
   and `edit_schematic`, and `inspect(kind="net")` warned the same. LTspice
   keeps that wire (recorded: `connectivity/same_instance_waypoint_on_wire`).
+- `plot_waveform(in_ltspice=true)` refused a plot with no sampled axis (a
+  stepped `.op` or `.tf`, or a stepped `.ac` or `.noise` at one frequency,
+  which hold one point a step), so no call could put such a run of a sheet
+  beside the sheet for LTspice to open. It now opens one in LTspice without
+  a chart, from its sheet when it ran one, names no traces for it and says
+  so in a `no_chart` observation. Without `in_ltspice` the refusal is now
+  `no_axis`, says what the plot holds (one point a step, and the stepped
+  parameter it starts with) and where its values are read, and no longer
+  appends the generic hint to check that the run finished.
 - An empty `job_id` was taken as absent where a call's sources were counted
   and as given where a case selection was checked. Beside a `raw_path` in
   `analyze_results`, `other_raw` passed unchecked, where a source with no
@@ -140,6 +149,18 @@ tool-surface changes.
 
 ### Added
 
+- `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
+  finished case's results beside the `.asc` it ran, under the sheet's name,
+  where LTspice keeps a sheet's own results and opens them from: the raw, the
+  log and each other raw the run wrote. The reply lists each file copied and
+  whether it replaced one, and the case's `assignments`, which the sheet does
+  not show. A netlist's run, another simulator's run, a case with no results
+  and a sheet changed since the run are refused. The job keeps its
+  own copy, and the sheet's `.plt` is left as it is.
+- A receipt of a job that ran a sheet in LTspice has a
+  `results_not_beside_sheet` observation: the results are in the job's
+  folder, where LTspice's window does not look, and
+  `jobs(action="place_beside_sheet")` puts a case's beside the sheet.
 - The `measurements` recipe reads a stepped run's `.meas` results a step at a
   time, where it refused `step` and `all_steps` and gave only statistics over
   every step. With `all_steps` it returns one row per step, and with `step`
