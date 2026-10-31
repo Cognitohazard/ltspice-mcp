@@ -385,6 +385,11 @@ class _Index:
         ]
         #: Every point a wire ends at.
         self.wire_ends = {end for wire in self.wires for end in wire}
+        #: The labels', comments' and directives' text, each with what its
+        #: glyphs surely cover.
+        self.sheet_texts = [
+            ((x, y), text, _core(extent)) for x, y, text, extent in view.text_extents
+        ]
 
 
 def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
@@ -995,7 +1000,7 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     texts: list[tuple[Part | None, Point, str, BBox]] = [
         (part, at, text, core) for _index, part, at, text, core in drawn
     ]
-    texts += [(None, (x, y), text, _core(extent)) for x, y, text, extent in ix.view.text_extents]
+    texts += [(None, at, text, core) for at, text, core in ix.sheet_texts]
     found: list[Finding] = []
     for n, (index, part, at, text, core) in enumerate(drawn):
         # What the text is drawn across: words for it, the parts and the
@@ -1056,12 +1061,6 @@ def _attribute_of(part: Part, text: str) -> str:
 def _sheet_texts_across_each_other(ix: _Index) -> list[Finding]:
     # Text at one anchor is stacked_directive's to say (or, for labels, the
     # net rules'), so only texts placed at different points are compared.
-    # Sorted by place, so a pair is said one way whatever order the file keeps
-    # its records in: an edit re-saves them in spicelib's order.
-    texts = sorted(
-        (((x, y), text, _core(extent)) for x, y, text, extent in ix.view.text_extents),
-        key=lambda placed: placed[:2],
-    )
     return [
         Finding(
             "sheet_text_overlap",
@@ -1070,8 +1069,9 @@ def _sheet_texts_across_each_other(ix: _Index) -> list[Finding]:
             points=(at, other_at),
             facts={"text": text, "other_text": other},
         )
-        for n, (at, text, core) in enumerate(texts)
-        for other_at, other, other_core in texts[n + 1 :]
+        for (at, text, core), (other_at, other, other_core) in itertools.combinations(
+            ix.sheet_texts, 2
+        )
         if other_at != at and other_core.overlaps(core)
     ]
 

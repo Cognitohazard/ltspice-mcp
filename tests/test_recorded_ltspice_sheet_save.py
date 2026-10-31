@@ -90,16 +90,16 @@ class TestWhatASaveChanges:
     def test_text_on_its_side_stays_on_its_side(self, build: str, tmp_path: Path):
         """As the schematic editor the server edits with writes it too, though
         its reader takes such text for upright (docs/spicelib_bugs.md)."""
-        theirs = [
-            line for line in saved(build, "save/shuffled").splitlines() if line[:5] == b"TEXT "
-        ]
-        assert b"TEXT 16 16 VRight 3 !.op" in theirs
         sheet = tmp_path / "shuffled.asc"
         sheet.write_bytes(given("save/shuffled"))
         written = io.StringIO()
         make_editor(sheet).save_netlist(written)
-        ours = [line for line in written.getvalue().splitlines() if line.startswith("TEXT ")]
-        assert [line.encode() for line in ours] == theirs
+        theirs, ours = (
+            [line for line in data.splitlines() if line.startswith(b"TEXT ")]
+            for data in (saved(build, "save/shuffled"), written.getvalue().encode())
+        )
+        assert b"TEXT 16 16 VRight 3 !.op" in theirs
+        assert ours == theirs
 
     def test_a_crlf_sheet_comes_back_as_the_lf_one(self, build: str):
         assert b"\r\n" in given("save/crlf")

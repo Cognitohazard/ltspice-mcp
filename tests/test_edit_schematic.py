@@ -2527,28 +2527,6 @@ class TestDataFlagPreservation:
         assert b"DATAFLAG" not in path.read_bytes()
 
 
-async def test_an_edit_keeps_turned_text_turned(state_no_sim, work_dir):
-    """A comment or directive drawn on its side stays on its side, though
-    spicelib's reader drops the turn (docs/spicelib_bugs.md). LTspice keeps it
-    on saving (recorded as ``save/shuffled``)."""
-    turned = [
-        "TEXT 0 64 VRight 3 !.op",
-        "TEXT 0 128 VLeft 2 ;a note",
-        "TEXT 0 192 VTop 2 ;on top",
-        "TEXT 0 256 Left 2 ;upright",
-    ]
-    path = work_dir / "turned.asc"
-    path.write_text(
-        "Version 4\nSHEET 1 880 680\nWIRE 0 0 160 0\n" + "\n".join(turned) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    data = await _commit(state_no_sim, path)
-    assert data["commit_state"] == "committed"
-    written = path.read_text(encoding="utf-8").splitlines()
-    assert [line for line in written if line.startswith("TEXT ")] == turned
-
-
 @pytest.mark.usefixtures("isolated_spicelib_symbol_cache")
 class TestRecordTheEditorCannotRead:
     """A sheet holding a record spicelib's reader has no branch for is refused

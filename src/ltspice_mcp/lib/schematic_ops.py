@@ -56,7 +56,7 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
-from spicelib.editor.ltspice_utils import TEXT_REGEX
+from spicelib.editor.ltspice_utils import TEXT_REGEX, asc_text_align_set
 from spicelib.utils.detect_encoding import EncodingDetectError
 from spicelib.utils.file_search import search_file_in_containers
 
@@ -1053,16 +1053,16 @@ class _AscEditor(AscEditor):
         super().reset_netlist(create_blank)
         # spicelib keeps a text for each TEXT line its pattern matches, in
         # order, but its pattern leaves the V of VLeft, VRight and the rest out
-        # of the justification it reads, so every one is read upright.
+        # of the justification it reads, so every one is read upright. Each is
+        # given its whole justification again.
         with open(self.asc_file_path, encoding=self.encoding) as asc_file:
-            on_its_side = [
-                line.split()[3].upper().startswith("V")
+            justifications = [
+                line.split()[3]
                 for line in asc_file
                 if line.startswith("TEXT") and TEXT_REGEX.match(line)
             ]
-        for text, turned in zip(self.directives, on_its_side, strict=True):
-            if turned:
-                text.angle = ERotation.R90
+        for text, justification in zip(self.directives, justifications, strict=True):
+            asc_text_align_set(text, justification)
 
     def _get_subcircuit(self, symbol: Any) -> Any:
         if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:

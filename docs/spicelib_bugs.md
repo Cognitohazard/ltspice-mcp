@@ -3476,7 +3476,7 @@ pins the workaround against both recordings.
 `TEXT_REGEX`; read by `AscEditor.reset_netlist`).
 **Our workaround:** `_AscEditor.reset_netlist` in `lib/schematic_ops.py`
 reads each `TEXT` line's justification again after spicelib's reader and
-turns the texts whose justification starts with `V`.
+gives it to `asc_text_align_set` whole.
 
 ### Summary
 
@@ -3552,7 +3552,7 @@ def test_text_on_its_side_is_saved_on_its_side(tmp_path):
 
 ### Cross-reference
 
-`tests/test_edit_schematic.py::test_an_edit_keeps_turned_text_turned` pins the
-workaround through an edit, and
 `tests/test_recorded_ltspice_sheet_save.py::TestWhatASaveChanges::test_text_on_its_side_stays_on_its_side`
-against both recordings.
+pins the workaround against both recordings, and
+`tests/test_sheet_findings_snapshot.py::test_an_edit_and_a_check_find_the_same_of_a_sheet`
+through an edit of the recorded sheet.

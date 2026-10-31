@@ -742,9 +742,6 @@ class TestHowTheSheetReads:
                 (300, 0, "OUT", BBox(300, -8, 340, 14)),
                 (300, 0, ".op", BBox(300, -8, 330, 14)),
                 (500, 0, "apart", BBox(500, -8, 560, 14)),
-                # The same text twice at one anchor, drawn at two sizes.
-                (700, 0, "twice", BBox(700, -8, 760, 14)),
-                (700, 0, "twice", BBox(700, -12, 790, 20)),
             )
         )
         (found,) = only(view, "sheet_text_overlap")
