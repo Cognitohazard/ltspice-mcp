@@ -496,7 +496,7 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[s
             results = result.get("results")
             if isinstance(results, dict):
                 analyze.fit_waveform_samples(
-                    data, results, rung.body_budget, list(results), _THINNED_ATTACHED_ROUTE
+                    data, results, rung, list(results), _THINNED_ATTACHED_ROUTE
                 )
     return emptied
 

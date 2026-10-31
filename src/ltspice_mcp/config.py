@@ -6,7 +6,7 @@ import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import tomlkit
 from tomlkit import comment, document, nl, table
@@ -16,10 +16,10 @@ from ltspice_mcp.lib import atomic_write_text
 logger = logging.getLogger(__name__)
 
 ToolListing = Literal["full", "compact"]
-VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact"})
+VALID_TOOL_LISTINGS: frozenset[str] = frozenset(get_args(ToolListing))
 
 TextChannel = Literal["summary", "json"]
-VALID_TEXT_CHANNELS: frozenset[str] = frozenset({"summary", "json"})
+VALID_TEXT_CHANNELS: frozenset[str] = frozenset(get_args(TextChannel))
 
 VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
@@ -96,16 +96,6 @@ def _validated_choice(value: object, valid: frozenset[str], what: str, source: s
         ", ".join(sorted(valid)),
     )
     return None
-
-
-def _validated_listing(value: object, source: str) -> str | None:
-    """Return value if it names a tool-listing mode, else warn and return None."""
-    return _validated_choice(value, VALID_TOOL_LISTINGS, "tool listing", source)
-
-
-def _validated_text_channel(value: object, source: str) -> str | None:
-    """Return value if it names a text-channel mode, else warn and return None."""
-    return _validated_choice(value, VALID_TEXT_CHANNELS, "text channel", source)
 
 
 def _validated_string_list(
@@ -233,12 +223,13 @@ def _toml_log_level(value: Any) -> Any:
     return _SKIP
 
 
-def _toml_tool_listing(value: Any) -> Any:
-    return _validated_listing(value, "config") or _SKIP
+def _toml_choice(valid: frozenset[str], what: str) -> Callable[[Any], Any]:
+    """A TOML reader for one key that takes one of ``valid``."""
 
+    def read(value: Any) -> Any:
+        return _validated_choice(value, valid, what, "config") or _SKIP
 
-def _toml_text_channel(value: Any) -> Any:
-    return _validated_text_channel(value, "config") or _SKIP
+    return read
 
 
 def _toml_bool(name: str) -> Callable[[Any], Any]:
@@ -307,12 +298,13 @@ def _env_log_level(value: str) -> Any:
     return _SKIP
 
 
-def _env_tool_listing(value: str) -> Any:
-    return _validated_listing(value.strip(), "LTSPICE_MCP_TOOL_LISTING") or _SKIP
+def _env_choice(valid: frozenset[str], what: str, name: str) -> Callable[[str], Any]:
+    """An environment reader for one variable that takes one of ``valid``."""
 
+    def read(value: str) -> Any:
+        return _validated_choice(value.strip(), valid, what, name) or _SKIP
 
-def _env_text_channel(value: str) -> Any:
-    return _validated_text_channel(value.strip(), "LTSPICE_MCP_TEXT_CHANNEL") or _SKIP
+    return read
 
 
 def _env_bool(name: str) -> Callable[[str], Any]:
@@ -567,17 +559,17 @@ _SETTINGS: tuple[_Setting, ...] = (
         field="tool_listing",
         section="tools",
         key="listing",
-        from_toml=_toml_tool_listing,
+        from_toml=_toml_choice(VALID_TOOL_LISTINGS, "tool listing"),
         env="LTSPICE_MCP_TOOL_LISTING",
-        from_env=_env_tool_listing,
+        from_env=_env_choice(VALID_TOOL_LISTINGS, "tool listing", "LTSPICE_MCP_TOOL_LISTING"),
     ),
     _Setting(
         field="text_channel",
         section="tools",
         key="text_channel",
-        from_toml=_toml_text_channel,
+        from_toml=_toml_choice(VALID_TEXT_CHANNELS, "text channel"),
         env="LTSPICE_MCP_TEXT_CHANNEL",
-        from_env=_env_text_channel,
+        from_env=_env_choice(VALID_TEXT_CHANNELS, "text channel", "LTSPICE_MCP_TEXT_CHANNEL"),
     ),
     _Setting(
         field="run_code",

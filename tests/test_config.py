@@ -319,15 +319,6 @@ class TestTextChannel:
     def test_default_is_the_summary_line(self):
         assert ServerConfig().text_channel == "summary"
 
-    @pytest.mark.parametrize("mode", ["summary", "json"])
-    def test_from_toml_and_env(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: str):
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text(f'[tools]\ntext_channel = "{mode}"\n')
-        monkeypatch.delenv("LTSPICE_MCP_TEXT_CHANNEL", raising=False)
-        assert ServerConfig.load(toml_path).text_channel == mode
-        monkeypatch.setenv("LTSPICE_MCP_TEXT_CHANNEL", mode)
-        assert ServerConfig.load(work_dir / "nonexistent.toml").text_channel == mode
-
     def test_an_unknown_value_is_ignored_with_a_warning_naming_the_valid_ones(
         self, work_dir: Path, caplog: pytest.LogCaptureFixture
     ):

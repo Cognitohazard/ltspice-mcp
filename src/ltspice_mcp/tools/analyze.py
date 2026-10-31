@@ -43,7 +43,7 @@ from ltspice_mcp.lib import (
     services,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import PlotDescriptor
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -79,7 +79,7 @@ from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
 )
-from ltspice_mcp.lib.signal_analysis import downsample_minmax
+from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     NotedModel,
@@ -1758,32 +1758,61 @@ def _sample_list(samples: np.ndarray, *, single: bool) -> list[float]:
     return samples.astype(np.float32).astype(str).astype(np.float64).tolist()
 
 
-def _inline_series(
-    axis: np.ndarray, wave: np.ndarray, analysis: str, limit: int
-) -> tuple[list[float], dict[str, Any]]:
-    """Render resident samples, using AC magnitude/phase only for AC plots.
-
-    Returns the axis points and the components read at them. The points are
-    the axis's alone (decimation buckets the axis, never the trace), so every
-    trace of one plot returns the same ones.
-    """
+def _trace_components(wave: np.ndarray, analysis: str) -> dict[str, np.ndarray]:
+    """One trace's inline components, using AC magnitude/phase only for AC plots."""
     if not np.iscomplexobj(wave):
-        components = {"y": wave}
-    elif analysis in AC_SHAPED:
-        components = {
+        return {"y": wave}
+    if analysis in AC_SHAPED:
+        return {
             "magnitude_db": safe_magnitude_db(wave),
             "phase_deg": np.degrees(np.angle(wave)),
         }
-    else:
-        components = {"real": np.real(wave), "imag": np.imag(wave)}
+    return {"real": np.real(wave), "imag": np.imag(wave)}
+
+
+def _inline_waveform(
+    raw: DecodedRaw,
+    signals: list[services.Signal],
+    step: int,
+    start: str | None,
+    end: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    """The inline samples of ``signals`` at one step, at most ``limit`` points each.
+
+    Every trace is read on the same axis through the same window, and
+    decimation buckets the axis alone, so the axis is sent once beside the
+    series rather than in each.
+    """
+    axis = metrics.guarded_axis(raw, step)
+    lo, hi = 0, len(axis)
+    if start is not None or end is not None:
+        lo, hi = metrics.window_indices(
+            axis, metrics.parse_time(start, "start"), metrics.parse_time(end, "end")
+        )
+    axis = axis[lo:hi]
+    traces = [
+        (signal.name, _trace_components(signal.wave(raw, step)[lo:hi], raw.descriptor.analysis))
+        for signal in signals
+    ]
+    samples = [part for _name, parts in traces for part in parts.values()]
+    single = [part.dtype == np.float32 for part in samples]
     x = axis
-    values: dict[str, Any] = {}
-    for name, samples in components.items():
-        single = samples.dtype == np.float32
-        if len(axis) > limit:
-            x, samples = downsample_minmax(axis, samples, limit)
-        values[name] = _sample_list(samples, single=single)
-    return _sample_list(x, single=x.dtype == np.float32), values
+    if len(axis) > limit:
+        x, samples = downsample_minmax_traces(axis, samples, limit)
+    written = iter(
+        [_sample_list(part, single=flag) for part, flag in zip(samples, single, strict=True)]
+    )
+    return {
+        "format": "inline",
+        "x": _sample_list(x, single=x.dtype == np.float32),
+        "series": [
+            {"signal": name, **{component: next(written) for component in parts}}
+            for name, parts in traces
+        ],
+        "points_returned": len(x),
+        "points_total": len(axis),
+    }
 
 
 async def _waveform(
@@ -1807,33 +1836,21 @@ async def _waveform(
             raise ResultError(
                 "This plot has no sampled axis; use inspect results table or CSV export."
             )
-        values: list[dict[str, Any]] = []
-        x: list[float] = []
-        total_max = 0
-        point_limit = min(recipe.max_points, state.config.max_points_returned)
-        for signal_input in recipe.signals:
-            signal = services.resolve_signal(raw, signal_input)
-            axis = metrics.guarded_axis(raw, step)
-            wave = signal.wave(raw, step)
-            if start is not None or end is not None:
-                lo, hi = metrics.window_indices(
-                    axis,
-                    metrics.parse_time(start, "start"),
-                    metrics.parse_time(end, "end"),
-                )
-                axis, wave = axis[lo:hi], wave[lo:hi]
-            total_max = max(total_max, len(axis))
-            # Every trace is read on the same axis through the same window, so
-            # the axis is sent once beside the series rather than in each.
-            x, components = _inline_series(axis, wave, raw.descriptor.analysis, point_limit)
-            values.append({"signal": signal.name, **components})
+        signals = [services.resolve_signal(raw, requested) for requested in recipe.signals]
+        # Decimating and writing every sample is CPU work proportional to the
+        # points kept, so it runs off the event loop as the csv export does.
+        inline = await asyncio.to_thread(
+            _inline_waveform,
+            raw,
+            signals,
+            step,
+            start,
+            end,
+            min(recipe.max_points, state.config.max_points_returned),
+        )
         return (
             {
-                "format": "inline",
-                "x": x,
-                "series": values,
-                "points_returned": len(x),
-                "points_total": total_max,
+                **inline,
                 **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
                     _IDENTITY_KEYS
                 ),
@@ -3636,17 +3653,20 @@ def analysis_surfaces(data: dict[str, Any]) -> list[list[Any]]:
     attached analysis is shrunk by :func:`render_attached_analysis`'s
     ``row_limit`` instead, over the same surfaces.
     """
-    surfaces: list[list[Any]] = []
-    for entry in data["results"].values():
-        surfaces.append(entry.get("values", []))
-        surfaces.append(entry.get("groups", []))
-        per_run = entry.get("per_run")
-        if isinstance(per_run, dict):
-            surfaces.append(per_run["items"])
-        spec = entry.get("spec")
-        if isinstance(spec, dict):
-            surfaces.append(spec["fail_cases"]["items"])
+    surfaces = [rows for entry in data["results"].values() for rows in _entry_surfaces(entry)]
     surfaces.append(data["coverage"]["missing_cases"]["items"])
+    return surfaces
+
+
+def _entry_surfaces(entry: dict[str, Any]) -> list[list[Any]]:
+    """One recipe entry's row surfaces, as :func:`analysis_surfaces` counts them."""
+    surfaces: list[list[Any]] = [entry.get("values", []), entry.get("groups", [])]
+    per_run = entry.get("per_run")
+    if isinstance(per_run, dict):
+        surfaces.append(per_run["items"])
+    spec = entry.get("spec")
+    if isinstance(spec, dict):
+        surfaces.append(spec["fail_cases"]["items"])
     return surfaces
 
 
@@ -3693,12 +3713,9 @@ _THINNED_WARNING = (
 
 def _sample_rows(entry: dict[str, Any]) -> list[dict[str, Any]]:
     """The rows of one rendered waveform entry whose value carries inline samples."""
-    rows = list(entry.get("values") or [])
-    per_run = entry.get("per_run")
-    if isinstance(per_run, dict):
-        rows.extend(per_run.get("items") or [])
     return [
         row
+        for rows in _entry_surfaces(entry)
         for row in rows
         if isinstance(row, dict)
         and isinstance(value := row.get("value"), dict)
@@ -3709,35 +3726,50 @@ def _sample_rows(entry: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _thinned(value: dict[str, Any], limit: int) -> dict[str, Any]:
-    """``value``'s inline samples decimated again, to at most ``limit`` points.
+@dataclass(frozen=True)
+class _StoredSamples:
+    """One row's inline samples, read into arrays once for every limit a fit tries."""
 
-    Bucketing min/max pairs by their minimum and maximum keeps every extreme the
-    first decimation kept. The samples kept are ones the value already held, so
-    their written form does not change.
-    """
-    if len(value["x"]) <= limit:
-        return value
-    x = np.asarray(value["x"], dtype=float)
-    series = [
-        {
-            name: (
-                downsample_minmax(x, np.asarray(item, dtype=float), limit)[1].tolist()
+    value: dict[str, Any]
+    x: np.ndarray
+    #: Each series component that holds samples: series index, name, samples.
+    parts: tuple[tuple[int, str, np.ndarray], ...]
+
+    @classmethod
+    def of(cls, value: dict[str, Any]) -> _StoredSamples:
+        return cls(
+            value,
+            np.asarray(value["x"], dtype=float),
+            tuple(
+                (index, name, np.asarray(item, dtype=float))
+                for index, entry in enumerate(value["series"])
+                for name, item in entry.items()
                 if isinstance(item, list)
-                else item
-            )
-            for name, item in entry.items()
-        }
-        for entry in value["series"]
-    ]
-    kept = downsample_minmax(x, x, limit)[0]
-    return {**value, "x": kept.tolist(), "series": series, "points_returned": len(kept)}
+            ),
+        )
+
+    def at(self, limit: int) -> dict[str, Any]:
+        """The value decimated again, to at most ``limit`` points.
+
+        Bucketing min/max pairs by their minimum and maximum keeps every extreme
+        the first decimation kept. The samples kept are ones the value already
+        held, so their written form does not change.
+        """
+        if len(self.x) <= limit or not self.parts:
+            return self.value
+        kept, samples = downsample_minmax_traces(
+            self.x, [part for _index, _name, part in self.parts], limit
+        )
+        series = [dict(entry) for entry in self.value["series"]]
+        for (index, name, _part), thinned in zip(self.parts, samples, strict=True):
+            series[index][name] = thinned.tolist()
+        return {**self.value, "x": kept.tolist(), "series": series, "points_returned": len(kept)}
 
 
 def fit_waveform_samples(
     page: dict[str, Any],
     results: dict[str, Any],
-    body_budget: int,
+    rung: response_budget.Rung,
     keys: Iterable[str],
     route: str,
 ) -> None:
@@ -3747,57 +3779,71 @@ def fit_waveform_samples(
     envelope itself, or a receipt's attached analysis. The samples of an inline
     waveform are already a bounded min/max decimation, so drawing it with fewer
     buckets is presentation, and cuts no fact; ``points_total`` still counts
-    every sample. One point limit caps every series, at the largest that fits,
-    and never below :data:`THIN_FLOOR_POINTS`. A row's value is replaced, never
-    edited, because a rendered row shares its value with the record behind it.
-    Each recipe thinned says so in its warnings, with ``route`` to the rest.
+    every sample. One point limit caps every series, at the largest that fits
+    the rung's body budget, and never below :data:`THIN_FLOOR_POINTS`; the
+    search starts where :meth:`RowMeasure.affordable` prices it, each series
+    counted as a surface of points. A row's value is replaced, never edited,
+    because a rendered row shares its value with the record behind it. Each
+    recipe thinned says so in its warnings, with ``route`` to the rest.
     """
-    keys = tuple(keys)
-    targets = [
-        (key, row, row["value"])
-        for key in keys
-        if isinstance(entry := results.get(key), dict) and entry.get("metric") == "waveform"
-        for row in _sample_rows(entry)
-    ]
-    if not targets:
+    found: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for key in keys:
+        entry = results.get(key)
+        if (
+            isinstance(entry, dict)
+            and entry.get("metric") == "waveform"
+            and (rows := _sample_rows(entry))
+        ):
+            found.append((entry, rows))
+    if not found:
         return
     measured = response_budget.estimate_tokens(page)
-    if measured <= body_budget:
+    if measured <= rung.body_budget:
         return
-    costs = [
-        (len(value["x"]), response_budget.estimate_tokens([value["x"], value["series"]]))
-        for _key, _row, value in targets
+    held = [
+        (
+            entry,
+            list(entry.get("warnings", [])),
+            [(row, _StoredSamples.of(row["value"])) for row in rows],
+        )
+        for entry, rows in found
     ]
-    widest = max(count for count, _tokens in costs)
-    if widest <= THIN_FLOOR_POINTS:
+    stored = [samples for _entry, _warnings, rows in held for _row, samples in rows]
+    if max(len(samples.x) for samples in stored) <= THIN_FLOOR_POINTS:
         return
-    room = body_budget - (measured - sum(tokens for _count, tokens in costs))
-    keyed = {key: [(row, original) for at, row, original in targets if at == key] for key in keys}
-    warnings = {key: list(results[key].get("warnings", [])) for key, rows in keyed.items() if rows}
+    measure = response_budget.RowMeasure(
+        tuple(
+            (
+                len(samples.x),
+                response_budget.estimate_tokens([samples.value["x"], samples.value["series"]]),
+            )
+            for samples in stored
+        ),
+        page=measured,
+    )
 
-    def priced(limit: int) -> bool:
-        return sum(tokens * min(count, limit) / count for count, tokens in costs) <= room
+    @functools.cache
+    def thinned(limit: int) -> tuple[dict[str, Any], ...]:
+        return tuple(samples.at(limit) for samples in stored)
 
     def fits(limit: int) -> bool:
+        values = iter(thinned(limit))
         # The warning a thinned recipe carries is part of the page it fits.
-        for key, rows in keyed.items():
-            if not rows:
-                continue
-            for row, original in rows:
-                row["value"] = _thinned(original, limit)
-            entry = results[key]
-            entry["warnings"] = list(warnings[key])
-            if any(row["value"] is not original for row, original in rows):
+        for entry, warnings, rows in held:
+            entry["warnings"] = list(warnings)
+            for row, _samples in rows:
+                row["value"] = next(values)
+            if any(row["value"] is not samples.value for row, samples in rows):
                 entry["warnings"].append(
                     _THINNED_WARNING.format(
-                        shown=max(row["value"]["points_returned"] for row, _original in rows),
-                        total=max(original["points_total"] for _row, original in rows),
+                        shown=max(row["value"]["points_returned"] for row, _samples in rows),
+                        total=max(samples.value["points_total"] for _row, samples in rows),
                         route=route,
                     )
                 )
-        return response_budget.estimate_tokens(page) <= body_budget
+        return response_budget.estimate_tokens(page) <= rung.body_budget
 
-    start = response_budget.largest_fitting(widest, priced, floor=THIN_FLOOR_POINTS)
+    start = max(THIN_FLOOR_POINTS, measure.affordable(rung))
     fits(response_budget.largest_fitting(start, fits, floor=THIN_FLOOR_POINTS))
 
 
@@ -3830,8 +3876,7 @@ def _degrade_analysis(
     rung: response_budget.Rung,
     *,
     preserve_provenance: bool,
-    waveforms: frozenset[str] = frozenset(),
-    unsized: frozenset[str] = frozenset(),
+    unsized: frozenset[str],
 ) -> list[str]:
     """Apply the budget ladder's in-place trim rung to this envelope.
 
@@ -3842,9 +3887,9 @@ def _degrade_analysis(
 
     Then thins inline waveform samples until the page fits: below the answer
     rung only the ``unsized`` ones, whose point count is the server's default
-    rather than the caller's, and from the answer rung on every one of
-    ``waveforms``. Thinning a row's samples moves no cursor, so it can follow
-    assembly where shrinking a page cannot.
+    rather than the caller's, and from the answer rung on every one. Thinning a
+    row's samples moves no cursor, so it can follow assembly where shrinking a
+    page cannot.
     """
     if not rung.trim:
         return []
@@ -3855,14 +3900,11 @@ def _degrade_analysis(
     # ladder working as specified, not a second revocation.
     keep = preserve_provenance and not rung.answer_channel
     cut = trim_analysis(data, keep_provenance=keep)
+    results = data["results"]
     if rung.answer_channel:
-        fit_waveform_samples(
-            data, data["results"], rung.body_budget, waveforms, _THINNED_ROUTE_ANY
-        )
+        fit_waveform_samples(data, results, rung, list(results), _THINNED_ROUTE_ANY)
     else:
-        fit_waveform_samples(
-            data, data["results"], rung.body_budget, unsized, _THINNED_ROUTE_UNSIZED
-        )
+        fit_waveform_samples(data, results, rung, unsized, _THINNED_ROUTE_UNSIZED)
     return cut
 
 
@@ -3896,13 +3938,9 @@ async def _negotiate_analysis(
     base = _Limits.of(a.include)
     text = ""
     rendered: dict[str, Any] = {}
-    waveforms = frozenset(
-        unit.key for unit in a.processed if isinstance(unit.recipe, WaveformRecipe)
-    )
     degrade = functools.partial(
         _degrade_analysis,
         preserve_provenance=a.include.provenance,
-        waveforms=waveforms,
         # Rows projected by include.fields are the caller's own opt-in.
         unsized=(
             frozenset()

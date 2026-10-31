@@ -16,7 +16,6 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     ResultError,
@@ -56,6 +55,7 @@ from tests.conftest import (
     SyncApi,
     make_experiment_job,
     stage_recorded_fixture,
+    staged_raw_result,
 )
 from tests.test_measurement_aggregation import TCROSS_AT as SWEEP_TCROSS
 from tests.test_measurement_aggregation import VFINAL as SWEEP_VFINAL
@@ -1689,10 +1689,7 @@ async def test_inline_waveform_sends_its_axis_once_per_row(
     """Every trace of one plot is read at the same axis points, so a series
     carrying its own copy of them sent the axis once per signal: half of a
     two-signal reply was the same numbers twice."""
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    loaded = await load_raw_result(
-        state=state_no_sim, raw_path=raw, job_id=None, run_index=0, case_id=None
-    )
+    raw, loaded = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
     data = await _analyze(
         state_no_sim,
         raw,
@@ -1714,10 +1711,7 @@ async def test_inline_samples_of_a_float32_trace_are_written_in_float32_form(
     """LTspice stores a trace in 32 bits; widened to a double it printed as
     seventeen digits (0.9999544620513916) where nine say the same float
     (0.99995446). The short form reads back as the very same 32-bit value."""
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    loaded = await load_raw_result(
-        state=state_no_sim, raw_path=raw, job_id=None, run_index=0, case_id=None
-    )
+    raw, loaded = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
     trace = loaded.trace("V(out)")
     assert trace.dtype == np.float32, "the fixture's premise: a 32-bit trace"
     data = await _analyze(

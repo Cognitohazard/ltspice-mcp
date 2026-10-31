@@ -47,6 +47,7 @@ from tests.conftest import (
     stage_recorded_fixture,
     submit_experiment,
 )
+from tests.test_analyze_results import _analyze
 
 # Every rung-0 allowlist the package declares, paired with the schema node whose
 # keys it names. Listed rather than derived, because the pairing is the point:
@@ -852,17 +853,9 @@ async def _waveform_reply(
     state: SessionState, raw: Path, *, budget: int | None = None, **recipe: Any
 ) -> dict[str, Any]:
     """Five traces of one transient, inline, as one ``waveform`` recipe."""
-    payload: dict[str, Any] = {
-        "sources": [{"path": str(raw), "label": "dut"}],
-        "recipes": [{"key": "w", "metric": "waveform", "signals": _FIVE_TRACES, **recipe}],
-    }
-    if budget is not None:
-        payload["budget"] = budget
-    result = await handle_analyze_results(AnalyzeResultsInput.model_validate(payload), state)
-    data = result.structured_content
-    assert data is not None
-    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(data)
-    return data
+    extra = {} if budget is None else {"budget": budget}
+    recipes = [{"key": "w", "metric": "waveform", "signals": _FIVE_TRACES, **recipe}]
+    return await _analyze(state, raw, recipes, **extra)
 
 
 def _inline_values(entry: dict[str, Any]) -> list[dict[str, Any]]:
