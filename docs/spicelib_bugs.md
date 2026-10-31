@@ -3466,3 +3466,93 @@ def test_a_block_symbol_that_gives_a_prefix_has_no_sheet(tmp_path):
 
 `tests/test_recorded_ltspice_schematics.py::test_the_editor_opens_a_blocks_sheet_where_ltspice_reads_it`
 pins the workaround against both recordings.
+
+---
+
+## Bug 34 — `AscEditor` reads a comment or directive drawn on its side as upright, and saves it so
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-10-31.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/ltspice_utils.py`,
+`TEXT_REGEX`; read by `AscEditor.reset_netlist`).
+**Our workaround:** `_AscEditor.reset_netlist` in `lib/schematic_ops.py`
+reads each `TEXT` line's justification again after spicelib's reader and
+turns the texts whose justification starts with `V`.
+
+### Summary
+
+A `TEXT` line's justification is `Left`, `Right`, `Center`, `Top`, `Bottom`
+or `Invisible`, or one of those after a `V` for text drawn on its side
+(`VRight`). `TEXT_REGEX` matches the `V` outside its justification group:
+
+```python
+TEXT_REGEX = re.compile(
+    r"TEXT (-?\d+)\s+(-?\d+)\s+V?(Left|Right|Top|Bottom|Center|Invisible)\s(\d+)\s*(?P<type>[!;])(?P<text>.*)",
+    re.IGNORECASE
+)
+```
+
+so the justification `asc_text_align_set` receives never starts with `v`,
+and it sets every text's `angle` to `ERotation.R0`. `asc_text_align_get`
+writes the `V` back only for `ERotation.R90`, so saving the sheet writes
+`TEXT 16 16 Right 3 !.op` for `TEXT 16 16 VRight 3 !.op`. LTspice keeps the
+`V` when it saves the sheet (recorded on LTspice 26 and XVII:
+`save/shuffled`).
+
+### Affected code
+
+```python
+# asc_editor.py, AscEditor.reset_netlist
+alignment = match.group(TEXT_REGEX_ALIGN)
+text = Text(coord=coord, text=text.strip(), size=size, type=ttype)
+text = asc_text_align_set(text, alignment)
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+Path("turned.asc").write_text(
+    "Version 4\nSHEET 1 880 680\nTEXT 16 16 VRight 3 !.op\n"
+)
+editor = AscEditor("turned.asc")
+editor.directives[0].angle          # ERotation.R0, though the text is turned
+editor.save_netlist("turned.asc")
+Path("turned.asc").read_text()      # ... "TEXT 16 16 Right 3 !.op"
+```
+
+### Impact
+
+Saving a sheet after any edit turns each of its comments and directives drawn
+on its side upright, so a label of a vertical rail or a directive placed
+along a part's side is drawn across what is beside it.
+
+### Proposed fix
+
+Capture the `V` with the justification:
+
+```python
+r"TEXT (-?\d+)\s+(-?\d+)\s+(V?(?:Left|Right|Top|Bottom|Center|Invisible))\s(\d+)\s*(?P<type>[!;])(?P<text>.*)"
+```
+
+`asc_text_align_set` already handles `vleft`, `vright` and the rest.
+
+### Suggested upstream test
+
+```python
+def test_text_on_its_side_is_saved_on_its_side(tmp_path):
+    sheet = tmp_path / "turned.asc"
+    sheet.write_text("Version 4\nSHEET 1 880 680\nTEXT 16 16 VRight 3 !.op\n")
+    editor = AscEditor(sheet)
+    assert editor.directives[0].angle == ERotation.R90
+    editor.save_netlist(sheet)
+    assert "TEXT 16 16 VRight 3 !.op" in sheet.read_text().splitlines()
+```
+
+### Cross-reference
+
+`tests/test_edit_schematic.py::test_an_edit_keeps_turned_text_turned` pins the
+workaround through an edit, and
+`tests/test_recorded_ltspice_sheet_save.py::TestWhatASaveChanges::test_text_on_its_side_stays_on_its_side`
+against both recordings.

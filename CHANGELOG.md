@@ -158,12 +158,22 @@ tool-surface changes.
   the old name and the new one into the file, kept the part under the old
   name, and reported that the part had no name before. It now renames the
   part, and refuses a name that another part has in any case.
+- Every edit of a sheet turned its comments and directives drawn on their
+  side (`VLeft`, `VRight` and the like) upright, whatever the edit changed:
+  spicelib's reader drops the turn. `edit_schematic` now saves each as the
+  sheet drew it, as LTspice does when it saves a sheet (recorded:
+  `save/shuffled`).
 - The refusal for a missing `raster` extra named ways to install the server
   with the extra, none of which reaches a server run from a source checkout.
   It now also names `uv sync --extra raster` for that case.
 
 ### Added
 
+- The sheet rule `sheet_text_overlap` reports a comment, directive or net
+  label drawn across another, by the extent estimated from LTspice's font
+  that `attribute_text_overlap` uses. `verify_circuit` reports it under the
+  `layout` check, and `edit_schematic` with its other findings. Texts at one
+  anchor are left to `stacked_directive`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the

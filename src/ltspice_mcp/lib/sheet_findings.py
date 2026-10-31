@@ -214,6 +214,13 @@ _RULES = (
         check="layout",
     ),
     Rule(
+        "sheet_text_overlap",
+        "drawing",
+        "point",
+        "A comment, directive or net label drawn across another.",
+        check="layout",
+    ),
+    Rule(
         "label_over_component",
         "drawing",
         "part",
@@ -1045,6 +1052,30 @@ def _attribute_of(part: Part, text: str) -> str:
     return "InstName" if text == part.ref else "Value"
 
 
+@_finds("sheet_text_overlap")
+def _sheet_texts_across_each_other(ix: _Index) -> list[Finding]:
+    # Text at one anchor is stacked_directive's to say (or, for labels, the
+    # net rules'), so only texts placed at different points are compared.
+    # Sorted by place, so a pair is said one way whatever order the file keeps
+    # its records in: an edit re-saves them in spicelib's order.
+    texts = sorted(
+        (((x, y), text, _core(extent)) for x, y, text, extent in ix.view.text_extents),
+        key=lambda placed: placed[:2],
+    )
+    return [
+        Finding(
+            "sheet_text_overlap",
+            f"The text {text!r} at {_at(at)} is drawn across the text {other!r} at "
+            f"{_at(other_at)}",
+            points=(at, other_at),
+            facts={"text": text, "other_text": other},
+        )
+        for n, (at, text, core) in enumerate(texts)
+        for other_at, other, other_core in texts[n + 1 :]
+        if other_at != at and other_core.overlaps(core)
+    ]
+
+
 @_finds("label_over_component")
 def _labels_over_components(ix: _Index) -> list[Finding]:
     return [
@@ -1191,6 +1222,10 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       side, not in an empty corner of its body. Only the anchor is tested, so
       the later lines of a directive that runs down into a part are not
       reported.
+    - ``sheet_text_overlap``: a comment, directive or net label whose text,
+      laid out and estimated as for ``attribute_text_overlap``, shares an area
+      with another's by more than the estimate's slack. Texts at one anchor
+      are ``stacked_directive``'s.
     - ``stacked_directive``: two or more directives or comments at exactly one
       anchor, with no guess at how far text reaches.
     - ``label_island``: a net joined only by labels of one name, with no wire

@@ -1438,11 +1438,12 @@ glyphs. `attribute_text_overlap` reports text that a wire, a line another
 part draws or a ground flag passes through, or that lies over a rectangle or
 circle another part draws or over other text, by more than the estimate's
 slack. A ground flag is taken as the triangle the render draws, turned as
-LTspice turns it; its size is the render's and is not recorded. Comments,
-directives and labels are checked only where attribute text crosses them, and
-the layout check reports this limit in `observations`. No op moves a part's
-text apart from the part, so the remedy is to move the part or the item its
-text crosses. `wire_through_symbol` and `text_in_symbol_body` likewise test
+LTspice turns it; its size is the render's and is not recorded.
+`sheet_text_overlap` reports a comment, directive or net label drawn across
+another, by the same estimate and slack; texts at one anchor are
+`stacked_directive`'s. The layout check states in `observations` what its scan
+compares. No op moves a part's text apart from the part, so the remedy is to
+move the part or the item its text crosses. `wire_through_symbol` and `text_in_symbol_body` likewise test
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
