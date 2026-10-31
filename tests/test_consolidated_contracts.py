@@ -758,10 +758,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # 11,557.
     # Raised by about 95 characters for minLength on each query's path (six
     # queries take one): an empty path names no file. Measured 11,631.
+    # Raised by 6 characters for the capabilities key 'text_channel', so a
+    # caller can read which text block its replies carry. Measured 11,646.
     # Raised by about 40 characters for the capabilities report's
     # simulator_capabilities key (the capability table's view for the detected
-    # families) and the sentence in its description. Measured 11,679.
-    "inspect": 11680,
+    # families) and the sentence in its description. Measured 11,694.
+    "inspect": 11700,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

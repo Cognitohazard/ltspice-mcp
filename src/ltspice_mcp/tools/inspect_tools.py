@@ -534,6 +534,7 @@ CapabilityField: TypeAlias = Literal[
     "tool_profile",
     "python_api",
     "tool_listing",
+    "text_channel",
     "limits",
     "linter_version",
 ]
@@ -1230,6 +1231,8 @@ def _do_capabilities(
         # listing is compact, because the per-argument descriptions are then
         # not on the wire — and this is the only place that fact is readable.
         "tool_listing": state.config.tool_listing,
+        # What each reply's text block holds beside structuredContent.
+        "text_channel": state.config.text_channel,
         "limits": {
             "max_experiment_cases": state.config.max_experiment_cases,
             "analysis_budget_s": state.config.analysis_budget_s,
