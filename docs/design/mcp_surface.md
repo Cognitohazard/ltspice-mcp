@@ -72,6 +72,14 @@ any tool runs, with a JSON-RPC invalid-params error (`-32602`) whose message
 gives the requested name and lists the available tools. An unknown resource
 URI gets the same error.
 
+**Failures outside the envelope.** Arguments that fail validation are a tool
+result with `isError`, so the caller can correct the call, and its
+`structuredContent` is `{error, code: "invalid_arguments", hint}`, the hint
+naming the `inspect(kind="reference")` lookup for the tool's arguments. A
+failure a tool raises instead of reporting in its envelope is `{error, code,
+hint?, suggestions?}` with the failure's own code, or `internal_error` for an
+unclassified one; a `path_denied` refusal is `{error, code, hint}`.
+
 **Error codes.** `code` is a stable public name for a failure. It depends on
 the kind of failure and never on the message, except that a failure inside a
 named stage may report that stage's code. A result read that fails while a
@@ -83,6 +91,7 @@ Codes by kind of failure:
 | code | meaning |
 |-|-|
 | `path_denied` | a sandbox (`allowed_paths`) is set and the path resolves outside it, or the path cannot be resolved; a `hint` describes the change to make (for a sandbox, the config file and key that widen it), returned as an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal |
+| `invalid_arguments` | the call's arguments failed validation before the tool ran |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
 | `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
@@ -190,6 +199,17 @@ valid call. `inspect(kind: "capabilities")` reports the session's mode as
 `tool_listing`. Both listings are static; they are the same for every
 connection and no call changes them. The server accepts the same calls in both
 modes, and dispatch, validation and responses are identical.
+
+**Text channel.** `[tools] text_channel` (or `LTSPICE_MCP_TEXT_CHANNEL`) sets
+what a reply's text block holds beside its `structuredContent`. `summary`, the
+default, is a one-line summary, because a client that reads
+`structuredContent` shows the model that and drops the text, so the data is
+not sent twice. `json` replaces the text blocks with the serialized
+`structuredContent`, as the MCP specification recommends for a client that
+passes only the text to the model; such a client's model otherwise reads the
+summary alone. Image blocks stay, and a reply with no `structuredContent`
+keeps its text. `inspect(kind: "capabilities")` reports the mode as
+`text_channel`.
 
 Three recipes, `periodic`, `return_loss` and `noise_integral`, are published
 in both modes as only their `metric` value and a one-sentence description that
@@ -401,6 +421,20 @@ budget is rendered under the server default (`[analysis] default_budget`,
 default 4000), which applies only the trim rung. Trim never removes facts or
 caller opt-ins. An explicit budget replaces the default and may use all three
 rungs.
+
+From the trim rung on, a reply still over its budget has its inline
+`waveform` samples thinned until it fits. The samples are already a min/max
+decimation, so they are drawn again with fewer buckets, each keeping its
+minimum and maximum, under one point limit for every series and never below
+32 points; `points_total` still counts every sample, and the recipe's
+`warnings` say how far the series was thinned and where to read the rest.
+Below the answer rung only a waveform whose call sets no `max_points` is
+thinned, since a count the caller set is an opt-in, and rows projected by
+`include.fields` are not thinned; from the answer rung on every
+inline waveform is. A receipt thins its attached analysis's waveforms at
+every rung, whatever `max_points` the request set: its rows preview what
+`analyze_results` over the `job_id` returns. Thinning a row's samples moves
+no cursor.
 
 **Simulator choice.** `execution.simulator` names one of the four supported
 families, or a named executable of one (above); the schema's pattern accepts
@@ -710,7 +744,8 @@ trim -> answer -> shrink ladder described under the input above. The trim rung
 empties the attached analysis's `source_hashes` (one identity row per run);
 `source` stays, because it lists the includes that were read in place, not
 staged, or staged with a reason. The runs page and the attached analysis's
-row surfaces may be shrunk to fewer rows; fact channels, completeness,
+row surfaces may be shrunk to fewer rows, and its inline waveforms are
+thinned first (see the input above); fact channels, completeness,
 progress, verdicts, coverage and the ids, token and cursors a caller needs to
 continue are never cut. If the floor (the smallest
 response the ladder can produce) exceeds the budget, the floor is returned
@@ -728,7 +763,9 @@ depend on the number of cases. `jobs(runs)` and `jobs(list)` keep at least one
 row at their floor.
 
 The lean row flattens `value` to its scalar leaves and keeps any `artifact`
-handle, both in `analyze_results` and in a `run_experiments` receipt.
+handle, both in `analyze_results` and in a `run_experiments` receipt. A
+`waveform` value is kept whole, less the run identity its row already
+carries, and so is a `plot` value's scalar leaves.
 
 Receipt failure rows with the same `code` and message (numbers in the message
 ignored) are merged into one row. That row is the merged failure whose
@@ -868,8 +905,10 @@ A result set stores the request, each source's file hashes and the selected
 plot, so a continuation reads the same plot. Each row of a RAW recipe reports
 the `dialect` of the plot it read. Each `source_hashes` row reports the
 `dialect` the caller gave, or else the one the job recorded, which may be null
-because the row is made without decoding the raw. Both include `plot_index`
-and `snapshot_id`. `step_values` come from the `.step` lines of the run's own
+because the row is made without decoding the raw. Both include
+`plot_index`. A `source_hashes` row includes `snapshot_id`; a default result
+row leaves it, like `deck_sha256`, to `include.fields`, and its `source`
+label names the `source_hashes` row that has it. `step_values` come from the `.step` lines of the run's own
 log as read when the result set was created, string values included; no other
 log is read for them.
 
@@ -1008,7 +1047,13 @@ continuation replays them.
 - Full-resolution data is returned as artifact handles
   `{path, content_type, sha256, bytes}`. Inline waveform data is always
   decimated to at most `max_points`, with `points_returned` and
-  `points_total` reported.
+  `points_total` reported, and a budget may thin it further (§3.1, the
+  response budget). An inline value is `{format, x, series[{signal, y}],
+  points_returned, points_total}`: every trace of one plot is read at the
+  same points, so the axis is sent once, as `x`. An AC series has
+  `magnitude_db` and `phase_deg` for `y`, and another complex one `real` and
+  `imag`. A 32-bit trace's samples are written in their shortest 32-bit
+  form, which reads back as the same 32-bit value.
 
 Output: `outcome, coverage {runs_requested, runs_analyzed, missing_cases: Page},
 results {key -> {metric, units, reduced[], groups?, steps?, spec?,
@@ -1481,7 +1526,8 @@ cursors where listed:
     LTspice when no window is open); dialects; job persistence
     (`persist_jobs`); the sandbox (allowed_paths, null when none is set);
     `tool_profile`; the tool listing this session was served
-    (`tool_listing`); limits; linter_version; the startup diagnostics
+    (`tool_listing`) and what its replies' text blocks hold
+    (`text_channel`); limits; linter_version; the startup diagnostics
     (`diagnostics`), which show whether the server started degraded; and
     `render: {png, missing, reason, remedy}` (whether verify_circuit can
     make the PNG it inlines and, if not, whether the `raster` extra is
@@ -1863,7 +1909,7 @@ it, and reported when the caller names it.
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
 | `noise_integral` | noise | — | `signal?`, `from_hz?`, `to_hz?` |
 | `operating_point` | op | — | `device?` scopes the reply to one device, named by its path (`x1.m1`) on either LTspice build; `device_names` maps each device inside a subcircuit to its name in the log's table and in the raw |
-| `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared; `csv` returns an artifact handle |
+| `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared and the axis sent once as `x`; a budget may thin it further; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
 
 A `signal`, `signals` entry or `expr` names one trace as the raw stores it, or

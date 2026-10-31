@@ -1,6 +1,7 @@
 """Tests for server.py — error hints, asc editor configuration, and dispatch."""
 
 import io
+import json
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -21,7 +22,9 @@ from ltspice_mcp.errors import (
 )
 from ltspice_mcp.server import (
     CONSOLIDATED_INSTRUCTIONS,
+    GUIDE_REMINDER,
     _get_error_hint,
+    _invoke,
     build_instructions,
     call_tool,
     list_resources,
@@ -395,6 +398,53 @@ class TestServerDispatch:
         assert "[security] allowed_paths" in data["hint"]
         assert str(state_no_sim.config.config_path) in data["hint"]
 
+    async def test_invalid_arguments_carry_a_stable_code(self, state_no_sim: SessionState):
+        """An argument error was text alone, with no code to branch on, and a
+        branch name sent as an object read as pydantic's 'Input tag ... found
+        using ... does not match any of the expected tags'."""
+        result = await call_tool(
+            fake_request_context(state_no_sim),
+            call_tool_params("jobs", {"action": {"action": "status", "job_id": "j"}}),
+        )
+        assert result.is_error
+        data = result.structured_content
+        assert data is not None
+        assert data["code"] == "invalid_arguments"
+        assert data["error"] == tool_text(result)
+        assert "action: must be one of 'status', 'wait'" in data["error"]
+        assert "Input tag" not in data["error"]
+        assert '"kind": "reference"' in data["hint"] and '"query": "jobs"' in data["hint"]
+
+    async def test_a_tool_error_carries_its_code(self, state_no_sim: SessionState):
+        """A typed failure kept its code off the wire unless it also had
+        suggestions to send."""
+        result = await call_tool(
+            fake_request_context(state_no_sim),
+            call_tool_params("plot_waveform", {"path": "missing.raw"}),
+        )
+        assert result.is_error
+        data = result.structured_content
+        assert data is not None
+        assert data["code"] == "result_unreadable"
+        message, hint = tool_text(result).split("\n\n", 1)
+        assert data["error"] == message
+        # The first reply's guide reminder follows the hint.
+        assert data["hint"].startswith(hint)
+
+    async def test_an_unclassified_failure_carries_the_internal_error_code(
+        self, state_no_sim: SessionState
+    ):
+        async def boom(arguments: dict[str, Any], state: SessionState) -> Any:
+            raise KeyError("PinName")
+
+        registered = replace(state_no_sim.tool_dispatch["inspect"], handler=boom)
+        result = await _invoke(registered, "inspect", {}, state_no_sim)
+        assert result.is_error
+        assert result.structured_content == {
+            "error": "Internal error in inspect: KeyError: 'PinName'",
+            "code": "internal_error",
+        }
+
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         result = await call_tool(
             fake_request_context(state_no_sim),
@@ -464,6 +514,34 @@ class TestServerDispatch:
 
 def _capabilities_call() -> mcp_types.CallToolRequestParams:
     return call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]})
+
+
+@pytest.mark.asyncio
+async def test_the_json_text_channel_carries_the_structured_content(state_no_sim: SessionState):
+    """A client that passes a reply's text alone to the model read one summary
+    line, '[0] capabilities: ok', and none of the data. Under text_channel =
+    "json" the text block is the serialized structuredContent, as the MCP
+    specification recommends, and the first reply's guide reminder is in it."""
+    state_no_sim.config.text_channel = "json"
+    result = await call_tool(fake_request_context(state_no_sim), _capabilities_call())
+    assert not result.is_error
+    data = result.structured_content
+    assert data is not None
+    (block,) = result.content
+    assert isinstance(block, mcp_types.TextContent)
+    assert json.loads(block.text) == data
+    assert GUIDE_REMINDER in data["hint"]
+
+
+@pytest.mark.asyncio
+async def test_the_default_text_channel_is_the_summary_line(state_no_sim: SessionState):
+    result = await call_tool(fake_request_context(state_no_sim), _capabilities_call())
+    data = result.structured_content
+    assert data is not None
+    summary, reminder = result.content
+    assert isinstance(summary, mcp_types.TextContent)
+    assert summary.text == "[0] capabilities: ok"
+    assert isinstance(reminder, mcp_types.TextContent) and reminder.text == GUIDE_REMINDER
 
 
 @pytest.mark.asyncio

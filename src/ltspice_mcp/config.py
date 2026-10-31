@@ -6,7 +6,7 @@ import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import tomlkit
 from tomlkit import comment, document, nl, table
@@ -16,7 +16,10 @@ from ltspice_mcp.lib import atomic_write_text
 logger = logging.getLogger(__name__)
 
 ToolListing = Literal["full", "compact"]
-VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact"})
+VALID_TOOL_LISTINGS: frozenset[str] = frozenset(get_args(ToolListing))
+
+TextChannel = Literal["summary", "json"]
+VALID_TEXT_CHANNELS: frozenset[str] = frozenset(get_args(TextChannel))
 
 VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
@@ -81,15 +84,16 @@ def _load_bounded_env(
         config_dict[key] = val
 
 
-def _validated_listing(value: object, source: str) -> str | None:
-    """Return value if it names a tool-listing mode, else warn and return None."""
-    if isinstance(value, str) and value in VALID_TOOL_LISTINGS:
+def _validated_choice(value: object, valid: frozenset[str], what: str, source: str) -> str | None:
+    """Return value if it is one of ``valid``, else warn and return None."""
+    if isinstance(value, str) and value in valid:
         return value
     logger.warning(
-        "Unknown tool listing %r in %s; ignoring it. Valid values are %s",
+        "Unknown %s %r in %s; ignoring it. Valid values are %s",
+        what,
         value,
         source,
-        ", ".join(sorted(VALID_TOOL_LISTINGS)),
+        ", ".join(sorted(valid)),
     )
     return None
 
@@ -219,8 +223,13 @@ def _toml_log_level(value: Any) -> Any:
     return _SKIP
 
 
-def _toml_tool_listing(value: Any) -> Any:
-    return _validated_listing(value, "config") or _SKIP
+def _toml_choice(valid: frozenset[str], what: str) -> Callable[[Any], Any]:
+    """A TOML reader for one key that takes one of ``valid``."""
+
+    def read(value: Any) -> Any:
+        return _validated_choice(value, valid, what, "config") or _SKIP
+
+    return read
 
 
 def _toml_bool(name: str) -> Callable[[Any], Any]:
@@ -289,8 +298,13 @@ def _env_log_level(value: str) -> Any:
     return _SKIP
 
 
-def _env_tool_listing(value: str) -> Any:
-    return _validated_listing(value.strip(), "LTSPICE_MCP_TOOL_LISTING") or _SKIP
+def _env_choice(valid: frozenset[str], what: str, name: str) -> Callable[[str], Any]:
+    """An environment reader for one variable that takes one of ``valid``."""
+
+    def read(value: str) -> Any:
+        return _validated_choice(value.strip(), valid, what, name) or _SKIP
+
+    return read
 
 
 def _env_bool(name: str) -> Callable[[str], Any]:
@@ -545,9 +559,17 @@ _SETTINGS: tuple[_Setting, ...] = (
         field="tool_listing",
         section="tools",
         key="listing",
-        from_toml=_toml_tool_listing,
+        from_toml=_toml_choice(VALID_TOOL_LISTINGS, "tool listing"),
         env="LTSPICE_MCP_TOOL_LISTING",
-        from_env=_env_tool_listing,
+        from_env=_env_choice(VALID_TOOL_LISTINGS, "tool listing", "LTSPICE_MCP_TOOL_LISTING"),
+    ),
+    _Setting(
+        field="text_channel",
+        section="tools",
+        key="text_channel",
+        from_toml=_toml_choice(VALID_TEXT_CHANNELS, "text channel"),
+        env="LTSPICE_MCP_TEXT_CHANNEL",
+        from_env=_env_choice(VALID_TEXT_CHANNELS, "text channel", "LTSPICE_MCP_TEXT_CHANNEL"),
     ),
     _Setting(
         field="run_code",
@@ -779,6 +801,18 @@ class ServerConfig:
     the definitions exactly as registered, about 45% more to load per
     session. Both listings are static — the same for every connection, and
     unchanged by anything called on it — so a client may cache either one."""
+
+    text_channel: TextChannel = "summary"
+    """What a tool reply's text block holds beside its ``structuredContent``.
+
+    ``"summary"`` (the default) is a one-line summary: clients that read
+    ``structuredContent`` (Claude Code among them) show the model that and drop
+    the text, so the data is not sent twice. ``"json"`` puts the serialized
+    ``structuredContent`` in the text block instead, as the MCP specification
+    recommends for clients that pass only the text to the model; such a client
+    otherwise receives the summary alone. A reply with no ``structuredContent``
+    keeps its text either way, and image blocks are untouched.
+    ``[tools] text_channel`` or ``LTSPICE_MCP_TEXT_CHANNEL``."""
 
     run_code: bool = True
     """Advertise the ``run_code`` tool: a Python snippet run in a warm worker
@@ -1043,6 +1077,15 @@ def generate_default_config(path: Path) -> None:
     tools_tbl.add(comment('removed, read on demand through inspect(kind="reference"); "full"'))
     tools_tbl.add(comment("advertises them as registered. Both give the same capabilities."))
     _shown_default(tools_tbl, "tool_listing")
+    tools_tbl.add(
+        comment('What a reply\'s text block holds. "summary" (the default) is one line;')
+    )
+    tools_tbl.add(
+        comment("clients that read structuredContent, Claude Code among them, use that.")
+    )
+    tools_tbl.add(comment('"json" puts the structuredContent there too, for a client that passes'))
+    tools_tbl.add(comment("only the text to the model."))
+    _shown_default(tools_tbl, "text_channel")
     tools_tbl.add(comment("run_code = false removes the tool that runs a Python snippet with the"))
     tools_tbl.add(
         comment("Python API in scope (loops over runs, numpy on samples). The snippet has")

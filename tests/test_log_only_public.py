@@ -284,6 +284,8 @@ def test_raw_analysis_retains_decoded_dialect_without_import_hint(state_no_sim, 
     )
     row = reply["results"]["table"]["values"][0]
     assert row["plot_index"] == 1 and row["dialect"] == "ngspice"
-    assert row["snapshot_id"] == reply["source_hashes"][0]["snapshot_id"]
+    # The row reaches its snapshot through its source label.
+    assert row["source"] == reply["source_hashes"][0]["label"]
+    assert reply["source_hashes"][0]["snapshot_id"]
     # Capture-only manifest records caller/producer hints, not inferred evidence.
     assert reply["source_hashes"][0]["dialect"] is None

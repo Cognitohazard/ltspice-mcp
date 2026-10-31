@@ -2,8 +2,9 @@
 
 ``[tools] listing`` changes only how much of each definition a client is shown
 at ``tools/list``. Neither mode adds or removes a capability, both are static
-listings, and ``full`` — the default — must stay byte for byte what the
-registry produces, because every other contract test in the suite reads it.
+listings, and ``full`` (``get_tools``' own default; a session is served
+``compact`` unless configured) must stay byte for byte what the registry
+produces, because every other contract test in the suite reads it.
 """
 
 from __future__ import annotations
