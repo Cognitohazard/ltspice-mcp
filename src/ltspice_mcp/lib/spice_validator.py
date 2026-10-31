@@ -41,13 +41,6 @@ from ltspice_mcp.lib.spice_lex_views import (
 # match ``.meas <kind>`` against the active analysis and detect duplicates.
 # Note that ``.meas noise`` is not a valid form even though ``.noise`` is —
 # the meas-side set is intentionally narrower.
-#: The simulators whose dialect the checks below know, by display name: the
-#: ``simulator`` argument's values that select a simulator's own rules. Any
-#: other value gets the dialect-neutral checks only. The capability table
-#: (``capabilities``) declares ``validator_rules`` a gap for every other
-#: family, and a test holds the two to each other.
-VALIDATED_SIMULATORS: frozenset[str] = frozenset({"LTspice", "ngspice"})
-
 ANALYSIS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op", "noise"})
 MEAS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op"})
 # ``.op`` is a bias-point request, not a mutually-exclusive analysis: LTspice

@@ -138,6 +138,7 @@ from ltspice_mcp.lib import (
     simulator_docs,
 )
 from ltspice_mcp.lib import file_stamp as stamps
+from ltspice_mcp.lib import simulator as simulator_mod
 from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
@@ -153,7 +154,7 @@ from ltspice_mcp.lib.connectivity import (
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
     model_row,
@@ -179,7 +180,6 @@ from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     dialect_for_simulator_name,
     family_refusal,
-    platform_key,
     selector_pattern,
     simulator_family,
     simulator_library_roots,
@@ -659,7 +659,7 @@ class HierarchyQuery(StrictModel):
         min_length=1, description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first."
     )
     simulator: str = Field(
-        pattern=selector_pattern(("ltspice", "ngspice")),
+        pattern=selector_pattern(sorted(SUPPORTED_FAMILIES)),
         description=(
             "Offline semantic backend; installation is not required. 'ltspice:<name>' "
             "spells names for that named build."
@@ -1196,7 +1196,7 @@ def _do_capabilities(
         # unverified one or one this host rules out. The evidence behind each
         # entry is served by the resource the view names.
         "simulator_capabilities": capabilities.session_view(
-            platform_key(), state.available_simulators
+            simulator_mod.platform_key(), state.available_simulators
         ),
         # What went wrong at startup, verbatim: a configured simulator path
         # that does not exist, a requested engine that fell back to another,

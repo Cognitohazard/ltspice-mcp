@@ -3,7 +3,7 @@
 
 A family is the lowercase name a run selects (``execution.simulator``) and a
 record keeps (``simulator_family``); ``DISPLAY`` is how a person reads it.
-``HOSTS`` are the platforms ``simulator._platform_key`` tells apart.
+``HOSTS`` are the platforms ``simulator.platform_key`` tells apart.
 """
 
 from __future__ import annotations

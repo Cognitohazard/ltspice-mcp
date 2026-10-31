@@ -23,7 +23,7 @@ from ltspice_mcp.config import (
     ServerConfig,
 )
 from ltspice_mcp.lib import capabilities, hidden_desktop
-from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.families import FAMILIES
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
@@ -68,10 +68,6 @@ SIMULATORS: dict[str, type] = {
     "xyce": XyceSimulator,
 }
 
-#: How a person names each family, in messages and the server instructions
-#: (``families.DISPLAY``, kept here for its importers).
-SIMULATOR_DISPLAY: dict[str, str] = DISPLAY
-
 # Each family's spicelib base class: the detected class, except that LTspice's
 # platform subclass (LTspiceWSL) is widened to its base, so every LTspice class
 # belongs to the family.
@@ -111,7 +107,7 @@ def family_refusal(family: str | None) -> str | None:
     paths it cannot open. spicelib itself looks for QSPICE only on Windows and
     documents no Wine support for it.
     """
-    return capabilities.host_refusal(family, _platform_key())
+    return capabilities.host_refusal(family, platform_key())
 
 
 def asc_export_refusal(simulator_class: type | None) -> str | None:
@@ -131,7 +127,21 @@ def asc_export_refusal(simulator_class: type | None) -> str | None:
 #: The families a run can be put on (``run_experiments``' ``execution.simulator``),
 #: and so the families a named executable may belong to: every supported one.
 #: Whether this host can run a family is asked per run (``family_refusal``).
-_RUN_FAMILIES: tuple[str, ...] = tuple(SIMULATORS)
+_RUN_FAMILIES: tuple[str, ...] = FAMILIES
+
+#: The family a deck is read as when nothing names one: LTspice, the primary
+#: simulator. The one fallback, for lint and for ``verify_circuit``.
+DEFAULT_FAMILY = "ltspice"
+
+
+def family_for(dialect: str | None, simulator: type | str | None) -> str | None:
+    """The family a deck is linted and validated for, or None when nothing names
+    one. A raw dialect names its family for every simulator but LTspice, whose
+    dialect is also what a raw nothing names reads as, so a non-LTspice
+    dialect decides; otherwise the simulator class or recorded class name does."""
+    named_by_dialect = dialect if dialect in SIMULATORS and dialect != "ltspice" else None
+    return named_by_dialect or simulator_family(simulator)
+
 
 #: A named executable's own name: lower case, so a selector is spelled one way.
 _EXECUTABLE_NAME_PATTERN = r"[a-z0-9][a-z0-9._-]{0,31}"
@@ -641,16 +651,12 @@ def install_hint() -> str:
     return f"{install}, {configure}simulator executable"
 
 
-def _platform_key() -> str:
-    if is_wsl():
-        return "wsl"
-    return {"Windows": "windows", "Darwin": "darwin"}.get(platform.system(), "linux")
-
-
 def platform_key() -> str:
     """The host this server runs on, as the capability table names hosts:
     ``windows``, ``wsl``, ``linux`` or ``darwin`` (``families.HOSTS``)."""
-    return _platform_key()
+    if is_wsl():
+        return "wsl"
+    return {"Windows": "windows", "Darwin": "darwin"}.get(platform.system(), "linux")
 
 
 # Realistic executable locations per simulator and platform, shown as the
@@ -720,7 +726,7 @@ def simulator_remediation(name: str, config: ServerConfig) -> dict[str, object]:
         "excluded_by_allowlist": excluded,
         "action": action,
     }
-    example = _SIMULATOR_EXE_EXAMPLES.get(name, {}).get(_platform_key())
+    example = _SIMULATOR_EXE_EXAMPLES.get(name, {}).get(platform_key())
     if example is not None:
         remediation["example_value"] = example
     return remediation

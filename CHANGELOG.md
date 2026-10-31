@@ -30,7 +30,8 @@ tool-surface changes.
   QSPICE or Xyce session was told its deck broke rules LTspice has and those
   simulators do not. It now checks the deck with the dialect-neutral rules
   only for a family with no declared validator rules, and says so in an
-  observation.
+  observation; with no simulator detected it says the deck was checked as
+  LTspice reads it, instead of choosing LTspice silently.
 
 - Where two collinear wires met at a point that another wire passes through,
   the sheet checks merged the two into one wire and did not join the other

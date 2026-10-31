@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ltspice_mcp.lib import atomic_write_bytes, now
+from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
 from ltspice_mcp.lib.deck_staging import sha256_file, staged_card_reference_targets
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ExperimentCase, SourceRecord
@@ -516,10 +516,11 @@ def verify_case_inputs(
 #: verified on Linux (WSL included) and Windows. A family absent here has no
 #: policy. The capability table (``capabilities``) declares the same, and a
 #: test holds the two to each other.
-CONTROLLED_STARTUP_HOSTS: dict[str, frozenset[str]] = {
-    "ltspice": frozenset({"windows"}),
-    "ngspice": frozenset({"linux", "wsl", "windows"}),
-}
+def _startup_unavailable(family: str, host: str) -> bool:
+    """Whether the capability table declares no controlled startup for
+    ``family`` on ``host``."""
+    found = capabilities.entry(family, "controlled_startup")
+    return found is None or found.status == "gap" or found.unavailable_on(host) is not None
 
 
 def prepare_startup(
@@ -540,7 +541,7 @@ def prepare_startup(
         from ltspice_mcp.lib.controlled_ltspice import STARTUP_VERSION as LTSPICE_STARTUP_VERSION
         from ltspice_mcp.lib.controlled_ltspice import capture_ini_template
 
-        if host not in CONTROLLED_STARTUP_HOSTS["ltspice"]:
+        if _startup_unavailable("ltspice", host):
             raise RecoveryError(
                 "recovery_startup_unsupported",
                 "Controlled LTspice startup requires native Windows",
@@ -564,7 +565,7 @@ def prepare_startup(
         raise RecoveryError(
             "recovery_startup_unsupported", "Controlled spinit policy requires ngspice"
         )
-    if host not in CONTROLLED_STARTUP_HOSTS["ngspice"]:
+    if _startup_unavailable("ngspice", host):
         raise RecoveryError(
             "recovery_startup_unsupported",
             "Controlled system startup is not verified on this platform",

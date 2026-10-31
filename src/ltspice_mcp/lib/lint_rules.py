@@ -16,12 +16,8 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
-from ltspice_mcp.lib.simulator import (
-    SIMULATOR_DISPLAY,
-    SIMULATORS,
-    current_ngbehavior,
-    simulator_family,
-)
+from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family_for
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, MeasCard, read_instance
@@ -102,10 +98,6 @@ class _LintContext:
     # with the evidence; None when nothing shows one.
     cp1252_reader: str | None = None
 
-    @property
-    def ngspice(self) -> bool:
-        return self.family == "ngspice"
-
     @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
         """``validate_netlist_arity`` over the deck, run once for every arity rule.
@@ -113,7 +105,7 @@ class _LintContext:
         Its one simulator-specific check (a C=/L= primary value) is LTspice's, so
         only an LTspice deck is held to it.
         """
-        return validate_netlist_arity(self.cards, simulator=SIMULATOR_DISPLAY[self.family])
+        return validate_netlist_arity(self.cards, simulator=DISPLAY[self.family])
 
     @functools.cached_property
     def files(self) -> tuple[_LintFile, ...]:
@@ -205,8 +197,6 @@ def _meas_ngspice_batch(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if not context.ngspice:
-        return []
     return [
         _finding(
             context,
@@ -273,8 +263,6 @@ def _meas_trig_degrees(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if context.family != "ltspice":
-        return []
     return [
         _finding(
             context,
@@ -295,8 +283,6 @@ def _step_ngspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if not context.ngspice:
-        return []
     findings = []
     for card in context.cards:
         if card.kind != "directive" or _directive_head(card) != ".step":
@@ -336,8 +322,6 @@ def _lib_section_ngspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if not context.ngspice:
-        return []
     mode = (
         context.ngbehavior if context.ngbehavior is not None else current_ngbehavior() or ""
     ).casefold()
@@ -374,8 +358,6 @@ def _analysis_count_ltspice(
     """LTspice runs one analysis a deck, with ``.op`` allowed beside it; two
     stop the run ("More than one analysis specified." on LTspice 26, a fatal
     error on XVII, recorded on both)."""
-    if context.family != "ltspice":
-        return []
     analyses = [
         (file.path, card)
         for file in context.files
@@ -411,8 +393,6 @@ def _meas_function_ltspice(
     """A ``.meas`` calling a function only LTspice's waveform viewer has: LTspice
     26 stops at the directive and takes no measurement, XVII fails that one
     (recorded on both)."""
-    if context.family != "ltspice":
-        return []
     findings = []
     for card in context.cards:
         refused = meas_functions_refused(card, "LTspice") if card.kind == "meas" else []
@@ -441,8 +421,6 @@ def _meas_name_ltspice(
     """A ``.meas`` named for a constant of the expression engine (``e``, ``k``,
     ``pi``, ``q``): LTspice 26 refuses the deck, XVII skips that measurement
     (recorded on both)."""
-    if context.family != "ltspice":
-        return []
     return [
         _finding(
             context,
@@ -463,8 +441,6 @@ def _lib_section_ltspice(
     """``.lib file section`` selects a section in ngspice. LTspice has no sections:
     it looks for a file named ``file section`` and stops (recorded on both
     builds)."""
-    if context.family != "ltspice":
-        return []
     findings = []
     for card, section in _sectioned_libs(context):
         findings.append(
@@ -842,7 +818,7 @@ def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]
     an ellipsis typed in a Western editor, and half of many double-byte
     characters. Silent when the session's LTspice is known to be XVII.
     """
-    if context.family != "ltspice" or context.cp1252_reader is not None:
+    if context.cp1252_reader is not None:
         return []
     findings: list[LintFinding] = []
     for path, text, _cards, codec in context.files:
@@ -889,8 +865,6 @@ def _node_control_byte_ltspice(context: _LintContext, rule: LintRule) -> list[Li
     ("Expected node name here."); XVII runs it and saves the name with the
     control character, which is not the name the server reads.
     """
-    if context.family != "ltspice":
-        return []
     findings: list[LintFinding] = []
     for path, text, cards, codec in context.files:
         # One scan of the file before any card is read: most 8-bit files hold
@@ -1029,15 +1003,12 @@ def lint_deck(
     session's LTspice reads decks as cp1252 (``services.cp1252_ltspice``).
     """
     suppressed = set(suppress)
-    # A raw dialect names its family for every simulator but LTspice, so a
-    # non-LTspice dialect decides; otherwise the simulator class (or recorded
-    # class name) does, and a deck nothing names is linted as LTspice's.
-    named_by_dialect = dialect if dialect in SIMULATORS and dialect != "ltspice" else None
     context = _LintContext(
         text=deck_text,
         path=path,
         cards=drop_title_card(lex(deck_text).cards),
-        family=named_by_dialect or simulator_family(simulator) or "ltspice",
+        # A deck nothing names is linted as the default family's.
+        family=family_for(dialect, simulator) or DEFAULT_FAMILY,
         includes=tuple(includes),
         ngbehavior=ngbehavior,
         codec=codec,

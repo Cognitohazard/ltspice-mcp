@@ -22,8 +22,9 @@ from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
+from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.observability import configure_stderr_logging
-from ltspice_mcp.lib.simulator import SIMULATOR_DISPLAY, no_simulator_message
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -318,7 +319,7 @@ def build_instructions(
     else:
 
         def disp(name: str) -> str:
-            return SIMULATOR_DISPLAY.get(name, name)
+            return DISPLAY.get(name, name)
 
         if len(available) == 1:
             active = f"Active simulator: {disp(next(iter(available)))}."

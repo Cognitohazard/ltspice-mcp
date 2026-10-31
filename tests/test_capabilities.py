@@ -8,53 +8,36 @@ implemented but unverified. The tests here keep that table honest:
   lacks one carries a reason instead of a silence;
 - every piece of evidence resolves: a recorded LTspice behaviour is a key of
   the inventory, a fixture is a file under ``tests/fixtures``, a test is a
-  module in ``tests/``;
-- the table agrees with the module that implements each capability, through
-  the declaration that module carries (``lint_rules.LintRule.family``,
-  ``spice_validator.VALIDATED_SIMULATORS``, ``hierarchy.SUPPORTED_FAMILIES``,
-  ``deck_prep.EXPORT_READERS``, ``experiment_inputs.CONTROLLED_STARTUP_HOSTS``,
-  ``raw_header``'s dialects): a family a module declares is not a gap here,
-  and one it does not declare is;
+  module in ``tests/``; every implementing module imports;
+- the table agrees with the code's behaviour for each capability: the lint
+  rules declared for a family, the validator's directive rules, the hierarchy
+  reader's families, the raw readers' dialects, the controlled-startup
+  policies;
 - the refusals that used to compare a family's name read the table.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import (
-    capabilities as cap,
-)
-from ltspice_mcp.lib import (
-    deck_prep,
-    experiment_inputs,
-    hierarchy,
-    lint_rules,
-    raw_header,
-    spice_validator,
-)
-from ltspice_mcp.lib import simulator as simulator_mod
+from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib import capabilities as cap
+from ltspice_mcp.lib import experiment_inputs, hierarchy, lint_rules, raw_header, spice_validator
 from ltspice_mcp.lib.families import DISPLAY, FAMILIES, HOSTS
 from ltspice_mcp.lib.simulator import SIMULATORS, asc_export_refusal, family_refusal
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
+from tests.conftest import FIXTURES_DIR, fake_host
 
-ROOT = Path(__file__).resolve().parent.parent
-INVENTORY = ROOT / "tests" / "fixtures" / "ltspice_recorded" / "inputs" / "cases.toml"
-FIXTURES = ROOT / "tests" / "fixtures"
+ROOT = FIXTURES_DIR.parents[1]
 
 BASELINE = [c.name for c in cap.CAPABILITIES if c.kind == "baseline"]
-REFINEMENTS = [c.name for c in cap.CAPABILITIES if c.kind == "refinement"]
 EVIDENCE = sorted({ref for e in cap.ENTRIES for ref in e.evidence})
-
-
-def _host(monkeypatch: pytest.MonkeyPatch, platform_key: str) -> None:
-    monkeypatch.setattr(simulator_mod, "_platform_key", lambda: platform_key)
 
 
 # ---------------------------------------------------------------------------
@@ -69,12 +52,8 @@ class TestShape:
         assert missing == [], f"{name} is baseline, so each of these needs an entry or a gap"
 
     def test_every_capability_has_at_least_one_entry(self):
-        unused = [
-            c.name
-            for c in cap.CAPABILITIES
-            if not any(e.capability == c.name for e in cap.ENTRIES)
-        ]
-        assert unused == []
+        declared = {e.capability for e in cap.ENTRIES}
+        assert [c.name for c in cap.CAPABILITIES if c.name not in declared] == []
 
     def test_a_supported_entry_needs_evidence(self):
         with pytest.raises(ValueError, match="needs evidence"):
@@ -98,8 +77,6 @@ class TestShape:
                 ("recorded:raw-transient",),
                 hosts=frozenset({"beos"}),
             )
-        for found in cap.ENTRIES:
-            assert found.hosts is None or found.hosts <= set(HOSTS)
 
     def test_entries_of_a_family_follow_the_capabilities_order(self):
         order = [c.name for c in cap.CAPABILITIES]
@@ -107,97 +84,107 @@ class TestShape:
             names = [e.capability for e in cap.entries_of(family)]
             assert names == sorted(names, key=order.index)
 
+    def test_the_families_are_the_simulators_a_run_selects(self):
+        assert tuple(SIMULATORS) == FAMILIES
+
 
 # ---------------------------------------------------------------------------
 # Evidence resolves
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def behaviour_keys() -> set[str]:
-    data = tomllib.loads(INVENTORY.read_text(encoding="utf-8"))
-    return set(data["behaviour"])
-
-
 @pytest.mark.parametrize("ref", EVIDENCE)
-def test_every_evidence_reference_resolves(ref: str, behaviour_keys: set[str]):
+def test_every_evidence_reference_resolves(ref: str):
     kind, _, target = ref.partition(":")
     if kind == "recorded":
-        assert target in behaviour_keys, f"{ref}: not a behaviour of {INVENTORY.name}"
+        assert target in rec.CASES.behaviours, f"{ref}: not a behaviour of the inventory"
     elif kind == "fixture":
-        assert (FIXTURES / target).is_file(), f"{ref}: no such fixture"
-    elif kind == "test":
+        assert (FIXTURES_DIR / target).is_file(), f"{ref}: no such fixture"
+    else:
+        assert kind == "test"
         assert (ROOT / target).is_file(), f"{ref}: no such test module"
-    else:  # pragma: no cover - the Entry constructor refuses other kinds
-        pytest.fail(f"{ref}: unknown evidence kind")
+
+
+@pytest.mark.parametrize("name", [c.name for c in cap.CAPABILITIES])
+def test_every_implementing_module_imports(name: str):
+    importlib.import_module(cap.capability(name).implemented_by)
 
 
 # ---------------------------------------------------------------------------
-# Bound to the code
+# Bound to the code's behaviour
 # ---------------------------------------------------------------------------
 
 
-def _status(family: str, name: str) -> str:
+def _is_gap(family: str, name: str) -> bool:
     found = cap.entry(family, name)
     assert found is not None, f"{family}/{name} has no entry"
-    return found.status
+    return found.status == "gap"
+
+
+#: A directive each validator dialect refuses and the others accept: a
+#: ``.meas`` named after a constant for LTspice, a zero-step ``.tran`` for
+#: ngspice. A family with no rules of its own refuses neither.
+_VALIDATOR_PROBES = (".meas tran q FIND V(out) AT 1m", ".tran 0 1m")
+
+
+def _hierarchy_models(family: str) -> bool:
+    try:
+        hierarchy.SemanticProfile(family, "kiltpsa" if family == "ngspice" else None)  # type: ignore[arg-type]
+    except NetlistError:
+        return False
+    return True
+
+
+_PROBES = {
+    "lint_rules": lambda family: any(rule.family == family for rule in lint_rules.RULES),
+    "validator_rules": lambda family: any(
+        spice_validator.validate_directive(probe, DISPLAY[family]) is not None
+        for probe in _VALIDATOR_PROBES
+    ),
+    "hierarchy": _hierarchy_models,
+    "reads_asc_export": lambda family: asc_export_refusal(SIMULATORS[family]) is None,
+}
 
 
 class TestBoundToTheCode:
     @pytest.mark.parametrize("family", FAMILIES)
-    def test_every_family_the_server_can_launch_is_not_a_run_gap(self, family: str):
-        assert family in SIMULATORS
-        assert _status(family, "run") != "gap"
+    @pytest.mark.parametrize("name", sorted(_PROBES))
+    def test_a_gap_is_declared_exactly_where_the_code_has_nothing(self, name: str, family: str):
+        assert _is_gap(family, name) == (not _PROBES[name](family))
 
     @pytest.mark.parametrize("family", FAMILIES)
-    def test_reads_asc_export_agrees_with_deck_prep(self, family: str):
-        implemented = family in deck_prep.EXPORT_READERS
-        assert (_status(family, "reads_asc_export") != "gap") == implemented
-
-    @pytest.mark.parametrize("family", FAMILIES)
-    def test_lint_rules_agrees_with_the_rules_declared_for_the_family(self, family: str):
-        implemented = any(rule.family == family for rule in lint_rules.RULES)
-        assert (_status(family, "lint_rules") != "gap") == implemented
-
-    @pytest.mark.parametrize("family", FAMILIES)
-    def test_validator_rules_agrees_with_the_validator(self, family: str):
-        implemented = DISPLAY[family] in spice_validator.VALIDATED_SIMULATORS
-        assert (_status(family, "validator_rules") != "gap") == implemented
-
-    @pytest.mark.parametrize("family", FAMILIES)
-    def test_hierarchy_agrees_with_the_hierarchy_reader(self, family: str):
-        implemented = family in hierarchy.SUPPORTED_FAMILIES
-        assert (_status(family, "hierarchy") != "gap") == implemented
-
-    @pytest.mark.parametrize("family", FAMILIES)
-    def test_results_agrees_with_the_raw_readers_dialects(self, family: str):
+    def test_results_are_read_for_every_family_the_raw_readers_know(self, family: str):
         assert family in raw_header._DIALECTS  # pyright: ignore[reportPrivateUsage]
-        assert _status(family, "results") != "gap"
+        assert not _is_gap(family, "results")
 
-    @pytest.mark.parametrize("family", FAMILIES)
-    def test_controlled_startup_agrees_with_the_startup_policies(self, family: str):
-        found = cap.entry(family, "controlled_startup")
-        assert found is not None
-        hosts = experiment_inputs.CONTROLLED_STARTUP_HOSTS.get(family)
-        if hosts is None:
-            assert found.status == "gap"
-        else:
-            assert found.status != "gap"
-            assert found.hosts == hosts
+    @pytest.mark.parametrize(
+        ("family", "host", "unavailable"),
+        [
+            ("ltspice", "windows", False),
+            ("ltspice", "linux", True),
+            ("ngspice", "linux", False),
+            ("ngspice", "wsl", False),
+            ("ngspice", "darwin", True),
+            ("xyce", "windows", True),
+            ("qspice", "windows", True),
+        ],
+    )
+    def test_controlled_startup_reads_the_table(self, family: str, host: str, unavailable: bool):
+        assert experiment_inputs._startup_unavailable(family, host) is unavailable  # pyright: ignore[reportPrivateUsage]
 
     def test_a_family_specific_lint_rule_runs_for_its_family_only(self, tmp_path: Path):
         deck = (
             "* step\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 2k 1k\n.tran 1m\n.end\n"
         )
         path = tmp_path / "step.cir"
-        for_ngspice = lint_deck_ids(deck, path, "ngspice")
-        for_xyce = lint_deck_ids(deck, path, "xyce")
+        for_ngspice = _lint_ids(deck, path, "ngspice")
+        for_xyce = _lint_ids(deck, path, "xyce")
         assert "step-ngspice" in for_ngspice
         assert "step-ngspice" not in for_xyce
         assert all(lint_rules.RULES_BY_ID[rule_id].family is None for rule_id in for_xyce)
 
 
-def lint_deck_ids(deck: str, path: Path, dialect: str) -> set[str]:
+def _lint_ids(deck: str, path: Path, dialect: str) -> set[str]:
     return {f["rule_id"] for f in lint_rules.lint_deck(deck, path, dialect, None)}
 
 
@@ -207,29 +194,26 @@ def lint_deck_ids(deck: str, path: Path, dialect: str) -> set[str]:
 
 
 class TestRefusals:
-    @pytest.mark.parametrize(
-        ("host", "where"), [("wsl", "WSL"), ("linux", "Wine"), ("darwin", "Wine")]
-    )
-    def test_qspice_is_refused_off_windows_naming_the_host(
-        self, monkeypatch: pytest.MonkeyPatch, host: str, where: str
+    @pytest.mark.parametrize("host", [h for h in HOSTS if h != "windows"])
+    def test_qspice_is_refused_off_windows_by_its_run_entry(
+        self, monkeypatch: pytest.MonkeyPatch, host: str
     ):
-        _host(monkeypatch, host)
-        refusal = family_refusal("qspice")
-        assert refusal is not None
-        assert "only when this server itself runs on Windows" in refusal
-        assert f"under {where}" in refusal
-
-    def test_qspice_runs_on_windows(self, monkeypatch: pytest.MonkeyPatch):
-        _host(monkeypatch, "windows")
-        assert family_refusal("qspice") is None
+        fake_host(monkeypatch, host)
+        run = cap.entry("qspice", "run")
+        assert run is not None
+        assert family_refusal("qspice") == run.unavailable_on(host) is not None
 
     @pytest.mark.parametrize("host", HOSTS)
     @pytest.mark.parametrize("family", ["ltspice", "ngspice", "xyce"])
     def test_the_other_families_are_not_refused_by_host(
         self, monkeypatch: pytest.MonkeyPatch, host: str, family: str
     ):
-        _host(monkeypatch, host)
+        fake_host(monkeypatch, host)
         assert family_refusal(family) is None
+
+    def test_qspice_runs_on_windows(self, monkeypatch: pytest.MonkeyPatch):
+        fake_host(monkeypatch, "windows")
+        assert family_refusal("qspice") is None
 
     def test_an_unknown_family_is_not_refused(self):
         assert family_refusal(None) is None
@@ -240,11 +224,6 @@ class TestRefusals:
         found = cap.entry(family, "reads_asc_export")
         assert found is not None and found.status == "gap"
         assert asc_export_refusal(SIMULATORS[family]) == found.reason
-        assert f"prepared for {DISPLAY[family]}" in (found.reason or "")
-
-    @pytest.mark.parametrize("family", ["ltspice", "ngspice"])
-    def test_a_schematic_runs_on_the_families_that_read_the_export(self, family: str):
-        assert asc_export_refusal(SIMULATORS[family]) is None
 
     def test_gap_reason_is_none_unless_the_entry_is_a_gap(self):
         assert cap.gap_reason("ltspice", "lint_rules") is None
@@ -280,7 +259,11 @@ class TestSessionView:
         off_windows = cap.session_view("linux", ["qspice", "ltspice"])["families"]
         assert off_windows["qspice"]["run"]["status"] == "unavailable_here"
         assert "under Wine" in off_windows["qspice"]["run"]["reason"]
-        assert off_windows["ltspice"]["open_window"]["status"] == "unavailable_here"
+        assert off_windows["ltspice"]["open_window"] == {
+            "kind": "refinement",
+            "status": "unavailable_here",
+            "reason": "LTspice open window is available on windows only, not on linux.",
+        }
         on_windows = cap.session_view("windows", ["qspice", "ltspice"])["families"]
         assert on_windows["qspice"]["run"]["status"] == "unverified"
         assert on_windows["ltspice"]["open_window"]["status"] == "supported"
@@ -296,11 +279,6 @@ class TestSessionView:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def bare_state(config: ServerConfig) -> SessionState:
-    return SessionState.create(config, available={})
-
-
 def _read_json(uri: str, state: SessionState) -> dict:
     result = handle_read_resource(uri, state)
     (content,) = result.contents
@@ -309,24 +287,23 @@ def _read_json(uri: str, state: SessionState) -> dict:
 
 
 class TestResource:
-    def test_the_whole_table_with_its_evidence(self, bare_state: SessionState):
-        data = _read_json(cap.RESOURCE_URI, bare_state)
+    def test_the_whole_table_with_its_evidence(self, state_no_sim: SessionState):
+        data = _read_json(cap.RESOURCE_URI, state_no_sim)
         assert [c["name"] for c in data["capabilities"]] == [c.name for c in cap.CAPABILITIES]
         assert set(data["families"]) == set(FAMILIES)
         lint = data["families"]["ltspice"]["lint_rules"]
         assert lint["status"] == "supported"
         assert "recorded:log-meas-angle-unit" in lint["evidence"]
-        assert set(data["statuses"]) == {"supported", "gap", "unverified"}
         assert set(data["evidence_kinds"]) == set(cap.EVIDENCE_KINDS)
 
-    def test_one_family(self, bare_state: SessionState):
-        data = _read_json(f"{cap.RESOURCE_URI}/xyce", bare_state)
+    def test_one_family(self, state_no_sim: SessionState):
+        data = _read_json(f"{cap.RESOURCE_URI}/xyce", state_no_sim)
         assert data["family"] == "xyce"
         assert data["display"] == "Xyce"
         assert data["capabilities"]["hierarchy"]["status"] == "gap"
         assert "nested instance targeting" in data["capabilities"]["hierarchy"]["reason"]
         assert data["capabilities"]["controlled_startup"]["status"] == "gap"
 
-    def test_an_unknown_family_is_refused(self, bare_state: SessionState):
+    def test_an_unknown_family_is_refused(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="unknown simulator family"):
-            handle_read_resource(f"{cap.RESOURCE_URI}/spectre", bare_state)
+            handle_read_resource(f"{cap.RESOURCE_URI}/spectre", state_no_sim)

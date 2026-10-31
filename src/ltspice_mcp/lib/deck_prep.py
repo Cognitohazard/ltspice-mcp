@@ -87,13 +87,6 @@ async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
         yield
 
 
-#: The families that run the netlist LTspice exports from a schematic: LTspice
-#: as exported, ngspice once ``_read_export`` has scrubbed it. The capability
-#: table (``capabilities``) declares ``reads_asc_export`` a gap for every other
-#: family, and a test holds the two to each other.
-EXPORT_READERS: frozenset[str] = frozenset({"ltspice", "ngspice"})
-
-
 def _read_export(net_path: Path, *, for_ngspice: bool) -> tuple[str, bytes]:
     """The deck a run of this export reads: the stem it is named by, and its bytes.
 

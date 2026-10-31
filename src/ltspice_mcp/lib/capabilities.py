@@ -10,20 +10,17 @@ reaches the tool surface through an argument or action gated on it.
 
 Features ask this table rather than compare a family's name:
 ``simulator.family_refusal`` and ``simulator.asc_export_refusal`` read it,
+``experiment_inputs.prepare_startup`` reads where a controlled startup holds,
 ``verify_circuit`` reads it to say when a deck was checked with the
 dialect-neutral rules only, ``inspect(kind="capabilities")`` shows the view
 for this session (``session_view``), and the ``spice://capabilities``
 resource serves the whole table with its evidence (``table_report``).
 
 Each entry names the module that implements its capability, and each piece
-of evidence is a typed reference that ``tests/test_capabilities.py``
-resolves: ``recorded:<behaviour>`` is a key of the LTspice behaviour
-inventory (``tests/fixtures/ltspice_recorded/inputs/cases.toml``),
-``fixture:<path>`` a file under ``tests/fixtures`` another simulator wrote,
-and ``test:<path>`` a test module that runs the program live or reads such a
-file. The same test holds the table to the code: a baseline capability a
-module declares for a family must not be a gap here, one it does not declare
-must be, and a supported entry carries evidence.
+of evidence is a typed reference (``EVIDENCE_KINDS``) that
+``tests/test_capabilities.py`` resolves. The same test holds the table to the
+code: a baseline capability the code has for a family must not be a gap
+here, one it lacks must be, and a supported entry carries evidence.
 """
 
 from __future__ import annotations
@@ -39,13 +36,18 @@ Status = Literal["supported", "gap", "unverified"]
 
 #: The prefixes an evidence reference may carry, and what each names.
 EVIDENCE_KINDS: dict[str, str] = {
-    "recorded": "a behaviour key of the LTspice inventory, tests/fixtures/ltspice_recorded/inputs/cases.toml",
+    "recorded": (
+        "a behaviour key of the LTspice inventory, "
+        "tests/fixtures/ltspice_recorded/inputs/cases.toml"
+    ),
     "fixture": "a file under tests/fixtures that a simulator wrote",
     "test": "a test module that runs the simulator live or reads its files",
 }
 
 #: The URI of the resource that serves this table with its evidence.
 RESOURCE_URI = "spice://capabilities"
+
+_HOSTS = frozenset(HOSTS)
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ class Capability:
     kind: Kind
     #: The need, stated without any simulator's mechanism.
     need: str
-    #: The module that implements it, which the binding test imports.
+    #: The module that implements it; the binding test imports it.
     implemented_by: str
 
 
@@ -76,7 +78,8 @@ class Entry:
     #: How this family meets the need, where the mechanism is its own.
     mechanism: str | None = None
     #: Why the capability is not available on a host outside ``hosts``, with
-    #: ``{where}`` standing for that host's name.
+    #: ``{where}`` standing for the layer that host runs Windows programs
+    #: through (WSL, or Wine). Without it a plain sentence names the host.
     host_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -94,7 +97,7 @@ class Entry:
                 raise ValueError(
                     f"{self.family}/{self.capability}: bad evidence reference {ref!r}"
                 )
-        if self.hosts is not None and not self.hosts <= set(HOSTS):
+        if self.hosts is not None and not self.hosts <= _HOSTS:
             raise ValueError(
                 f"{self.family}/{self.capability}: unknown host in {sorted(self.hosts)}"
             )
@@ -105,24 +108,13 @@ class Entry:
         """Why the capability is not available on ``host``, or None when it is."""
         if self.hosts is None or host in self.hosts:
             return None
-        where = "WSL" if host == "wsl" else "Wine" if host in ("linux", "darwin") else host
         if self.host_reason is not None:
-            return self.host_reason.format(where=where)
-        display = DISPLAY[self.family]
-        on = " or ".join(sorted(self.hosts))
-        return f"{display}'s {self.capability} is available on {on} only, not under {where}."
-
-
-def _ltspice_only(display: str) -> str:
-    return (
-        "LTspice exports a schematic in its own netlist dialect, which is not "
-        f"prepared for {display}, so a run on {display} takes a hand-written "
-        ".cir/.net/.sp netlist."
-    )
-
-
-def _no_rules(display: str, what: str, where: str) -> str:
-    return f"No {what} for {display} are declared; {where} runs the dialect-neutral rules only."
+            return self.host_reason.format(where="WSL" if host == "wsl" else "Wine")
+        what = self.capability.replace("_", " ")
+        return (
+            f"{DISPLAY[self.family]} {what} is available on {' or '.join(sorted(self.hosts))} "
+            f"only, not on {host}."
+        )
 
 
 CAPABILITIES: tuple[Capability, ...] = (
@@ -229,13 +221,20 @@ CAPABILITIES: tuple[Capability, ...] = (
 
 _CAPABILITY_BY_NAME: dict[str, Capability] = {c.name: c for c in CAPABILITIES}
 
-_HOSTS_ALL = frozenset(HOSTS)
+#: The families the server runs through spicelib's common interface only:
+#: nothing of theirs is recorded, and the deck-language code models none.
+_UNMODELLED: tuple[str, ...] = ("qspice", "xyce")
 _WINDOWS = frozenset({"windows"})
-_QSPICE_HOST_REASON = (
-    "QSPICE runs only when this server itself runs on Windows: it is a Windows "
-    "program, spicelib starts it with this host's own file paths, and under "
-    "{where} it cannot open them (only LTspice has a path adapter here)."
-)
+
+
+def _each(families: Iterable[str], capability: str, status: Status, reason: str) -> list[Entry]:
+    """One entry per family, with ``{display}`` in ``reason`` spelled as a person
+    names the family."""
+    return [
+        Entry(family, capability, status, reason=reason.format(display=DISPLAY[family]))
+        for family in families
+    ]
+
 
 ENTRIES: tuple[Entry, ...] = (
     # --- run ---------------------------------------------------------------
@@ -247,7 +246,11 @@ ENTRIES: tuple[Entry, ...] = (
         "unverified",
         reason="No recording or live test of a QSPICE run exists.",
         hosts=_WINDOWS,
-        host_reason=_QSPICE_HOST_REASON,
+        host_reason=(
+            "QSPICE runs only when this server itself runs on Windows: it is a Windows "
+            "program, spicelib starts it with this host's own file paths, and under "
+            "{where} it cannot open them (only LTspice has a path adapter here)."
+        ),
     ),
     Entry("xyce", "run", "unverified", reason="No recording or live test of a Xyce run exists."),
     # --- reads_asc_export --------------------------------------------------
@@ -264,8 +267,13 @@ ENTRIES: tuple[Entry, ...] = (
         ("recorded:export-boilerplate", "test:tests/test_deck_prep.py"),
         mechanism="deck_prep drops the exporter's .backanno and the § in instance names.",
     ),
-    Entry("qspice", "reads_asc_export", "gap", reason=_ltspice_only("QSPICE")),
-    Entry("xyce", "reads_asc_export", "gap", reason=_ltspice_only("Xyce")),
+    *_each(
+        _UNMODELLED,
+        "reads_asc_export",
+        "gap",
+        "LTspice exports a schematic in its own netlist dialect, which is not prepared for "
+        "{display}, so a run on {display} takes a hand-written .cir/.net/.sp netlist.",
+    ),
     # --- lint_rules --------------------------------------------------------
     Entry(
         "ltspice",
@@ -284,13 +292,12 @@ ENTRIES: tuple[Entry, ...] = (
         "supported",
         ("test:tests/test_lint_rules.py", "fixture:ngspice_ac_no_meas.log"),
     ),
-    Entry(
-        "qspice",
+    *_each(
+        _UNMODELLED,
         "lint_rules",
         "gap",
-        reason=_no_rules("QSPICE", "lint rules", "run_experiments"),
+        "No lint rules for {display} are declared; the dialect-neutral rules run.",
     ),
-    Entry("xyce", "lint_rules", "gap", reason=_no_rules("Xyce", "lint rules", "run_experiments")),
     # --- validator_rules ---------------------------------------------------
     Entry(
         "ltspice",
@@ -299,17 +306,11 @@ ENTRIES: tuple[Entry, ...] = (
         ("recorded:log-meas-db", "recorded:deck-forms"),
     ),
     Entry("ngspice", "validator_rules", "supported", ("test:tests/test_spice_validator.py",)),
-    Entry(
-        "qspice",
+    *_each(
+        _UNMODELLED,
         "validator_rules",
         "gap",
-        reason=_no_rules("QSPICE", "validator rules", "verify_circuit's syntax check"),
-    ),
-    Entry(
-        "xyce",
-        "validator_rules",
-        "gap",
-        reason=_no_rules("Xyce", "validator rules", "verify_circuit's syntax check"),
+        "No validator rules for {display} are declared; the dialect-neutral checks run.",
     ),
     # --- hierarchy ---------------------------------------------------------
     Entry(
@@ -319,23 +320,12 @@ ENTRIES: tuple[Entry, ...] = (
         ("recorded:subckt-device-names", "recorded:save-subckt-names", "recorded:deck-semantics"),
     ),
     Entry("ngspice", "hierarchy", "supported", ("test:tests/test_hierarchy.py",)),
-    Entry(
-        "qspice",
+    *_each(
+        _UNMODELLED,
         "hierarchy",
         "gap",
-        reason=(
-            "The hierarchy reader models LTspice and ngspice only; a run on QSPICE gets no "
-            "semantic profile, so nested instance targeting is unavailable."
-        ),
-    ),
-    Entry(
-        "xyce",
-        "hierarchy",
-        "gap",
-        reason=(
-            "The hierarchy reader models LTspice and ngspice only; a run on Xyce gets no "
-            "semantic profile, so nested instance targeting is unavailable."
-        ),
+        "The hierarchy reader models LTspice and ngspice only; a run on {display} gets no "
+        "semantic profile, so nested instance targeting is unavailable.",
     ),
     # --- diagnostics -------------------------------------------------------
     Entry(
@@ -354,23 +344,12 @@ ENTRIES: tuple[Entry, ...] = (
             "test:tests/test_ngspice_e2e.py",
         ),
     ),
-    Entry(
-        "qspice",
+    *_each(
+        _UNMODELLED,
         "diagnostics",
         "unverified",
-        reason=(
-            "Convergence and fatal errors are read with the generic patterns; no recording "
-            "of QSPICE's wording exists."
-        ),
-    ),
-    Entry(
-        "xyce",
-        "diagnostics",
-        "unverified",
-        reason=(
-            "Convergence and fatal errors are read with the generic patterns; no recording "
-            "of Xyce's wording exists."
-        ),
+        "Convergence and fatal errors are read with the generic patterns; no recording of "
+        "{display}'s wording exists.",
     ),
     # --- results -----------------------------------------------------------
     Entry(
@@ -401,17 +380,11 @@ ENTRIES: tuple[Entry, ...] = (
         ("test:tests/test_ngspice_e2e.py",),
         mechanism="The server's recipes; see native_measurements for the simulator's own.",
     ),
-    Entry(
-        "qspice",
+    *_each(
+        _UNMODELLED,
         "measurements",
         "unverified",
-        reason="The server's recipes read the results, which are unverified for QSPICE.",
-    ),
-    Entry(
-        "xyce",
-        "measurements",
-        "unverified",
-        reason="The server's recipes read the results, which are unverified for Xyce.",
+        "The server's recipes read the results, which are unverified for {display}.",
     ),
     # --- refinements -------------------------------------------------------
     Entry("ltspice", "progress_in_point", "supported", ("recorded:raw-partial",)),
@@ -420,7 +393,10 @@ ENTRIES: tuple[Entry, ...] = (
         "qspice",
         "progress_in_point",
         "unverified",
-        reason="The partial-results reader assumes every value is a double; no QSPICE raw is recorded.",
+        reason=(
+            "The partial-results reader assumes every value is a double; no QSPICE raw is "
+            "recorded."
+        ),
     ),
     Entry(
         "xyce",
@@ -444,17 +420,11 @@ ENTRIES: tuple[Entry, ...] = (
         hosts=frozenset({"linux", "wsl", "windows"}),
         mechanism="An immutable spinit, selected through SPICE_SCRIPTS.",
     ),
-    Entry(
-        "qspice",
+    *_each(
+        _UNMODELLED,
         "controlled_startup",
         "gap",
-        reason="No controlled startup policy exists for QSPICE; a recoverable run is refused.",
-    ),
-    Entry(
-        "xyce",
-        "controlled_startup",
-        "gap",
-        reason="No controlled startup policy exists for Xyce; a recoverable run is refused.",
+        "No controlled startup policy exists for {display}; a recoverable run is refused.",
     ),
     Entry(
         "ltspice",
@@ -577,9 +547,9 @@ def session_view(host: str, families: Iterable[str]) -> dict[str, Any]:
     declared capability's kind and status, where a capability a host
     restriction excludes here reads ``unavailable_here``. The evidence is left
     to the resource the view points at."""
-    chosen = [f for f in FAMILIES if f in set(families)]
+    wanted = set(families)
     report: dict[str, Any] = {}
-    for family in chosen:
+    for family in (f for f in FAMILIES if f in wanted):
         rows: dict[str, Any] = {}
         for found in entries_of(family):
             row: dict[str, Any] = {"kind": capability(found.capability).kind}
@@ -609,34 +579,24 @@ def _entry_report(found: Entry) -> dict[str, Any]:
     return report
 
 
+def _capabilities_of(family: str) -> dict[str, Any]:
+    return {found.capability: _entry_report(found) for found in entries_of(family)}
+
+
 def family_report(family: str) -> dict[str, Any]:
     """One family's entries with their evidence, for the resource."""
     if family not in FAMILIES:
         raise ValueError(f"unknown simulator family {family!r}; one of {list(FAMILIES)}")
-    return {
-        "family": family,
-        "display": DISPLAY[family],
-        "capabilities": {found.capability: _entry_report(found) for found in entries_of(family)},
-    }
+    return {"family": family, "display": DISPLAY[family], "capabilities": _capabilities_of(family)}
 
 
 def table_report() -> dict[str, Any]:
     """The whole table with its evidence, for the resource."""
     return {
         "capabilities": [
-            {
-                "name": c.name,
-                "kind": c.kind,
-                "need": c.need,
-                "implemented_by": c.implemented_by,
-            }
+            {"name": c.name, "kind": c.kind, "need": c.need, "implemented_by": c.implemented_by}
             for c in CAPABILITIES
         ],
-        "families": {family: family_report(family)["capabilities"] for family in FAMILIES},
-        "statuses": {
-            "supported": "established by the evidence listed",
-            "gap": "not available for this family, for the reason given",
-            "unverified": "implemented, but no recording or live test establishes it",
-        },
+        "families": {family: _capabilities_of(family) for family in FAMILIES},
         "evidence_kinds": dict(EVIDENCE_KINDS),
     }

@@ -13,7 +13,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
@@ -53,15 +53,17 @@ _SAFE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _SAFE_NODE = re.compile(r"[A-Za-z0-9_]+\Z")
 
 
-#: The families whose reading of a hierarchy this module models. The
+#: The families whose reading of a hierarchy this module models. The sites
+#: that decide whether a run gets a profile read ``SUPPORTED_FAMILIES``; the
 #: capability table (``capabilities``) declares ``hierarchy`` a gap for every
 #: other family, and a test holds the two to each other.
-SUPPORTED_FAMILIES: frozenset[str] = frozenset({"ltspice", "ngspice"})
+Family = Literal["ltspice", "ngspice"]
+SUPPORTED_FAMILIES: frozenset[str] = frozenset(get_args(Family))
 
 
 @dataclass(frozen=True)
 class SemanticProfile:
-    simulator: Literal["ltspice", "ngspice"]
+    simulator: Family
     ngbehavior: str | None = None
     evaluation_context: str = "initial_deck"
     #: The LTspice is XVII (or IV), which spells a node or device inside a
