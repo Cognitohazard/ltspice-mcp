@@ -910,11 +910,10 @@ class TestWaveformSamplesFitTheBudget:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         """A point count the caller chose is an opt-in, which the server's
-        default budget never revokes. The default count is read as unchosen,
-        since a stored recipe no longer says which fields the caller wrote."""
+        default budget never revokes, even when it is the default count."""
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         state_no_sim.config.default_budget = 2000
-        data = await _waveform_reply(state_no_sim, raw, max_points=1000)
+        data = await _waveform_reply(state_no_sim, raw, max_points=2000)
 
         (value,) = _inline_values(data["results"]["w"])
         assert value["points_returned"] == value["points_total"]
@@ -927,7 +926,7 @@ class TestWaveformSamplesFitTheBudget:
         point count is one."""
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         state_no_sim.config.default_budget = 0
-        data = await _waveform_reply(state_no_sim, raw, budget=2000, max_points=1000)
+        data = await _waveform_reply(state_no_sim, raw, budget=2000, max_points=2000)
 
         assert response_budget.estimate_tokens(data) <= 2000
         (value,) = _inline_values(data["results"]["w"])

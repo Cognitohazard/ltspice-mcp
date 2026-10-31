@@ -3809,20 +3809,19 @@ _THINNED_ROUTE_ANY = "A larger 'budget' keeps more, and format 'csv' writes ever
 
 
 def unsized_waveforms(recipes: Iterable[Recipe]) -> frozenset[str]:
-    """The keys of the inline waveform recipes whose point count the caller left at
-    its default, which a budget may thin below the answer rung.
+    """The keys of the inline waveform recipes whose call set no ``max_points``,
+    which a budget may thin below the answer rung.
 
-    Read off the value, because a recipe is re-validated from a stored dump that
-    fills in every default, so whether the caller wrote ``max_points`` is gone
-    by the time it is rendered. Any other count is the caller's opt-in.
+    A count the caller wrote, even the default one, is their opt-in. The result
+    set stores each recipe as the caller sent it, so a continuation still
+    knows which fields were written.
     """
-    default = WaveformRecipe.model_fields["max_points"].default
     return frozenset(
         recipe.key
         for recipe in recipes
         if isinstance(recipe, WaveformRecipe)
         and recipe.format == "inline"
-        and recipe.max_points == default
+        and "max_points" not in recipe.model_fields_set
     )
 
 

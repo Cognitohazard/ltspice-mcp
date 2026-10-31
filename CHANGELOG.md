@@ -10,6 +10,26 @@ tool-surface changes.
 
 ### Fixed
 
+- An inline `waveform` could come back at several times the response budget,
+  and a caller's `budget` changed nothing but add `budget_not_met`: its
+  samples were the one part of a reply no rung reduced. Four traces of a
+  1,042-point transient came to about 42,000 estimated tokens. The samples
+  are now thinned to fit, each bucket keeping its minimum and maximum, and
+  the recipe's warnings say so; `points_total` still counts every sample.
+  Under the server's default budget only a waveform whose call sets no
+  `max_points` is thinned, so a count the caller set is kept; a caller's
+  `budget` thins any waveform from its answer rung on. A run receipt thins
+  its attached waveforms whatever their `max_points`, because its rows
+  preview what `analyze_results` over the job returns.
+- An argument error came back as text alone, with no code; a typed failure
+  carried its code only when it also had suggestions, and an unclassified
+  failure carried none. Each now has `structuredContent` with its `code`:
+  `invalid_arguments` for an argument error, with a hint naming the
+  `inspect(kind="reference")` lookup for the tool; the failure's own code for
+  a typed failure; `internal_error` otherwise. A branch name that no branch
+  has (an unknown `action`, or one sent as an object) is reported at the
+  field, as "must be one of 'status', 'wait', …", instead of pydantic's
+  "Input tag … does not match any of the expected tags".
 - Where two collinear wires met at a point that another wire passes through,
   the sheet checks merged the two into one wire and did not join the other
   wire there. LTspice joins it, because each wire end on the point lies on
@@ -161,6 +181,11 @@ tool-surface changes.
 
 ### Added
 
+- `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
+  reply's serialized `structuredContent` in its text block, as the MCP
+  specification recommends for a client that passes only the text to the
+  model; under the default, `"summary"`, such a model reads one summary line.
+  `inspect(kind="capabilities")` reports the mode as `text_channel`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the
@@ -219,6 +244,16 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** an inline `waveform` value sends its axis once, as `x` beside
+  `series`, instead of once in every series: every trace of one plot is read
+  at the same points. A 32-bit trace's samples are written in their shortest
+  32-bit form (`0.99995446`, not `0.9999544620513916`), which reads back as
+  the same 32-bit value.
+- **Breaking:** a default result row no longer carries `snapshot_id`, as it
+  already left out `deck_sha256`. The reply's `source_hashes` row for the
+  row's `source` label has it, and `include.fields: ["snapshot_id"]` puts it
+  back on the row. A `waveform` or `plot` value no longer repeats the run
+  identity its row already carries.
 - **Breaking:** every argument that names a file is `path`, as
   `run_experiments`, `verify_circuit` and `inspect` already spelled it.
   `plot_waveform` takes `path` for `raw_file`. An `analyze_results` source

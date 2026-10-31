@@ -1789,6 +1789,25 @@ async def test_csv_waveform_states_that_max_points_is_inline_only(
 
 
 @pytest.mark.asyncio
+async def test_csv_waveform_without_max_points_has_no_max_points_note(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The note answers a max_points the caller wrote, not the default that
+    every waveform recipe holds."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "csv", "metric": "waveform", "signals": ["V(out)"], "format": "csv"}],
+    )
+    assert data["results"]["csv"]["values"][0]["value"]["row_count"] > 10
+    assert not any(
+        observation["code"] == "max_points_not_applied" for observation in data["observations"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     state_no_sim: SessionState,
     work_dir: Path,
