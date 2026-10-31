@@ -146,6 +146,7 @@ start_ltspice = true     # start LTspice when asked to show something in it and 
 
 [tools]
 listing = "compact"      # "full" sends every argument description, about 45% more to load
+text_channel = "summary" # "json" repeats each reply's data as text, for clients that ignore structuredContent
 run_code = true          # false removes run_code
 
 [state]
@@ -157,6 +158,13 @@ the tool list, which makes the list a session loads before its first call
 about 45% smaller. The tools accept the same calls either way. The assistant
 looks up an argument with `inspect(kind="reference", query="...")`, and a
 rejected call lists the fields it accepts. `full` sends every description.
+
+**`text_channel`.** A tool reply carries its data as `structuredContent` and
+a one-line summary as text. Claude Code and other clients that read
+`structuredContent` give the assistant the data. A client that passes only
+the text gives it the summary alone, so the assistant sees no results; set
+`text_channel = "json"` for such a client, which puts the data in the text
+too.
 
 **`run_code`** runs a Python snippet in a worker process where `api` is a
 [Python API](#python-api) `Api` open on the server's working directory and

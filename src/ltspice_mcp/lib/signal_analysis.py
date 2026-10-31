@@ -2082,28 +2082,42 @@ def downsample_minmax(
     Used by ``plot_waveform`` to bound the points handed to the browser; the
     full-resolution data stays on disk (``export_waveform``).
     """
+    xs, (ys,) = downsample_minmax_traces(x, [y], target_points)
+    return xs, ys
+
+
+def downsample_minmax_traces(
+    x: np.ndarray, traces: Sequence[np.ndarray], target_points: int
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """:func:`downsample_minmax` for several traces on one axis, bucketed once.
+
+    The points kept are the axis's buckets alone, so every trace is returned at
+    the same ones.
+    """
     if len(x) == 0:
-        return np.empty(0, dtype=float), np.empty(0, dtype=float)
+        return np.empty(0, dtype=float), [np.empty(0, dtype=float) for _ in traces]
     # _equal_time_buckets needs an ascending axis; a high->low sweep (a .dc 5 0
     # or descending .noise) otherwise reads x_end <= x_start and collapses to a
     # single bucket — two output points for the whole curve. Flip to ascending,
     # bucket, then restore the caller's axis order.
     flipped = x.size > 1 and x[0] > x[-1]
     if flipped:
-        x, y = x[::-1], y[::-1]
+        x = x[::-1]
+        traces = [y[::-1] for y in traces]
     edges, bounds, _ = _equal_time_buckets(x, max(1, target_points // 2))
     starts = bounds[:-1]
     nonempty = bounds[1:] > starts
     block_starts = starts[nonempty]
     xs = np.empty(2 * len(block_starts), dtype=float)
-    ys = np.empty_like(xs)
     xs[0::2] = edges[:-1][nonempty]
     xs[1::2] = edges[1:][nonempty]
-    ys[0::2] = np.minimum.reduceat(y, block_starts)
-    ys[1::2] = np.maximum.reduceat(y, block_starts)
-    if flipped:
-        return xs[::-1], ys[::-1]
-    return xs, ys
+    kept: list[np.ndarray] = []
+    for y in traces:
+        ys = np.empty_like(xs)
+        ys[0::2] = np.minimum.reduceat(y, block_starts)
+        ys[1::2] = np.maximum.reduceat(y, block_starts)
+        kept.append(ys[::-1] if flipped else ys)
+    return (xs[::-1] if flipped else xs), kept
 
 
 def compute_measurement_stats(

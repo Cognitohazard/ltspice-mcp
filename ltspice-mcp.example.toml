@@ -95,6 +95,11 @@
 # removed, read on demand through inspect(kind="reference"); "full"
 # advertises them as registered. Both give the same capabilities.
 # listing = "compact"
+# What a reply's text block holds. "summary" (the default) is one line;
+# clients that read structuredContent, Claude Code among them, use that.
+# "json" puts the structuredContent there too, for a client that passes
+# only the text to the model.
+# text_channel = "summary"
 # run_code = false removes the tool that runs a Python snippet with the
 # Python API in scope (loops over runs, numpy on samples). The snippet has
 # the server's own file and process authority, which allowed_paths does not

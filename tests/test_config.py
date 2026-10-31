@@ -313,6 +313,29 @@ class TestToolListing:
         assert '"full"' in content
 
 
+class TestTextChannel:
+    """[tools] text_channel selects what a reply's text block holds."""
+
+    def test_default_is_the_summary_line(self):
+        assert ServerConfig().text_channel == "summary"
+
+    def test_an_unknown_value_is_ignored_with_a_warning_naming_the_valid_ones(
+        self, work_dir: Path, caplog: pytest.LogCaptureFixture
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\ntext_channel = "verbose"\n')
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(toml_path)
+        assert config.text_channel == "summary"
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert "verbose" in message and "json" in message and "ignoring" in message
+
+    def test_generated_config_documents_the_key(self, work_dir: Path):
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        assert '# text_channel = "summary"' in path.read_text()
+
+
 class TestSimulatorExeConfig:
     """Tests for the simulator_exe config field being wired to detection."""
 
@@ -663,6 +686,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_SYNC_OPEN_WINDOW": "on",
     "LTSPICE_MCP_START_LTSPICE": "on",
     "LTSPICE_MCP_TOOL_LISTING": "full",
+    "LTSPICE_MCP_TEXT_CHANNEL": "summary",
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_RUN_CODE": "off",
     "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "7",
@@ -717,6 +741,7 @@ start_ltspice = false
 
 [tools]
 listing = "compact"
+text_channel = "json"
 run_code = true
 
 [state]
@@ -781,6 +806,7 @@ class TestLoadCoversEveryKey:
             "sync_open_window": False,
             "start_ltspice": False,
             "tool_listing": "compact",
+            "text_channel": "json",
             "run_code": True,
             "persist_jobs": False,
             "preload_recent_count": 3,
@@ -826,6 +852,7 @@ class TestLoadCoversEveryKey:
             "sync_open_window": True,
             "start_ltspice": True,
             "tool_listing": "full",
+            "text_channel": "summary",
             "run_code": False,
             "persist_jobs": True,
             "preload_recent_count": 7,
@@ -873,6 +900,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_RAW_MB": "0",
             "LTSPICE_MCP_LOG_LEVEL": "LOUD",
             "LTSPICE_MCP_TOOL_LISTING": "sparse",
+            "LTSPICE_MCP_TEXT_CHANNEL": "verbose",
             "LTSPICE_MCP_PERSIST_JOBS": "maybe",
             "LTSPICE_MCP_OPEN_PLOT": "sometimes",
             "LTSPICE_MCP_ATTACH_PLOT": "2",
@@ -896,6 +924,7 @@ class TestLoadCoversEveryKey:
         assert snapshot["max_raw_mb"] == 512
         assert snapshot["log_level"] == "DEBUG"
         assert snapshot["tool_listing"] == "compact"
+        assert snapshot["text_channel"] == "json"
         assert snapshot["persist_jobs"] is False
         assert snapshot["open_plot"] is False
         assert snapshot["attach_plot"] is True
@@ -913,6 +942,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_MAX_ESTIMATED_POINTS",
             "LTSPICE_MCP_MAX_RAW_MB",
             "LTSPICE_MCP_LOG_LEVEL",
+            "LTSPICE_MCP_TEXT_CHANNEL",
             "LTSPICE_MCP_PERSIST_JOBS",
             "LTSPICE_MCP_OPEN_PLOT",
             "LTSPICE_MCP_ATTACH_PLOT",
