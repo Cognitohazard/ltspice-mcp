@@ -175,7 +175,8 @@ _EXTRA_MISSING = "the optional 'raster' extra (resvg-py) is not installed"
 _EXTRA_REMEDY = (
     "install it where the server runs (pip install 'ltspice-mcp[raster]', "
     "uv tool install 'ltspice-mcp[raster]', or launch with uvx --from "
-    "'ltspice-mcp[raster]' ltspice-mcp), then restart the server"
+    "'ltspice-mcp[raster]' ltspice-mcp; for a server run from a source "
+    "checkout, uv sync --extra raster in the checkout), then restart the server"
 )
 
 

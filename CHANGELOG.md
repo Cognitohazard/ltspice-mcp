@@ -158,6 +158,9 @@ tool-surface changes.
   the old name and the new one into the file, kept the part under the old
   name, and reported that the part had no name before. It now renames the
   part, and refuses a name that another part has in any case.
+- The refusal for a missing `raster` extra named ways to install the server
+  with the extra, none of which reaches a server run from a source checkout.
+  It now also names `uv sync --extra raster` for that case.
 
 ### Added
 
@@ -219,6 +222,9 @@ tool-surface changes.
 
 ### Changed
 
+- `group_by`'s description in `analyze_results` and in `run_experiments`'
+  `analyze` block names a parameter varied by a variation or within a run,
+  where it named a `.step` axis, a deck command not every simulator has.
 - **Breaking:** every argument that names a file is `path`, as
   `run_experiments`, `verify_circuit` and `inspect` already spelled it.
   `plot_waveform` takes `path` for `raw_file`. An `analyze_results` source
