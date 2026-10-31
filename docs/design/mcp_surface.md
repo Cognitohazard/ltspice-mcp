@@ -1523,7 +1523,14 @@ cursors where listed:
     exporter presence (`exporter_available`); `open_window_sync: {available,
     reason, starts_ltspice}` (whether edit_schematic keeps a sheet open in an
     LTspice window in step with its file, and whether in_ltspice starts
-    LTspice when no window is open); dialects; job persistence
+    LTspice when no window is open); dialects; `simulator_capabilities:
+    {families: {<family>: {<capability>: {kind, status, reason?}}}, evidence}`
+    (what each detected family can do here: every capability the server
+    offers, `baseline` or `refinement`, as `supported`, a declared `gap`,
+    `unverified`, or `unavailable_here` when this host rules it out, with
+    the reason; the evidence behind each entry, and the undetected families,
+    are at the `spice://capabilities` resource and
+    `spice://capabilities/{family}`); job persistence
     (`persist_jobs`); the sandbox (allowed_paths, null when none is set);
     `tool_profile`; the tool listing this session was served
     (`tool_listing`) and what its replies' text blocks hold

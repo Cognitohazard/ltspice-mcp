@@ -293,10 +293,16 @@ class TestRetiredToolPrefixInSourceStrings:
     #                   prefixes
     #   ltspice_event — log-record extra key used by observability
     #   ltspice_ini   — configured startup file for controlled LTspice runs
+    #   ltspice_bridge — the module the capability table names as implementing
+    #                   the open-window capability
+    #   ltspice_recorded — the recorded-fixtures directory the capability
+    #                   table's evidence references point into
     _NON_TOOL_TOKENS: ClassVar[set[str]] = {
         "ltspice_mcp",
         "ltspice_event",
         "ltspice_ini",
+        "ltspice_bridge",
+        "ltspice_recorded",
     }
 
     def test_no_tool_is_registered_under_the_prefix(self) -> None:

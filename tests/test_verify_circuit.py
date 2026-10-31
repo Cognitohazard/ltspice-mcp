@@ -32,6 +32,7 @@ from typing import Any, get_args
 import jsonschema
 import pytest
 from pydantic import ValidationError
+from spicelib.simulators.xyce_simulator import XyceSimulator
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
@@ -2099,3 +2100,35 @@ class TestRenderAndCompareArguments:
         stays one declaration and the extra half is visibly that tool's own.
         """
         assert issubclass(_model_of(tool, field), shared)
+
+
+class FakeXyce(XyceSimulator):
+    """A Xyce install: a family the validator declares no rules for."""
+
+    spice_exe: typing.ClassVar[list[str]] = ["/fake/path/Xyce"]
+
+
+async def test_a_family_with_no_validator_rules_gets_the_neutral_checks_and_says_so(
+    config, work_dir
+):
+    """A session whose default simulator is Xyce had its decks checked against
+    LTspice's rules, so a .meas named 'q' was a finding Xyce does not have. The
+    check now runs the dialect-neutral rules for a family the capability table
+    declares no validator rules for, and the reply names the declared gap."""
+    deck = work_dir / "rc.cir"
+    deck.write_text(
+        "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n"
+        ".meas tran q FIND V(out) AT 0.5m\n.end\n"
+    )
+    with_ltspice = await _run(_with_ltspice(config), path=str(deck), checks=["syntax"])
+    assert [f["at"]["line"] for f in with_ltspice["findings"]] == [6]
+
+    state = SessionState.create(config, available={"xyce": FakeXyce})
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    assert data["checks_run"] == ["syntax"]
+    assert data["findings"] == []
+    assert any(
+        note.startswith("syntax: No validator rules for Xyce are declared")
+        for note in data["observations"]
+    ), data["observations"]

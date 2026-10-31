@@ -326,9 +326,10 @@ The `lp` measurement comes back as (abridged):
 If the result is off target, the assistant edits the netlist and runs it
 again. A long simulation returns a job ID instead of waiting, and
 `jobs(action="status" | "wait" | "cancel")` checks on the job, waits for it
-or cancels it. Jobs, signals, measurements and the configuration are also
-readable as MCP resources (`spice://results/...`, `spice://netlists/...`,
-`spice://config`).
+or cancels it. Jobs, signals, measurements, the configuration and what each
+simulator family can do are also readable as MCP resources
+(`spice://results/...`, `spice://netlists/...`, `spice://config`,
+`spice://capabilities`).
 
 Sweeps and Monte Carlo are set in the `variations` argument of
 `run_experiments` and have no tools of their own.

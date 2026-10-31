@@ -22,7 +22,8 @@ from ltspice_mcp.config import (
     SIM_SECTION,
     ServerConfig,
 )
-from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib import capabilities, hidden_desktop
+from ltspice_mcp.lib.families import FAMILIES
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
@@ -67,14 +68,6 @@ SIMULATORS: dict[str, type] = {
     "xyce": XyceSimulator,
 }
 
-#: How a person names each family, in messages and the server instructions.
-SIMULATOR_DISPLAY: dict[str, str] = {
-    "ltspice": "LTspice",
-    "ngspice": "ngspice",
-    "qspice": "QSPICE",
-    "xyce": "Xyce",
-}
-
 # Each family's spicelib base class: the detected class, except that LTspice's
 # platform subclass (LTspiceWSL) is widened to its base, so every LTspice class
 # belongs to the family.
@@ -85,10 +78,6 @@ _FAMILY_BASES: dict[str, type] = {**SIMULATORS, "ltspice": LTspice}
 _FAMILY_BY_CLASS_NAME: dict[str, str] = {
     cls.__name__: family for family, cls in (*SIMULATORS.items(), *_FAMILY_BASES.items())
 }
-
-# Families that read the netlist LTspice exports from a schematic: LTspice as
-# exported, ngspice once ``deck_prep`` has scrubbed it.
-_READS_LTSPICE_EXPORT = frozenset({"ltspice", "ngspice"})
 
 
 def simulator_family(simulator: type | str | None) -> str | None:
@@ -110,21 +99,15 @@ def simulator_family(simulator: type | str | None) -> str | None:
 def family_refusal(family: str | None) -> str | None:
     """Why runs on ``family`` cannot happen on this host, or None when they can.
 
-    QSPICE is a Windows program, and spicelib starts it with this host's own
-    file paths. Only LTspice has an adapter that translates them for a Windows
-    simulator (``LTspiceWSL``, and spicelib's Wine prefix for LTspice), so off
-    native Windows a QSPICE run is handed paths it cannot open. spicelib itself
-    looks for QSPICE only on Windows and documents no Wine support for it.
+    The capability table's ``run`` entry says which hosts a family runs on
+    (``capabilities``). QSPICE is a Windows program, and spicelib starts it
+    with this host's own file paths. Only LTspice has an adapter that
+    translates them for a Windows simulator (``LTspiceWSL``, and spicelib's
+    Wine prefix for LTspice), so off native Windows a QSPICE run is handed
+    paths it cannot open. spicelib itself looks for QSPICE only on Windows and
+    documents no Wine support for it.
     """
-    host = _platform_key()
-    if family == "qspice" and host != "windows":
-        return (
-            "QSPICE runs only when this server itself runs on Windows: it is a "
-            "Windows program, spicelib starts it with this host's own file paths, "
-            f"and under {'WSL' if host == 'wsl' else 'Wine'} it cannot open them "
-            "(only LTspice has a path adapter here)."
-        )
-    return None
+    return capabilities.host_refusal(family, platform_key())
 
 
 def asc_export_refusal(simulator_class: type | None) -> str | None:
@@ -134,24 +117,31 @@ def asc_export_refusal(simulator_class: type | None) -> str | None:
     LTspice's own dialect (``.backanno``, its ``§`` name prefix and ``µ`` unit
     suffix, ``.lib`` lines into LTspice's model library). LTspice reads it, and
     ngspice reads it once ``deck_prep`` has scrubbed those; any other family is
-    refused rather than handed a dialect it was never checked against. A class
-    outside the supported families is left to the export as before.
+    refused rather than handed a dialect it was never checked against, as the
+    capability table's ``reads_asc_export`` entries declare. A class outside
+    the supported families is left to the export as before.
     """
-    family = simulator_family(simulator_class)
-    if family is None or family in _READS_LTSPICE_EXPORT:
-        return None
-    display = SIMULATOR_DISPLAY[family]
-    return (
-        "LTspice exports a schematic in its own netlist dialect, which is not "
-        f"prepared for {display}, so a run on {display} takes a hand-written "
-        ".cir/.net/.sp netlist."
-    )
+    return capabilities.gap_reason(simulator_family(simulator_class), "reads_asc_export")
 
 
 #: The families a run can be put on (``run_experiments``' ``execution.simulator``),
 #: and so the families a named executable may belong to: every supported one.
 #: Whether this host can run a family is asked per run (``family_refusal``).
-_RUN_FAMILIES: tuple[str, ...] = tuple(SIMULATORS)
+_RUN_FAMILIES: tuple[str, ...] = FAMILIES
+
+#: The family a deck is read as when nothing names one: LTspice, the primary
+#: simulator. The one fallback, for lint and for ``verify_circuit``.
+DEFAULT_FAMILY = "ltspice"
+
+
+def family_for(dialect: str | None, simulator: type | str | None) -> str | None:
+    """The family a deck is linted and validated for, or None when nothing names
+    one. A raw dialect names its family for every simulator but LTspice, whose
+    dialect is also what a raw nothing names reads as, so a non-LTspice
+    dialect decides; otherwise the simulator class or recorded class name does."""
+    named_by_dialect = dialect if dialect in SIMULATORS and dialect != "ltspice" else None
+    return named_by_dialect or simulator_family(simulator)
+
 
 #: A named executable's own name: lower case, so a selector is spelled one way.
 _EXECUTABLE_NAME_PATTERN = r"[a-z0-9][a-z0-9._-]{0,31}"
@@ -661,7 +651,9 @@ def install_hint() -> str:
     return f"{install}, {configure}simulator executable"
 
 
-def _platform_key() -> str:
+def platform_key() -> str:
+    """The host this server runs on, as the capability table names hosts:
+    ``windows``, ``wsl``, ``linux`` or ``darwin`` (``families.HOSTS``)."""
     if is_wsl():
         return "wsl"
     return {"Windows": "windows", "Darwin": "darwin"}.get(platform.system(), "linux")
@@ -734,7 +726,7 @@ def simulator_remediation(name: str, config: ServerConfig) -> dict[str, object]:
         "excluded_by_allowlist": excluded,
         "action": action,
     }
-    example = _SIMULATOR_EXE_EXAMPLES.get(name, {}).get(_platform_key())
+    example = _SIMULATOR_EXE_EXAMPLES.get(name, {}).get(platform_key())
     if example is not None:
         remediation["example_value"] = example
     return remediation

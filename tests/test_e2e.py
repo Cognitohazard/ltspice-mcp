@@ -893,7 +893,7 @@ class TestResources:
     async def test_list_resources_returns_static_set(self, shared_session: ClientSession):
         result = await shared_session.list_resources()
         resources = {r.name: r for r in result.resources}
-        assert len(resources) == 6
+        assert len(resources) == 7
         assert set(resources.keys()) == {
             "netlists",
             "results",
@@ -901,15 +901,23 @@ class TestResources:
             "recent",
             "plot_widget",
             "guide",
+            "capabilities",
         }
         assert str(resources["config"].uri) == "spice://config"
         assert str(resources["recent"].uri) == "spice://recent"
         assert str(resources["guide"].uri) == "spice://guide"
+        assert str(resources["capabilities"].uri) == "spice://capabilities"
 
-    async def test_list_resource_templates_returns_four(self, shared_session: ClientSession):
+    async def test_list_resource_templates_returns_five(self, shared_session: ClientSession):
         result = await shared_session.list_resource_templates()
         templates = {t.name for t in result.resource_templates}
-        assert templates == {"guide_section", "netlist_content", "job_signals", "job_measurements"}
+        assert templates == {
+            "family_capabilities",
+            "guide_section",
+            "netlist_content",
+            "job_signals",
+            "job_measurements",
+        }
 
     async def test_read_ui_widget_resource_over_protocol(self, shared_session: ClientSession):
         # The MCP Apps renderer is served under the ui:// scheme — exercise the

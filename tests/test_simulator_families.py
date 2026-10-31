@@ -23,7 +23,6 @@ from spicelib.simulators.qspice_simulator import Qspice
 from spicelib.simulators.xyce_simulator import XyceSimulator
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import simulator as simulator_mod
 from ltspice_mcp.lib import store
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.simulator import (
@@ -46,6 +45,9 @@ from tests.conftest import (
     stand_in_program,
     submit_experiment,
     terminal_experiment,
+)
+from tests.conftest import (
+    fake_host as _host,
 )
 
 # The banner Xyce 7 opens its log with (the -l file spicelib asks for), in the
@@ -142,17 +144,6 @@ def _stand_in(base: type, program: Path, raw: bytes, log: str) -> type:
             "run": classmethod(run),
         },
     )
-
-
-def _host(monkeypatch: pytest.MonkeyPatch, platform_key: str) -> None:
-    """Run as if the server ran on ``platform_key``: windows, wsl, linux or darwin."""
-    monkeypatch.setattr(simulator_mod, "_platform_key", lambda: platform_key)
-
-
-@pytest.fixture
-def windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """This host is native Windows, the one place QSPICE runs."""
-    _host(monkeypatch, "windows")
 
 
 @pytest.fixture

@@ -61,7 +61,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
-from ltspice_mcp.lib.hierarchy import SemanticProfile
+from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.native_inputs import NativeCaseValidator
 from ltspice_mcp.lib.native_records import NativeCaseRecord
@@ -1039,7 +1039,7 @@ async def _prepare_circuit(
                     if dialect == "ngspice"
                     else None,
                 )
-                if dialect in {"ltspice", "ngspice"}
+                if dialect in SUPPORTED_FAMILIES
                 else None
             ),
             record_source_lineage=native is not None or args.execution.recoverable,

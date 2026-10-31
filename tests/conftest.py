@@ -282,6 +282,19 @@ class FakeSim:
     spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
 
 
+def fake_host(monkeypatch: pytest.MonkeyPatch, platform_key: str) -> None:
+    """Run as if the server ran on ``platform_key``: windows, wsl, linux or darwin."""
+    from ltspice_mcp.lib import simulator as simulator_mod
+
+    monkeypatch.setattr(simulator_mod, "platform_key", lambda: platform_key)
+
+
+@pytest.fixture
+def windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This host is native Windows, the one place QSPICE runs."""
+    fake_host(monkeypatch, "windows")
+
+
 def installed_simulator(*library_dirs: Path, base: type = FakeSim) -> type:
     """A detected simulator whose own model library is ``library_dirs``.
 

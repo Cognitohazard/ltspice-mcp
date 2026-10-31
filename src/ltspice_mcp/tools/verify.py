@@ -77,9 +77,10 @@ from mcp import types
 from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
-from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
+from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, capabilities
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
+from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
@@ -108,7 +109,7 @@ from ltspice_mcp.lib.sheet_findings import (
 from ltspice_mcp.lib.sheet_findings import (
     findings as sheet_findings,
 )
-from ltspice_mcp.lib.simulator import is_ngspice
+from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_ops import (
@@ -2332,8 +2333,22 @@ async def evaluate_verify_circuit(
 
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
-        # The simulator a run_experiments call with no override would use.
-        simulator = "ngspice" if is_ngspice(state.default_simulator) else "LTspice"
+        # The simulator a run_experiments call with no override would use, by
+        # the display name the validator keys its rules on. With none detected
+        # the deck is checked as the default family reads it, and the reply
+        # says so; a family the capability table declares no validator rules
+        # for gets the dialect-neutral checks only, and the reply says that.
+        family = family_for(None, state.default_simulator)
+        if family is None:
+            family = DEFAULT_FAMILY
+            observation_events.append(
+                "syntax: no simulator is detected; the deck was checked as "
+                f"{DISPLAY[family]} reads it."
+            )
+        simulator = DISPLAY[family]
+        gap = capabilities.gap_reason(family, "validator_rules")
+        if gap is not None:
+            observation_events.append(f"syntax: {gap}")
         findings.extend(
             await asyncio.to_thread(
                 _syntax_findings,

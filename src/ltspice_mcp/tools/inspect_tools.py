@@ -131,12 +131,14 @@ from ltspice_mcp.errors import (
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
     NETLIST_SUFFIXES,
+    capabilities,
     guide,
     response_budget,
     services,
     simulator_docs,
 )
 from ltspice_mcp.lib import file_stamp as stamps
+from ltspice_mcp.lib import simulator as simulator_mod
 from ltspice_mcp.lib.asc_document import ROTATIONS
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
@@ -152,7 +154,7 @@ from ltspice_mcp.lib.connectivity import (
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
     model_row,
@@ -524,6 +526,7 @@ CapabilityField: TypeAlias = Literal[
     "render",
     "open_window_sync",
     "dialects",
+    "simulator_capabilities",
     "diagnostics",
     "ngbehavior",
     "persist_jobs",
@@ -539,9 +542,10 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, and which a run can select; the named
-    executables, whether the .asc exporter is available, job persistence, the
-    sandbox, the configured limits, and the linter version."""
+    reported builds and raw dialects, which a run can select and what each can
+    do here; the named executables, whether the .asc exporter is available,
+    job persistence, the sandbox, the configured limits, and the linter
+    version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -656,7 +660,7 @@ class HierarchyQuery(StrictModel):
         min_length=1, description=f"Netlist {NETLIST_SUFFIX_TEXT}; export a schematic first."
     )
     simulator: str = Field(
-        pattern=selector_pattern(("ltspice", "ngspice")),
+        pattern=selector_pattern(sorted(SUPPORTED_FAMILIES)),
         description=(
             "Offline semantic backend; installation is not required. 'ltspice:<name>' "
             "spells names for that named build."
@@ -1188,6 +1192,13 @@ def _do_capabilities(
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
         },
+        # What each detected family can do here, from the capability table:
+        # every capability's kind and status, with the reason for a gap, an
+        # unverified one or one this host rules out. The evidence behind each
+        # entry is served by the resource the view names.
+        "simulator_capabilities": capabilities.session_view(
+            simulator_mod.platform_key(), state.available_simulators
+        ),
         # What went wrong at startup, verbatim: a configured simulator path
         # that does not exist, a requested engine that fell back to another,
         # a WSL auto-detection. Otherwise these live only in the server's own
