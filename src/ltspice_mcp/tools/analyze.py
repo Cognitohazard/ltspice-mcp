@@ -624,8 +624,8 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
     group_by: list[str] = Field(
         default_factory=list,
         description=(
-            "Split each recipe's reductions along these dimensions: a variation "
-            "assignment parameter name, 'circuit', or a .step axis name. Empty "
+            "Split each recipe's reductions along these dimensions: 'circuit', or "
+            "the name of a parameter varied by a variation or within a run. Empty "
             "gives one reduction over every row."
         ),
     )

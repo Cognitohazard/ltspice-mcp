@@ -10,11 +10,14 @@ the way LTspice spells it.
 
 from __future__ import annotations
 
+import io
 import os
+from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.lib.asc_document import Shape, Symbol, parse_asc
+from ltspice_mcp.lib.schematic_ops import make_editor
 from tests import _ltspice_recorded as rec
 from tests._schematic_fixtures import formatted
 from tests.ltspice_recorder import INPUTS, discover_builds
@@ -83,6 +86,20 @@ class TestWhatASaveChanges:
         assert parse_asc(given("save/built")).version == "4"
         version = parse_asc(saved(build, "save/built")).version
         assert version == ("4" if rec.generation(build) == "xvii" else "4.1")
+
+    def test_text_on_its_side_stays_on_its_side(self, build: str, tmp_path: Path):
+        """As the schematic editor the server edits with writes it too, though
+        its reader takes such text for upright (docs/spicelib_bugs.md)."""
+        sheet = tmp_path / "shuffled.asc"
+        sheet.write_bytes(given("save/shuffled"))
+        written = io.StringIO()
+        make_editor(sheet).save_netlist(written)
+        theirs, ours = (
+            [line for line in data.splitlines() if line.startswith(b"TEXT ")]
+            for data in (saved(build, "save/shuffled"), written.getvalue().encode())
+        )
+        assert b"TEXT 16 16 VRight 3 !.op" in theirs
+        assert ours == theirs
 
     def test_a_crlf_sheet_comes_back_as_the_lf_one(self, build: str):
         assert b"\r\n" in given("save/crlf")

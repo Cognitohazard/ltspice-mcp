@@ -664,6 +664,7 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
         "symbol_overlap": 0,
         "wire_through_symbol": 0,
         "attribute_text_overlap": 0,
+        "sheet_text_overlap": 0,
     }
     assert quality["rules_run"] == {
         "shared_reference": 0,
@@ -718,6 +719,21 @@ async def test_layout_reports_attribute_text_under_a_ground_flag(
     assert found["evidence"]["detail"] == (
         "R1's text '{Rload*2}' at (168,168) is drawn across the ground at (140,168)"
     )
+
+
+async def test_layout_reports_comments_drawn_over_each_other(state_no_sim, work_dir):
+    """A comment drawn across another: before this rule, sheet text was
+    compared only with part text, so the overlap was checked by eye."""
+    sheet = (
+        "Version 4\nSHEET 1 880 680\n"
+        "TEXT 100 100 Left 2 ;the loop's crossover target\n"
+        "TEXT 160 100 Left 2 ;phase margin at least 45 degrees\n"
+    )
+    asc = _write(work_dir, "notes.asc", sheet)
+    layout = await _run(state_no_sim, path=str(asc), checks=["layout"])
+    (found,) = [f for f in layout["findings"] if f["rule_id"] == "sheet_text_overlap"]
+    assert found["evidence"]["detail"].startswith("The text ")
+    assert layout["rules_run"]["sheet_text_overlap"] == 1
 
 
 async def test_quality_reports_a_part_giving_a_parameter_twice(

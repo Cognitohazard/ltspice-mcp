@@ -214,6 +214,13 @@ _RULES = (
         check="layout",
     ),
     Rule(
+        "sheet_text_overlap",
+        "drawing",
+        "point",
+        "A comment, directive or net label drawn across another.",
+        check="layout",
+    ),
+    Rule(
         "label_over_component",
         "drawing",
         "part",
@@ -378,6 +385,11 @@ class _Index:
         ]
         #: Every point a wire ends at.
         self.wire_ends = {end for wire in self.wires for end in wire}
+        #: The labels', comments' and directives' text, each with what its
+        #: glyphs surely cover.
+        self.sheet_texts = [
+            ((x, y), text, _core(extent)) for x, y, text, extent in view.text_extents
+        ]
 
 
 def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
@@ -988,7 +1000,7 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     texts: list[tuple[Part | None, Point, str, BBox]] = [
         (part, at, text, core) for _index, part, at, text, core in drawn
     ]
-    texts += [(None, (x, y), text, _core(extent)) for x, y, text, extent in ix.view.text_extents]
+    texts += [(None, at, text, core) for at, text, core in ix.sheet_texts]
     found: list[Finding] = []
     for n, (index, part, at, text, core) in enumerate(drawn):
         # What the text is drawn across: words for it, the parts and the
@@ -1043,6 +1055,25 @@ def _attribute_of(part: Part, text: str) -> str:
     """Which of a part's two drawn attributes ``text`` is: its reference, which
     the InstName window shows, or else its value."""
     return "InstName" if text == part.ref else "Value"
+
+
+@_finds("sheet_text_overlap")
+def _sheet_texts_across_each_other(ix: _Index) -> list[Finding]:
+    # Text at one anchor is stacked_directive's to say (or, for labels, the
+    # net rules'), so only texts placed at different points are compared.
+    return [
+        Finding(
+            "sheet_text_overlap",
+            f"The text {text!r} at {_at(at)} is drawn across the text {other!r} at "
+            f"{_at(other_at)}",
+            points=(at, other_at),
+            facts={"text": text, "other_text": other},
+        )
+        for (at, text, core), (other_at, other, other_core) in itertools.combinations(
+            ix.sheet_texts, 2
+        )
+        if other_at != at and other_core.overlaps(core)
+    ]
 
 
 @_finds("label_over_component")
@@ -1191,6 +1222,10 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
       side, not in an empty corner of its body. Only the anchor is tested, so
       the later lines of a directive that runs down into a part are not
       reported.
+    - ``sheet_text_overlap``: a comment, directive or net label whose text,
+      laid out and estimated as for ``attribute_text_overlap``, shares an area
+      with another's by more than the estimate's slack. Texts at one anchor
+      are ``stacked_directive``'s.
     - ``stacked_directive``: two or more directives or comments at exactly one
       anchor, with no guess at how far text reaches.
     - ``label_island``: a net joined only by labels of one name, with no wire

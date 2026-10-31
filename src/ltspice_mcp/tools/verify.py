@@ -268,8 +268,9 @@ _RULES_OF_CHECK: dict[str, tuple[str, ...]] = {
 # to the one fact that changes what a caller concludes — the scan's blind spot,
 # not how bounding boxes are built.
 LAYOUT_COVERAGE = (
-    "Layout scan checks attribute text by extents estimated from LTspice's font; "
-    "directives and comments only where attribute text crosses them."
+    "Layout scan checks text by extents estimated from LTspice's font: a part's "
+    "text against what it crosses, and comments, directives and labels against "
+    "each other."
 )
 
 

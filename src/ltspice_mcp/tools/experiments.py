@@ -353,8 +353,8 @@ class AttachedAnalysis(
     group_by: list[str] = Field(
         default_factory=list,
         description=(
-            "Split reductions along these dimensions: a variation assignment "
-            "parameter name, 'circuit', or a .step axis name."
+            "Split reductions along these dimensions: 'circuit', or the name of "
+            "a parameter varied by a variation or within a run."
         ),
     )
     include: Annotated[

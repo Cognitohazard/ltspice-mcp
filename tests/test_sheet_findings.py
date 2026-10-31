@@ -68,6 +68,7 @@ class TestTheRegistry:
                 "symbol_overlap",
                 "wire_through_symbol",
                 "attribute_text_overlap",
+                "sheet_text_overlap",
                 "label_over_component",
                 "text_in_symbol_body",
                 "stacked_directive",
@@ -98,6 +99,7 @@ class TestTheRegistry:
                 "symbol_overlap",
                 "wire_through_symbol",
                 "attribute_text_overlap",
+                "sheet_text_overlap",
             },
             "quality": {
                 "shared_reference",
@@ -728,6 +730,28 @@ class TestHowTheSheetReads:
             ("R1",),
             ((0, 0), (40, 0)),
             {"text": "10k", "across": "ground"},
+        )
+
+    def test_sheet_texts_drawn_across_each_other(self) -> None:
+        """Comments, directives and net labels drawn over one another. Text
+        at one anchor is stacked_directive's, and is not said twice."""
+        view = SheetView(
+            text_extents=(
+                (0, 0, ".tran 1m", BBox(0, -8, 80, 14)),
+                (40, 0, "a note", BBox(40, -8, 120, 14)),
+                (300, 0, "OUT", BBox(300, -8, 340, 14)),
+                (300, 0, ".op", BBox(300, -8, 330, 14)),
+                (500, 0, "apart", BBox(500, -8, 560, 14)),
+            )
+        )
+        (found,) = only(view, "sheet_text_overlap")
+        assert found.detail == (
+            "The text '.tran 1m' at (0,0) is drawn across the text 'a note' at (40,0)"
+        )
+        assert (found.refs, found.points, found.facts) == (
+            (),
+            ((0, 0), (40, 0)),
+            {"text": ".tran 1m", "other_text": "a note"},
         )
 
     def test_text_at_one_anchor(self) -> None:

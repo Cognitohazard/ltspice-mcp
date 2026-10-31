@@ -240,7 +240,9 @@ server with it:
 uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
 ```
 
-With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude
+With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. For a server
+run from a source checkout, run `uv sync --extra raster` in the checkout; a
+plain `uv sync` already installs it with the development tools. The Claude
 Code plugin and the Claude Desktop extension already include it. The extra's
 rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no other library.
 Restart the server afterwards. The image `plot_waveform` attaches with

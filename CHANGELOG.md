@@ -178,9 +178,22 @@ tool-surface changes.
   the old name and the new one into the file, kept the part under the old
   name, and reported that the part had no name before. It now renames the
   part, and refuses a name that another part has in any case.
+- Every edit of a sheet turned its comments and directives drawn on their
+  side (`VLeft`, `VRight` and the like) upright, whatever the edit changed:
+  spicelib's reader drops the turn. `edit_schematic` now saves each as the
+  sheet drew it, as LTspice does when it saves a sheet (recorded:
+  `save/shuffled`).
+- The refusal for a missing `raster` extra named ways to install the server
+  with the extra, none of which reaches a server run from a source checkout.
+  It now also names `uv sync --extra raster` for that case.
 
 ### Added
 
+- The sheet rule `sheet_text_overlap` reports a comment, directive or net
+  label drawn across another, by the extent estimated from LTspice's font
+  that `attribute_text_overlap` uses. `verify_circuit` reports it under the
+  `layout` check, and `edit_schematic` with its other findings. Texts at one
+  anchor are left to `stacked_directive`.
 - `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
   reply's serialized `structuredContent` in its text block, as the MCP
   specification recommends for a client that passes only the text to the
@@ -244,6 +257,9 @@ tool-surface changes.
 
 ### Changed
 
+- `group_by`'s description in `analyze_results` and in `run_experiments`'
+  `analyze` block names a parameter varied by a variation or within a run,
+  where it named a `.step` axis, a deck command not every simulator has.
 - **Breaking:** an inline `waveform` value sends its axis once, as `x` beside
   `series`, instead of once in every series: every trace of one plot is read
   at the same points. A 32-bit trace's samples are written in their shortest
