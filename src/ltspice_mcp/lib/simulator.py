@@ -22,7 +22,8 @@ from ltspice_mcp.config import (
     SIM_SECTION,
     ServerConfig,
 )
-from ltspice_mcp.lib import hidden_desktop
+from ltspice_mcp.lib import capabilities, hidden_desktop
+from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
@@ -67,13 +68,9 @@ SIMULATORS: dict[str, type] = {
     "xyce": XyceSimulator,
 }
 
-#: How a person names each family, in messages and the server instructions.
-SIMULATOR_DISPLAY: dict[str, str] = {
-    "ltspice": "LTspice",
-    "ngspice": "ngspice",
-    "qspice": "QSPICE",
-    "xyce": "Xyce",
-}
+#: How a person names each family, in messages and the server instructions
+#: (``families.DISPLAY``, kept here for its importers).
+SIMULATOR_DISPLAY: dict[str, str] = DISPLAY
 
 # Each family's spicelib base class: the detected class, except that LTspice's
 # platform subclass (LTspiceWSL) is widened to its base, so every LTspice class
@@ -85,10 +82,6 @@ _FAMILY_BASES: dict[str, type] = {**SIMULATORS, "ltspice": LTspice}
 _FAMILY_BY_CLASS_NAME: dict[str, str] = {
     cls.__name__: family for family, cls in (*SIMULATORS.items(), *_FAMILY_BASES.items())
 }
-
-# Families that read the netlist LTspice exports from a schematic: LTspice as
-# exported, ngspice once ``deck_prep`` has scrubbed it.
-_READS_LTSPICE_EXPORT = frozenset({"ltspice", "ngspice"})
 
 
 def simulator_family(simulator: type | str | None) -> str | None:
@@ -110,21 +103,15 @@ def simulator_family(simulator: type | str | None) -> str | None:
 def family_refusal(family: str | None) -> str | None:
     """Why runs on ``family`` cannot happen on this host, or None when they can.
 
-    QSPICE is a Windows program, and spicelib starts it with this host's own
-    file paths. Only LTspice has an adapter that translates them for a Windows
-    simulator (``LTspiceWSL``, and spicelib's Wine prefix for LTspice), so off
-    native Windows a QSPICE run is handed paths it cannot open. spicelib itself
-    looks for QSPICE only on Windows and documents no Wine support for it.
+    The capability table's ``run`` entry says which hosts a family runs on
+    (``capabilities``). QSPICE is a Windows program, and spicelib starts it
+    with this host's own file paths. Only LTspice has an adapter that
+    translates them for a Windows simulator (``LTspiceWSL``, and spicelib's
+    Wine prefix for LTspice), so off native Windows a QSPICE run is handed
+    paths it cannot open. spicelib itself looks for QSPICE only on Windows and
+    documents no Wine support for it.
     """
-    host = _platform_key()
-    if family == "qspice" and host != "windows":
-        return (
-            "QSPICE runs only when this server itself runs on Windows: it is a "
-            "Windows program, spicelib starts it with this host's own file paths, "
-            f"and under {'WSL' if host == 'wsl' else 'Wine'} it cannot open them "
-            "(only LTspice has a path adapter here)."
-        )
-    return None
+    return capabilities.host_refusal(family, _platform_key())
 
 
 def asc_export_refusal(simulator_class: type | None) -> str | None:
@@ -134,18 +121,11 @@ def asc_export_refusal(simulator_class: type | None) -> str | None:
     LTspice's own dialect (``.backanno``, its ``§`` name prefix and ``µ`` unit
     suffix, ``.lib`` lines into LTspice's model library). LTspice reads it, and
     ngspice reads it once ``deck_prep`` has scrubbed those; any other family is
-    refused rather than handed a dialect it was never checked against. A class
-    outside the supported families is left to the export as before.
+    refused rather than handed a dialect it was never checked against, as the
+    capability table's ``reads_asc_export`` entries declare. A class outside
+    the supported families is left to the export as before.
     """
-    family = simulator_family(simulator_class)
-    if family is None or family in _READS_LTSPICE_EXPORT:
-        return None
-    display = SIMULATOR_DISPLAY[family]
-    return (
-        "LTspice exports a schematic in its own netlist dialect, which is not "
-        f"prepared for {display}, so a run on {display} takes a hand-written "
-        ".cir/.net/.sp netlist."
-    )
+    return capabilities.gap_reason(simulator_family(simulator_class), "reads_asc_export")
 
 
 #: The families a run can be put on (``run_experiments``' ``execution.simulator``),
@@ -665,6 +645,12 @@ def _platform_key() -> str:
     if is_wsl():
         return "wsl"
     return {"Windows": "windows", "Darwin": "darwin"}.get(platform.system(), "linux")
+
+
+def platform_key() -> str:
+    """The host this server runs on, as the capability table names hosts:
+    ``windows``, ``wsl``, ``linux`` or ``darwin`` (``families.HOSTS``)."""
+    return _platform_key()
 
 
 # Realistic executable locations per simulator and platform, shown as the

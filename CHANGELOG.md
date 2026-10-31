@@ -8,7 +8,29 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Added
+
+- A declared table of what each simulator family can do: every capability
+  the server offers, marked baseline or refinement, is `supported` with its
+  evidence (a recorded LTspice behaviour, a file another simulator wrote, or
+  a test that runs it), a `gap` with the reason, or `unverified`. The first
+  declared gaps: QSPICE and Xyce have no lint or validator rules, no
+  hierarchy reader (so no nested instance targeting) and no controlled
+  startup; ngspice has no `.step` and evaluates no top-level `.meas` in a
+  batch run. `inspect(kind="capabilities")` reports the detected families'
+  statuses under `simulator_capabilities`, and the `spice://capabilities`
+  resource (and `spice://capabilities/{family}`) serves the whole table with
+  its evidence. The refusals of a QSPICE run off Windows and of a schematic
+  run on QSPICE or Xyce now read the table.
+
 ### Fixed
+
+- `verify_circuit`'s syntax check validated a deck against LTspice's rules
+  whenever the session's default simulator was anything but ngspice, so a
+  QSPICE or Xyce session was told its deck broke rules LTspice has and those
+  simulators do not. It now checks the deck with the dialect-neutral rules
+  only for a family with no declared validator rules, and says so in an
+  observation.
 
 - Where two collinear wires met at a point that another wire passes through,
   the sheet checks merged the two into one wire and did not join the other

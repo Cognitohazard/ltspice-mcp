@@ -54,11 +54,18 @@ RuleCheck = Callable[["_LintContext", "LintRule"], list[LintFinding]]
 
 @dataclass(frozen=True)
 class LintRule:
-    """Metadata and implementation for one deterministic lint rule."""
+    """Metadata and implementation for one deterministic lint rule.
+
+    ``family`` is the simulator family whose reading of a deck the rule
+    models, None for a rule that holds for every family. ``lint_deck`` runs a
+    rule only for its family, and the capability table (``capabilities``)
+    says a family has lint rules only when a rule declares it.
+    """
 
     rule_id: str
     disposition: Disposition
     check: RuleCheck
+    family: str | None = None
 
 
 class _LintFile(NamedTuple):
@@ -935,27 +942,27 @@ RULES: tuple[LintRule, ...] = (
     # A warning, not blocking: ngspice runs the deck and skips only the
     # top-level .meas, and reading the run relays ngspice's own notice of the
     # skip. Refusing the deck would cost the caller the rest of the run.
-    LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch),
+    LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch, family="ngspice"),
     # Blocking: on both builds' defaults a .meas that calls a trig function
     # runs cleanly and reads its angle in degrees, where the same expression
     # in a B source is in radians, and a user setting outside the deck can
     # change that unit. The number that comes back is wrong without any sign
     # in the log, which a warning under the default lint mode does not stop.
-    LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees),
-    LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
+    LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees, family="ltspice"),
+    LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice, family="ngspice"),
     # Blocking: LTspice refuses each of these decks before it runs, or, on XVII
     # for a .meas function or name, fails the measurement the caller asked for.
-    LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice),
-    LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice),
-    LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice),
-    LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice),
+    LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice, family="ltspice"),
+    LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice, family="ltspice"),
+    LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice, family="ltspice"),
+    LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice, family="ltspice"),
     # A warning, not blocking: LTspice 24 and later run another circuit than
     # the one the server reads, XVII the same one, and which build will run
     # the deck is not always known here.
-    LintRule("byte-85-ltspice", "warning", _byte_85_ltspice),
+    LintRule("byte-85-ltspice", "warning", _byte_85_ltspice, family="ltspice"),
     # A warning: LTspice 26 refuses the card and says so in its log, while
     # XVII runs it under a name the server does not spell the same way.
-    LintRule("node-control-byte-ltspice", "warning", _node_control_byte_ltspice),
+    LintRule("node-control-byte-ltspice", "warning", _node_control_byte_ltspice, family="ltspice"),
     LintRule("model-missing", "blocking", _model_missing),
     # One rule per validate_netlist_arity check, each at the disposition its
     # declared severity names, so suppressing one never silences another.
@@ -966,7 +973,7 @@ RULES: tuple[LintRule, ...] = (
     # A warning, not blocking: the run still answers a real question at the base
     # value. What matters is that the caller learns the sweep did not happen,
     # since ngspice itself says nothing.
-    LintRule("step-ngspice", "warning", _step_ngspice),
+    LintRule("step-ngspice", "warning", _step_ngspice, family="ngspice"),
     LintRule("include-relative", "warning", _include_relative),
     LintRule("suffix-mega-milli", "warning", _suffix_mega_milli),
     # Blocking, not a warning: a .param TEMP does not set temperature, so the
@@ -1039,6 +1046,8 @@ def lint_deck(
     findings: list[LintFinding] = []
     for rule in RULES:
         if rule.rule_id in suppressed:
+            continue
+        if rule.family is not None and rule.family != context.family:
             continue
         findings.extend(rule.check(context, rule))
     return findings

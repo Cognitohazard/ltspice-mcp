@@ -53,6 +53,12 @@ _SAFE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _SAFE_NODE = re.compile(r"[A-Za-z0-9_]+\Z")
 
 
+#: The families whose reading of a hierarchy this module models. The
+#: capability table (``capabilities``) declares ``hierarchy`` a gap for every
+#: other family, and a test holds the two to each other.
+SUPPORTED_FAMILIES: frozenset[str] = frozenset({"ltspice", "ngspice"})
+
+
 @dataclass(frozen=True)
 class SemanticProfile:
     simulator: Literal["ltspice", "ngspice"]
@@ -63,7 +69,7 @@ class SemanticProfile:
     xvii_names: bool = False
 
     def __post_init__(self) -> None:
-        if self.simulator not in {"ltspice", "ngspice"}:
+        if self.simulator not in SUPPORTED_FAMILIES:
             raise NetlistError("hierarchy supports ltspice or ngspice")
         if self.simulator == "ltspice" and self.ngbehavior is not None:
             raise NetlistError("ngbehavior is only valid for ngspice")

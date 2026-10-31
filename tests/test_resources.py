@@ -25,7 +25,7 @@ def _text(contents) -> str:
 class TestStaticResources:
     def test_returns_static_resources(self):
         resources = get_static_resources()
-        assert len(resources) == 6
+        assert len(resources) == 7
         names = {r.name for r in resources}
         assert names == {
             "netlists",
@@ -34,6 +34,7 @@ class TestStaticResources:
             "recent",
             "plot_widget",
             "guide",
+            "capabilities",
         }
 
     def test_resource_uris(self):

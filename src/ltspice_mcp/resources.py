@@ -15,7 +15,7 @@ from urllib.parse import quote, unquote
 
 from mcp import types
 
-from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, guide, services
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, capabilities, guide, services
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.plot_html import (
     WIDGET_MIME_TYPE,
@@ -89,7 +89,8 @@ _router = ResourceRouter()
 def get_static_resources() -> list[types.Resource]:
     """Return the static resources always present on this server.
 
-    (netlists, results, config, recent, the guide, and the plot_widget UI renderer.)
+    (netlists, results, config, recent, the guide, the capability table, and the
+    plot_widget UI renderer.)
     """
     return [
         types.Resource(
@@ -142,12 +143,33 @@ def get_static_resources() -> list[types.Resource]:
                 "sections and task playbooks, each readable as spice://guide/{section}."
             ),
         ),
+        types.Resource(
+            name="capabilities",
+            uri=capabilities.RESOURCE_URI,
+            mime_type="application/json",
+            description=(
+                "What each simulator family can do: every capability's status "
+                "(supported, a declared gap, or unverified) with the evidence or the "
+                "reason, for every family whether or not it is detected here. "
+                "inspect(kind='capabilities') shows the detected families' statuses "
+                "without the evidence."
+            ),
+        ),
     ]
 
 
 def get_resource_templates() -> list[types.ResourceTemplate]:
-    """Return the 4 dynamic resource templates."""
+    """Return the 5 dynamic resource templates."""
     return [
+        types.ResourceTemplate(
+            name="family_capabilities",
+            uri_template=f"{capabilities.RESOURCE_URI}/{{family}}",
+            description=(
+                "One simulator family's capabilities with their evidence: ltspice, "
+                "ngspice, qspice or xyce."
+            ),
+            mime_type="application/json",
+        ),
         types.ResourceTemplate(
             name="guide_section",
             uri_template="spice://guide/{section}",
@@ -241,6 +263,26 @@ def _read_guide_section(
     text = guide.read(params["section"])
     state.guide_read = True
     return _make_result(uri_str, text, mime="text/markdown")
+
+
+@_router.route(capabilities.RESOURCE_URI)
+def _read_capabilities(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
+    """Serve the capability table with its evidence, for every family."""
+    del params, state
+    return _make_result(uri_str, json.dumps(capabilities.table_report(), indent=2))
+
+
+@_router.route(f"{capabilities.RESOURCE_URI}/{{family}}")
+def _read_family_capabilities(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
+    """Serve one family's capabilities with their evidence."""
+    del state
+    return _make_result(
+        uri_str, json.dumps(capabilities.family_report(params["family"]), indent=2)
+    )
 
 
 @_router.route("spice://config")

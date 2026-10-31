@@ -131,6 +131,7 @@ from ltspice_mcp.errors import (
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
     NETLIST_SUFFIXES,
+    capabilities,
     guide,
     response_budget,
     services,
@@ -178,6 +179,7 @@ from ltspice_mcp.lib.simulator import (
     current_ngbehavior,
     dialect_for_simulator_name,
     family_refusal,
+    platform_key,
     selector_pattern,
     simulator_family,
     simulator_library_roots,
@@ -524,6 +526,7 @@ CapabilityField: TypeAlias = Literal[
     "render",
     "open_window_sync",
     "dialects",
+    "simulator_capabilities",
     "diagnostics",
     "ngbehavior",
     "persist_jobs",
@@ -538,9 +541,10 @@ CapabilityField: TypeAlias = Literal[
 
 class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
-    reported builds and raw dialects, and which a run can select; the named
-    executables, whether the .asc exporter is available, job persistence, the
-    sandbox, the configured limits, and the linter version."""
+    reported builds and raw dialects, which a run can select and what each can
+    do here; the named executables, whether the .asc exporter is available,
+    job persistence, the sandbox, the configured limits, and the linter
+    version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -1187,6 +1191,13 @@ def _do_capabilities(
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()
         },
+        # What each detected family can do here, from the capability table:
+        # every capability's kind and status, with the reason for a gap, an
+        # unverified one or one this host rules out. The evidence behind each
+        # entry is served by the resource the view names.
+        "simulator_capabilities": capabilities.session_view(
+            platform_key(), state.available_simulators
+        ),
         # What went wrong at startup, verbatim: a configured simulator path
         # that does not exist, a requested engine that fell back to another,
         # a WSL auto-detection. Otherwise these live only in the server's own

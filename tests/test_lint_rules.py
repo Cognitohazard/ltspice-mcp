@@ -770,15 +770,19 @@ def test_rule_metadata_is_limited_to_fields_something_reads():
     """A rule carries only metadata a consumer acts on.
 
     ``disposition`` picks the finding's severity and drives the blocking gate;
-    ``check`` is the rule body. Anything else every rule sets and nothing reads
-    is worse than absent when it names an execution stage: ``lint_deck`` runs
-    every rule unconditionally, so a rule declaring a later stage would run at
-    preflight anyway. Add such a field together with the code that honours it.
+    ``check`` is the rule body; ``family`` is the simulator family a rule
+    models, which ``lint_deck`` runs it for alone and the capability table
+    reads. Anything else every rule sets and nothing reads is worse than
+    absent when it names an execution stage: ``lint_deck`` runs every rule of
+    the deck's family unconditionally, so a rule declaring a later stage would
+    run at preflight anyway. Add such a field together with the code that
+    honours it.
     """
     assert {field.name for field in dataclasses.fields(LintRule)} == {
         "rule_id",
         "disposition",
         "check",
+        "family",
     }
 
 
