@@ -1,6 +1,7 @@
 # Agent evaluation harness — design
 
-Status: proposal (draft 1), not implemented.
+Status: proposal (draft 2, revised after one adversarial review), not
+implemented.
 
 ## 1. Why, and which decisions it serves
 
@@ -13,130 +14,167 @@ discoverability and need that number before they ship:
   `inspect(kind="reference")` (the listing is about 47 KB in compact mode,
   most of it the recipe union);
 - a detail level for reference search;
-- the default of `[tools] text_channel` and `[tools] listing`;
+- the defaults of `[tools] listing` and `[tools] text_channel`;
 - regressions from any later surface change (reply shapes, budgets, errors,
   guide text).
 
-The harness measures, per task: whether the agent succeeded (judged from what
-it left in its workspace), how many tool calls and turns it took, how many
-tool errors it hit and of which code, how many tokens it spent and on what,
-and how large the server's replies were. It compares server variants on the
-same tasks with the same model, paired, with confidence intervals.
+The harness measures, per trial: whether the agent succeeded (judged from what
+it left in its workspace), how many turns and tool calls it took, how many tool
+errors it hit and with which code, how many tokens it read and wrote, and how
+large the server's replies were. It compares server variants on the same tasks
+with the same model and client, paired.
 
-Non-goals: ranking models in general; testing simulator numerics (the
-recorded-fixture tests do that); a CI gate (runs cost money and are opt-in).
+Non-goals: ranking models; testing simulator numerics (the recorded-fixture
+tests do that); a CI gate (runs cost money and are opt-in).
 
-## 2. What is under test
+## 2. What reaches the model: a finding that comes first
 
-The server, as a client sees it: `python -m ltspice_mcp` over stdio, with a
-generated `ltspice-mcp.toml`. The model and the client are the environment
-the server is evaluated in, held fixed within a comparison. A variant changes
-the server only: its configuration, its code revision, or both.
+Which channel a client shows the model decides whether a reply carries any
+data, and it is not the same for every client or even for every Claude Code
+session. In Claude Code 2.1.316, the function that turns an MCP tool result
+into the model's tool result does this when the result has
+`structuredContent`:
 
-## 3. Architecture
+- by default, the model gets the serialized `structuredContent` (plus any
+  image blocks), and the text blocks are dropped;
+- when a remotely controlled flag is on (`tengu_eventual_noodle`, default
+  off), the model gets the `content` blocks instead, and `structuredContent`
+  only when every text block is blank.
+
+So under the server's default `text_channel = "summary"`, a Claude Code
+session with that flag on reads one summary line per reply and no data. The
+eval does not need to establish this; it is a product risk to settle on its own
+(set `text_channel = "json"` by default, or make the summary line carry the
+data). The eval records which rendering a trial used and, in the `claude-code`
+profile, reads what the model actually received from the stream rather than
+assuming it.
+
+## 3. What is under test
+
+The server as a client sees it: `python -m ltspice_mcp` over stdio with a
+generated `ltspice-mcp.toml`, started with an explicit minimal environment
+(`PATH`, `HOME`/`USERPROFILE`, `SYSTEMROOT` on Windows, `LTSPICE_MCP_HOME`);
+no inherited `LTSPICE_MCP_*` variable, since those override the TOML. The model
+and the client are the environment the server is evaluated in, fixed within a
+comparison. A variant changes the server only: its configuration, its code
+revision, or both.
+
+## 4. Architecture
 
 ```
 evals/
-  tasks/<task_id>/task.toml     prompt, category, requirements, grader, split
+  tasks/<task_id>/task.toml     prompt, category, requirements, grader
   tasks/<task_id>/workspace/    files copied into the trial's workspace
   tasks/<task_id>/grader/       reference data, never copied into a workspace
   variants/<name>.toml          server revision + config overlay
-  ltspice_eval/                 runner, client profiles, graders, report rows
-  runs/<suite>/<variant>/       results.jsonl, errors.jsonl, traces/ (gitignored)
+  ltspice_eval/                 runner, client profiles, graders, rows
+  runs/<suite>/                 results.jsonl, errors.jsonl, traces/ (gitignored)
 ```
 
-One trial is one (task, variant, rep). Each trial:
+One trial is one (task, variant, rep):
 
-1. creates a fresh temporary workspace and copies `workspace/` into it;
-2. writes the variant's `ltspice-mcp.toml` there, with `allowed_paths` set to
-   the workspace, job persistence inside it, and `LTSPICE_MCP_HOME` inside it;
-3. starts the server for that variant (`uv run --project <checkout> python -m
-   ltspice_mcp`, cwd = workspace), so no trial sees another's jobs or state;
-4. runs the task through the chosen client profile until the agent stops, a
-   turn limit, a token limit or the wall-clock ceiling;
-5. stops the server, grades the workspace, writes one row (or one error row),
-   and keeps the trace.
+1. a fresh temporary workspace receives `workspace/`, the variant's
+   `ltspice-mcp.toml` (`allowed_paths` = the workspace; job store inside it)
+   and a private `LTSPICE_MCP_HOME`;
+2. the variant's server starts from its own checkout, synced once per run
+   (`uv sync` per variant, then trials run with `--no-sync --frozen`, so
+   concurrent trials never race on a venv);
+3. the client profile runs the task until the agent stops or a limit fires;
+4. the server's whole process tree is stopped (a Job object on Windows),
+   since detached job owners and workers can outlive it, and only then is the
+   workspace graded, ignoring `.ltspice-mcp/` and `ltspice-mcp.toml`;
+5. one row (or one error row) and the trace are written.
 
-Trials run concurrently under a semaphore sized to the account's rate limit
-and the machine's simulator capacity.
+Trials of all variants are interleaved in a randomized order under one
+concurrency limit, so rate limits, cache warmth and time of day fall on every
+variant alike.
 
-## 4. Client profiles
+## 5. Client profiles
 
-Two profiles, because clients differ in exactly the ways the surface work
-cares about (whether `structuredContent` or the text block reaches the model,
-how large a tool result may be, which file tools exist).
+### 5.1 `api`: a controlled client (default)
 
-### 4.1 `api`: a controlled client (default)
+A manual tool-use loop on the Anthropic Messages API (`anthropic` SDK), with
+the server's tools proxied from an MCP `ClientSession`. Manual rather than the
+SDK's tool runner because the harness controls exactly what each tool result
+looks like.
 
-A manual tool-use loop on the Anthropic Messages API (Python `anthropic`
-SDK), with the server's tools proxied from an MCP `ClientSession`. Manual
-rather than the SDK's tool runner, because the harness must control exactly
-what each tool result looks like to the model.
+- **Tools**: the server's `tools/list` as served, plus harness file tools
+  confined to the workspace (`read_file`, `write_file`, `edit_file`,
+  `list_dir`). No shell: the simulator is reached only through the server.
+- **System prompt**: a frozen preamble with the answer convention, then the
+  server's `initialize` instructions, as Claude Code places them (under its
+  MCP server instructions heading). The workspace path goes in the first user
+  message, not the system prompt, so tools and system cache across trials.
+- **Rendering** of a result with `structuredContent`, recorded per row:
+  `structured` (the serialized `structuredContent` plus image blocks: Claude
+  Code's default) or `content` (the content blocks: Claude Code with the flag
+  on, and clients that ignore `structuredContent`). Runs use `structured`
+  unless a variant is about the text channel.
+- **Oversized results**: Claude Code saves a tool result over 25,000 tokens
+  to a file and hands the model its path. The profile records each such
+  event and gives the model a short notice; it does not claim to reproduce
+  the file hand-off.
+- **Caching**: a breakpoint on the last system block and one on the latest
+  turn; tools are never reordered within a trial.
+- **Model and effort** are run parameters; the served `model` is asserted
+  against the requested one on every call.
 
-- **Tools**: the server's `tools/list`, in the order served, plus harness file
-  tools confined to the workspace: `read_file`, `write_file`, `edit_file`,
-  `list_dir`. No shell: the agent reaches the simulator only through the
-  server, which is the surface under test.
-- **System prompt**: a short frozen preamble naming the workspace and the
-  answer convention (§5.3), followed by the server's `initialize`
-  instructions, as MCP clients place them.
-- **Result rendering**, a profile option recorded on every row:
-  - `structured` — the tool result is the JSON of `structuredContent`, with
-    image blocks passed as images; this is what structured-aware clients
-    such as Claude Code show the model;
-  - `text` — only the `content` blocks, as a client that ignores
-    `structuredContent` shows them.
-- **Result cap**: a tool result over a configurable size (default 25,000
-  tokens, as Claude Code enforces) is replaced by an error saying so,
-  mimicking that client; the row counts how often it happened.
-- **Caching**: `cache_control` on the last system block (caches tools and
-  system together) and on the last block of the latest turn; tools are never
-  reordered within a trial.
-- **Model and effort**: run parameters, recorded per row from the response.
-  The served `model` is asserted against the requested one on every call.
+### 5.2 `claude-code`: the real client
 
-### 4.2 `claude-code`: the real client
+```
+claude -p <prompt> --output-format stream-json --verbose
+  --strict-mcp-config --mcp-config <file with the server and its env>
+  --setting-sources "" --tools Read,Write,Edit,Glob,Grep --disallowedTools Bash
+  --permission-mode acceptEdits --permission-prompts none
+  --no-session-persistence --model <m> --effort <e> --max-turns <n>
+  --max-budget-usd <cap>
+```
 
-`claude -p <prompt> --mcp-config <file> --output-format stream-json`, with a
-pinned CLI version recorded per row. The allow-list is the server's tools plus
-Read, Write, Edit, Glob and Grep; Bash is off by default, for the same reason
-as above and because it would let the agent run ngspice itself. Usage, tool
-calls and results are read from the stream. This profile is slower and less
-controlled, and is used to check that `api` results transfer: the baseline is
-run under both, and a variant that wins under `api` is confirmed under
-`claude-code` before it ships.
+run with `DISABLE_AUTOUPDATER=1` and a pinned CLI version, recorded per row.
+`--strict-mcp-config` and empty setting sources keep the operator's own
+`CLAUDE.md`, plugins, skills and MCP servers out. Usage, tool calls and the
+tool results the model received are read from the stream. This profile
+confirms that an `api` result transfers: the baseline and any variant about to
+ship run under it.
 
-## 5. Tasks
+## 6. Tasks
 
-### 5.1 Categories
+### 6.1 Categories
 
 | category | needs | the agent is asked to | graded on |
 |-|-|-|-|
 | `analyze` | nothing | read a recorded `.raw`/`.log` in the workspace and report a quantity (rise time, −3 dB point per step, which step overshoots most, a failed `.meas`) | the reported value against a reference, within a tolerance |
-| `measure` | ngspice | run a given deck, possibly with a sweep, and report a result (phase margin, the R1 where V(out) crosses 2.5 V) | the reported value against a reference |
-| `design` | ngspice | write a deck meeting a spec (an RC low-pass at 1 kHz ±5% with E12 parts; a divider sourcing 1 mA) | the grader simulates the agent's deck itself and checks the spec and constraints |
+| `measure` | ngspice | run a given deck, possibly swept, and report a result (phase margin, the R1 where V(out) crosses 2.5 V) | the reported value against a reference |
+| `design` | ngspice | write a deck meeting a spec (an RC low-pass at 1 kHz ±5% with E12 parts) | the grader simulates the agent's deck itself and checks spec and constraints |
 | `debug` | ngspice | fix a deck that fails or misbehaves, given the symptom a user would report | the fixed deck runs and meets the stated behaviour |
-| `schematic` | symbol fixtures | draw a netlist as an `.asc` with `edit_schematic` | the build benchmark's scorer: the sheet is the netlist (equivalence), and its sheet findings |
-| `ltspice` | LTspice (Windows) | `.meas`-based work and running a sheet | as for `measure`; opt-in suite |
+| `schematic` | symbol fixtures | draw a netlist as an `.asc` with `edit_schematic` | equivalence to the netlist, and the sheet's findings (§7) |
+| `ltspice` | LTspice (Windows, native) | `.meas`-based work and running a sheet | as for `measure`; opt-in suite |
 
-Every category includes cases whose right answer is a refusal or a negative
-("the run did not converge", "that trace does not exist"), so a policy of
-always answering cannot score well.
+Every category includes cases whose right answer is a negative ("the run did
+not converge", "that trace does not exist"), so always answering cannot score
+well. Task authors check what a fixture's name and its `.log` (`.step` lines,
+`.meas` results) give away, and say whether a task tests log reading or trace
+math.
 
-### 5.2 The task file
+`schematic` trials use the suite's symbol set (`tests/fixtures/symbols`, via
+`[schematic] symbol_paths`) for the agent and the grader alike; LTspice's own
+library changes geometry. `ltspice` trials run natively on Windows: under WSL
+the server writes LTspice artifacts to a Windows temp directory outside the
+workspace.
+
+### 6.2 The task file
 
 ```toml
 id = "analyze-step-ac-f3db"
 category = "analyze"
-split = "dev"                 # dev | holdout, drawn at random per category
 requires = []                 # "ngspice", "ltspice"
 prompt = """
 step_ac.raw in your workspace is a stepped AC run of a filter. For each step,
-what is the -3 dB frequency of V(out)?
+what is the -3 dB frequency of V(out)? Write the answer to answer.json as
+{"f3db_hz": [...]} in step order.
 """
 [grader]
-kind = "answer"               # answer | deck | sheet | custom
-answer_schema = "per_step_frequencies"
+kind = "answer"               # answer | deck | sheet
 tolerance = { rel = 0.02 }
 reference = "grader/reference.json"
 [limits]
@@ -144,136 +182,164 @@ max_turns = 30
 wall_clock_s = 600
 ```
 
-### 5.3 How the agent answers
+### 6.3 How the agent answers
 
-In every profile the agent writes `answer.json` in its workspace (the prompt
-gives the expected keys); `design`, `debug` and `schematic` tasks are graded
-on the files they leave. Graders read the workspace after the server has
-stopped and never read the transcript for correctness. Transcript checks are
-only process guardrails, reported as their own metrics: inputs marked
-read-only were not changed; an `.asc` was changed only through
-`edit_schematic`.
+The agent writes `answer.json` in its workspace; `design`, `debug` and
+`schematic` tasks are graded on the files they leave. Graders never read the
+transcript for correctness. Two transcript checks are kept as separate
+guardrail metrics: inputs marked read-only were not changed, and an `.asc`
+was changed only through `edit_schematic`.
 
-### 5.4 Where tasks come from
+### 6.4 Where tasks come from
 
-In order of preference: the maintainer's own past agent sessions with this
-server, and notes already kept on where agents struggled with it; GitHub issues;
-maintainer-written cases (three to five first, with a sentence each on what
-makes them hard); then variations of those, synthesized from the guide's task
-playbooks. Target 30 to 40 tasks for the first suite, a third held out.
-The maintainer reviews every task and signs off before any paid run, and again
-on the graders after a five-task pilot.
+In order: the maintainer's past agent sessions with this server and notes
+kept on where agents struggled; GitHub issues; three to five maintainer-written
+cases, each with a sentence on what makes it hard; then variations of those
+drawn from the guide's playbooks. 30 to 40 tasks for the first suite. The
+maintainer signs off the task set before any paid run, and the graders after a
+five-task pilot.
 
-## 6. Grading
+## 7. Grading
 
-- Graders are independent of the server code under test. References are
-  computed when a task is authored (ngspice version recorded), and a `design`
-  or `debug` grader runs the agent's deck with ngspice directly, not through
-  the server.
-- Reference data lives in `grader/`, which is never copied into a workspace.
+**Independence.** A grader must not run the code a variant changes:
+
+- References are computed when a task is authored, from a pinned grader
+  environment, with the ngspice version recorded.
+- `design` and `debug` graders append their own measurement lines to the
+  agent's deck, run ngspice directly, and read the result with spicelib's raw
+  reader or from ngspice's printed `.meas` output; never through the server.
+- The `schematic` grader is the build benchmark's scorer, which imports the
+  server's connectivity, sheet and netlist code. It runs from one pinned
+  revision in its own environment, recorded on every row, whatever revision
+  the variant runs. Equivalence counts parts, pins and nets; whether a value
+  difference or a missing directive fails the task is set per task. On
+  Windows, LTspice's own netlist export of the agent's sheet is the stronger
+  check, used where available.
+- Reference data lives in `grader/`, never copied into a workspace.
 - Tolerances accept equivalent forms (units, `1k` vs `1000`, rounding).
-- Every grader is tested offline on a known-good and a known-bad end state.
 
-Outcomes are classified, and only model outcomes are scored:
+**Outcomes, by cause:**
 
-| class | goes to | example |
+| outcome | where | status |
 |-|-|-|
-| pass / fail | `results.jsonl` | wrong value, missing `answer.json`, deck misses spec |
-| refusal | `results.jsonl`, own metric | the model declined |
-| truncated | `results.jsonl`, `status: truncated` | hit `max_tokens` |
-| harness or server error | `errors.jsonl` | server crashed, MCP transport died, grader crashed |
-| timeout | `errors.jsonl` | wall-clock ceiling |
+| pass, fail | `results.jsonl` | `ok` |
+| agent still working at the wall clock, turn or token limit | `results.jsonl` (fail) | `timeout`, `max_turns`, `budget` |
+| refusal | `results.jsonl`, own metric | `refused` |
+| server or transport died, simulator hung, grader crashed | `errors.jsonl` | error class |
 
-## 7. Metrics
+A response stopped by `max_tokens` is one call's stop reason: the loop lets the
+model continue, and only a trial that ends that way is marked.
 
-Per row: `pass`; turns; tool calls, total and per tool; tool errors, total and
-per `error.code` (including `invalid_arguments`); tool results over the cap;
-size of each tool result (estimated tokens), total and largest; guide and
-reference lookups; `usage` (input, output, cache read, cache write) summed
-over calls and per call; served model; latency (model time and total wall
-clock, separately); retries; guardrail violations.
+## 8. Metrics
 
-Reported per variant: pass rate with a 95% interval; tokens, cost and tool
-calls per **solved** task; tool errors per trial; paired differences against
-the baseline with bootstrap intervals. Cost is derived from `usage` and the
-row's model, never measured another way.
+Per row: `pass`; status; turns; tool calls, total and per tool; tool errors,
+total and per `error.code` (including `invalid_arguments`); reference and
+guide lookups; size of each tool result in estimated tokens, total and
+largest; oversized-result events; `usage` per call and summed (input, output,
+cache read, cache write); served model; latency (model time and wall clock,
+separately); retries; guardrail violations; the rendering, CLI version and
+grader revision.
 
-## 8. Experiment design
+Reported per variant:
 
-- **Variants** are a server revision (a git ref checked out into a worktree)
-  plus a config overlay: `baseline` is master with defaults; `v1`, `v2`, … are
-  named in their `change.md`.
-- **Paired**: every variant runs the same tasks and reps with the same model,
-  effort and profile.
-- **Reps**: 3 per (task, variant) to start. With 30 tasks that is 90 trials a
-  variant, a noise floor of roughly ±10 points on pass rate; efficiency
-  metrics are continuous and resolve smaller effects.
-- **Sensitivity check** before trusting a result: an ablation variant (tool
-  descriptions and guide stripped) must score clearly worse than baseline. If
-  it doesn't, the suite isn't measuring the surface.
-- **Held-out**: decisions are made on `dev`; the chosen variant is confirmed
-  on `holdout`, which is never used to tune text.
+- pass rate, and paired differences against the baseline;
+- **total input tokens** (input + cache read + cache write) and output tokens
+  per trial: the primary size measure, since dollars depend on cache timing;
+- tool calls and tool errors per trial;
+- tokens per solved task, computed on tasks every compared variant solved,
+  beside the unconditional figures, so a variant that skips hard tasks does
+  not look efficient;
+- intervals by bootstrap over **tasks** (resampling a task with all its
+  reps), since reps of one task are correlated.
 
-## 9. Output
+## 9. Experiment design
 
-`runs/<suite>/<variant>/results.jsonl` (one row per trial, written as each
-finishes, resumable at the (task, rep) key), `errors.jsonl`, and
-`traces/<task>_rep<k>.json` (the full exchange: system prompt, every tool call
-and result, the final answer, and the grader's inputs and verdict). A summary
-command prints the per-variant table and writes a static HTML report.
+- **Variants**: a git ref checked out into a worktree plus a config overlay.
+  `baseline` is master with defaults; `v1`, `v2`, … are described in their
+  `change.md`.
+- **Paired**: same tasks, reps, model, effort, profile and rendering.
+- **Resolution**: with 30 tasks and 3 reps, a pass-rate difference near 50%
+  has an interval of roughly ±17 points; token and tool-call measures resolve
+  smaller effects, and are the expected movers for the §1 changes. The plan
+  states the effect each decision needs before its run.
+- **Noise floor**, measured rather than assumed: an A/A run (two variants
+  with identical servers) before the first comparison.
+- **Positive control**, of the same kind and size as the change under test:
+  for recipe disclosure, a variant that strips only the recipe argument
+  descriptions must measurably raise `invalid_arguments` errors and reference
+  lookups. If it does not, the suite cannot see that change.
+- **Confirmation**: no held-out split in the first version (30 tasks cannot
+  spare one); a variant chosen under `api` is confirmed under `claude-code`.
 
-## 10. Testing the harness itself
+## 10. Output
 
-Offline, in `tests/`, with no API calls: a scripted model replays a fixed
-sequence of tool calls through the real loop and server. An oracle script
-must pass every seed task, and a null script (answers at once with a constant)
-must fail them. Also tested: each grader on good and bad end states, error
-classification (a killed server lands in `errors.jsonl`), resume, and the
-served-model assertion.
+`runs/<suite>/results.jsonl`, one row per trial with its variant, written as
+each trial ends and resumable at the (task, variant, rep) key;
+`errors.jsonl`; `traces/<variant>/<task>_rep<k>.json` (system prompt, every
+tool call and result as the model received it, the answer, the grader's inputs
+and verdict). A summary command prints the per-variant table and writes CSV.
 
-## 11. Safety and isolation
+## 11. Testing the harness itself
+
+Offline, in `tests/`, with no API calls:
+
+- a scripted model replays a fixed sequence of tool calls through the real
+  loop and a real server process; an oracle script must pass every seed task
+  and a null script (answers at once with a constant) must fail them;
+- a fake `ngspice` executable on `PATH` answers `-b -o <log> -r <raw>
+  <netlist>` by copying recorded fixtures, so `measure`-style seed tasks run
+  in CI;
+- each grader on a known-good and a known-bad end state;
+- error classification (a killed server lands in `errors.jsonl`; an agent
+  still calling tools at the ceiling lands in `results.jsonl` as `timeout`),
+  resume, and the served-model assertion.
+
+## 12. Safety and isolation
 
 - The workspace is the only directory the harness file tools and the server's
   `allowed_paths` accept.
 - `run_code` is off in every variant unless the variant is about it; such a
-  variant runs only inside a container, since the snippet has the server
+  variant runs only in a container, since the snippet has the server
   process's authority.
-- The `claude-code` profile runs with Bash disabled.
-- Tasks and fixtures are authored by the project, so no untrusted text enters
-  a prompt.
+- The `claude-code` profile runs with Bash disabled and the operator's
+  settings excluded.
+- Tasks and fixtures are authored by the project.
 
-## 12. Cost
+## 13. Cost
 
-No estimate is quoted before a pilot. The first paid step is a five-task
-pilot on one variant; its measured `usage` gives tokens per trial (spread, not
-just mean), dollars per full run and wall clock, shown with the arithmetic,
-and the full run waits for the maintainer's yes. `--max-usd` stops a run when
-spend reaches it.
+No estimate before a pilot. The first paid step is five tasks on one variant;
+its measured `usage` gives tokens per trial (spread, not just mean), dollars
+per full run and wall clock, with the arithmetic shown, and the full run waits
+for the maintainer's yes. `--max-usd` stops a run when spend reaches it.
 
-## 13. Platforms
+## 14. Platforms
 
-The runner and graders use `pathlib`, asyncio subprocesses and UTF-8 files
-written explicitly, so they run on Windows, where the `ltspice` suite runs.
-`analyze` and `schematic` tasks need no simulator; `measure`, `design` and
-`debug` need ngspice on PATH.
+The runner and graders use `pathlib`, asyncio subprocesses and explicit
+UTF-8. ngspice runs on Windows; the variant TOML sets `[simulator] path`
+rather than relying on `PATH` or spicelib's search of `C:/Spice64`.
 
-## 14. Plan
+## 15. Plan
 
-1. The maintainer supplies seed tasks and any past sessions to mine.
-2. Harness skeleton, both profiles, scripted-model tests, eight seed tasks; no
-   paid calls.
-3. Task set (30–40) reviewed and signed off; grader pilot reviewed.
-4. Paid pilot, cost estimate, consent; baseline under both profiles.
-5. First decisions: `listing` compact vs full, `text_channel`; then recipe
-   disclosure and reference detail as their branches land.
+0. A fidelity probe (one `claude-code` call on a trivial task, approved
+   first): read in the stream what the model received from a tool result.
+1. Harness skeleton, `api` profile, fake ngspice, scripted-model tests, eight
+   seed tasks. No paid calls.
+2. The task set reviewed and signed off; a five-task grader pilot reviewed.
+3. Paid pilot, cost estimate, consent; A/A run; baseline under `api`, then
+   under `claude-code`.
+4. First decisions: `listing` compact vs full; then recipe disclosure (with
+   its positive control) and reference detail as their branches land.
 
-## 15. Open questions
+Not in the first version: an HTML report, a held-out split, both renderings on
+every run.
+
+## 16. Open questions
 
 1. Budget, and credentials for each profile.
-2. Models to evaluate: the default model at its default effort, and which
-   others.
-3. Whether past session transcripts exist to mine for tasks.
-4. Where it runs: Linux or WSL with ngspice for the main suite; a Windows
-   machine for the `ltspice` suite.
-5. Whether the task set and harness are committed (recommended; runs and
-   traces stay out of git).
+2. Models: the default model at its default effort, and which others.
+3. Past session transcripts to mine for tasks.
+4. Machines: Linux or WSL with ngspice for the main suite; Windows for the
+   `ltspice` suite.
+5. Committing the task set and harness (recommended; runs stay out of git).
+6. The `text_channel` default (§2), which is a product decision ahead of the
+   eval.
