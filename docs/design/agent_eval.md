@@ -358,9 +358,11 @@ rather than relying on `PATH` or spicelib's search of `C:/Spice64`.
    b. the fake ngspice, the `deck` grader, `measure`, `design` and `debug`
       tasks;
    c. the `sheet` grader (its scorer exists) and `schematic` tasks.
-2. The task set reviewed and signed off; a five-task grader pilot reviewed.
-3. Paid pilot, cost estimate, consent; A/A run; baseline under `api`, then
-   under `claude-code`.
+2. The task set reviewed and signed off.
+3. A five-task pilot on one variant, which does two jobs: its grades are
+   reviewed, and its measured usage gives the cost estimate. Then, with
+   consent, the A/A run and the baseline under `api`, then under
+   `claude-code`.
 4. First decisions: `listing` compact vs full; then recipe disclosure (with
    its positive control) and reference detail as their branches land.
 
