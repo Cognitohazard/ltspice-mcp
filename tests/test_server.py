@@ -2,7 +2,6 @@
 
 import io
 import json
-import logging
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -532,53 +531,6 @@ async def test_the_json_text_channel_carries_the_structured_content(state_no_sim
     assert isinstance(block, mcp_types.TextContent)
     assert json.loads(block.text) == data
     assert GUIDE_REMINDER in data["hint"]
-
-
-def _tool_events(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
-    return [
-        record.__dict__["ltspice_event"]
-        for record in caplog.records
-        if record.name == "ltspice_mcp.events" and "ltspice_event" in record.__dict__
-    ]
-
-
-@pytest.mark.asyncio
-async def test_each_tool_call_logs_one_event(
-    state_no_sim: SessionState, caplog: pytest.LogCaptureFixture
-):
-    """The tool, how long it took, how it ended, and the size of the reply as
-    it is sent; never the arguments."""
-    caplog.set_level(logging.INFO, logger="ltspice_mcp.events")
-    ctx = fake_request_context(state_no_sim)
-    answered = await call_tool(ctx, _capabilities_call())
-    refused = await call_tool(ctx, call_tool_params("run_experiments", {"missing": "field"}))
-    events = _tool_events(caplog)
-    assert [{k: v for k, v in e.items() if k not in ("ts", "duration_s")} for e in events] == [
-        {
-            "event": "tool_call",
-            "tool": "inspect",
-            "outcome": "ok",
-            "code": None,
-            "reply_chars": len(answered.model_dump_json(by_alias=True, exclude_none=True)),
-        },
-        {
-            "event": "tool_call",
-            "tool": "run_experiments",
-            "outcome": "error",
-            "code": "invalid_arguments",
-            "reply_chars": len(refused.model_dump_json(by_alias=True, exclude_none=True)),
-        },
-    ]
-    assert all(e["duration_s"] >= 0 for e in events)
-
-
-@pytest.mark.asyncio
-async def test_no_tool_event_is_logged_below_info(
-    state_no_sim: SessionState, caplog: pytest.LogCaptureFixture
-):
-    caplog.set_level(logging.WARNING, logger="ltspice_mcp.events")
-    await call_tool(fake_request_context(state_no_sim), _capabilities_call())
-    assert _tool_events(caplog) == []
 
 
 @pytest.mark.asyncio

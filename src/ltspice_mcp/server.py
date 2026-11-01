@@ -406,12 +406,26 @@ async def list_tools(
 async def call_tool(
     ctx: ServerRequestContext, params: types.CallToolRequestParams
 ) -> types.CallToolResult:
+    """Answer a tool call, and log one event for it however it ends, a call
+    the client cancels included (``lib/observability.emit_tool_event``)."""
+    started = time.monotonic()
+    try:
+        result = await _answer_tool_call(ctx, params)
+    except BaseException as ended:
+        emit_tool_event(params.name, time.monotonic() - started, ended)
+        raise
+    emit_tool_event(params.name, time.monotonic() - started, result)
+    return result
+
+
+async def _answer_tool_call(
+    ctx: ServerRequestContext, params: types.CallToolRequestParams
+) -> types.CallToolResult:
     """Dispatch tool calls to registered handlers.
 
     All handlers return types.CallToolResult (the MCP protocol's canonical
     response type). Data-returning tools populate structuredContent.
     """
-    started = time.monotonic()
     state = _get_state(ctx)
     name = params.name
     arguments = params.arguments
@@ -452,9 +466,7 @@ async def call_tool(
     await _notice_circuit(arguments, state)
 
     result = _with_guide_reminder(await _invoke(registered, name, arguments, state), state)
-    result = _with_text_channel(result, state)
-    emit_tool_event(name, time.monotonic() - started, result)
-    return result
+    return _with_text_channel(result, state)
 
 
 def _with_text_channel(result: types.CallToolResult, state: SessionState) -> types.CallToolResult:
