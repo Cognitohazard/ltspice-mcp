@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator, Collection
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -24,7 +25,7 @@ from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.families import DISPLAY
-from ltspice_mcp.lib.observability import configure_stderr_logging
+from ltspice_mcp.lib.observability import configure_stderr_logging, emit_tool_event
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
@@ -403,6 +404,21 @@ async def list_tools(
 
 
 async def call_tool(
+    ctx: ServerRequestContext, params: types.CallToolRequestParams
+) -> types.CallToolResult:
+    """Answer a tool call, and log one event for it however it ends, a call
+    the client cancels included (``lib/observability.emit_tool_event``)."""
+    started = time.monotonic()
+    try:
+        result = await _answer_tool_call(ctx, params)
+    except BaseException as ended:
+        emit_tool_event(params.name, time.monotonic() - started, ended)
+        raise
+    emit_tool_event(params.name, time.monotonic() - started, result)
+    return result
+
+
+async def _answer_tool_call(
     ctx: ServerRequestContext, params: types.CallToolRequestParams
 ) -> types.CallToolResult:
     """Dispatch tool calls to registered handlers.

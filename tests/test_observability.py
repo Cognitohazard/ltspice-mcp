@@ -7,8 +7,10 @@ of the 2026-07-28 revision and is not served.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -22,7 +24,9 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.observability import emit_job_event
 from ltspice_mcp.lib.store import Store
+from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
+from tests.conftest import LIVENESS_S, call_tool_params, fake_request_context
 
 
 @pytest.fixture
@@ -157,3 +161,72 @@ class TestJobRegistryEmitsOnAdd:
         assert event["event"] == "submitted"
         assert event["kind"] == "experiment"
         assert event["job_id"] == "exp_add"
+
+
+_CAPABILITIES = {"queries": [{"kind": "capabilities"}]}
+
+
+@pytest.mark.asyncio
+class TestEachToolCallEmitsOne:
+    """The tool, how long it took, how it ended and the size of the reply as
+    sent; never the arguments."""
+
+    async def test_an_answered_and_a_refused_call(
+        self, state_no_sim: SessionState, events_caplog: pytest.LogCaptureFixture
+    ):
+        ctx = fake_request_context(state_no_sim)
+        answered = await call_tool(ctx, call_tool_params("inspect", _CAPABILITIES))
+        refused = await call_tool(ctx, call_tool_params("run_experiments", {"missing": "field"}))
+        events = _events(events_caplog)
+        assert [{k: v for k, v in e.items() if k not in ("ts", "duration_s")} for e in events] == [
+            {
+                "event": "tool_call",
+                "tool": "inspect",
+                "outcome": "ok",
+                "code": None,
+                "reply_chars": len(answered.model_dump_json(by_alias=True, exclude_none=True)),
+            },
+            {
+                "event": "tool_call",
+                "tool": "run_experiments",
+                "outcome": "error",
+                "code": "invalid_arguments",
+                "reply_chars": len(refused.model_dump_json(by_alias=True, exclude_none=True)),
+            },
+        ]
+
+    async def test_a_cancelled_call(
+        self,
+        state_no_sim: SessionState,
+        events_caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A call the client gave up on, which the SDK cancels: the one most
+        worth a record, and it has no result to measure."""
+        entered = asyncio.Event()
+
+        async def waits_until_cancelled(arguments, state):
+            entered.set()
+            await asyncio.Event().wait()
+
+        inspect = state_no_sim.tool_dispatch["inspect"]
+        monkeypatch.setitem(
+            state_no_sim.tool_dispatch, "inspect", replace(inspect, handler=waits_until_cancelled)
+        )
+        call = asyncio.create_task(
+            call_tool(
+                fake_request_context(state_no_sim), call_tool_params("inspect", _CAPABILITIES)
+            )
+        )
+        await asyncio.wait_for(entered.wait(), LIVENESS_S)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        (event,) = _events(events_caplog)
+        assert {k: v for k, v in event.items() if k not in ("ts", "duration_s")} == {
+            "event": "tool_call",
+            "tool": "inspect",
+            "outcome": "cancelled",
+            "code": None,
+            "reply_chars": None,
+        }
