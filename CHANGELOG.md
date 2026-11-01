@@ -10,6 +10,11 @@ tool-surface changes.
 
 ### Added
 
+- At `INFO`, the server logs one structured record per tool call on the
+  `ltspice_mcp.events` logger: the tool, its duration, whether it failed and
+  with which error code, and the size of the reply as sent, so slow calls and
+  replies too large for a client show in the server's log. Arguments are not
+  logged.
 - A declared table of what each simulator family can do: every capability
   the server offers, marked baseline or refinement, is `supported` with its
   evidence (a recorded LTspice behaviour, a file another simulator wrote, or

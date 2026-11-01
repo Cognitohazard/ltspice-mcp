@@ -1,9 +1,10 @@
-"""Structured lifecycle events for experiment jobs.
+"""Structured events for experiment jobs and tool calls.
 
 Emits machine-parseable log records on job state transitions — submit,
-start, completion, failure, cancellation, interrupted recovery. Logs go
-through a dedicated ``ltspice_mcp.events`` logger so operators can route
-them to a different sink from the usual debug/info stream.
+start, completion, failure, cancellation, interrupted recovery — and one
+record per tool call (:func:`emit_tool_event`). Logs go through a dedicated
+``ltspice_mcp.events`` logger so operators can route them to a different
+sink from the usual debug/info stream.
 
 Each event carries:
     ts            ISO-8601 timestamp (UTC)
@@ -33,10 +34,13 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import ExperimentJob
+
+if TYPE_CHECKING:
+    from mcp import types
 
 logger = logging.getLogger("ltspice_mcp.events")
 
@@ -125,5 +129,36 @@ def emit_job_event(
         event,
         job.job_id,
         suffix,
+        extra={"ltspice_event": payload},
+    )
+
+
+def emit_tool_event(tool: str, duration_s: float, result: types.CallToolResult) -> None:
+    """Emit one event for a finished call of ``tool``.
+
+    It says how long the call took, whether it failed and with which ``code``,
+    and how many characters the reply is as it is sent, so a reply too large
+    for a client shows here first. The call's arguments are not logged.
+    Measuring a reply serializes it again, so nothing is measured unless the
+    record would be emitted.
+    """
+    if not logger.isEnabledFor(logging.INFO):
+        return
+    failed = bool(result.is_error)
+    payload: dict[str, Any] = {
+        "ts": datetime.now(UTC).isoformat(),
+        "event": "tool_call",
+        "tool": tool,
+        "duration_s": duration_s,
+        "outcome": "error" if failed else "ok",
+        "code": (result.structured_content or {}).get("code") if failed else None,
+        "reply_chars": len(result.model_dump_json(by_alias=True, exclude_none=True)),
+    }
+    logger.info(
+        "tool.%s %s after %.2fs, %d chars",
+        tool,
+        payload["outcome"],
+        duration_s,
+        payload["reply_chars"],
         extra={"ltspice_event": payload},
     )

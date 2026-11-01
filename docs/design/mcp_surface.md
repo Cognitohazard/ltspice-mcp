@@ -1733,6 +1733,14 @@ neither advertises nor serves the MCP logging capability
 and `logging/setLevel` returns method-not-found. Everything a caller needs is
 in the tool result.
 
+At `INFO`, the `ltspice_mcp.events` logger writes one record for each tool call
+the server answers, with a structured payload on the record's `ltspice_event`
+attribute: `event: "tool_call"`, `tool`, `duration_s`, `outcome` (`ok` or
+`error`), the error's `code`, and `reply_chars`, the length of the result as
+sent. The call's arguments are not logged. A call through the Python API is not
+a tool call over MCP and writes none. The same logger writes a job's lifecycle
+events.
+
 ---
 
 ## 5. Out of scope
