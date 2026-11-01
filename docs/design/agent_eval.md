@@ -1,7 +1,7 @@
 # Agent evaluation harness — design
 
-Status: proposal (draft 2, revised after one adversarial review), not
-implemented.
+Status: proposal (draft 3, revised after two rounds of adversarial review),
+not implemented.
 
 ## 1. Why, and which decisions it serves
 
@@ -41,8 +41,9 @@ into the model's tool result does this when the result has
   off), the model gets the `content` blocks instead, and `structuredContent`
   only when every text block is blank.
 
-So under the server's default `text_channel = "summary"`, a Claude Code
-session with that flag on reads one summary line per reply and no data. The
+The server's default suits the first case. But under `text_channel =
+"summary"`, a Claude Code session with that flag on reads one summary line per
+reply and no data. The
 eval does not need to establish this; it is a product risk to settle on its own
 (set `text_channel = "json"` by default, or make the summary line carry the
 data). The eval records which rendering a trial used and, in the `claude-code`
@@ -52,9 +53,16 @@ assuming it.
 ## 3. What is under test
 
 The server as a client sees it: `python -m ltspice_mcp` over stdio with a
-generated `ltspice-mcp.toml`, started with an explicit minimal environment
-(`PATH`, `HOME`/`USERPROFILE`, `SYSTEMROOT` on Windows, `LTSPICE_MCP_HOME`);
-no inherited `LTSPICE_MCP_*` variable, since those override the TOML. The model
+generated `ltspice-mcp.toml`. Both profiles start it through one launcher,
+`python -I evals/launch_server.py <variant>`, which sets its own environment and
+execs the variant checkout's venv Python. The environment starts from the MCP
+SDK's default list (Windows: `APPDATA HOMEDRIVE HOMEPATH LOCALAPPDATA PATH
+PATHEXT PROCESSOR_ARCHITECTURE SYSTEMDRIVE SYSTEMROOT TEMP USERNAME
+USERPROFILE`; elsewhere `HOME LOGNAME PATH SHELL TERM USER`), adds `TMP`,
+`LANG`/`LC_ALL`, `WSL_DISTRO_NAME` and the trial's `LTSPICE_MCP_HOME`, and
+drops every other `LTSPICE_MCP_*` variable (they override the TOML), plus
+`VIRTUAL_ENV` and `PYTHONPATH`. A launcher is needed because Claude Code, not
+the harness, decides what a stdio server inherits. The model
 and the client are the environment the server is evaluated in, fixed within a
 comparison. A variant changes the server only: its configuration, its code
 revision, or both.
@@ -76,9 +84,9 @@ One trial is one (task, variant, rep):
 1. a fresh temporary workspace receives `workspace/`, the variant's
    `ltspice-mcp.toml` (`allowed_paths` = the workspace; job store inside it)
    and a private `LTSPICE_MCP_HOME`;
-2. the variant's server starts from its own checkout, synced once per run
-   (`uv sync` per variant, then trials run with `--no-sync --frozen`, so
-   concurrent trials never race on a venv);
+2. the variant's server starts through the launcher from its own checkout,
+   whose venv is synced once per run before any trial (no `uv run` at trial
+   time, so concurrent trials never race on a venv or need a cache dir);
 3. the client profile runs the task until the agent stops or a limit fires;
 4. the server's whole process tree is stopped (a Job object on Windows),
    since detached job owners and workers can outlive it, and only then is the
@@ -123,17 +131,24 @@ looks like.
 
 ```
 claude -p <prompt> --output-format stream-json --verbose
-  --strict-mcp-config --mcp-config <file with the server and its env>
+  --strict-mcp-config --mcp-config <file naming the launcher as server "spice">
   --setting-sources "" --tools Read,Write,Edit,Glob,Grep --disallowedTools Bash
-  --permission-mode acceptEdits --permission-prompts none
+  --allowedTools "mcp__spice" --permission-mode acceptEdits
+  --permission-prompts none
   --no-session-persistence --model <m> --effort <e> --max-turns <n>
   --max-budget-usd <cap>
 ```
 
-run with `DISABLE_AUTOUPDATER=1` and a pinned CLI version, recorded per row.
-`--strict-mcp-config` and empty setting sources keep the operator's own
-`CLAUDE.md`, plugins, skills and MCP servers out. Usage, tool calls and the
-tool results the model received are read from the stream. This profile
+run with `DISABLE_AUTOUPDATER=1`, a pinned CLI version recorded per row, and
+a scratch `HOME` (an empty `.claude/`, credentials from `ANTHROPIC_API_KEY`).
+`--permission-prompts none` denies anything that would prompt, and MCP tools
+prompt unless allowed, hence `--allowedTools "mcp__spice"`.
+`--strict-mcp-config` and empty setting sources keep the operator's MCP servers
+and settings out; the scratch `HOME` keeps their `~/.claude/CLAUDE.md` out,
+which no setting source governs. `--tools` also removes Task, TodoWrite and
+WebFetch, which real sessions have: a fidelity trade-off, stated in the
+report. Usage, tool calls and the tool results the model received are read
+from the stream. This profile
 confirms that an `api` result transfers: the baseline and any variant about to
 ship run under it.
 
@@ -223,9 +238,14 @@ five-task pilot.
 | outcome | where | status |
 |-|-|-|
 | pass, fail | `results.jsonl` | `ok` |
+| `answer.json` missing or malformed | `results.jsonl` (fail) | `unparseable` |
 | agent still working at the wall clock, turn or token limit | `results.jsonl` (fail) | `timeout`, `max_turns`, `budget` |
-| refusal | `results.jsonl`, own metric | `refused` |
-| server or transport died, simulator hung, grader crashed | `errors.jsonl` | error class |
+| refusal (classified from the transcript) | `results.jsonl` (fail), own metric | `refused` |
+| server or transport died, grader crashed | `errors.jsonl` | error class |
+| the run's `--max-usd` stopped the trial | `errors.jsonl` | `aborted` |
+
+A simulator that hangs is stopped by the server's own run timeout and reaches
+the agent as `simulation_failed`, so it is part of the trial, not an error.
 
 A response stopped by `max_tokens` is one call's stop reason: the loop lets the
 model continue, and only a trial that ends that way is marked.
@@ -246,9 +266,10 @@ Reported per variant:
 - **total input tokens** (input + cache read + cache write) and output tokens
   per trial: the primary size measure, since dollars depend on cache timing;
 - tool calls and tool errors per trial;
-- tokens per solved task, computed on tasks every compared variant solved,
-  beside the unconditional figures, so a variant that skips hard tasks does
-  not look efficient;
+- tokens per solved task, on the tasks every compared variant solved (at
+  least one passing rep under each), averaged per task before differencing so
+  3 reps do not count as 3 pairs, beside the unconditional figures, so a
+  variant that skips hard tasks does not look efficient;
 - intervals by bootstrap over **tasks** (resampling a task with all its
   reps), since reps of one task are correlated.
 
@@ -264,10 +285,15 @@ Reported per variant:
   states the effect each decision needs before its run.
 - **Noise floor**, measured rather than assumed: an A/A run (two variants
   with identical servers) before the first comparison.
-- **Positive control**, of the same kind and size as the change under test:
-  for recipe disclosure, a variant that strips only the recipe argument
-  descriptions must measurably raise `invalid_arguments` errors and reference
-  lookups. If it does not, the suite cannot see that change.
+- **Positive control**, with a known direction and of the kind the decision
+  is about: a variant whose recipe schema renames one enum value that tasks
+  need, so the published listing is wrong for it, must raise
+  `invalid_arguments`. (Stripping the recipe argument descriptions is not a
+  control: that is the recipe-disclosure change itself, whose result is the
+  answer, not a test of the suite.)
+- **Effect per decision**, stated before its run, with the minimum detectable
+  size taken from the A/A run: for recipe disclosure, total input tokens down
+  while pass rate and `invalid_arguments` stay within noise.
 - **Confirmation**: no held-out split in the first version (30 tasks cannot
   spare one); a variant chosen under `api` is confirmed under `claude-code`.
 
@@ -286,9 +312,11 @@ Offline, in `tests/`, with no API calls:
 - a scripted model replays a fixed sequence of tool calls through the real
   loop and a real server process; an oracle script must pass every seed task
   and a null script (answers at once with a constant) must fail them;
-- a fake `ngspice` executable on `PATH` answers `-b -o <log> -r <raw>
-  <netlist>` by copying recorded fixtures, so `measure`-style seed tasks run
-  in CI;
+- a fake `ngspice` answers `-b -o <log> -r <raw> <netlist>` by copying
+  recorded ngspice-format fixtures (the server parses logs by family, and the
+  suite's recordings are mostly LTspice's, so new ones are recorded on Linux,
+  where CI installs ngspice); it is named by `[simulator] path`, an `.exe` or
+  `.cmd` on Windows, so `measure`-style seed tasks run in CI;
 - each grader on a known-good and a known-bad end state;
 - error classification (a killed server lands in `errors.jsonl`; an agent
   still calling tools at the ceiling lands in `results.jsonl` as `timeout`),
@@ -320,10 +348,16 @@ rather than relying on `PATH` or spicelib's search of `C:/Spice64`.
 
 ## 15. Plan
 
-0. A fidelity probe (one `claude-code` call on a trivial task, approved
-   first): read in the stream what the model received from a tool result.
-1. Harness skeleton, `api` profile, fake ngspice, scripted-model tests, eight
-   seed tasks. No paid calls.
+0. A command-line smoke test (one `claude-code` call on a trivial task,
+   approved first): the server is allowed, its environment is the launcher's,
+   the operator's settings and `CLAUDE.md` are absent, and the stream shows
+   what the model received.
+1. The harness, in three steps, none with paid calls:
+   a. the `api` loop and MCP proxy, the `answer` grader, `analyze` tasks (no
+      simulator), oracle and null scripts, result rows;
+   b. the fake ngspice, the `deck` grader, `measure`, `design` and `debug`
+      tasks;
+   c. the `sheet` grader (its scorer exists) and `schematic` tasks.
 2. The task set reviewed and signed off; a five-task grader pilot reviewed.
 3. Paid pilot, cost estimate, consent; A/A run; baseline under `api`, then
    under `claude-code`.
