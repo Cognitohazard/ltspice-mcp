@@ -71,7 +71,7 @@ from ltspice_mcp.lib.ltspice_bridge import (
     Instance,
     bridge_command,
 )
-from ltspice_mcp.lib.ltspice_frame import VISIBLE_TRACES, LtspiceFrame, SaveQuestion
+from ltspice_mcp.lib.ltspice_frame import SAVE, VISIBLE_TRACES, LtspiceFrame, SaveQuestion
 from ltspice_mcp.lib.ltspice_windows import start_in_view
 
 # The lines that say how a sheet is stored and how far it extends, which
@@ -94,6 +94,9 @@ _LOOKED_S = 2.0
 its menu cannot say whether it knows of any. One that knows of them does it
 in a fraction of a second however large they are, and one that knows of none
 never does: this is how long it takes to tell."""
+_SAVED_S = 5.0
+"""How long LTspice is given to write a sheet it was told to save. Saving a
+sheet is quick; this is a cap on a window that did not."""
 _CLOSED_S = 2.0
 """How long LTspice is given to close a pane it was told to close, or to ask
 about it. Either takes a moment; this is a cap on a window that did neither."""
@@ -284,6 +287,35 @@ class Shown:
     tied: bool = False
 
 
+@dataclass(frozen=True)
+class WindowUpdate:
+    """What a window that had a committed sheet open shows after the commit.
+
+    ``refusal`` says why it does not show the committed sheet, and is None
+    where it does. ``reopened`` says it did not take the sheet and was closed
+    and opened again from the file instead. ``saved`` says the file now holds
+    this window's copy, which LTspice saved (``OpenWindows.save``).
+    """
+
+    refusal: str | None = None
+    reopened: bool = False
+    saved: bool = False
+
+
+@dataclass(frozen=True)
+class Saved:
+    """A sheet LTspice saved from a window.
+
+    ``window`` is the window's copy as it was read, ``data`` the file LTspice
+    wrote from it, and ``others`` each other window that had the sheet open,
+    with what it shows after it was handed the saved sheet.
+    """
+
+    window: OpenSheet
+    data: bytes
+    others: list[tuple[OpenSheet, WindowUpdate]]
+
+
 def _same_file(ours: Path, theirs: str) -> bool:
     return os.path.normcase(os.path.abspath(theirs)) == os.path.normcase(os.path.abspath(ours))
 
@@ -352,10 +384,17 @@ class OpenWindows:
         if self._command is None:
             raise WindowsUnavailable(f"LTspice windows cannot be reached here: {self.unavailable}")
 
-    def _session(self) -> BridgeSession:
+    def _session(self, waits: float = 0.0) -> BridgeSession:
+        """A bridge session, ended after the deadline plus ``waits``.
+
+        The deadline is for a bridge that stopped answering. ``waits`` is the
+        longest a caller waits inside the session on the window itself, for
+        a pane to close or for LTspice's answer to a question, which is not
+        the bridge's time.
+        """
         self.check()
         assert self._command is not None
-        return BridgeSession(self._command, timeout=self._timeout)
+        return BridgeSession(self._command, timeout=self._timeout + waits)
 
     @staticmethod
     def _windows(session: BridgeSession) -> list[Instance]:
@@ -509,7 +548,7 @@ class OpenWindows:
         """
 
         def show() -> Shown:
-            with self._session() as session:
+            with self._session(waits=_CLOSED_S) as session:
                 window = self._to_show_in(session)[0]
                 session.attach(window.pid)
                 reopened = self._close_results(session, window.pid, results)
@@ -608,7 +647,7 @@ class OpenWindows:
 
     def _results_from_sheet(self, sheet: Path, place: Callable[[], None]) -> Shown:
         results = results_beside(sheet)
-        with self._session() as session:
+        with self._session(waits=_CLOSED_S) as session:
             window, spelled = self._holder(session, sheet)
             held = None if spelled is None else session.design_text(spelled)
             reopened = self._close_results(session, window.pid, results)
@@ -626,9 +665,16 @@ class OpenWindows:
             window.pid, sheet, _OPENED_S if knows else _LOOKED_S
         ):
             return Shown(window, held, reopened=reopened, tied=True)
-        with self._session() as session:
+        with self._session(waits=2 * _CLOSED_S) as session:
             session.attach(window.pid)
-            unsaved = self._close_sheet(session, window.pid, sheet, held)
+            spelled = self._spelling(session, sheet)
+            unsaved = (
+                None
+                if spelled is None  # closed by someone since
+                else self._close_sheet(
+                    session, window.pid, sheet, spelled, held, discardable=sheet.read_bytes()
+                )
+            )
             if unsaved is not None:
                 session.show_results(str(results))
                 return Shown(window, unsaved, reopened=reopened)
@@ -678,13 +724,24 @@ class OpenWindows:
             self._sheet_in_front(session, sheet)
         return self._visible_traces(pid, sheet, seconds)
 
-    def _close_sheet(self, session: BridgeSession, pid: int, sheet: Path, held: str) -> str | None:
-        """Close ``sheet`` in the attached window ``pid``, so that opened again it
-        looks for its results. Returns None once it is closed.
+    def _close_sheet(
+        self,
+        session: BridgeSession,
+        pid: int,
+        sheet: Path,
+        spelled: str,
+        held: str,
+        *,
+        discardable: bytes,
+    ) -> str | None:
+        """Close ``sheet``, open in the attached window ``pid`` as ``spelled``, so
+        that opened again it reads the file. Returns None once it is closed.
 
-        Only where the window holds what the file does: ``held`` is what it
-        held when the caller last read it, and where that differs the sheet is
-        left open and what it holds is returned. LTspice counts a sheet it was
+        Only where the window holds what ``discardable`` does, a sheet the file
+        holds or held, which closing it without saving loses nothing of:
+        ``held`` is what the window held when the caller last read it, and
+        where that differs the sheet is left open and what it holds is
+        returned. LTspice counts a sheet it was
         handed through the bridge as changed even when it reads as its file
         does, which every sheet this server edited while it was open is, and
         asks whether to save it before closing (recorded). While it asks
@@ -692,12 +749,8 @@ class OpenWindows:
         read again then: the answer is No where it reads as the file, which
         loses nothing, and otherwise Cancel, which leaves it as it was.
         """
-        on_disk = sheet.read_bytes()
-        if file_difference(on_disk, held) is not None:
+        if file_difference(discardable, held) is not None:
             return held
-        spelled = self._spelling(session, sheet)
-        if spelled is None:
-            return None  # closed by someone since
         pane = self._pane_in_front(session, pid, sheet, spelled, session.active_design)
         if pane is None:
             raise BridgeError(f"{sheet.name} could not be put in front in LTspice")
@@ -715,7 +768,9 @@ class OpenWindows:
         if question is None:
             return None
         now = session.design_text(spelled)
-        keep = not _same_file(sheet, question.path) or file_difference(on_disk, now) is not None
+        keep = (
+            not _same_file(sheet, question.path) or file_difference(discardable, now) is not None
+        )
         self._frame.answer(question, discard=not keep)
         # Cancelled, the box goes; answered No, the sheet goes after it.
         gone = question.box if keep else pane
@@ -723,25 +778,134 @@ class OpenWindows:
             raise BridgeError(f"LTspice did not take its answer about {sheet.name}")
         return now if keep else None
 
+    def save(self, sheet: Path, on_disk: bytes) -> Saved | None:
+        """Have LTspice save ``sheet`` from the window whose copy differs from the
+        file, ``on_disk``, as its Save command does. Blocks.
+
+        None when no window holds a copy different from the file, and nothing
+        is saved. Each other window that has the sheet open holds the file's
+        sheet, so it is handed the saved one, as after a commit. LTspice writes
+        the sheet in its own way, so the file's bytes change even where its
+        content is the window's, and a sheet an older build wrote is saved as
+        LTspice 26 writes one (recorded). Only for a caller whose user agreed
+        to keep the changes made in that window.
+
+        Raises ``BridgeError`` when there is no bridge, when two windows hold
+        different copies (which to keep is the user's choice), when the sheet
+        cannot be put in front, while LTspice waits on a box of its own, and
+        when the file does not come to hold the window's copy in time.
+        """
+        holding = self.holding(sheet)
+        differing = [each for each in holding if file_difference(on_disk, each.text) is not None]
+        if not differing:
+            return None
+        if len(differing) > 1:
+            processes = " and ".join(str(each.pid) for each in differing)
+            raise BridgeError(
+                f"LTspice processes {processes} each hold a copy of {sheet.name} that "
+                "differs from the file; the user saves the one to keep there, or closes "
+                "the others without saving"
+            )
+        (window,) = differing
+        data = self._save_window(window, on_disk)
+        others = [each for each in holding if each is not window]
+        updates = self.show_each(others, window.text, on_disk)
+        return Saved(window, data, list(zip(others, updates, strict=True)))
+
+    def _save_window(self, sheet: OpenSheet, on_disk: bytes) -> bytes:
+        """Send ``sheet``'s window the sheet menu's Save, and return the file
+        once it holds the window's copy.
+
+        A box LTspice shows instead, such as for a write-protected file, is
+        quoted and answered with Cancel, which leaves the window's copy as it
+        was (recorded).
+        """
+        path = Path(sheet.path)
+        with self._session() as session:
+            session.attach(sheet.pid)
+            self._sheet_in_front(session, path)
+            self._free(sheet.pid)
+            self._frame.send(sheet.pid, SAVE)
+        saved: list[bytes] = []
+
+        def written() -> bool:
+            try:
+                now = path.read_bytes()
+            except OSError:
+                return False
+            if now != on_disk and file_difference(now, sheet.text) is None:
+                saved.append(now)
+            return bool(saved)
+
+        if not _within(
+            _SAVED_S, 0.05, lambda: written() or not self._frame.takes_input(sheet.pid)
+        ):
+            raise BridgeError(f"LTspice did not save {path.name} within {_SAVED_S:g} s")
+        if not saved:
+            asked = " ".join(self._frame.dismiss_boxes(sheet.pid))
+            raise BridgeError(f"LTspice did not save {path.name}; it showed a box: {asked}")
+        return saved[-1]
+
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""
         with self._session() as session:
             session.attach(sheet.pid)
             session.replace_design_text(sheet.path, text)
 
-    def show_each(self, sheets: Sequence[OpenSheet], text: str) -> list[str | None]:
-        """``show`` for every window: None where it took the sheet, else why not.
+    def show_each(self, sheets: Sequence[OpenSheet], text: str, was: bytes) -> list[WindowUpdate]:
+        """``show`` for every window, which ``text`` was committed over the file
+        ``was``, and what each window shows then.
 
-        A window that could not be reached is an answer saying so, never an
-        exception: the file is already committed when this runs, and a window
-        left behind is a fact about that window.
+        A window that does not take the sheet is closed and opened again from
+        the file (``_reopened``). One that cannot be updated either way is an
+        answer saying why, never an exception: the file is already committed
+        when this runs, and a window left behind is a fact about that window.
         """
-        refusals: list[str | None] = []
+        updates: list[WindowUpdate] = []
         for sheet in sheets:
             try:
                 self.show(sheet, text)
             except BridgeError as error:
-                refusals.append(str(error))
+                updates.append(self._reopened(sheet, text, was, error))
             else:
-                refusals.append(None)
-        return refusals
+                updates.append(WindowUpdate())
+        return updates
+
+    def _reopened(
+        self, sheet: OpenSheet, text: str, was: bytes, error: BridgeError
+    ) -> WindowUpdate:
+        """Close ``sheet`` in its window and open the committed file there, for a
+        window that ``show`` did not hand ``text`` (``error``).
+
+        What the window holds then decides it. The committed sheet: a request
+        that timed out was carried out after all. The sheet as the file held
+        it before the commit, ``was``: it is closed and opened again, losing
+        nothing. Anything else holds changes made there since, and is left
+        open. A window that no longer has the sheet open shows no old copy and
+        is left as it is.
+        """
+        path = Path(sheet.path)
+        try:
+            with self._session(waits=2 * _CLOSED_S) as session:
+                try:
+                    session.attach(sheet.pid)
+                except BridgeError:
+                    return WindowUpdate(str(error))  # gone, and its copy with it
+                spelled = self._spelling(session, path)
+                if spelled is None:
+                    return WindowUpdate(str(error))
+                held = session.design_text(spelled)
+                if content_difference(text, held) is None:
+                    return WindowUpdate()
+                if (
+                    self._close_sheet(session, sheet.pid, path, spelled, held, discardable=was)
+                    is not None
+                ):
+                    return WindowUpdate(
+                        f"{error}; it was not closed and opened again, because it holds "
+                        "changes made there since"
+                    )
+                self._sheet_in_front(session, path)
+        except BridgeError as again:
+            return WindowUpdate(f"{error}; closing it and opening it again failed too: {again}")
+        return WindowUpdate(reopened=True)

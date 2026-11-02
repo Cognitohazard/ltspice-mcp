@@ -714,6 +714,67 @@
   ]
  },
  {
+  "note": "open a sheet to save",
+  "call": "open_design",
+  "arguments": {
+   "path": "C:\\recording\\saving.asc"
+  },
+  "reply": {
+   "already_open": "false",
+   "path": "C:\\recording\\saving.asc",
+   "status": "ok",
+   "type": "schematic"
+  }
+ },
+ {
+  "note": "hand the window a changed sheet to save",
+  "call": "set_design_content",
+  "arguments": {
+   "path": "C:\\recording\\saving.asc",
+   "text": "Version 4.1\nSHEET 1 880 680\nWIRE 32 128 -48 128\nWIRE 208 128 112 128\nWIRE 240 128 208 128\nWIRE -48 144 -48 128\nWIRE 240 144 240 128\nWIRE 240 256 240 208\nWIRE -48 272 -48 224\nFLAG 240 256 0\nFLAG -48 272 0\nFLAG 208 128 out\nSYMBOL voltage -48 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nSYMBOL res 128 112 R90\nWINDOW 0 0 56 VBottom 2\nWINDOW 3 32 56 VTop 2\nSYMATTR InstName R1\nSYMATTR Value 4.7k\nSYMBOL cap 224 144 R0\nSYMATTR InstName C1\nSYMATTR Value 100n\nTEXT -64 320 Left 2 !.tran 1m\n"
+  },
+  "reply": {
+   "message": "",
+   "status": "ok",
+   "unchanged": "false"
+  }
+ },
+ {
+  "note": "Save writes the window's copy to the file, the first line as LTspice 26 writes it",
+  "observed": [
+   true,
+   "Version 4.1"
+  ]
+ },
+ {
+  "note": "Save asks nothing on the way",
+  "observed": true
+ },
+ {
+  "note": "saved, it closes without a question",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "Save of a write-protected sheet leaves the file as it was, takes no input and shows a box with these words",
+  "observed": [
+   true,
+   false,
+   [
+    "Trouble writing schematic \"C:\\recording\\locked.asc\"\n\nThe file is write protected."
+   ]
+  ]
+ },
+ {
+  "note": "Cancel closes that box, and the window still holds its copy",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},
