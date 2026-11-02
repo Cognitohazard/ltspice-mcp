@@ -1265,6 +1265,23 @@ class TestExportedNames:
         else:
             assert references == ["X§U1", "X§X2", "X§x3"]
 
+    def test_a_run_reads_a_current_by_the_name_on_the_sheet(self, build: str, tmp_path: Path):
+        """The card is ``R§Load`` on both builds, but the run's raw names its
+        current ``I(Load)``, as the sheet names the part. ``Load`` is 2k, so its
+        current is half of R1's and the two cannot be mistaken."""
+        references = [
+            card.name
+            for card in rec.export_cards(build, "export/load_name_op")
+            if card.kind == "instance"
+        ]
+        assert references == ["V1", "R1", "R§Load"]
+        currents = {
+            name: value
+            for name, value in rec.operating_point(build, "export/load_name_op", tmp_path).items()
+            if name.startswith("i(")
+        }
+        assert currents == pytest.approx({"i(v1)": -1.5e-3, "i(r1)": 1e-3, "i(load)": 0.5e-3})
+
     def test_an_instance_named_as_written_matches_its_export(self, build: str):
         """A netlist naming the sheet's instances as the sheet does (``X2``,
         ``x3``, ``RLoad``) is the export's circuit: the ``X`` LTspice puts in

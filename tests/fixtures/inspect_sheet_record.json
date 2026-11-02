@@ -96068,6 +96068,437 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/load_name_op.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 272,
+      "y": 32
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 288,
+       "y": 32
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 288,
+       "y": 128
+      }
+     ],
+     "position": {
+      "x": 288,
+      "y": 80
+     },
+     "reference": "Load",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "2k"
+    },
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 144,
+      "y": 32
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 160,
+       "y": 32
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 160,
+       "y": 128
+      }
+     ],
+     "position": {
+      "x": 160,
+      "y": 80
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    },
+    {
+     "bounding_box": {
+      "height": 64,
+      "width": 64,
+      "x": 0,
+      "y": 32
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "+",
+       "order": 1,
+       "x": 32,
+       "y": 32
+      },
+      {
+       "dir": "down",
+       "name": "-",
+       "order": 2,
+       "x": 32,
+       "y": 96
+      }
+     ],
+     "position": {
+      "x": 32,
+      "y": 64
+     },
+     "reference": "V1",
+     "rotation": "R0",
+     "symbol": "voltage",
+     "value": "1"
+    }
+   ],
+   "total": 3
+  },
+  "nets": [
+   {
+    "at": "V1.+",
+    "coordinates_sha256": "c8ea560a5ebc4d50",
+    "is_shorted": false,
+    "labels": [
+     "in"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 288,
+      "y": 32
+     },
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 160,
+      "y": 32
+     },
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 32,
+      "y": 32
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "V1.-",
+    "coordinates_sha256": "d9f0f229412fdb5e",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "Load",
+      "x": 288,
+      "y": 128
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 160,
+      "y": 128
+     },
+     {
+      "pin": "-",
+      "reference": "V1",
+      "x": 32,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "c8ea560a5ebc4d50",
+    "is_shorted": false,
+    "labels": [
+     "in"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 288,
+      "y": 32
+     },
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 160,
+      "y": 32
+     },
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 32,
+      "y": 32
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "d9f0f229412fdb5e",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "Load",
+      "x": 288,
+      "y": 128
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 160,
+      "y": 128
+     },
+     {
+      "pin": "-",
+      "reference": "V1",
+      "x": 32,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "Load.1",
+    "coordinates_sha256": "c8ea560a5ebc4d50",
+    "is_shorted": false,
+    "labels": [
+     "in"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 288,
+      "y": 32
+     },
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 160,
+      "y": 32
+     },
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 32,
+      "y": 32
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "Load.2",
+    "coordinates_sha256": "d9f0f229412fdb5e",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "Load",
+      "x": 288,
+      "y": 128
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 160,
+      "y": 128
+     },
+     {
+      "pin": "-",
+      "reference": "V1",
+      "x": 32,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "net:in",
+    "coordinates_sha256": "c8ea560a5ebc4d50",
+    "is_shorted": false,
+    "labels": [
+     "in"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 288,
+      "y": 32
+     },
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 160,
+      "y": 32
+     },
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 32,
+      "y": 32
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": "net:0",
+    "coordinates_sha256": "d9f0f229412fdb5e",
+    "is_shorted": false,
+    "labels": [
+     "0"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "Load",
+      "x": 288,
+      "y": 128
+     },
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 160,
+      "y": 128
+     },
+     {
+      "pin": "-",
+      "reference": "V1",
+      "x": 32,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": [
+     96,
+     32
+    ],
+    "coordinates_sha256": "c8ea560a5ebc4d50",
+    "is_shorted": false,
+    "labels": [
+     "in"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 288,
+      "y": 32
+     },
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 160,
+      "y": 32
+     },
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 32,
+      "y": 32
+     }
+    ],
+    "snapped_to_wire": {
+     "from": {
+      "x": 32,
+      "y": 32
+     },
+     "to": {
+      "x": 160,
+      "y": 32
+     }
+    },
+    "total_coordinates": 3,
+    "total_pins": 3
+   },
+   {
+    "at": [
+     224,
+     32
+    ],
+    "coordinates_sha256": "c8ea560a5ebc4d50",
+    "is_shorted": false,
+    "labels": [
+     "in"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "Load",
+      "x": 288,
+      "y": 32
+     },
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 160,
+      "y": 32
+     },
+     {
+      "pin": "+",
+      "reference": "V1",
+      "x": 32,
+      "y": 32
+     }
+    ],
+    "snapped_to_wire": {
+     "from": {
+      "x": 160,
+      "y": 32
+     },
+     "to": {
+      "x": 288,
+      "y": 32
+     }
+    },
+    "total_coordinates": 3,
+    "total_pins": 3
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
   "components": {
    "rows": [
