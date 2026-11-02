@@ -291,6 +291,11 @@ class TestCaseList:
             f"reason there is none: {unexplained}"
         )
 
+    def test_a_pending_behaviour_has_the_inputs_it_waits_to_record(self):
+        for key, behaviour in CASES.behaviours.items():
+            if behaviour.pending:
+                assert CASES.of(key), f"{key} is pending but names no input to record"
+
     def test_every_behaviour_names_the_code_that_models_it(self):
         for key, behaviour in CASES.behaviours.items():
             assert behaviour.model, f"{key} names no code"
@@ -348,7 +353,8 @@ class TestCommittedRecordings:
         expected = {
             case.case_id
             for case in CASES.cases
-            if not case.builds or generation in case.builds or build in case.builds
+            if (not case.builds or generation in case.builds or build in case.builds)
+            and not CASES.behaviours[case.behaviour].pending
         }
         assert set(manifest["cases"]) == expected
 
@@ -356,8 +362,24 @@ class TestCommittedRecordings:
         recorded = {
             entry["behaviour"] for entry in load_manifest(FIXTURES / build)["cases"].values()
         }
-        expected = {case.behaviour for case in CASES.cases}
+        expected = {
+            case.behaviour for case in CASES.cases if not CASES.behaviours[case.behaviour].pending
+        }
         assert recorded == expected
+
+    def test_a_pending_behaviour_is_not_recorded_yet(self, build: str):
+        """Once a pending behaviour's cases are recorded, its ``pending`` key goes.
+
+        Left in place, it would excuse the behaviour from the checks above on
+        every later re-record, so a recording that went missing would pass.
+        """
+        recorded = {
+            entry["behaviour"] for entry in load_manifest(FIXTURES / build)["cases"].values()
+        }
+        still_pending = {key for key, behaviour in CASES.behaviours.items() if behaviour.pending}
+        assert not recorded & still_pending, (
+            f"recorded on {build}, so remove `pending` from: {sorted(recorded & still_pending)}"
+        )
 
     def test_every_recorded_file_is_present_and_unchanged(self, build: str):
         directory = FIXTURES / build
