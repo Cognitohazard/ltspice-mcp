@@ -35,6 +35,12 @@ tool-surface changes.
   with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
   time limit also counted the wait for LTspice to close the pane or answer its
   question. That wait is now added to the limit.
+- `floating_pin` did not report the pins of a part joined only by a wire
+  running straight between them. LTspice drops that wire and leaves both
+  pins unconnected (recorded: `connectivity/same_instance_bare`), so
+  `verify_circuit` and `edit_schematic` now report each pin as floating,
+  beside the `dropped_wire` finding for the wire. The rule now reads the
+  sheet's nets as LTspice netlists them.
 - `verify_circuit`'s syntax check validated a deck against LTspice's rules
   whenever the session's default simulator was anything but ngspice, so a
   QSPICE or Xyce session was told its deck broke rules LTspice has and those
