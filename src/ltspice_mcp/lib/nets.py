@@ -12,6 +12,7 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
@@ -137,17 +138,18 @@ class Nets:
     """A sheet's nets as a netlister makes them, over its pins and labels.
 
     A net is an ``int``. A pin may be on a net of its own where others share
-    its point. ``segments`` gives each run of wire with the nets a point on it
-    touches: one for a run that joins what is on it, more for one the
-    netlister drops (``dropped``). Labels of one name are one net only through
-    ``folded``, and ``name_key`` is the form the netlister compares names in.
+    its point. ``runs`` are the runs of wire the netlister keeps, each on its
+    net. A run it drops (``dropped``) joins nothing, and a point on one touches
+    the nets of the pins at both its ends. Labels of one name are one net only
+    through ``folded``, and ``name_key`` is the form the netlister compares
+    names in.
     """
 
     def __init__(
         self,
         pins: dict[PinAt, int],
         labels: dict[LabelAt, int],
-        segments: Iterable[tuple[Segment, tuple[int, ...]]],
+        runs: Sequence[tuple[Segment, int]],
         dropped: Sequence[DroppedRun],
         name_key: Callable[[str], str],
     ) -> None:
@@ -161,7 +163,12 @@ class Nets:
         for pin in pins:
             self._pins_at.setdefault(pin.point, []).append(pin)
         self._label_points = {label.point: net for label, net in labels.items()}
-        self._segments = SegmentIndex(segments)
+        #: How many pins, labels and kept runs each net holds.
+        self._held = Counter([*pins.values(), *labels.values(), *(net for _run, net in runs)])
+        self._runs = SegmentIndex(runs)
+        self._dropped = SegmentIndex(
+            (run.segment, tuple(pins[end] for end in run.ends)) for run in self.dropped
+        )
         self._folded = fold_by_name(((net, label.text) for label, net in labels.items()), name_key)
 
     def of_pin(self, pin: PinAt) -> int:
@@ -176,11 +183,17 @@ class Nets:
         """``net`` with every net that carries a label of one of its names as one."""
         return self._folded(net)
 
+    def unconnected(self, pin: PinAt) -> bool:
+        """Whether nothing but ``pin`` is on its net: no other pin, no label and
+        no run of wire the netlister keeps."""
+        return self._held[self._pin_net[pin]] == 1
+
     def nets_at(self, point: Point) -> tuple[int, ...]:
         """Every net with a pin or label on ``point`` or a run of wire through it."""
         found = {self._pin_net[pin] for pin in self._pins_at.get(point, ())}
         if point in self._label_points:
             found.add(self._label_points[point])
-        for nets in self._segments.at(point):
+        found.update(self._runs.at(point))
+        for nets in self._dropped.at(point):
             found.update(nets)
         return tuple(sorted(found))

@@ -596,7 +596,6 @@ def nets_by_ltspice(
         for drop in drops
         for x1, y1, x2, y2 in [drop["segment"]]
     ]
-    segments = [(run, (point_nets[run[0]],)) for run in kept]
-    segments += [(run.segment, tuple(pin_nets[pin] for pin in run.ends)) for run in dropped]
     label_nets = {label: point_nets[label.point] for label in labels}
-    return Nets(pin_nets, label_nets, segments, dropped, name_key)
+    run_nets = [(run, point_nets[run[0]]) for run in kept]
+    return Nets(pin_nets, label_nets, run_nets, dropped, name_key)
