@@ -92,6 +92,18 @@ class TestServerInstructions:
         named = removed_tools_named_in(CONSOLIDATED_INSTRUCTIONS)
         assert not named, f"the instructions name removed tools: {named}"
 
+    def test_instructions_keep_sheets_off_ltspice_own_server(self):
+        """A client may connect LTspice's own MCP server beside this one, and
+        its instructions send sheet edits to its set_design_content. Its edits
+        and runs reach only the copy open in the window, so the rule is in the
+        text every client shows, not only in the guide."""
+        assert says(
+            CONSOLIDATED_INSTRUCTIONS,
+            "LTspice's own MCP server",
+            "set_design_content",
+            "edit sheets with edit_schematic and run them with run_experiments",
+        )
+
 
 # The Python API's import line: the discovery route every instruction edition
 # carries, whatever the sentence around it says.

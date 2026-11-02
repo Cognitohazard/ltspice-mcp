@@ -31,6 +31,11 @@ tool-surface changes.
 
 ### Fixed
 
+- The read-the-guide reminder said the session had not read the guide when
+  the server had only restarted, as after a reconnect, or when the guide was
+  read through `api.guide()` inside `run_code`, neither of which the server
+  sees. It now says the server has not been asked for the guide since it
+  started, so an agent that has read it carries on.
 - Closing and reopening an LTspice plot or sheet could fail on a busy machine
   with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
   time limit also counted the wait for LTspice to close the pane or answer its
@@ -303,6 +308,12 @@ tool-surface changes.
 
 ### Changed
 
+- The server's instructions say that LTspice's own MCP server
+  (`set_design_content`, `start_simulation`) edits and runs only the copy
+  open in its window, and to edit sheets with `edit_schematic` and run them
+  with `run_experiments`. A client that connects both servers met that rule
+  only in the guide, while LTspice's server's own instructions send sheet
+  edits to `set_design_content`.
 - `group_by`'s description in `analyze_results` and in `run_experiments`'
   `analyze` block names a parameter varied by a variation or within a run,
   where it named a `.step` axis, a deck command not every simulator has.

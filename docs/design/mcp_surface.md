@@ -1676,9 +1676,11 @@ that cannot be answered fails rather than returning an empty list.
 
 **The guide.** `inspect(kind: "guide")`, `Api.guide()` and the
 `spice://guide` resources serve the same text. A read through `inspect` or a
-resource is recorded on the session; if a session has not read the guide, its
-first tool reply contains one reminder to read it, in the text and in the
-structured `hint`.
+resource is recorded on the server's session. A read through `Api.guide()`,
+inside `run_code` too, is not, and a restarted server starts with none. If no
+read has reached the server since it started, its first tool reply contains one
+reminder to read the guide, in the text and in the structured `hint`, worded
+for that: an agent that has read it carries on.
 
 ---
 
