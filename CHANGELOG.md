@@ -31,6 +31,10 @@ tool-surface changes.
 
 ### Fixed
 
+- Closing and reopening an LTspice plot or sheet could fail on a busy machine
+  with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
+  time limit also counted the wait for LTspice to close the pane or answer its
+  question. That wait is now added to the limit.
 - `verify_circuit`'s syntax check validated a deck against LTspice's rules
   whenever the session's default simulator was anything but ngspice, so a
   QSPICE or Xyce session was told its deck broke rules LTspice has and those
@@ -227,6 +231,14 @@ tool-surface changes.
   specification recommends for a client that passes only the text to the
   model; under the default, `"summary"`, such a model reads one summary line.
   `inspect(kind="capabilities")` reports the mode as `text_channel`.
+- `edit_schematic(save_open_window=true, ops=[])` has LTspice save the sheet
+  from the user's window, as Ctrl+S does, so the agent can keep the user's
+  unsaved changes once they agree instead of asking them to save by hand. Use
+  it after an edit is refused with `open_window_differs`, or after a plot
+  opens with `tied: false` because its sheet had unsaved changes. The reply
+  gives the file's new `sha256`, and the sheet is then read again before an
+  edit. A box LTspice shows instead of saving, such as for a write-protected
+  file, is quoted in `window_not_saved` and closed with Cancel.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the
@@ -298,6 +310,13 @@ tool-surface changes.
   row's `source` label has it, and `include.fields: ["snapshot_id"]` puts it
   back on the row. A `waveform` or `plot` value no longer repeats the run
   identity its row already carries.
+- When an LTspice window that has an edited sheet open does not take the
+  committed sheet, the server now closes the sheet there and opens it again
+  from the file, and the window's entry in `open_in_ltspice` says
+  `reopened: true`. Before, the reply told the user to do this by hand. It is
+  done only when the window still holds the sheet as it was before the edit,
+  so nothing the user changed there since is lost; otherwise the entry says
+  `shown: false` as before.
 - **Breaking:** every argument that names a file is `path`, as
   `run_experiments`, `verify_circuit` and `inspect` already spelled it.
   `plot_waveform` takes `path` for `raw_file`. An `analyze_results` source

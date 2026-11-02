@@ -57,6 +57,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -76,6 +77,7 @@ from ltspice_mcp.lib.hidden_desktop import (
 )
 from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession, bridge_command
 from ltspice_mcp.lib.ltspice_frame import (
+    SAVE,
     VISIBLE_TRACES,
     LtspiceFrame,
     SaveQuestion,
@@ -765,6 +767,91 @@ def _tie_and_menu_facts(
     )
 
 
+def _save_facts(
+    recording: _Recording,
+    session: BridgeSession,
+    desktop: HiddenDesktop,
+    scrub: _Scrub,
+    pid: int,
+    work: Path,
+) -> None:
+    """What the sheet menu's Save does to a sheet the bridge handed new text,
+    and to one whose file is write-protected.
+
+    The sheet is a copy of the input an older build wrote, so the record also
+    shows how LTspice writes such a sheet back.
+    """
+    frame = LtspiceFrame(desktop.windows)
+    sheet = work / "saving.asc"
+    shutil.copyfile(INPUTS / f"{EDITED}.asc", sheet)
+    on_disk = sheet.read_bytes()
+    recording.call(session, "open a sheet to save", "open_design", path=str(sheet))
+    changed = session.design_text(str(sheet)).replace("SYMATTR Value 1k", "SYMATTR Value 4.7k")
+    recording.call(
+        session,
+        "hand the window a changed sheet to save",
+        "set_design_content",
+        path=str(sheet),
+        text=changed,
+    )
+    session.bring_to_front(str(sheet))
+    frame.send(pid, SAVE)
+    _until(
+        lambda: file_difference(sheet.read_bytes(), changed) is None or not frame.takes_input(pid),
+        "saving the sheet or asking something",
+    )
+    saved = sheet.read_bytes()
+    recording.fact(
+        "Save writes the window's copy to the file, the first line as LTspice 26 writes it",
+        [
+            saved != on_disk and file_difference(saved, changed) is None,
+            saved.splitlines()[0].decode("ascii", "replace"),
+        ],
+    )
+    recording.fact(
+        "Save asks nothing on the way", frame.takes_input(pid) and not frame.box_words(pid)
+    )
+    pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet")
+    frame.close(pane)
+    _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+    recording.fact(
+        "saved, it closes without a question",
+        [not frame.is_open(pane), frame.save_question(pid) is None],
+    )
+
+    locked = work / "locked.asc"
+    shutil.copyfile(INPUTS / f"{EDITED}.asc", locked)
+    session.open_design(str(locked))
+    changed = session.design_text(str(locked)).replace("SYMATTR Value 1k", "SYMATTR Value 4.7k")
+    session.replace_design_text(str(locked), changed)
+    on_disk = locked.read_bytes()
+    os.chmod(locked, stat.S_IREAD)
+    try:
+        session.bring_to_front(str(locked))
+        frame.send(pid, SAVE)
+        _until(
+            lambda: not frame.takes_input(pid) or locked.read_bytes() != on_disk,
+            "saving a write-protected sheet or saying why not",
+        )
+        recording.fact(
+            "Save of a write-protected sheet leaves the file as it was, takes no input "
+            "and shows a box with these words",
+            [
+                locked.read_bytes() == on_disk,
+                frame.takes_input(pid),
+                [scrub.text(words) for words in frame.box_words(pid)],
+            ],
+        )
+        frame.dismiss_boxes(pid)
+        _until(lambda: frame.takes_input(pid), "closing the box")
+        recording.fact(
+            "Cancel closes that box, and the window still holds its copy",
+            [not frame.box_words(pid), session.design_text(str(locked)) == changed],
+        )
+    finally:
+        os.chmod(locked, stat.S_IREAD | stat.S_IWRITE)
+
+
 def reader_subjects() -> dict[str, list[str]]:
     """The results files LTspice's reader is asked about, by the build that wrote them.
 
@@ -992,6 +1079,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 )
                 _sheet_close_facts(recording, session, desktop, scrub, window.pid, work, results)
                 _tie_and_menu_facts(recording, session, desktop, build, window.pid, work, results)
+                _save_facts(recording, session, desktop, scrub, window.pid, work)
                 reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()
@@ -1025,7 +1113,9 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
         },
         "inputs": {name: sha256_bytes((INPUTS / f"{name}.asc").read_bytes()) for name in names},
         "reference": reference_record(build),
-        "sheet_commands": {VISIBLE_TRACES: menu_command(build.exe, VISIBLE_TRACES)},
+        "sheet_commands": {
+            label: menu_command(build.exe, label) for label in (VISIBLE_TRACES, SAVE)
+        },
         # The results files the reader was handed, as the main recordings held them then.
         "reader": results_read,
         "files": {name: sha256_bytes(data) for name, data in sorted(files.items())},

@@ -33,6 +33,8 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | nested devices, scoped ports, effective parameters | `inspect(kind="hierarchy", path=..., simulator=...)` |
 | find the recipe, op or check for a job, and its fields | `inspect(kind="reference", query="phase margin")` |
 | what the user has open in LTspice, and which sheet is in front | `inspect(kind="open_in_ltspice")` |
+| measure a run the user made in LTspice | `inspect(kind="open_in_ltspice")` names the sheet in front, and LTspice wrote its results beside it as `<sheet>.raw`: `analyze_results(sources=[{"path": "<sheet>.raw"}], recipes=[…])` |
+| keep the user's unsaved LTspice changes, once they agree | `edit_schematic(path=…, expected_sha256=…, ops=[], save_open_window=true)` (guide section 'schematics') |
 | LTspice's own reference: shortcuts, menus, the waveform viewer, `.MEAS` | `inspect(kind="simulator_docs")`, then `name=` one of them |
 | create or mutate an `.asc` | `edit_schematic(path=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |

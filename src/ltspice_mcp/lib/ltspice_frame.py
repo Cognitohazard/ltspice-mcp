@@ -39,7 +39,7 @@ front. The caller makes sure of the state first (``OpenWindows``).
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +51,8 @@ from ltspice_mcp.lib.ltspice_bridge import BridgeError
 
 #: The schematic editor's command that opens the results beside a sheet.
 VISIBLE_TRACES = "Visible Traces"
+#: The schematic editor's command that saves the sheet in front, as Ctrl+S does.
+SAVE = "Save"
 # A top-level menu only the schematic editor's menu bar has, which tells its
 # menu from the waveform viewer's and the symbol editor's.
 _SHEET_MENU = "Hierarchy"
@@ -226,20 +228,53 @@ class LtspiceFrame:
         """
         return hidden_desktop.takes_input(self._frame(pid))
 
+    def _boxes(self, pid: int) -> Iterator[tuple[int, list[str]]]:
+        """Each box LTspice process ``pid`` has up, with the words it shows.
+
+        A box has a title. A waveform viewer keeps untitled dialogs of its own
+        for its cursors, which are not boxes anyone answers.
+        """
+        for window in self._top_level(pid):
+            titled = bool(hidden_desktop.window_text(window))
+            if not titled or hidden_desktop.window_class(window) != hidden_desktop.DIALOG_CLASS:
+                continue
+            words = [
+                hidden_desktop.window_text(child)
+                for child in hidden_desktop.child_windows(window)
+                if hidden_desktop.window_class(child) == _WORDS_CLASS
+            ]
+            yield window, [each for each in words if each]
+
+    def box_words(self, pid: int) -> list[str]:
+        """The words of the boxes LTspice process ``pid`` has up, for a reply to quote."""
+        return [each for _box, words in self._boxes(pid) for each in words]
+
+    def dismiss_boxes(self, pid: int) -> list[str]:
+        """Answer Cancel to each box LTspice process ``pid`` has up, and return
+        their words.
+
+        For a box LTspice showed in answer to a command sent from here, which
+        Cancel closes leaving the document as it was: the one for a sheet that
+        cannot be written has only OK, and Cancel closes it too (recorded).
+        Returns before LTspice has acted on the answer. Raises ``FrameError``
+        when a box does not take it.
+        """
+        words: list[str] = []
+        for box, said in self._boxes(pid):
+            words += said
+            try:
+                hidden_desktop.post_command(box, _CANCEL)
+            except OSError as error:
+                raise FrameError(f"LTspice's box did not take Cancel: {error}") from error
+        return words
+
     def save_question(self, pid: int) -> SaveQuestion | None:
         """The question LTspice process ``pid`` is asking about saving a document, or None."""
         before, after = _SAVE_QUESTION
-        for window in self._top_level(pid):
-            if hidden_desktop.window_class(window) != hidden_desktop.DIALOG_CLASS:
-                continue
-            for child in hidden_desktop.child_windows(window):
-                words = hidden_desktop.window_text(child)
-                if (
-                    hidden_desktop.window_class(child) == _WORDS_CLASS
-                    and words.startswith(before)
-                    and words.endswith(after)
-                ):
-                    return SaveQuestion(window, words[len(before) : -len(after)])
+        for box, words in self._boxes(pid):
+            for each in words:
+                if each.startswith(before) and each.endswith(after):
+                    return SaveQuestion(box, each[len(before) : -len(after)])
         return None
 
     def answer(self, question: SaveQuestion, *, discard: bool) -> None:
