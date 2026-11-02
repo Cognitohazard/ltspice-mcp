@@ -1832,26 +1832,28 @@ def _fake_exporter(_cls, asc_path, timeout=0):
     return net
 
 
-async def test_the_default_export_writes_the_net_ltspice_writes(
+async def test_the_default_export_writes_nothing_beside_the_sheet(
     config, work_dir, asc_symbols, monkeypatch
 ):
-    """LTspice writes <name>.net beside a schematic it runs, and so does
-    run_experiments, so the default export writes that file rather than copy the
-    schematic and its project files into the store to avoid it."""
+    """A check changes nothing in the caller's folder unless asked to: the
+    default export is a copy in the server's own folder, and a .net already
+    beside the sheet is left as it was."""
     monkeypatch.setattr(vc, "_create_netlist", _fake_exporter)
     state = _with_ltspice(config)
     asc = _write(work_dir, "d.asc", _RES_ASC)
+    theirs = _write(work_dir, "d.net", _PRIOR_NET)
 
     data = await _run(state, path=str(asc), checks=["export"])
 
     assert data["export"]["ok"] is True
-    assert data["export"]["destination"] == "sidecar"
-    assert data["export"]["netlist"] == str(work_dir / "d.net")
-    assert (work_dir / "d.net").read_text() == _NEW_NET
-    assert not state.store.verify_artifact("export").exists()
+    assert data["export"]["destination"] == "managed"
+    assert ".ltspice-mcp" in data["export"]["netlist"]
+    assert theirs.read_text() == _PRIOR_NET
+    # Nothing new beside the sheet; the server's own folder holds the copy.
+    assert {path.name for path in work_dir.iterdir()} - {".ltspice-mcp"} == {"d.asc", "d.net"}
 
 
-async def test_a_failed_default_export_names_the_mode_that_writes_nothing_beside_it(
+async def test_a_failed_sidecar_export_names_the_mode_that_writes_nothing_beside_it(
     config, work_dir, asc_symbols, monkeypatch
 ):
     """A schematic in a folder the user cannot write (LTspice's bundled examples
@@ -1866,7 +1868,7 @@ async def test_a_failed_default_export_names_the_mode_that_writes_nothing_beside
     state = _with_ltspice(config)
     asc = _write(work_dir, "ro.asc", _RES_ASC)
 
-    data = await _run(state, path=str(asc), checks=["export"])
+    data = await _run(state, path=str(asc), checks=["export"], export_to="sidecar")
 
     (failure,) = data["failures"]
     assert failure["stage"] == "export"

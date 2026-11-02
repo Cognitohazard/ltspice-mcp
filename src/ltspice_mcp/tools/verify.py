@@ -50,12 +50,12 @@ have to make assumptions?"), free-text with one thing to fix. It also keeps the
 channel consistent with ``diff_circuit``, which has surfaced these same messages,
 from this same helper, in ``warnings`` all along.
 
-``export_to`` is ``sidecar`` by default: the export overwrites the schematic's
-conventional ``<name>.net`` under the export lock, the file LTspice itself writes
-beside a schematic it runs (and ``run_experiments`` exports through), and reports
-the structural delta from the prior one. ``managed`` is the non-destructive
-alternative: it stages the schematic with its project-local files in the store's
-scratch and exports there, writing nothing beside the caller's file.
+``export_to`` is ``managed`` by default: it stages the schematic with its
+project-local files in the store's scratch and exports there, writing nothing
+beside the caller's file, as ``run_experiments`` exports a copy. ``sidecar``
+overwrites the schematic's conventional ``<name>.net`` under the export lock,
+the file LTspice itself writes beside a schematic it runs, and reports the
+structural delta from the prior one.
 """
 
 from __future__ import annotations
@@ -877,19 +877,18 @@ class VerifyCircuitInput(ToolInput):
     )
 
     export_to: Literal["sidecar", "managed"] = Field(
-        default="sidecar",
+        default="managed",
         description=(
-            "'sidecar' overwrites <name>.net next to the schematic, as LTspice "
-            "does when it runs one; 'managed' exports a copy in the server's "
-            "scratch and writes nothing there."
+            "'managed' exports a copy in the server's scratch; 'sidecar' "
+            "overwrites <name>.net next to the schematic, as LTspice does, and "
+            "reports what changed."
         ),
     )
 
 
 VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
-    "it checks; the export check writes the .net next to an .asc unless "
-    "export_to='managed'. For a "
+    "it checks, or write next to it unless export_to='sidecar'. For a "
     "netlist: SPICE syntax, directive and element arity, non-ASCII "
     "value suffixes such as µ, and connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
@@ -2596,9 +2595,9 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     title="Check Circuit",
     description=VERIFY_DESCRIPTION,
     input_model=VerifyCircuitInput,
-    # Not read-only: export writes a file on every path, by default the deck's
-    # .net beside the schematic (export_to:managed writes scratch instead). The
-    # annotation states the worst case; the description carries the nuance.
+    # Not read-only: export writes a file on every path, by default in the
+    # store's scratch (export_to:sidecar writes the .net beside the schematic).
+    # The annotation states the worst case; the description carries the nuance.
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=_OUTPUT_SCHEMA,
 )
