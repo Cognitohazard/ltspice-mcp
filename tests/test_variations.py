@@ -528,6 +528,39 @@ class TestRandomExpansion:
                 MismatchRule(rule="mismatch", min_wl_um2=bad)
         assert MismatchRule(rule="mismatch", min_wl_um2=1e-2).min_wl_um2 == 1e-2
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="mismatch sigma ignores the instance multiplier m; remove this mark with the fix",
+    )
+    def test_mismatch_sigma_counts_the_instance_multiplier(self, tmp_path: Path):
+        """``m=4`` is four devices in parallel, so its mismatch sigma is half of one's.
+
+        Pelgrom's sigma scales as 1/sqrt(area), and a device written with a
+        multiplier ``m`` has m times the gate area of one copy. The draw's
+        stream is keyed by circuit, case and instance, not by the deck's text,
+        so the two decks below draw the same normal deviate and their offsets
+        differ only by the sigma each was given.
+        """
+
+        def vto_offset(directory: Path, multiplier: str) -> float:
+            directory.mkdir()
+            circuit = _closure(
+                directory,
+                includes={},
+                root_body=f".model NM NMOS(VTO=0.7 KP=100u)\nM1 d g 0 0 NM W=10u L=1u{multiplier}\n",
+            )
+            variation = _random_rule({"rule": "mismatch", "prefix": "M", "AVT": 3e-3})
+            cases = materialize_variants(
+                circuit, expand_variations([circuit], [variation]), directory / "out"
+            )
+            return cases[0].assignments["random:mismatch:M1.VTO"] - 0.7
+
+        single = vto_offset(tmp_path / "single", "")
+        four = vto_offset(tmp_path / "four", " m=4")
+
+        assert single != 0.0
+        assert four == pytest.approx(single / 2, rel=1e-9)
+
 
 _CORE = ".subckt core in out\nR1 in out 1k\n.ends\n"
 
