@@ -1218,14 +1218,16 @@ a window's copy and does not check. For one that replaces the sheet:
   last changed, and committing would leave two sheets, each missing the
   other's changes. The call then fails with `open_window_differs` at stage
   `window_check`, naming a few of the differing entries, and writes nothing.
-  If the user wants to keep the window's version, a call with
-  `save_open_window: true` and no ops has LTspice save the sheet from that
-  window, as Ctrl+S does, and the reply gives the file's new `sha256`. The
-  caller reads the sheet again before editing it, because it now holds the
-  user's changes. A box LTspice shows instead of saving fails the call with
-  `window_not_saved`, quoting the box, and the server closes the box with
-  Cancel, which leaves the window's copy as it was. To keep the file's version, the user
-  closes the sheet in LTspice without saving. A dry run reports the
+  A call with no ops and `open_window` set to the user's choice settles it.
+  With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
+  and the reply gives the file's new `sha256`. A box LTspice shows instead of
+  saving fails the call with `window_not_saved`, quoting the box, and the
+  server closes the box with Cancel, which leaves the window's copy as it was.
+  With `"discard"`, the server closes the sheet in each window that differs
+  without saving and opens it again from the file, which is unchanged; a
+  window whose copy changes meanwhile is left open and fails the call with
+  `window_not_discarded`. Either way the caller reads the sheet again before
+  editing it. A dry run reports the
   difference in `observations` and is not refused. The comparison is by
   content rather than text, because LTspice returns its own serialization of
   a sheet. That serialization differs from the file it read in the first

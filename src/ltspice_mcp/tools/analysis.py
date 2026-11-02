@@ -1107,9 +1107,10 @@ _TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
 _ALONE_NOTE = (
     "The plot is not tied to the sheet, so clicking a net there does not plot it, "
     "because LTspice opened the sheet before it had results and has unsaved changes "
-    "to it. Ask the user whether to keep those changes. If they agree, call "
-    "edit_schematic with save_open_window=true; the sheet then holds their changes, "
-    "so run it again and show that run."
+    "to it. Ask the user whether to keep those changes, then call edit_schematic with "
+    "ops=[] and open_window='save' or 'discard'. After 'discard', showing this run "
+    "again ties the plot; after 'save', the sheet holds their changes, so run it "
+    "again and show that run."
 )
 _BY_HAND_NOTE = (
     "The results are beside the sheet: View > Visible Traces on it in LTspice opens "

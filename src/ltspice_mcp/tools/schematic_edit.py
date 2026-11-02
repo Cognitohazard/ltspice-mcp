@@ -199,11 +199,11 @@ class EditSchematicInput(ToolInput):
             "revision_conflict, writing nothing; dry runs only report it."
         ),
     )
-    save_open_window: bool = Field(
-        default=False,
+    open_window: Literal["save", "discard"] | None = Field(
+        default=None,
         description=(
-            "With ops=[], LTspice saves its unsaved copy of the sheet. Only after the "
-            "user agrees; guide section 'schematics'."
+            "With ops=[], once the user chooses: 'save' has LTspice save its unsaved copy "
+            "of the sheet, 'discard' drops it. Guide section 'schematics'."
         ),
     )
     ops: list[ConsolidatedOp] = Field(
@@ -528,13 +528,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "reopened": {
                         "type": "boolean",
                         "description": (
-                            "The window did not take the edit, so the sheet was "
-                            "closed there and opened again from the file."
+                            "The sheet was closed there and opened again from the "
+                            "file: the window did not take the edit, or open_window "
+                            "'discard' dropped its copy."
                         ),
                     },
                     "saved": {
                         "type": "boolean",
-                        "description": "With save_open_window: the file now holds this window's copy.",
+                        "description": "With open_window 'save': the file now holds this window's copy.",
                     },
                     "reason": {
                         "type": "string",
@@ -1307,21 +1308,20 @@ def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> str | None:
 
 
 _WINDOW_REMEDY = (
-    "Ask the user whether to keep the changes in their LTspice window. If they agree, "
-    "call edit_schematic with save_open_window=true, ops=[] and this expected_sha256, "
-    "then read the sheet again and resubmit. To keep the file's version instead, they "
-    "close the sheet in LTspice without saving."
+    "Ask the user whether to keep the changes in their LTspice window. Then call "
+    "edit_schematic with ops=[], this expected_sha256 and open_window='save' to keep "
+    "them or open_window='discard' to drop them, read the sheet again, and resubmit."
 )
 
 
-_SAVE_ARGUMENTS = frozenset({"path", "expected_sha256", "save_open_window", "ops"})
+_WINDOW_ARGUMENTS = frozenset({"path", "expected_sha256", "open_window", "ops"})
 
 
-def _set_besides_a_save(args: EditSchematicInput) -> list[str]:
-    """The arguments given a value other than their default beside save_open_window."""
+def _set_besides_open_window(args: EditSchematicInput) -> list[str]:
+    """The arguments given a value other than their default beside open_window."""
     return sorted(
         name
-        for name in args.model_fields_set - _SAVE_ARGUMENTS
+        for name in args.model_fields_set - _WINDOW_ARGUMENTS
         if getattr(args, name)
         != EditSchematicInput.model_fields[name].get_default(call_default_factory=True)
     )
@@ -1330,7 +1330,7 @@ def _set_besides_a_save(args: EditSchematicInput) -> list[str]:
 def _saved_reply(
     target: Path, build_id: str, stages: list[dict], current: str, saved: Saved | None
 ) -> EditSchematicEvaluation:
-    """The reply to save_open_window once LTspice saved the sheet, or once no
+    """The reply to open_window 'save' once LTspice saved the sheet, or once no
     window held a copy different from the file."""
     if saved is None:
         hint = "No LTspice window holds a sheet different from the file, so nothing was saved."
@@ -1357,6 +1357,38 @@ def _saved_reply(
             sha256=sha256,
             applied=0,
             open_in_ltspice=rows,
+            hint=hint,
+        ),
+        text=hint,
+    )
+
+
+def _discarded_reply(
+    target: Path,
+    build_id: str,
+    stages: list[dict],
+    current: str,
+    discarded: Sequence[tuple[OpenSheet, WindowUpdate]],
+) -> EditSchematicEvaluation:
+    """The reply to open_window 'discard' once each window that held a different
+    copy was closed without saving and opened again from the file."""
+    hint = (
+        f"LTspice closed {target.name} without saving and opened it again from the file, "
+        "so the changes made in the window are gone."
+        if discarded
+        else "No LTspice window holds a sheet different from the file, so nothing was dropped."
+    )
+    return EditSchematicEvaluation(
+        data=_envelope(
+            delivered=True,
+            commit_state="not_committed",
+            target=target,
+            build_id=build_id,
+            base="existing",
+            stages=stages,
+            sha256=current,
+            applied=0,
+            open_in_ltspice=[_window_row(*each) for each in discarded],
             hint=hint,
         ),
         text=hint,
@@ -1398,8 +1430,9 @@ def _window_notes(shown: Sequence[Mapping[str, object]]) -> list[str]:
             notes.append(
                 f"An LTspice window (process {row['pid']}) has this sheet open and could "
                 f"not be updated ({row.get('reason')}): it still shows the sheet as it "
-                "was, and saving from it would overwrite this edit. Close the sheet "
-                "there without saving and open it again."
+                "was, and saving from it would overwrite this edit. Ask the user, then "
+                "call edit_schematic with ops=[] and open_window='discard' to open the "
+                "file there."
             )
     return notes
 
@@ -1443,13 +1476,13 @@ async def _evaluate_edit_schematic(
             "ops list is empty — pass at least one op, or name return_views to "
             "read the sheet's pin table without changing it."
         )
-    if args.save_open_window and (args.ops or _set_besides_a_save(args)):
+    if args.open_window is not None and (args.ops or _set_besides_open_window(args)):
         raise NetlistError(
-            "save_open_window takes only path and expected_sha256, with ops=[]: save "
-            "the sheet, read it again, then edit it in another call."
+            "open_window takes only path and expected_sha256, with ops=[]: settle the "
+            "window, read the sheet again, then edit it in another call."
         )
     # An op-less batch is a read: nothing to commit, so it runs as a dry run.
-    dry_run = args.dry_run or not (args.ops or args.save_open_window)
+    dry_run = args.dry_run or not (args.ops or args.open_window)
     _validate_view_cursors(args.view_cursors)
     # Resolve the optional reference here, with the rest of the argument checks:
     # a path outside allowed_paths is an argument fault the caller fixes by
@@ -1573,11 +1606,32 @@ async def _evaluate_edit_schematic(
                 f"({current}); a commit quoting it would return revision_conflict."
             )
 
-        if args.save_open_window:
-            if on_disk is None or current is None:
-                raise NetlistError(
-                    f"{target.name} does not exist, so no window can hold a copy of it."
+        if args.open_window is not None and (on_disk is None or current is None):
+            raise NetlistError(
+                f"{target.name} does not exist, so no window can hold a copy of it."
+            )
+        if args.open_window == "discard" and on_disk is not None and current is not None:
+            try:
+                discarded = await asyncio.to_thread(state.open_windows.discard, target, on_disk)
+            except BridgeError as exc:
+                left, discarded = [str(exc)], []
+            else:
+                left = [update.refusal for _sheet, update in discarded if update.refusal]
+            if left:
+                message = (
+                    f"LTspice did not drop the changes to {target.name}: {'; '.join(left)}. "
+                    "Read the sheet again before editing it."
                 )
+                return refused(
+                    code="window_not_discarded",
+                    stage="window_discard",
+                    failure="; ".join(left),
+                    message=message,
+                    hint=message,
+                    text=f"edit_schematic: {message}",
+                )
+            return finish(_discarded_reply(target, build_id, stages, current, discarded))
+        if args.open_window == "save" and on_disk is not None and current is not None:
             try:
                 saved = await asyncio.to_thread(state.open_windows.save, target, on_disk)
             except BridgeError as exc:
@@ -1620,7 +1674,7 @@ async def _evaluate_edit_schematic(
             if differs is not None and dry_run:
                 window_notes.append(
                     f"{differs} A commit is refused until the window's copy is saved "
-                    "(save_open_window, with the user's agreement) or the sheet is closed."
+                    "(open_window, with the user's agreement) or the sheet is closed."
                 )
             elif differs is not None:
                 return refused(

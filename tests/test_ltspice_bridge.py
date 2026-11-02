@@ -193,7 +193,7 @@ class TestRecording:
             ],
             "that plot does, for a sheet that knows of none and for one that knows of its "
             "results": [False, False],
-            # What save_open_window relies on: LTspice's own Save, sent from
+            # What open_window 'save' relies on: LTspice's own Save, sent from
             # outside, writes the window's copy and leaves nothing to ask.
             "Save writes the window's copy to the file, the first line as LTspice 26 writes it": [
                 True,
@@ -211,6 +211,10 @@ class TestRecording:
                 ],
             ],
             "Cancel closes that box, and the window still holds its copy": [True, True],
+            # What open_window 'discard' relies on.
+            "a sheet whose window copy differs from the file is asked about before it closes": True,
+            "answered No, it closes and its file is as it was": [True, True],
+            "opened again, the window holds the file": True,
             "no LTspice was started in its place": True,
         }
 

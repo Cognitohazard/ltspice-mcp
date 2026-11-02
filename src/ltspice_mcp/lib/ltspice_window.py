@@ -316,6 +316,11 @@ class Saved:
     others: list[tuple[OpenSheet, WindowUpdate]]
 
 
+def _reads_as(on_disk: bytes) -> Callable[[str], bool]:
+    """Whether a window's copy reads as ``on_disk``, a sheet the file holds or held."""
+    return lambda text: file_difference(on_disk, text) is None
+
+
 def _same_file(ours: Path, theirs: str) -> bool:
     return os.path.normcase(os.path.abspath(theirs)) == os.path.normcase(os.path.abspath(ours))
 
@@ -672,7 +677,12 @@ class OpenWindows:
                 None
                 if spelled is None  # closed by someone since
                 else self._close_sheet(
-                    session, window.pid, sheet, spelled, held, discardable=sheet.read_bytes()
+                    session,
+                    window.pid,
+                    sheet,
+                    spelled,
+                    held,
+                    may_lose=_reads_as(sheet.read_bytes()),
                 )
             )
             if unsaved is not None:
@@ -732,24 +742,23 @@ class OpenWindows:
         spelled: str,
         held: str,
         *,
-        discardable: bytes,
+        may_lose: Callable[[str], bool],
     ) -> str | None:
         """Close ``sheet``, open in the attached window ``pid`` as ``spelled``, so
         that opened again it reads the file. Returns None once it is closed.
 
-        Only where the window holds what ``discardable`` does, a sheet the file
-        holds or held, which closing it without saving loses nothing of:
-        ``held`` is what the window held when the caller last read it, and
-        where that differs the sheet is left open and what it holds is
-        returned. LTspice counts a sheet it was
-        handed through the bridge as changed even when it reads as its file
-        does, which every sheet this server edited while it was open is, and
-        asks whether to save it before closing (recorded). While it asks
-        nobody can change the sheet and the bridge still reads it, so it is
-        read again then: the answer is No where it reads as the file, which
-        loses nothing, and otherwise Cancel, which leaves it as it was.
+        Only where ``may_lose`` says of the window's copy that closing it
+        without saving loses nothing the caller may not lose: ``held`` is what
+        the window held when the caller last read it, and where it may not be
+        lost the sheet is left open and what it holds is returned. LTspice
+        asks whether to save a sheet it counts changed before closing it,
+        which every sheet the bridge handed text to is, even one that reads as
+        its file does (recorded). While it asks nobody can change the sheet
+        and the bridge still reads it, so it is read again then: the answer is
+        No where ``may_lose`` still says so, and otherwise Cancel, which leaves
+        it as it was.
         """
-        if file_difference(discardable, held) is not None:
+        if not may_lose(held):
             return held
         pane = self._pane_in_front(session, pid, sheet, spelled, session.active_design)
         if pane is None:
@@ -768,9 +777,7 @@ class OpenWindows:
         if question is None:
             return None
         now = session.design_text(spelled)
-        keep = (
-            not _same_file(sheet, question.path) or file_difference(discardable, now) is not None
-        )
+        keep = not _same_file(sheet, question.path) or not may_lose(now)
         self._frame.answer(question, discard=not keep)
         # Cancelled, the box goes; answered No, the sheet goes after it.
         gone = question.box if keep else pane
@@ -846,6 +853,48 @@ class OpenWindows:
             raise BridgeError(f"LTspice did not save {path.name}; it showed a box: {asked}")
         return saved[-1]
 
+    def discard(self, sheet: Path, on_disk: bytes) -> list[tuple[OpenSheet, WindowUpdate]]:
+        """Close ``sheet`` without saving in each window whose copy differs from
+        the file, ``on_disk``, and open it there again from the file. Blocks.
+
+        Returns each such window with what it shows then, which is empty when
+        no window holds a different copy. Only for a caller whose user agreed
+        to drop the changes made in those windows: a window whose copy changes
+        before LTspice has asked about it is left open, with the reason.
+        Raises ``BridgeError`` when the windows cannot be asked.
+        """
+        return [
+            (each, self._discarded(each))
+            for each in self.holding(sheet)
+            if file_difference(on_disk, each.text) is not None
+        ]
+
+    def _discarded(self, sheet: OpenSheet) -> WindowUpdate:
+        """Close ``sheet`` in its window without saving, if it still holds the
+        copy it held when read, and open it again from the file."""
+        path = Path(sheet.path)
+        try:
+            with self._session(waits=2 * _CLOSED_S) as session:
+                session.attach(sheet.pid)
+                spelled = self._spelling(session, path)
+                if spelled is None:
+                    return WindowUpdate("it no longer has the sheet open")
+                held = session.design_text(spelled)
+                unchanged = self._close_sheet(
+                    session,
+                    sheet.pid,
+                    path,
+                    spelled,
+                    held,
+                    may_lose=lambda text: content_difference(sheet.text, text) is None,
+                )
+                if unchanged is not None:
+                    return WindowUpdate("its copy changed after it was read, so it was left open")
+                self._sheet_in_front(session, path)
+        except BridgeError as error:
+            return WindowUpdate(f"it could not be closed and opened again: {error}")
+        return WindowUpdate(reopened=True)
+
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""
         with self._session() as session:
@@ -898,7 +947,9 @@ class OpenWindows:
                 if content_difference(text, held) is None:
                     return WindowUpdate()
                 if (
-                    self._close_sheet(session, sheet.pid, path, spelled, held, discardable=was)
+                    self._close_sheet(
+                        session, sheet.pid, path, spelled, held, may_lose=_reads_as(was)
+                    )
                     is not None
                 ):
                     return WindowUpdate(

@@ -2104,8 +2104,9 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     if shown.get("differs_from_file"):
         return (
             "LTspice already had the sheet open and shows a different one from the file "
-            f"that was checked ({shown['difference']}); to see the file's, close it there "
-            "without saving and ask again."
+            f"that was checked ({shown['difference']}). Ask the user whether to keep the "
+            "window's copy, then call edit_schematic with ops=[] and open_window='save' "
+            "to write it to the file or open_window='discard' to open the file there."
         )
     if shown.get("started"):
         return "LTspice was started, with it in front."

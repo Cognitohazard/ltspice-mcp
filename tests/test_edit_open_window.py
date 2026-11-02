@@ -34,6 +34,7 @@ from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_sch
 from tests._ltspice_window import (
     PID,
     FakeFrame,
+    FrameWhoseSheetChangesAsItAsks,
     a_window,
     as_ltspice_reads,
     digest,
@@ -184,7 +185,7 @@ async def test_an_edit_is_refused_while_the_window_holds_a_different_sheet(
             "error": "the open LTspice window differs from the file",
         }
     ]
-    assert "save_open_window=true" in data["hint"]
+    assert "open_window='save'" in data["hint"]
     # Neither side was touched.
     assert file_bytes(asc_file) == before
     assert window.text(asc_file) == held
@@ -214,7 +215,7 @@ def write_protected_box(sheet: Path) -> str:
 
 
 async def save(state: SessionState, sheet: Path, **kw: Any) -> dict:
-    return await edit(state, sheet, ops=[], save_open_window=True, **kw)
+    return await edit(state, sheet, ops=[], open_window="save", **kw)
 
 
 async def test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on(
@@ -286,8 +287,8 @@ async def test_a_save_is_a_call_of_its_own(
 ):
     """The edit is made in another call, against the saved sheet once read."""
     holding_a_change(window, asc_file)
-    with pytest.raises(NetlistError, match="save_open_window takes only path and expected_sha256"):
-        await edit(asc_state, asc_file, save_open_window=True, **other)
+    with pytest.raises(NetlistError, match="open_window takes only path and expected_sha256"):
+        await edit(asc_state, asc_file, open_window="save", **other)
 
 
 async def test_other_windows_with_the_sheet_open_are_handed_the_saved_one(
@@ -315,6 +316,102 @@ async def test_other_windows_with_the_sheet_open_are_handed_the_saved_one(
         held,
         held,
     ]
+
+
+async def discard(state: SessionState, sheet: Path, **kw: Any) -> dict:
+    return await edit(state, sheet, ops=[], open_window="discard", **kw)
+
+
+async def test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """The user changed the sheet in LTspice, so LTspice asks before closing
+    it; the answer is No, and the window then holds the file."""
+    before = file_bytes(asc_file)
+    world = tmp_path / "world.json"
+    write_world(world, [a_window({str(asc_file): a_change(asc_file)}, unsaved=[str(asc_file)])])
+
+    data = await discard(asc_state, asc_file)
+
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "not_committed"
+    assert data["sha256"] == hashlib.sha256(before).hexdigest()
+    assert data["open_in_ltspice"] == [
+        {"pid": PID, "version": "26.1.1", "shown": True, "reopened": True}
+    ]
+    assert "the changes made in the window are gone" in data["hint"]
+    assert file_bytes(asc_file) == before
+    entry = read_world(world)["windows"][0]
+    assert entry["answers"] == ["no"]
+    assert window.text(asc_file) == as_ltspice_reads(asc_file)
+
+    edited = await edit(asc_state, asc_file)
+    assert edited["commit_state"] == "committed"
+
+
+async def test_nothing_is_dropped_where_no_window_holds_a_different_sheet(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    window.shows(asc_file, as_ltspice_reads(asc_file))
+
+    data = await discard(asc_state, asc_file)
+
+    assert data["commit_state"] == "not_committed"
+    assert data["hint"] == (
+        "No LTspice window holds a sheet different from the file, so nothing was dropped."
+    )
+    assert "closed" not in read_world(tmp_path / "world.json")["windows"][0]
+
+
+async def test_every_window_with_a_different_copy_is_closed_and_opened_from_the_file(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """Unlike a save, a discard leaves no choice between copies: the file's is kept."""
+    world = tmp_path / "world.json"
+    write_world(
+        world,
+        [
+            a_window({str(asc_file): a_change(asc_file)}),
+            a_window({str(asc_file): a_change(asc_file).replace("5k", "6k")}, pid=PID + 1),
+        ],
+    )
+
+    data = await discard(asc_state, asc_file)
+
+    assert [(row["pid"], row.get("reopened")) for row in data["open_in_ltspice"]] == [
+        (PID, True),
+        (PID + 1, True),
+    ]
+    assert {entry["designs"][str(asc_file)] for entry in read_world(world)["windows"]} == {
+        as_ltspice_reads(asc_file)
+    }
+
+
+async def test_a_window_changed_while_ltspice_asks_is_left_open(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """The user agreed to drop the changes they had; ones made after the
+    window was read are not dropped."""
+    world = tmp_path / "world.json"
+    held = a_change(asc_file)
+    later = held.replace("5k", "7k")
+    write_world(world, [a_window({str(asc_file): held}, unsaved=[str(asc_file)])])
+    asc_state.open_windows = OpenWindows(
+        fake_command(world),
+        timeout=LIVENESS_S,
+        frame=FrameWhoseSheetChangesAsItAsks(world, asc_file, later),
+    )
+
+    data = await discard(asc_state, asc_file)
+
+    assert data["error"]["code"] == "window_not_discarded"
+    assert data["error"]["message"] == (
+        f"LTspice did not drop the changes to {asc_file.name}: its copy changed after it "
+        "was read, so it was left open. Read the sheet again before editing it."
+    )
+    entry = read_world(world)["windows"][0]
+    assert entry["answers"] == ["cancel"]
+    assert entry["designs"][str(asc_file)] == later
 
 
 async def test_two_windows_with_different_copies_save_nothing(

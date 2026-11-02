@@ -45,6 +45,7 @@ from tests._ltspice_window import (
     STARTED_PID,
     FakeFrame,
     FakeStart,
+    FrameWhoseSheetChangesAsItAsks,
     a_window,
     as_ltspice_reads,
     fake_command,
@@ -473,9 +474,10 @@ SHEET_REOPENED = (
 ALONE = (
     "The plot is not tied to the sheet, so clicking a net there does not plot it, "
     "because LTspice opened the sheet before it had results and has unsaved changes "
-    "to it. Ask the user whether to keep those changes. If they agree, call "
-    "edit_schematic with save_open_window=true; the sheet then holds their changes, "
-    "so run it again and show that run."
+    "to it. Ask the user whether to keep those changes, then call edit_schematic with "
+    "ops=[] and open_window='save' or 'discard'. After 'discard', showing this run "
+    "again ties the plot; after 'save', the sheet holds their changes, so run it "
+    "again and show that run."
 )
 
 
@@ -837,24 +839,6 @@ async def test_a_sheet_with_changes_nobody_saved_is_left_open_and_the_plot_stand
     window = read_world(world)["windows"][0]
     assert window["closed"] == [str(beside), str(sheet)]
     assert window["panes"] == window["tied"] == [str(beside)]
-
-
-class FrameWhoseSheetChangesAsItAsks(FakeFrame):
-    """A window someone changes the sheet in between its being read and its
-    being told to close: by the time LTspice asks, it holds ``text``."""
-
-    def __init__(self, world: Path, sheet: Path, text: str) -> None:
-        super().__init__(world)
-        self._sheet = str(sheet)
-        self._text = text
-
-    def close(self, pane: int) -> None:
-        super().close(pane)
-        changed = read_world(self._world)
-        for entry in changed["windows"]:
-            if entry.get("asking") == self._sheet:
-                entry["designs"][self._sheet] = self._text
-        self._keep(changed)
 
 
 @pytest.mark.usefixtures("quick_to_tell")
