@@ -34,13 +34,9 @@ def suite_name(path: Path) -> str:
 # path's own order ignores case on Windows and not elsewhere, and a record that
 # keeps the first sheet to show something would keep a different one.
 SCREENSHOT_SHEETS = TESTS / "fixtures" / "ltspice_screenshots"
-DRAWN_SHEETS = TESTS / "fixtures" / "ltspice_recorded" / "inputs" / "draw"
+_NOT_CIRCUITS = (SCREENSHOT_SHEETS, TESTS / "fixtures" / "ltspice_recorded" / "inputs" / "draw")
 SUITE_SHEETS = sorted(
-    (
-        path
-        for path in TESTS.rglob("*.asc")
-        if SCREENSHOT_SHEETS not in path.parents and DRAWN_SHEETS not in path.parents
-    ),
+    (path for path in TESTS.rglob("*.asc") if path.parent not in _NOT_CIRCUITS),
     key=suite_name,
 )
 SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"), key=suite_name)

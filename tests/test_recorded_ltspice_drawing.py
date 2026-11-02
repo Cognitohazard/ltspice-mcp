@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.lib.asc_document import parse_asc
+from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.schematic_scene import (
     GND_DEPTH,
     GND_HALF_W,
@@ -56,28 +58,32 @@ class _Scale:
 
 def _scale(case_id: str, drawn: dict[str, Any]) -> _Scale:
     """The scale of a drawing, from its sheet's two longest wires, level and upright."""
-    sheet = (INPUTS / rec.CASES.case(case_id).source).read_text(encoding="utf-8")
-    wires = [
-        [int(value) for value in line.split()[1:]]
-        for line in sheet.splitlines()
-        if line.startswith("WIRE")
-    ]
-    across = max((w for w in wires if w[1] == w[3]), key=lambda w: abs(w[2] - w[0]))
-    down = max((w for w in wires if w[0] == w[2]), key=lambda w: abs(w[3] - w[1]))
+    wires = parse_asc((INPUTS / rec.CASES.case(case_id).source).read_bytes()).wires
+    across = max((w for w in wires if w.y1 == w.y2), key=lambda w: abs(w.x2 - w.x1))
+    down = max((w for w in wires if w.x1 == w.x2), key=lambda w: abs(w.y2 - w.y1))
     strokes = drawn["strokes"]
     level = max((s for s in strokes if s[1] == s[3]), key=lambda s: abs(s[2] - s[0]))
     upright = max((s for s in strokes if s[0] == s[2]), key=lambda s: abs(s[3] - s[1]))
-    per_unit = abs(level[2] - level[0]) / abs(across[2] - across[0])
+    per_unit = abs(level[2] - level[0]) / abs(across.x2 - across.x1)
     return _Scale(
         per_unit,
-        min(level[0], level[2]) - min(across[0], across[2]) * per_unit,
-        min(upright[1], upright[3]) - min(down[1], down[3]) * per_unit,
+        min(level[0], level[2]) - min(across.x1, across.x2) * per_unit,
+        min(upright[1], upright[3]) - min(down.y1, down.y2) * per_unit,
     )
 
 
 def _scene(build: str, case_id: str, directory: Path) -> Scene:
     sheet = rec.stage_sheet(build, case_id, directory)
     return build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+
+
+def _laid_out(build: str, case_id: str, directory: Path) -> list[tuple[str, BBox]]:
+    """Each text of a sheet's parts and where the scene lays it out."""
+    return [
+        (text, box)
+        for part in sheet_view(_scene(build, case_id, directory)).parts
+        for _x, _y, text, box in part.text_extents
+    ]
 
 
 def _triangle(drawn: dict[str, Any], scale: _Scale, flag: NetFlag) -> set[tuple[float, float]]:
@@ -144,11 +150,7 @@ def test_part_text_lies_where_the_scene_lays_it_out(build: str, tmp_path: Path):
     drawn = rec.drawing(build, case_id)
     scale = _scale(case_id, drawn)
     texts = {text["text"]: text for text in drawn["texts"]}
-    laid_out = [
-        (text, box)
-        for part in sheet_view(_scene(build, case_id, tmp_path)).parts
-        for _x, _y, text, box in part.text_extents
-    ]
+    laid_out = _laid_out(build, case_id, tmp_path)
     assert len(laid_out) == 16
     for text, box in laid_out:
         shown = texts[DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY.get(text, text)]
@@ -199,16 +201,13 @@ def test_value2_is_drawn_only_with_a_visible_window(build: str):
 def test_the_scene_holds_every_part_text_a_build_draws_but_a_value2(build: str, tmp_path: Path):
     case_id = "draw/value2"
     drawn = {text["text"] for text in rec.drawing(build, case_id)["texts"]}
-    laid_out = {
-        text
-        for part in sheet_view(_scene(build, case_id, tmp_path)).parts
-        for _x, _y, text, _box in part.text_extents
-    }
+    laid_out = {text for text, _box in _laid_out(build, case_id, tmp_path)}
     assert drawn - laid_out == DRAWN_BY_LTSPICE_AND_LEFT_OUT_OF_THE_SCENE
     assert laid_out - drawn == set()
 
 
-@pytest.mark.parametrize("build", rec.BUILDS)
-def test_nothing_on_these_sheets_is_drawn_in_a_way_the_reader_does_not_read(build: str):
-    for case in rec.CASES.of("sheet-drawing"):
-        assert rec.drawing(build, case.case_id)["other"] == [], case.case_id
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(rec.cases_of("sheet-drawing"))))
+def test_nothing_on_these_sheets_is_drawn_in_a_way_the_reader_does_not_read(
+    build: str, case_id: str
+):
+    assert rec.drawing(build, case_id)["other"] == []

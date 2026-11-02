@@ -70,7 +70,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Any
 
 from ltspice_mcp.lib import pe_menu, plot_settings
@@ -486,6 +486,8 @@ def load_cases(inputs: Path = INPUTS) -> CaseFile:
         if case.case_id in seen:
             raise RecorderError(f"duplicate case id {case.case_id!r}")
         seen.add(case.case_id)
+        if case.settings:
+            refuse_unread_settings(PurePosixPath(case.case_id), case.case_id)
         if case.kind not in DEFAULT_KEEP:
             raise RecorderError(f"{case.case_id}: unknown kind {case.kind!r}")
         if case.behaviour not in behaviours:
@@ -772,7 +774,6 @@ _EMR_SETTEXTALIGN = 22
 _EMR_MOVETOEX = 27
 _EMR_SELECTOBJECT = 37
 _EMR_ELLIPSE = 42
-_EMR_ARC = 45
 _EMR_LINETO = 54
 _EMR_EXTCREATEFONTINDIRECTW = 82
 _EMR_EXTTEXTOUTW = 84
@@ -785,19 +786,18 @@ def read_emf(data: bytes) -> dict[str, list[Any]]:
     """What an image a build wrote of a sheet draws, in the image's own units.
 
     ``strokes`` are ``[x1, y1, x2, y2]`` in the order drawn, and ``ellipses``
-    and ``arcs`` their bounding boxes and, for an arc, its two ends. Each of
-    ``texts`` gives its point, its box, each character's advance and its font;
-    the box is the text's cell, so it says nothing of how far the glyphs reach
-    inside it. ``other`` counts the records of any other type by that type, so
-    that one a build starts to draw with is seen rather than lost.
+    their bounding boxes. Each of ``texts`` gives its point, its box, each
+    character's advance and its font; the box is the text's cell, so it says
+    nothing of how far the glyphs reach inside it. ``other`` counts the records
+    of any other type by that type, so that one a build starts to draw with is
+    seen rather than lost.
     """
     strokes: list[list[int]] = []
     ellipses: list[list[int]] = []
-    arcs: list[list[int]] = []
     texts: list[dict[str, Any]] = []
     other: dict[int, int] = {}
-    fonts: dict[int, tuple[int, int, int, str]] = {}
-    font = (0, 0, 0, "")
+    fonts: dict[int, dict[str, Any]] = {}
+    font: dict[str, Any] = {}
     align = 0
     pen = (0, 0)
     at = 0
@@ -815,21 +815,21 @@ def read_emf(data: bytes) -> dict[str, list[Any]]:
             pen = to
         elif kind == _EMR_ELLIPSE:
             ellipses.append(list(struct.unpack_from("<4i", record, 8)))
-        elif kind == _EMR_ARC:
-            arcs.append(list(struct.unpack_from("<8i", record, 8)))
         elif kind == _EMR_SETTEXTALIGN:
             align = struct.unpack_from("<I", record, 8)[0]
         elif kind == _EMR_SELECTOBJECT:
             font = fonts.get(struct.unpack_from("<I", record, 8)[0], font)
         elif kind == _EMR_EXTCREATEFONTINDIRECTW:
             handle, height, _width, escapement = struct.unpack_from("<I3i", record, 8)
-            weight = struct.unpack_from("<i", record, 28)[0]
-            face = record[40:104].decode("utf-16-le").split("\0")[0]
-            fonts[handle] = (height, escapement, weight, face)
+            fonts[handle] = {
+                "font": record[40:104].decode("utf-16-le").split("\0")[0],
+                "height": height,
+                "escapement": escapement,
+                "weight": struct.unpack_from("<i", record, 28)[0],
+            }
         elif kind == _EMR_EXTTEXTOUTW:
             x, y, count, string_at = struct.unpack_from("<2iII", record, 36)
             advances_at = struct.unpack_from("<I", record, 72)[0]
-            height, escapement, weight, face = font
             texts.append(
                 {
                     "text": record[string_at : string_at + 2 * count].decode("utf-16-le"),
@@ -837,10 +837,7 @@ def read_emf(data: bytes) -> dict[str, list[Any]]:
                     "bounds": list(struct.unpack_from("<4i", record, 8)),
                     "advances": list(struct.unpack_from(f"<{count}i", record, advances_at)),
                     "align": align,
-                    "font": face,
-                    "height": height,
-                    "escapement": escapement,
-                    "weight": weight,
+                    **font,
                 }
             )
         elif kind not in _EMR_NOT_DRAWN:
@@ -848,7 +845,6 @@ def read_emf(data: bytes) -> dict[str, list[Any]]:
     return {
         "strokes": strokes,
         "ellipses": ellipses,
-        "arcs": arcs,
         "texts": texts,
         "other": [[kind, other[kind]] for kind in sorted(other)],
     }
@@ -1247,22 +1243,33 @@ def drive_save(
     windows = _Windows(desktop, process.pid, case.stem)
     waits = _Waits(process, BoxWatch(desktop, process.pid), build, case, timeout)
     sheet = work / case.work_name
-    doing = "open the sheet in its schematic window"
     try:
-        frame = waits.until(windows.frame, doing)
-        child, client = waits.until(lambda: windows.sheet(frame), doing)
-        _send(client, _WM_MDIACTIVATE, child, 0)
-        waits.settle(doing)
+        _, child = _open_sheet(windows, waits)
         waits.saved(sheet, child, save, "save the sheet")
     except _CaseStop as stop:
-        # The build has the sheet open while it waits on its box, and Windows
-        # does not remove a file that is open.
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        sheet.unlink(missing_ok=True)
+        _end_and_remove(process, sheet)
         return stop.ended
     return _Ended(stopped=True, exit_code=None)
+
+
+def _open_sheet(windows: _Windows, waits: _Waits) -> tuple[int, int]:
+    """Wait for a case's sheet to open, and return the frame and the sheet's
+    window, in front of the frame's others."""
+    doing = "open the sheet in its schematic window"
+    frame = waits.until(windows.frame, doing)
+    child, client = waits.until(lambda: windows.sheet(frame), doing)
+    _send(client, _WM_MDIACTIVATE, child, 0)
+    waits.settle(doing)
+    return frame, child
+
+
+def _end_and_remove(process: StartedProcess | subprocess.Popen[bytes], path: Path) -> None:
+    """End a build stopped on a message box and remove ``path``: the build has
+    the file open while it waits, and Windows does not remove a file that is open."""
+    if process.poll() is None:
+        process.kill()
+        process.wait()
+    path.unlink(missing_ok=True)
 
 
 def drive_draw(
@@ -1290,12 +1297,8 @@ def drive_draw(
     windows = _Windows(desktop, process.pid, case.stem)
     waits = _Waits(process, BoxWatch(desktop, process.pid, ignore=_SAVE_AS), build, case, timeout)
     image = work / f"{case.stem}.emf"
-    doing = "open the sheet in its schematic window"
     try:
-        frame = waits.until(windows.frame, doing)
-        child, client = waits.until(lambda: windows.sheet(frame), doing)
-        _send(client, _WM_MDIACTIVATE, child, 0)
-        waits.settle(doing)
+        frame, child = _open_sheet(windows, waits)
         doing = "fit the sheet to its window"
         _user32().SetWindowPos(frame, None, 0, 0, *_DRAWING_FRAME, _SWP_NOMOVE | _SWP_NOZORDER)
         waits.settle(doing)
@@ -1308,11 +1311,7 @@ def drive_draw(
         _set_text(_file_name_field(dialog), str(image))
         waits.saved(image, dialog, _IDOK, "write the sheet's image")
     except _CaseStop as stop:
-        # As for a save case: Windows does not remove a file that is open.
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        image.unlink(missing_ok=True)
+        _end_and_remove(process, image)
         return stop.ended
     drawing = render_drawing(read_emf(image.read_bytes()))
     (work / f"{case.stem}.drawn").write_bytes(drawing)
@@ -1460,36 +1459,36 @@ class CaseResult:
     defaults: dict[str, str] = field(default_factory=dict)
 
 
-def refuse_unread_settings(deck: Path, case_id: str) -> None:
-    """Refuse to start a build on ``deck`` with a settings file it would not read.
+def refuse_unread_settings(path: PurePath, named: str) -> None:
+    """Refuse a part of a deck's path a build would not read its settings file by.
 
     A build ignores ``-ini``, with no error, when the deck's path holds the
     letters ``ini``, in either case, in the deck's name or in any folder above
     it. It then runs on the recording user's own settings. The path to the
-    executable does not count.
+    executable does not count. So a case's name is checked when the list is
+    read, and the folder cases run under before anything is recorded.
     """
-    if "ini" in deck.as_posix().casefold():
+    if "ini" in path.as_posix().casefold():
         raise RecorderError(
-            f"{case_id}: a build ignores -ini when the deck's path holds 'ini'; rename the "
+            f"{named}: a build ignores -ini when the deck's path holds 'ini'; rename the "
             "case, or record under a path without those letters (--work-dir)"
         )
 
 
+#: What each kind of case adds to its command line, where it is not a batch
+#: run: a plot case runs in the window, which a batch run (-b) never opens, and
+#: a save or draw case only opens its sheet there.
+_MODES: Mapping[str, tuple[str, ...]] = {
+    "netlist": ("-netlist",),
+    "plot": ("-Run",),
+    "save": (),
+    "draw": (),
+}
+
+
 def _command(build: Build, case: Case, deck: Path, ini: Path) -> list[str]:
-    # A plot case runs in the window, which a batch run (-b) never opens, and
-    # a save or draw case only opens its sheet there.
-    if case.kind == "netlist":
-        mode = ["-netlist"]
-    elif case.kind == "plot":
-        mode = ["-Run"]
-    elif case.kind in ("save", "draw"):
-        mode = []
-    else:
-        mode = ["-Run", "-b"]
-    settings: list[str] = []
-    if case.settings:
-        refuse_unread_settings(deck, case.case_id)
-        settings = ["-ini", str(ini)]
+    mode = _MODES.get(case.kind, ("-Run", "-b"))
+    settings = ["-ini", str(ini)] if case.settings else []
     return [str(build.exe), *mode, deck.as_posix(), *case.switches, *settings]
 
 
@@ -1566,6 +1565,14 @@ def _wait(
             return _Ended(stopped=True, exit_code=exit_code, dialog=dialog if stop else None)
 
 
+#: The kinds of case that drive the build's window, and what drives it.
+_WINDOW_DRIVERS: Mapping[str, Callable[..., _Ended]] = {
+    "plot": drive_plot,
+    "save": drive_save,
+    "draw": drive_draw,
+}
+
+
 def _launch(
     desktop: HiddenDesktop,
     command: Sequence[str],
@@ -1595,12 +1602,9 @@ def _launch(
     )
     with started as process:
         try:
-            if case.kind == "plot":
-                return drive_plot(process, desktop, build, case, work, timeout)
-            if case.kind == "save":
-                return drive_save(process, desktop, build, case, work, timeout)
-            if case.kind == "draw":
-                return drive_draw(process, desktop, build, case, work, timeout)
+            drive = _WINDOW_DRIVERS.get(case.kind)
+            if drive is not None:
+                return drive(process, desktop, build, case, work, timeout)
             return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
         finally:
             if process.poll() is None:
@@ -1846,6 +1850,10 @@ def record_build(
         if case.applies_to(build)
         and (not only or any(fnmatch.fnmatch(case.case_id, pattern) for pattern in only))
     ]
+    # Ahead of anything being removed: a run refused here loses no recording.
+    cleanup = work_root is None
+    root = Path(tempfile.mkdtemp(prefix="ltspice-recording-")) if work_root is None else work_root
+    refuse_unread_settings(root, "the folder cases run in")
     directory = out / build.label
     library = library_record(build)
     previous: dict[str, Any] = {}
@@ -1865,8 +1873,6 @@ def record_build(
             )
         library = previous.get("library")
 
-    cleanup = work_root is None
-    root = Path(tempfile.mkdtemp(prefix="ltspice-recording-")) if work_root is None else work_root
     desktop = recording_desktop()
     try:
         forbidden = private_strings([str(root)])

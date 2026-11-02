@@ -4294,8 +4294,8 @@
       "kind": "draw",
       "outputs": {
         "draw/ground_flags.drawn": {
-          "bytes": 654,
-          "sha256": "3c9a479b79a9ce203746aab5687a125f14528fde75119d24c64fa6f5c5f3ea34"
+          "bytes": 640,
+          "sha256": "714db3e0e892c78b00cc5b4407bc669aef85ff2b995d274476f172733372ba54"
         }
       },
       "reported_build": null,
@@ -4320,8 +4320,8 @@
       "kind": "draw",
       "outputs": {
         "draw/ground_flags_font_40.drawn": {
-          "bytes": 650,
-          "sha256": "f95aeedb97448359b202e305a8945803ab7bb28fc4f27bd3e090e6b06069bba6"
+          "bytes": 636,
+          "sha256": "32c9ba3d2524ad405c4eff891249d32f5e5e025b7d0e93974cfe370a24ac4d57"
         }
       },
       "reported_build": null,
@@ -4350,8 +4350,8 @@
       "kind": "draw",
       "outputs": {
         "draw/part_text.drawn": {
-          "bytes": 5412,
-          "sha256": "87ded025681d9895d38e2e833d040a2614bd0343efc573bc8f73b446a800ed26"
+          "bytes": 5398,
+          "sha256": "6c5238c28361011a7214c728fc9a5e69dd69b78cb9eb6d380ae3de5a0b142ae5"
         }
       },
       "reported_build": null,
@@ -4377,8 +4377,8 @@
       "kind": "draw",
       "outputs": {
         "draw/part_text_font_40.drawn": {
-          "bytes": 5412,
-          "sha256": "33ea3a00e6240444e8a91acc4b457edbfa16f9c3a51a10b8421aec2bad7e78f5"
+          "bytes": 5398,
+          "sha256": "cf0fb6dfe1020c25b7891d2a145797f75de2ef04ec47117836a422069a9611fd"
         }
       },
       "reported_build": null,
@@ -4408,8 +4408,8 @@
       "kind": "draw",
       "outputs": {
         "draw/value2.drawn": {
-          "bytes": 2023,
-          "sha256": "26aae919edcb6fee0dde7f19047e597eab4a8e956a3ee9d4bd87a55a66d5c2ef"
+          "bytes": 2009,
+          "sha256": "9d3cfb48900f27c2b8b7373b0c1d16666ae0262818ad8af633f1a98c6fb5b3da"
         }
       },
       "reported_build": null,

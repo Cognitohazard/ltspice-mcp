@@ -350,9 +350,9 @@ message box, the box is recorded and nothing is kept.
 The frame has a fixed size because the numbers in an image depend on how far
 the sheet is zoomed, and a frame left at its opening size would make them depend
 on the recording display. The image itself is not kept, since its header names
-that display. `ltspice_recorder.read_emf` reads the strokes, ellipses, arcs and
-texts it draws, and `<case>.drawn` holds those as text, in the image's own
-units. A record of a type the reader does not know is counted under `other`.
+that display. `ltspice_recorder.read_emf` reads the strokes, ellipses and texts
+it draws, and `<case>.drawn` holds those as text, in the image's own units. A
+record of any other drawing type is counted under `other`.
 
 `test_recorded_ltspice_drawing.py` takes the scale to sheet units from the two
 longest wires of each sheet. Coordinates in an image are whole numbers, so a

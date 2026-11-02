@@ -394,9 +394,9 @@ class TestCommittedRecordings:
         assert not stale, f"inputs changed since they were recorded; record again: {stale}"
 
     def test_every_command_is_the_one_the_server_launches(self, build: str):
-        """A plot case and a save case are the exceptions: one runs the sheet in
-        the window, as the person the sheet is handed to does, and the other
-        only opens it there."""
+        """A plot case, a save case and a draw case are the exceptions: the
+        first runs the sheet in the window, as the person the sheet is handed
+        to does, and the others only open it there."""
         manifest = load_manifest(FIXTURES / build)
         for case_id, entry in manifest["cases"].items():
             command = entry["command"]
@@ -484,31 +484,32 @@ def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tm
 class TestSettingsSwitch:
     """A build ignores ``-ini`` when the deck's path holds the letters ``ini``."""
 
-    BUILD = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "current", None)
-    SETTINGS = Path("C:/rec/case.ini")
-
-    def _case(self, *, settings: bool = True) -> recorder.Case:
-        return recorder.Case("raw/x", "b", "run", "raw/x.cir", settings=settings)
-
     @pytest.mark.parametrize(
-        "deck",
+        "path",
         ["C:/rec/x_ini0.cir", "C:/rec/mini.cir", "C:/rec/MINI.cir", "D:/Gemini/rec/x.cir"],
     )
-    def test_a_deck_whose_path_holds_them_is_refused(self, deck: str):
+    def test_a_path_that_holds_them_is_refused(self, path: str):
         with pytest.raises(RecorderError, match="ignores -ini"):
-            recorder._command(self.BUILD, self._case(), Path(deck), self.SETTINGS)
+            recorder.refuse_unread_settings(Path(path), "x")
 
     def test_the_letters_apart_are_not(self):
-        command = recorder._command(
-            self.BUILD, self._case(), Path("C:/rec/in_i.cir"), self.SETTINGS
-        )
-        assert command[-2:] == ["-ini", str(self.SETTINGS)]
+        recorder.refuse_unread_settings(Path("C:/rec/in_i.cir"), "x")
 
-    def test_a_run_that_names_no_settings_file_has_no_switch_to_lose(self):
-        command = recorder._command(
-            self.BUILD, self._case(settings=False), Path("C:/rec/mini.cir"), self.SETTINGS
+    def _cases(self, tmp_path: Path, extra: str = "") -> recorder.CaseFile:
+        return load_cases(
+            _inputs(
+                tmp_path,
+                "raw/x.cir",
+                '[[case]]\nid = "raw/x_ini0"\nbehaviour = "b"\nsource = "raw/x.cir"\n' + extra,
+            )
         )
-        assert "-ini" not in command
+
+    def test_a_case_named_with_them_is_refused_before_anything_runs(self, tmp_path: Path):
+        with pytest.raises(RecorderError, match="ignores -ini"):
+            self._cases(tmp_path)
+
+    def test_a_case_that_names_no_settings_file_has_no_switch_to_lose(self, tmp_path: Path):
+        assert self._cases(tmp_path, "settings = false\n").case("raw/x_ini0")
 
 
 def _menu_item(flags: int, text: str, command: int | None = None) -> bytes:
@@ -605,20 +606,17 @@ class TestDrawingOfASheet:
             }
         ]
 
-    def test_ellipses_and_arcs_are_kept(self):
-        drawing = recorder.read_emf(
-            _emf_record(42, struct.pack("<4i", 1, 2, 3, 4))
-            + _emf_record(45, struct.pack("<8i", 1, 2, 3, 4, 5, 6, 7, 8))
-        )
+    def test_an_ellipse_is_kept_by_its_box(self):
+        drawing = recorder.read_emf(_emf_record(42, struct.pack("<4i", 1, 2, 3, 4)))
         assert drawing["ellipses"] == [[1, 2, 3, 4]]
-        assert drawing["arcs"] == [[1, 2, 3, 4, 5, 6, 7, 8]]
 
     def test_a_record_that_draws_something_unread_is_counted(self):
-        # A polygon would otherwise leave no trace of being missed. The pixel
-        # a build sets at the end of a stroke adds nothing to the stroke.
+        # An arc or a polygon would otherwise leave no trace of being missed.
+        # The pixel a build sets at the end of a stroke adds nothing to it.
         pixel = _emf_record(15, _emf_point(1, 2), struct.pack("<I", 0))
+        arc = _emf_record(45, bytes(32))
         polygon = _emf_record(86, bytes(24))
-        assert recorder.read_emf(pixel + polygon + polygon)["other"] == [[86, 2]]
+        assert recorder.read_emf(pixel + polygon + arc + polygon)["other"] == [[45, 1], [86, 2]]
 
     def test_nothing_of_the_machine_is_kept(self):
         """A file's header gives the display it was written on, and LTspice
@@ -656,54 +654,23 @@ class TestDrawingOfASheet:
         assert recorder.render_drawing(one) == recorder.render_drawing(dict(reversed(one.items())))
 
 
-class TestDrawCases:
-    """The parts of a draw case that run anywhere."""
+@pytest.mark.parametrize(("kind", "kept"), [("save", "asc"), ("draw", "drawn")])
+class TestSheetWindowCases:
+    """The parts of a case that opens a sheet in the window that run anywhere."""
 
-    def _case(self, tmp_path: Path, extra: str = "") -> recorder.Case:
+    def _case(self, tmp_path: Path, kind: str, extra: str = "") -> recorder.Case:
         inputs = _inputs(
             tmp_path,
-            "draw/sheet.asc",
-            '[[case]]\nid = "draw/x"\nbehaviour = "b"\nkind = "draw"\n'
-            'source = "draw/sheet.asc"\n' + extra,
+            "sheets/sheet.asc",
+            f'[[case]]\nid = "sheets/x"\nbehaviour = "b"\nkind = "{kind}"\n'
+            'source = "sheets/sheet.asc"\n' + extra,
         )
-        return load_cases(inputs).case("draw/x")
+        return load_cases(inputs).case("sheets/x")
 
-    def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path):
-        case = self._case(tmp_path)
+    def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path, kind: str, kept: str):
+        case = self._case(tmp_path, kind)
         build = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "current", None)
-        deck, settings = Path("C:/rec") / case.work_name, tmp_path / "x.ini"
-        assert recorder._command(build, case, deck, settings) == [
-            str(build.exe),
-            deck.as_posix(),
-            "-ini",
-            str(settings),
-        ]
-
-    def test_what_it_keeps_is_the_drawing(self, tmp_path: Path):
-        assert self._case(tmp_path).kept() == ("drawn",)
-
-    def test_it_takes_no_steps(self, tmp_path: Path):
-        with pytest.raises(RecorderError, match="only a plot case"):
-            self._case(tmp_path, 'steps = [{ command = "Save" }]\n')
-
-
-class TestSaveCases:
-    """The parts of a save case that run anywhere: its command, what it keeps,
-    and the menu its Save is read from."""
-
-    def _case(self, tmp_path: Path, extra: str = "") -> recorder.Case:
-        inputs = _inputs(
-            tmp_path,
-            "save/sheet.asc",
-            '[[case]]\nid = "save/x"\nbehaviour = "b"\nkind = "save"\n'
-            'source = "save/sheet.asc"\n' + extra,
-        )
-        return load_cases(inputs).case("save/x")
-
-    def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path):
-        case = self._case(tmp_path)
-        build = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "modern", None)
-        deck, ini = Path("C:/rec") / case.work_name, tmp_path / "x.ini"
+        deck, ini = tmp_path / "work" / case.work_name, tmp_path / "x.ini"
         assert recorder._command(build, case, deck, ini) == [
             str(build.exe),
             deck.as_posix(),
@@ -711,14 +678,18 @@ class TestSaveCases:
             str(ini),
         ]
 
-    def test_what_it_keeps_is_the_sheet_the_build_wrote(self, tmp_path: Path):
-        case = self._case(tmp_path)
-        assert case.kept() == ("asc",)
+    def test_what_it_keeps_is_what_the_window_wrote(self, tmp_path: Path, kind: str, kept: str):
+        case = self._case(tmp_path, kind)
+        assert case.kept() == (kept,)
         assert case.work_name == "x.asc"
 
-    def test_it_takes_no_steps(self, tmp_path: Path):
+    def test_it_takes_no_steps(self, tmp_path: Path, kind: str, kept: str):
         with pytest.raises(RecorderError, match="only a plot case"):
-            self._case(tmp_path, 'steps = [{ command = "Save" }]\n')
+            self._case(tmp_path, kind, 'steps = [{ command = "Save" }]\n')
+
+
+class TestSaveCases:
+    """The menu a save case's Save is read from, which runs anywhere."""
 
     def test_its_save_is_the_schematic_menus_own(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
