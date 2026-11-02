@@ -8,6 +8,7 @@ the same text), the instructions that send a model there, and the one reminder
 a session gets when it skipped them.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -417,13 +418,12 @@ class TestTheReadTheGuideReminder:
         args = {"queries": [{"kind": "capabilities", "fields": ["tool_profile"]}]}
         first = await call_tool(fake_request_context(state), call_tool_params("inspect", args))
         second = await call_tool(fake_request_context(state), call_tool_params("inspect", args))
-        # Both channels: a structured-aware client reads only the hint.
+        # In the data, and so in the text block that carries it serialized.
         assert first.structured_content is not None
         assert GUIDE_REMINDER in first.structured_content["hint"]
-        assert any(
-            isinstance(block, types.TextContent) and block.text == GUIDE_REMINDER
-            for block in first.content
-        )
+        (block,) = first.content
+        assert isinstance(block, types.TextContent)
+        assert GUIDE_REMINDER in json.loads(block.text)["hint"]
         # Once a session: the second reply is the tool's own.
         assert second.structured_content is not None
         assert GUIDE_REMINDER not in second.structured_content.get("hint", "")
@@ -458,4 +458,6 @@ class TestTheReadTheGuideReminder:
             fake_request_context(state), call_tool_params("run_experiments", {"missing": 1})
         )
         assert result.is_error
-        assert any(GUIDE_REMINDER in getattr(block, "text", "") for block in result.content)
+        (block,) = result.content
+        assert isinstance(block, types.TextContent)
+        assert GUIDE_REMINDER in json.loads(block.text)["hint"]

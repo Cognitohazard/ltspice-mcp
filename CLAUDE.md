@@ -103,7 +103,7 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
 - Every tool declares a `title`.
 - Every registered tool's `output_schema` must be an object schema at the top level, as MCP requires. `tools/list` leaves output schemas out (`ToolRegistry.get_tools`), but advertising a bare `oneOf`/`anyOf` would make strict clients, Claude Code included, reject the whole response.
 - A tool with an `output_schema` must return `structuredContent` on every code path, text-only replies included.
-- `structuredContent` must contain everything the caller needs, because structured-aware clients drop the text channel when it is present. Copy any hint, referral, recovery step or caveat from the text into the data, conventionally as an optional `hint` key declared in the schema.
+- `structuredContent` must contain everything the caller needs: structured-aware clients read only it, and the server makes the text block that data serialized (`server._with_serialized_text`), as the MCP specification recommends. Put any hint, referral, recovery step or caveat in the data, conventionally as an optional `hint` key declared in the schema.
 - A handler that a registered tool delegates to declares its own output schema with `@declare_output_schema(...)`, so the suite checks its `structuredContent` against that schema instead of the delegating tool's; `tests/test_conformance_hook_armed.py` fails a delegation without one.
 - Keep argument descriptions to one or two plain sentences (unit, sign convention, default, interaction with a sibling field). Put longer explanation in a guide section and point to it (`tests/test_guide_delivery.py` checks that pointers resolve).
 - A file argument is named `path`.

@@ -466,22 +466,23 @@ async def _answer_tool_call(
     await _notice_circuit(arguments, state)
 
     result = _with_guide_reminder(await _invoke(registered, name, arguments, state), state)
-    return _with_text_channel(result, state)
+    return _with_serialized_text(result)
 
 
-def _with_text_channel(result: types.CallToolResult, state: SessionState) -> types.CallToolResult:
-    """Put the serialized ``structuredContent`` in the text block, when the
-    operator set ``[tools] text_channel = "json"``.
+def _with_serialized_text(result: types.CallToolResult) -> types.CallToolResult:
+    """Make the text block the serialized ``structuredContent``.
 
-    The MCP specification has a tool that returns ``structuredContent`` also
-    return it serialized as text, for a client that passes only the text to
-    the model; under the default summary line, that model reads one line. The
-    text blocks are replaced by the one, because ``structuredContent`` already
-    carries every hint they held. Other blocks, such as an image, stay, and a
-    reply with no ``structuredContent`` keeps its text. Runs after the guide
-    reminder, whose ``hint`` copy is in the data it serializes.
+    The MCP specification: "For backwards compatibility, a tool that returns
+    structured content SHOULD also return the serialized JSON in a
+    TextContent block." A client that shows the model only the text, or only
+    the text of a failed call (Claude Code does the latter), then reads the
+    same data, error codes and recovery hints included, as one that reads
+    ``structuredContent``. The text blocks are replaced by the one, compact
+    to spend as few tokens as the data allows; other blocks, such as an
+    image, stay. A reply with no ``structuredContent`` keeps its text. Runs
+    after the guide reminder, so the text carries the reminder's ``hint``.
     """
-    if state.config.text_channel != "json" or result.structured_content is None:
+    if result.structured_content is None:
         return result
     text = json.dumps(
         result.structured_content, ensure_ascii=False, separators=(",", ":"), default=str
@@ -498,9 +499,10 @@ def _with_guide_reminder(
     """Add the read-the-guide reminder to the first reply of a session that has
     not read the guide, once.
 
-    The reminder rides the text channel and ``structuredContent["hint"]`` both,
-    because a structured-aware client shows only the latter. The result is
-    copied, never edited in place: a replayed receipt's payload can be shared.
+    The reminder goes in ``structuredContent["hint"]``, which the text block
+    then carries serialized; a reply with no ``structuredContent`` gets it as
+    a text block of its own. The result is copied, never edited in place: a
+    replayed receipt's payload can be shared.
     """
     if state.guide_read or state.guide_reminded:
         return result

@@ -222,11 +222,6 @@ tool-surface changes.
   that `attribute_text_overlap` uses. `verify_circuit` reports it under the
   `layout` check, and `edit_schematic` with its other findings. Texts at one
   anchor are left to `stacked_directive`.
-- `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
-  reply's serialized `structuredContent` in its text block, as the MCP
-  specification recommends for a client that passes only the text to the
-  model; under the default, `"summary"`, such a model reads one summary line.
-  `inspect(kind="capabilities")` reports the mode as `text_channel`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the
@@ -285,6 +280,13 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** a reply's text block is its `structuredContent` serialized as
+  JSON, as the MCP specification recommends, in place of a one-line summary.
+  A client that passes the model only the text now gives it the data, and a
+  failed call's text carries its `code` and recovery `hint`, which a client
+  that shows the model only an error's text (Claude Code among them) used to
+  leave out. `plot_waveform`'s `format` argument is removed: every reply's
+  text is the same JSON.
 - `group_by`'s description in `analyze_results` and in `run_experiments`'
   `analyze` block names a parameter varied by a variation or within a run,
   where it named a `.step` axis, a deck command not every simulator has.

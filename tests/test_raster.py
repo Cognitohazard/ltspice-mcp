@@ -11,28 +11,23 @@ installed.
 
 from __future__ import annotations
 
-import base64
 import pickle
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
 import pytest
-from mcp import types
 
 from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.raster import (
     DEFAULT_SCALE,
     PNG,
     SVG,
-    RasterSupport,
     RasterUnavailableError,
-    RenderedImage,
     raster_available,
     raster_support,
     render_image,
 )
-from ltspice_mcp.tools._base import image_response
 from tests.conftest import FailingImports, fail_imports, needs_raster, not_installed
 
 # Smallest thing a rasterizer will accept that still has measurable extent.
@@ -264,100 +259,6 @@ def test_default_scale_is_the_measured_one() -> None:
     # lies somewhere at or below this: going lower is not a tuning change, it
     # steps off measured ground, and an under-scaled render fails silently.
     assert DEFAULT_SCALE == 1.5
-
-
-# ---------------------------------------------------------------------------
-# MCP response shape
-# ---------------------------------------------------------------------------
-
-
-def _blocks(result: types.CallToolResult, kind: type) -> list:
-    return [c for c in result.content if isinstance(c, kind)]
-
-
-def test_raster_is_returned_as_an_image_block() -> None:
-    image = RenderedImage(data=b"\x89PNG-ish", image_format=PNG, mime_type="image/png", scale=2.0)
-    result = image_response(image, "rendered rc.asc")
-
-    images = _blocks(result, types.ImageContent)
-    assert len(images) == 1
-    assert images[0].mime_type == "image/png"
-    assert base64.b64decode(images[0].data) == b"\x89PNG-ish"
-
-
-def test_vector_is_returned_as_text_not_an_image_block() -> None:
-    # image/svg+xml is not reliably rendered by clients; sending markup as an
-    # image block would show the model a blank space instead of a schematic.
-    image = RenderedImage(data=TINY_SVG.encode(), image_format=SVG, mime_type="image/svg+xml")
-    result = image_response(image, "rendered rc.asc")
-
-    assert not _blocks(result, types.ImageContent)
-    texts = [c.text for c in _blocks(result, types.TextContent)]
-    assert TINY_SVG in texts
-
-
-def test_metadata_survives_for_structured_only_clients() -> None:
-    # A client that renders only structuredContent must still learn that it
-    # asked for a PNG and got SVG, without decoding the payload.
-    image = RenderedImage(
-        data=b"<svg/>",
-        image_format=SVG,
-        mime_type="image/svg+xml",
-        png_unavailable=RasterSupport(
-            png=False, missing="extra", reason="cairosvg missing", remedy="install it"
-        ),
-    )
-    result = image_response(image, "rendered", {"path": "/tmp/rc.asc"})
-
-    assert result.structured_content is not None
-    payload = result.structured_content
-    assert payload["path"] == "/tmp/rc.asc"
-    assert payload["image"]["image_format"] == SVG
-    assert payload["image"]["scale"] is None
-    assert payload["image"]["bytes"] == len(b"<svg/>")
-    assert "cairosvg" in payload["image"]["note"]
-
-
-def test_raster_response_carries_caller_text_and_full_metadata() -> None:
-    # The caller's message must survive alongside the image, and the raster's
-    # own scale/size/bytes must reach a structured-only client.
-    image = RenderedImage(
-        data=b"\x89PNG-ish",
-        image_format=PNG,
-        mime_type="image/png",
-        scale=3.0,
-        width=60,
-        height=30,
-    )
-    result = image_response(image, "rendered rc.asc", {"path": "/tmp/rc.asc"})
-
-    # Image first, then the caller's text — a client that shows only the first
-    # block should show the picture.
-    assert [type(c).__name__ for c in result.content] == ["ImageContent", "TextContent"]
-    assert _blocks(result, types.TextContent)[0].text == "rendered rc.asc"
-
-    assert result.structured_content is not None
-    meta = result.structured_content["image"]
-    assert meta["scale"] == 3.0
-    assert (meta["width"], meta["height"]) == (60, 30)
-    assert meta["bytes"] == len(b"\x89PNG-ish")
-    assert meta["note"] is None
-
-
-def test_caller_cannot_clobber_the_image_metadata_key() -> None:
-    image = RenderedImage(data=b"x", image_format=SVG, mime_type="image/svg+xml")
-    with pytest.raises(ValueError, match="owns the 'image' key"):
-        image_response(image, "rendered", {"image": "something else"})
-
-
-@needs_raster
-def test_end_to_end_svg_to_image_block() -> None:
-    result = image_response(render_image(TINY_SVG, scale=1.0), "rendered")
-    images = _blocks(result, types.ImageContent)
-    assert len(images) == 1
-    assert base64.b64decode(images[0].data).startswith(_PNG_MAGIC)
-    assert result.structured_content is not None
-    assert result.structured_content["image"]["image_format"] == PNG
 
 
 def test_a_missing_native_cairo_library_counts_as_no_rasterizer(

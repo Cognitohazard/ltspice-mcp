@@ -382,21 +382,18 @@ class TestServerDispatch:
             call_tool_params("plot_waveform", {"path": "/etc/passwd"}),
         )
         assert result.is_error
-        msg = tool_text(result)
-        assert "Allowed paths" in msg
-        # The message names the config line that widens the sandbox and says the
-        # file is re-read on the next call, so the agent can act on it itself.
-        assert "[security] allowed_paths" in msg
-        assert "next call" in msg
-        assert "LTSPICE_MCP_ALLOWED_PATHS" in msg
-        # A structured-aware client drops the text channel, so the refusal and
-        # its guidance ride structuredContent too.
         data = result.structured_content
         assert data is not None
         assert data["code"] == "path_denied"
         assert "outside allowed directories" in data["error"]
-        assert "[security] allowed_paths" in data["hint"]
-        assert str(state_no_sim.config.config_path) in data["hint"]
+        # The hint names the config line that widens the sandbox and says the
+        # file is re-read on the next call, so the agent can act on it itself.
+        hint = data["hint"]
+        assert "Allowed paths" in hint
+        assert "[security] allowed_paths" in hint
+        assert "next call" in hint
+        assert "LTSPICE_MCP_ALLOWED_PATHS" in hint
+        assert str(state_no_sim.config.config_path) in hint
 
     async def test_invalid_arguments_carry_a_stable_code(self, state_no_sim: SessionState):
         """An argument error was text alone, with no code to branch on, and a
@@ -426,10 +423,8 @@ class TestServerDispatch:
         data = result.structured_content
         assert data is not None
         assert data["code"] == "result_unreadable"
-        message, hint = tool_text(result).split("\n\n", 1)
-        assert data["error"] == message
-        # The first reply's guide reminder follows the hint.
-        assert data["hint"].startswith(hint)
+        assert data["error"] == tool_text(result)
+        assert data["hint"]
 
     async def test_an_unclassified_failure_carries_the_internal_error_code(
         self, state_no_sim: SessionState
@@ -451,9 +446,10 @@ class TestServerDispatch:
             call_tool_params("plot_waveform", {"path": "missing.raw"}),
         )
         assert result.is_error
-        msg = tool_text(result)
-        # The appended recovery hint names only exposed tools.
-        assert "jobs" in msg or "analyze_results" in msg
+        data = result.structured_content
+        assert data is not None
+        # The recovery hint names only exposed tools.
+        assert "jobs" in data["hint"] or "analyze_results" in data["hint"]
 
     async def test_list_resources(self, state_no_sim: SessionState):
         result = await list_resources(fake_request_context(state_no_sim), None)
@@ -517,12 +513,10 @@ def _capabilities_call() -> mcp_types.CallToolRequestParams:
 
 
 @pytest.mark.asyncio
-async def test_the_json_text_channel_carries_the_structured_content(state_no_sim: SessionState):
-    """A client that passes a reply's text alone to the model read one summary
-    line, '[0] capabilities: ok', and none of the data. Under text_channel =
-    "json" the text block is the serialized structuredContent, as the MCP
-    specification recommends, and the first reply's guide reminder is in it."""
-    state_no_sim.config.text_channel = "json"
+async def test_the_text_block_is_the_serialized_structured_content(state_no_sim: SessionState):
+    """As the MCP specification recommends: a client that passes a reply's
+    text alone to the model read one summary line, '[0] capabilities: ok',
+    and none of the data. The first reply's guide reminder is in it too."""
     result = await call_tool(fake_request_context(state_no_sim), _capabilities_call())
     assert not result.is_error
     data = result.structured_content
@@ -534,14 +528,21 @@ async def test_the_json_text_channel_carries_the_structured_content(state_no_sim
 
 
 @pytest.mark.asyncio
-async def test_the_default_text_channel_is_the_summary_line(state_no_sim: SessionState):
-    result = await call_tool(fake_request_context(state_no_sim), _capabilities_call())
-    data = result.structured_content
-    assert data is not None
-    summary, reminder = result.content
-    assert isinstance(summary, mcp_types.TextContent)
-    assert summary.text == "[0] capabilities: ok"
-    assert isinstance(reminder, mcp_types.TextContent) and reminder.text == GUIDE_REMINDER
+async def test_a_failed_calls_text_carries_its_code_and_hint(state_no_sim: SessionState):
+    """A client that shows the model only the text of a failed call, as Claude
+    Code does, read the message alone: the code and the recovery hint were
+    only in structuredContent."""
+    result = await call_tool(
+        fake_request_context(state_no_sim),
+        call_tool_params("plot_waveform", {"path": "missing.raw"}),
+    )
+    assert result.is_error
+    (block,) = result.content
+    assert isinstance(block, mcp_types.TextContent)
+    carried = json.loads(block.text)
+    assert carried == result.structured_content
+    assert carried["code"] == "result_unreadable"
+    assert carried["hint"]
 
 
 @pytest.mark.asyncio

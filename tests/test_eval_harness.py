@@ -368,7 +368,7 @@ def test_the_launcher_drops_what_would_override_the_variant():
         "HOME": "/var/empty",
         "TMP": "/tmp",
         "LANG": "C.UTF-8",
-        "LTSPICE_MCP_TEXT_CHANNEL": "json",
+        "LTSPICE_MCP_TOOL_LISTING": "full",
         "LTSPICE_MCP_HOME": "/elsewhere",
         "VIRTUAL_ENV": "/venv",
         "PYTHONPATH": "/src",
@@ -387,13 +387,13 @@ def test_the_launcher_drops_what_would_override_the_variant():
 
 async def test_the_server_runs_without_the_callers_overrides(tmp_path: Path, monkeypatch):
     """A caller's ``LTSPICE_MCP_*`` and ``PYTHONPATH`` do not reach the server:
-    the text channel stays the summary, and a shadowing package on the
-    caller's path is not the server that answers."""
+    the tool listing stays the variant's compact one, and a shadowing package
+    on the caller's path is not the server that answers."""
     shadow = tmp_path / "shadow" / "ltspice_mcp"
     shadow.mkdir(parents=True)
     (shadow / "__init__.py").write_text("", encoding="utf-8")
     (shadow / "__main__.py").write_text("raise SystemExit(7)\n", encoding="utf-8")
-    monkeypatch.setenv("LTSPICE_MCP_TEXT_CHANNEL", "json")
+    monkeypatch.setenv("LTSPICE_MCP_TOOL_LISTING", "full")
     monkeypatch.setenv("PYTHONPATH", str(shadow.parent))
     variant = load_variant("baseline")
     dirs = make_trial_dirs(STEP_AC)
@@ -402,13 +402,9 @@ async def test_the_server_runs_without_the_callers_overrides(tmp_path: Path, mon
         with (dirs.root / "server.stderr").open("w", encoding="utf-8") as errlog:
             async with connect(variant, dirs, errlog) as server:
                 assert server.server_info["name"] == "ltspice-mcp"
-                result = await server.session.call_tool(
-                    "inspect", {"queries": [{"kind": "guide"}]}
-                )
-                assert isinstance(result, mcp_types.CallToolResult)
-                text = result.content[0]
-                assert isinstance(text, mcp_types.TextContent)
-                assert not text.text.lstrip().startswith("{")
+                [inspect] = [tool for tool in server.tools if tool.name == "inspect"]
+                # The compact listing leaves out every argument's description.
+                assert "description" not in inspect.input_schema["properties"]["queries"]
     finally:
         sweep(dirs.home)
 
