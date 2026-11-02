@@ -1,0 +1,10 @@
+* a nonlinear transient under .options solver=alt
+V1 in 0 SINE(0 5 1k)
+R1 in out 1k
+L1 out mid 10m
+C1 mid 0 100n
+D1 mid 0 DX
+.model DX D(Is=1e-14)
+.options solver=alt
+.tran 0 2m 0 10u
+.end

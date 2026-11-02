@@ -75,6 +75,7 @@ REFUSED = [subject for subject in SUBJECTS if "refused" in reader_reply(*subject
 #: noise analysis at one frequency). A stepped run's ``.op.raw`` is one such:
 #: it holds one point, however many steps the run took.
 ONE_POINT = {
+    "noise_list_one_freq",
     "noise_one_freq",
     "op",
     "op_one_subckt",
@@ -86,7 +87,7 @@ ONE_POINT = {
     "tran_op_raw.op",
 }
 #: Files of one point on an axis, which the server keeps.
-ONE_POINT_ON_AN_AXIS = {"noise_one_freq"}
+ONE_POINT_ON_AN_AXIS = {"noise_list_one_freq", "noise_one_freq"}
 #: A stepped run's ``.op.raw`` as LTspice 26 writes it: one point, and no
 #: variable that says which step it is (XVII's opens with the step's ``param``).
 #: Both readers refuse it.
@@ -100,6 +101,7 @@ PARAMETERS_FIRST = {
     "step_temp_op": "Operating Point",
     "step_ac_one_freq": "AC Analysis",
     "step_ac_one_freq_numdgt7": "AC Analysis",
+    "step_noise_list_one_freq": "Noise Spectral Density - (V/Hz½ or A/Hz½)",
     "step_noise_one_freq": "Noise Spectral Density - (V/Hz½ or A/Hz½)",
     "tf_step": "Transfer Function",
 }

@@ -18,7 +18,9 @@ Three layers, all in this module because they share one object: the tree under
 from __future__ import annotations
 
 import codecs
+import json
 import re
+import struct
 from pathlib import Path
 
 import pytest
@@ -65,6 +67,12 @@ LOCAL_NAMES = [
     ("cp932", "\u30bd\u30d5\u30c8"),
     ("cp1251", "\u0418\u0432\u0430\u043d"),
 ]
+
+
+#: XVII names itself only in a raw's Command field, and on the Alternate solver
+#: that field ends with the solver. The build is the same one, but
+#: ``reported_build`` reads the whole field as its name.
+SOLVER_IN_THE_BUILD_NAME_ON_THE_SERVER_ONLY = {("ltspice17", "deck/solver_setting_1")}
 
 
 def scrubber() -> Scrubber:
@@ -231,14 +239,15 @@ class TestSettingsCopy:
     # build saves; Grid in [Colors] is a colour.
     ANSI = (
         b"[Options]\r\nLastRunVersion=26.1.1\r\nDefaultTrtol=2\r\nNoGreekMus=true\r\n"
-        b"grid=on\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
+        b"grid=on\r\nSchFontSize=28\r\nBoldSchFont=true\r\nSchematicFont=3\r\n"
+        b"ShowCheckSum=false\r\n[Colors]\r\nGrid=1\r\n"
         b"[Recent File List]\r\nFile1=C:\\x\\y.asc\r\n"
     )
 
     def test_keys_that_change_results_are_removed_and_the_rest_kept(self):
         copy = neutral_settings(self.ANSI, {})
         assert copy == (
-            b"[Options]\r\nLastRunVersion=26.1.1\r\nSchFontSize=28\r\n[Colors]\r\nGrid=1\r\n"
+            b"[Options]\r\nLastRunVersion=26.1.1\r\nShowCheckSum=false\r\n[Colors]\r\nGrid=1\r\n"
         )
 
     def test_a_default_on_record_stands_and_one_it_lacks_is_added(self):
@@ -385,14 +394,14 @@ class TestCommittedRecordings:
         assert not stale, f"inputs changed since they were recorded; record again: {stale}"
 
     def test_every_command_is_the_one_the_server_launches(self, build: str):
-        """A plot case and a save case are the exceptions: one runs the sheet in
-        the window, as the person the sheet is handed to does, and the other
-        only opens it there."""
+        """A plot case, a save case and a draw case are the exceptions: the
+        first runs the sheet in the window, as the person the sheet is handed
+        to does, and the others only open it there."""
         manifest = load_manifest(FIXTURES / build)
         for case_id, entry in manifest["cases"].items():
             command = entry["command"]
             assert command[0] == manifest["executable"]["name"], case_id
-            modes = {"netlist": ["-netlist"], "plot": ["-Run"], "save": []}
+            modes = {"netlist": ["-netlist"], "plot": ["-Run"], "save": [], "draw": []}
             mode = modes.get(entry["kind"], ["-Run", "-b"])
             assert command[1 : 1 + len(mode)] == mode, case_id
             assert command[1 + len(mode)].startswith("<dir>/"), case_id
@@ -425,7 +434,10 @@ class TestCommittedRecordings:
                 continue  # an export, or a case that kept only its raw
             detected = reported_build(log, raw if raw.is_file() and raw.stat().st_size else None)
             if detected is not None:
-                assert detected == manifest["reported_build"], case_id
+                expected = manifest["reported_build"]
+                if (build, case_id) in SOLVER_IN_THE_BUILD_NAME_ON_THE_SERVER_ONLY:
+                    expected += " -- Alternate Solver"
+                assert detected == expected, case_id
                 named += 1
         assert named > 50
 
@@ -469,6 +481,37 @@ def test_an_installed_build_still_behaves_as_recorded(label: str, group: str, tm
     )
 
 
+class TestSettingsSwitch:
+    """A build ignores ``-ini`` when the deck's path holds the letters ``ini``."""
+
+    @pytest.mark.parametrize(
+        "path",
+        ["C:/rec/x_ini0.cir", "C:/rec/mini.cir", "C:/rec/MINI.cir", "D:/Gemini/rec/x.cir"],
+    )
+    def test_a_path_that_holds_them_is_refused(self, path: str):
+        with pytest.raises(RecorderError, match="ignores -ini"):
+            recorder.refuse_unread_settings(Path(path), "x")
+
+    def test_the_letters_apart_are_not(self):
+        recorder.refuse_unread_settings(Path("C:/rec/in_i.cir"), "x")
+
+    def _cases(self, tmp_path: Path, extra: str = "") -> recorder.CaseFile:
+        return load_cases(
+            _inputs(
+                tmp_path,
+                "raw/x.cir",
+                '[[case]]\nid = "raw/x_ini0"\nbehaviour = "b"\nsource = "raw/x.cir"\n' + extra,
+            )
+        )
+
+    def test_a_case_named_with_them_is_refused_before_anything_runs(self, tmp_path: Path):
+        with pytest.raises(RecorderError, match="ignores -ini"):
+            self._cases(tmp_path)
+
+    def test_a_case_that_names_no_settings_file_has_no_switch_to_lose(self, tmp_path: Path):
+        assert self._cases(tmp_path, "settings = false\n").case("raw/x_ini0")
+
+
 def _menu_item(flags: int, text: str, command: int | None = None) -> bytes:
     """One item of a classic menu template, the form both builds' menus are in."""
     head = flags.to_bytes(2, "little")
@@ -488,22 +531,145 @@ def _inputs(tmp_path: Path, source: str, cases: str) -> Path:
     return tmp_path
 
 
-class TestSaveCases:
-    """The parts of a save case that run anywhere: its command, what it keeps,
-    and the menu its Save is read from."""
+def _emf_record(kind: int, *fields: bytes) -> bytes:
+    """One record of an enhanced metafile: its type, its size, what it holds."""
+    body = b"".join(fields)
+    return struct.pack("<II", kind, 8 + len(body)) + body
 
-    def _case(self, tmp_path: Path, extra: str = "") -> recorder.Case:
+
+def _emf_point(x: int, y: int) -> bytes:
+    return struct.pack("<2i", x, y)
+
+
+def _emf_font(handle: int, height: int, escapement: int, weight: int, face: str) -> bytes:
+    """An EMR_EXTCREATEFONTINDIRECTW record, the fields a drawing keeps filled in."""
+    return _emf_record(
+        82,
+        struct.pack("<I5i", handle, height, 0, escapement, escapement, weight),
+        bytes(8),
+        face.encode("utf-16-le").ljust(64, b"\0"),
+    )
+
+
+def _emf_text(
+    text: str, at: tuple[int, int], bounds: tuple[int, int, int, int], advances: list[int]
+) -> bytes:
+    """An EMR_EXTTEXTOUTW record, laid out as both builds write one: the string
+    after the fixed fields, and the advances after the string."""
+    chars = text.encode("utf-16-le")
+    string_at = 76
+    return _emf_record(
+        84,
+        struct.pack("<4i", *bounds),
+        struct.pack("<Iff", 1, 1.0, 1.0),
+        _emf_point(*at),
+        struct.pack("<III", len(text), string_at, 0),
+        struct.pack("<4i", 0, 0, -1, -1),
+        struct.pack("<I", string_at + len(chars)),
+        chars,
+        struct.pack(f"<{len(text)}i", *advances),
+    )
+
+
+class TestDrawingOfASheet:
+    """What is read from the image a build writes of a sheet."""
+
+    def test_a_stroke_runs_from_where_the_pen_was(self):
+        drawing = recorder.read_emf(
+            _emf_record(27, _emf_point(1, 2))
+            + _emf_record(54, _emf_point(3, 4))
+            + _emf_record(54, _emf_point(5, 6))
+            + _emf_record(27, _emf_point(7, 8))
+            + _emf_record(54, _emf_point(9, 10))
+        )
+        assert drawing["strokes"] == [[1, 2, 3, 4], [3, 4, 5, 6], [7, 8, 9, 10]]
+
+    def test_a_text_keeps_the_font_and_alignment_it_was_drawn_with(self):
+        drawing = recorder.read_emf(
+            _emf_font(1, 159, 0, 700, "Tahoma")
+            + _emf_font(2, 159, 900, 700, "Tahoma")
+            + _emf_record(37, struct.pack("<I", 2))
+            + _emf_record(22, struct.pack("<I", 10))
+            + _emf_text("66\u00b5", (5, 6), (1, 2, 3, 4), [90, 84, 80])
+        )
+        assert drawing["texts"] == [
+            {
+                "text": "66\u00b5",
+                "at": [5, 6],
+                "bounds": [1, 2, 3, 4],
+                "advances": [90, 84, 80],
+                "align": 10,
+                "font": "Tahoma",
+                "height": 159,
+                "escapement": 900,
+                "weight": 700,
+            }
+        ]
+
+    def test_an_ellipse_is_kept_by_its_box(self):
+        drawing = recorder.read_emf(_emf_record(42, struct.pack("<4i", 1, 2, 3, 4)))
+        assert drawing["ellipses"] == [[1, 2, 3, 4]]
+
+    def test_a_record_that_draws_something_unread_is_counted(self):
+        # An arc or a polygon would otherwise leave no trace of being missed.
+        # The pixel a build sets at the end of a stroke adds nothing to it.
+        pixel = _emf_record(15, _emf_point(1, 2), struct.pack("<I", 0))
+        arc = _emf_record(45, bytes(32))
+        polygon = _emf_record(86, bytes(24))
+        assert recorder.read_emf(pixel + polygon + arc + polygon)["other"] == [[45, 1], [86, 2]]
+
+    def test_nothing_of_the_machine_is_kept(self):
+        """A file's header gives the display it was written on, and LTspice
+        26's description runs on into strings of the program's own."""
+        header = _emf_record(1, b"\x00\x0a\x00\x00" * 20, "LTspice image".encode("utf-16-le"))
+        drawing = recorder.read_emf(header + _emf_record(27, _emf_point(1, 2)))
+        rendered = recorder.render_drawing(drawing)
+        assert b"LTspice image" not in rendered
+        assert b"2560" not in rendered
+        assert json.loads(rendered) == drawing
+
+    def test_a_record_cut_off_ends_the_reading(self):
+        whole = _emf_record(27, _emf_point(1, 2)) + _emf_record(54, _emf_point(3, 4))
+        assert recorder.read_emf(whole + b"\x36\x00")["strokes"] == [[1, 2, 3, 4]]
+
+    def test_a_drawing_is_ascii_with_one_item_a_line(self):
+        drawing = recorder.read_emf(
+            _emf_record(27, _emf_point(1, 2))
+            + _emf_record(54, _emf_point(3, 4))
+            + _emf_record(54, _emf_point(5, 6))
+            + _emf_font(1, 159, 0, 700, "Tahoma")
+            + _emf_record(37, struct.pack("<I", 1))
+            + _emf_text("66\u00b5", (5, 6), (1, 2, 3, 4), [90, 84, 80])
+        )
+        rendered = recorder.render_drawing(drawing)
+        assert rendered.isascii()
+        assert rendered.endswith(b"\n")
+        lines = rendered.decode("ascii").splitlines()
+        assert "[1, 2, 3, 4]," in lines
+        assert "[3, 4, 5, 6]" in lines
+        assert sum("66" in line for line in lines) == 1
+
+    def test_the_same_drawing_gives_the_same_bytes(self):
+        one = recorder.read_emf(_emf_record(27, _emf_point(1, 2)))
+        assert recorder.render_drawing(one) == recorder.render_drawing(dict(reversed(one.items())))
+
+
+@pytest.mark.parametrize(("kind", "kept"), [("save", "asc"), ("draw", "drawn")])
+class TestSheetWindowCases:
+    """The parts of a case that opens a sheet in the window that run anywhere."""
+
+    def _case(self, tmp_path: Path, kind: str, extra: str = "") -> recorder.Case:
         inputs = _inputs(
             tmp_path,
-            "save/sheet.asc",
-            '[[case]]\nid = "save/x"\nbehaviour = "b"\nkind = "save"\n'
-            'source = "save/sheet.asc"\n' + extra,
+            "sheets/sheet.asc",
+            f'[[case]]\nid = "sheets/x"\nbehaviour = "b"\nkind = "{kind}"\n'
+            'source = "sheets/sheet.asc"\n' + extra,
         )
-        return load_cases(inputs).case("save/x")
+        return load_cases(inputs).case("sheets/x")
 
-    def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path):
-        case = self._case(tmp_path)
-        build = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "modern", None)
+    def test_it_opens_the_sheet_and_nothing_else(self, tmp_path: Path, kind: str, kept: str):
+        case = self._case(tmp_path, kind)
+        build = recorder.Build(Path("C:/apps/LTspice.exe"), "ltspice26", "current", None)
         deck, ini = tmp_path / "work" / case.work_name, tmp_path / "x.ini"
         assert recorder._command(build, case, deck, ini) == [
             str(build.exe),
@@ -512,14 +678,18 @@ class TestSaveCases:
             str(ini),
         ]
 
-    def test_what_it_keeps_is_the_sheet_the_build_wrote(self, tmp_path: Path):
-        case = self._case(tmp_path)
-        assert case.kept() == ("asc",)
+    def test_what_it_keeps_is_what_the_window_wrote(self, tmp_path: Path, kind: str, kept: str):
+        case = self._case(tmp_path, kind)
+        assert case.kept() == (kept,)
         assert case.work_name == "x.asc"
 
-    def test_it_takes_no_steps(self, tmp_path: Path):
+    def test_it_takes_no_steps(self, tmp_path: Path, kind: str, kept: str):
         with pytest.raises(RecorderError, match="only a plot case"):
-            self._case(tmp_path, 'steps = [{ command = "Save" }]\n')
+            self._case(tmp_path, kind, 'steps = [{ command = "Save" }]\n')
+
+
+class TestSaveCases:
+    """The menu a save case's Save is read from, which runs anywhere."""
 
     def test_its_save_is_the_schematic_menus_own(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
