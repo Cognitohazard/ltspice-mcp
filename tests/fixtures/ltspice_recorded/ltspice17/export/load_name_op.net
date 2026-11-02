@@ -1,0 +1,7 @@
+* C:\recording\load_name_op.asc
+V1 in 0 1
+R1 in 0 1k
+R§Load in 0 2k
+.op
+.backanno
+.end

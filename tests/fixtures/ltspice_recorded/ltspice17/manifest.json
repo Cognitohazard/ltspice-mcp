@@ -4349,6 +4349,41 @@
         ".net"
       ]
     },
+    "export/load_name_op": {
+      "behaviour": "export-instance-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/load_name_op.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "export/load_name_op.asc": "44bc24716511fff15b4fe4bbbffd82d4af205974d1bcfce691e5bd24bf08d8d7",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/load_name_op.net": {
+          "bytes": 87,
+          "sha256": "2d477fc080a2d9969b19c7960a1efc62442685335cdb06520209d4a1f2cdd42d"
+        },
+        "export/load_name_op.raw": {
+          "bytes": 712,
+          "sha256": "253b319bcec422d5eecada3fac76c4d22c60df2cc2953d55ac42fc6e25b5a6ab"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
     "export/micro_cp1252": {
       "behaviour": "export-encoding",
       "command": [
