@@ -21,6 +21,8 @@ from ltspice_mcp.lib import schematic_ops
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.connectivity import (
     label_folded_nets,
+    name_keys,
+    named_labels,
     same_instance_dropped_segments,
     signature,
 )
@@ -389,6 +391,29 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
     assert bool(dropped) == (first != second)
     if dropped:
         assert [(d["ref"], set(d["pins"])) for d in dropped] == [("R1", {"1", "2"})]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
+def test_two_names_are_said_of_one_net_exactly_where_the_export_merges_them(
+    build: str, case_id: str, tmp_path: Path
+):
+    """LTspice gives a node one name, so of two or more names, one that no
+    node of the export carries was merged into another's node. Ground is no
+    name: a named net that is grounded carries one name. Each sheet labels R1's
+    pins, or a point on the wire between them, and the export drops that wire
+    or keeps it."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    flags = parse_asc(sheet.read_bytes()).flags
+    names = name_keys(named_labels(flag.name for flag in flags))
+    nodes = name_keys(
+        node for card in rec.export_instances(build, case_id).values() for node in card.nodes
+    )
+    merged = len(names) > 1 and not names <= nodes
+
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    assert bool(findings(sheet_view(scene), ["net_with_two_names"])) == merged
+    edited = sheet_findings(_editor(sheet))
+    assert any(one.rule == "net_with_two_names" for one in edited) == merged
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))

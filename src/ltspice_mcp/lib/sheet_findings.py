@@ -41,16 +41,13 @@ from functools import cached_property
 from typing import Any, Literal
 
 from ltspice_mcp.lib.connectivity import (
-    NetPartition,
     build_on_wire_predicate,
     build_wire_counter,
     crossing_points,
     fold_case,
     is_ground,
-    label_folded_nets,
     name_key,
     nets_by_ltspice,
-    partition,
     point_on_segment,
 )
 from ltspice_mcp.lib.geometry import BBox
@@ -407,27 +404,25 @@ class _Index:
         ]
 
     @cached_property
-    def nets(self) -> Nets:
-        """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
-        labels = [
+    def labels(self) -> list[LabelAt]:
+        """Every label, ground flags included, each told by its place in the view."""
+        return [
             LabelAt((x, y), index, text) for index, (x, y, text) in enumerate(self.view.labels)
         ]
-        return nets_by_ltspice(self.pins, labels, self.every_wire)
 
+    @cached_property
+    def nets(self) -> Nets:
+        """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
+        return self.nets_without(())
 
-def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
-    """The sheet's nets as its wiring joins them (``connectivity.partition``),
-    leaving out the pins and labels on the points in ``without``."""
-    return partition(
-        (
-            ((x, y), (part.name, name))
-            for part in view.parts
-            for name, x, y in part.pins
-            if (x, y) not in without
-        ),
-        (((x, y), text) for x, y, text in view.labels if (x, y) not in without),
-        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in view.wires],
-    )
+    def nets_without(self, points: Collection[Point]) -> Nets:
+        """The sheet's nets as LTspice would netlist them with no pin or label
+        on any of ``points``."""
+        return nets_by_ltspice(
+            [pin for pin in self.pins if pin.point not in points],
+            [label for label in self.labels if label.point not in points],
+            self.every_wire,
+        )
 
 
 def _net_name(labels: list[tuple[Point, str]]) -> str:
@@ -603,17 +598,13 @@ def _subcircuit_value_slots(ix: _Index) -> list[Finding]:
 def _nets_with_two_names(ix: _Index) -> list[Finding]:
     # One node per label-folded net, names compared as LTspice compares them,
     # ground no name. Each name is given in the spelling LTspice gives it.
-    named = [
-        ((x, y), name)
-        for x, y, text in ix.view.labels
-        if (name := text.strip()) and not is_ground(name)
-    ]
-    if len({name_key(name) for _point, name in named}) < 2:
-        return []
-    net_of = label_folded_nets(_wired_nets(ix.view))
-    nets: dict[Point, dict[str, list[tuple[Point, str]]]] = {}
-    for point, name in named:
-        nets.setdefault(net_of(point), {}).setdefault(name_key(name), []).append((point, name))
+    nets: dict[int, dict[str, list[tuple[Point, str]]]] = {}
+    for label in ix.labels:
+        name = label.text.strip()
+        if not name or is_ground(name):
+            continue
+        net = ix.nets.folded(ix.nets.of_label(label))
+        nets.setdefault(net, {}).setdefault(ix.nets.name_key(name), []).append((label.point, name))
     found: list[Finding] = []
     for by_key in nets.values():
         if len(by_key) < 2:
@@ -649,27 +640,27 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
         on.setdefault((x, y), []).append(f"label '{text.strip()}'")
     # A point no wire ends at lies away from the ends of every wire through it.
     crossings = {
-        point: [(a, b) for a, b in ix.wires if point_on_segment(point, a, b)]
+        point: count
         for point in on
-        if point not in ix.wire_ends and ix.wires_through(point) > 1
+        if point not in ix.wire_ends and (count := ix.wires_through(point)) > 1
     }
     if not crossings:
         return []
-    net_of = label_folded_nets(_wired_nets(ix.view, without=crossings))
+    apart = ix.nets_without(crossings)
     found: list[Finding] = []
-    for point, through in sorted(crossings.items()):
-        nets = {net_of(a) for a, _b in through}
+    for point, count in sorted(crossings.items()):
+        nets = {apart.folded(net) for net in apart.nets_at(point)}
         if len(nets) < 2:
             continue
         what = ", ".join(on[point])
         found.append(
             Finding(
                 "joined_at_crossing",
-                f"{what} at {_at(point)} sits where {len(through)} wires cross, and joins "
+                f"{what} at {_at(point)} sits where {count} wires cross, and joins "
                 f"{len(nets)} nets there that are apart without it",
                 refs=tuple(refs.get(point, ())),
                 points=(point,),
-                facts={"wires": len(through), "nets": len(nets)},
+                facts={"wires": count, "nets": len(nets)},
             )
         )
     return found
