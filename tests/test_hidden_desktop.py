@@ -197,12 +197,27 @@ class TestStart:
         finally:
             started.close()
 
-    def test_past_its_timeout_the_program_is_ended(self, desktop: HiddenDesktop, probe):
+    def test_past_its_timeout_the_program_is_ended(
+        self, desktop: HiddenDesktop, probe, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A slow start can use up the timeout before the probe reports, so ``start``
+        returns here only once it has. The timeout then ends a program known to be
+        running."""
+        start = desktop.start
+        running = []
+
+        def start_then_wait_for_the_report(*args, **kwargs):
+            started = start(*args, **kwargs)
+            facts = wait_until(written(probe.report, json.loads), what="the probe to report")
+            running.append(identify(facts["pid"]))
+            return started
+
+        monkeypatch.setattr(desktop, "start", start_then_wait_for_the_report)
         with pytest.raises(subprocess.TimeoutExpired):
             # timing: the bound is the behaviour under test; the probe never exits
             desktop.run(probe("wait"), timeout=1.0, env=environment())
-        pid = json.loads(probe.report.read_text(encoding="utf-8"))["pid"]
-        wait_until(lambda: not process_running(pid), what="the probe to be gone")
+        assert running[0] is not None
+        wait_until(lambda: not process_running(running[0]), what="the probe to be gone")
 
     def test_closing_a_started_program_ends_it(self, desktop: HiddenDesktop, probe):
         started = desktop.start(probe("wait"), env=environment())
