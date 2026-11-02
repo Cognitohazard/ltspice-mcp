@@ -1,7 +1,7 @@
 # Agent evaluation harness — design
 
-Status: proposal (draft 3, revised after two rounds of adversarial review),
-not implemented.
+Status: approved (draft 3, revised after two rounds of adversarial review,
+with ceilings in place of budgets); not implemented.
 
 ## 1. Why, and which decisions it serves
 
@@ -87,7 +87,8 @@ One trial is one (task, variant, rep):
 2. the variant's server starts through the launcher from its own checkout,
    whose venv is synced once per run before any trial (no `uv run` at trial
    time, so concurrent trials never race on a venv or need a cache dir);
-3. the client profile runs the task until the agent stops or a limit fires;
+3. the client profile runs the task until the agent stops, or a ceiling
+   stops a runaway (§7);
 4. the server's whole process tree is stopped (a Job object on Windows),
    since detached job owners and workers can outlive it, and only then is the
    workspace graded, ignoring `.ltspice-mcp/` and `ltspice-mcp.toml`;
@@ -135,8 +136,8 @@ claude -p <prompt> --output-format stream-json --verbose
   --setting-sources "" --tools Read,Write,Edit,Glob,Grep --disallowedTools Bash
   --allowedTools "mcp__spice" --permission-mode acceptEdits
   --permission-prompts none
-  --no-session-persistence --model <m> --effort <e> --max-turns <n>
-  --max-budget-usd <cap>
+  --no-session-persistence --model <m> --effort <e>
+  --max-turns <turn ceiling> --max-budget-usd <dollar ceiling>
 ```
 
 run with `DISABLE_AUTOUPDATER=1`, a pinned CLI version recorded per row, and
@@ -148,7 +149,10 @@ and settings out; the scratch `HOME` keeps their `~/.claude/CLAUDE.md` out,
 which no setting source governs. `--tools` also removes Task, TodoWrite and
 WebFetch, which real sessions have: a fidelity trade-off, stated in the
 report. Usage, tool calls and the tool results the model received are read
-from the stream. This profile
+from the stream. `--max-turns` and `--max-budget-usd` carry the trial's
+ceilings (§7). In 2.1.316 they only end the loop and neither reaches the
+model; the spend cap's one other effect is on progress events from shell
+tools, which are off. This profile
 confirms that an `api` result transfers: the baseline and any variant about to
 ship run under it.
 
@@ -192,10 +196,10 @@ what is the -3 dB frequency of V(out)? Write the answer to answer.json as
 kind = "answer"               # answer | deck | sheet
 tolerance = { rel = 0.02 }
 reference = "grader/reference.json"
-[limits]
-max_turns = 30
-wall_clock_s = 600
 ```
+
+A task sets no limits of its own; every trial runs under the suite's
+ceilings (§7).
 
 ### 6.3 How the agent answers
 
@@ -233,16 +237,46 @@ five-task pilot.
 - Reference data lives in `grader/`, never copied into a workspace.
 - Tolerances accept equivalent forms (units, `1k` vs `1000`, rounding).
 
+**Ceilings, not budgets.** A limit set near normal use decides outcomes. A
+trial that would have finished is cut off and fails, and a variant that spends
+more is cut off more often, so a difference in efficiency shows up as a
+difference in pass rate, by an amount that depends on where the limit was set.
+So a trial has no budget, only ceilings, whose one job is to stop a runaway:
+an agent in a loop, or a client that never returns.
+
+- **One set for the suite**: turns, dollars and wall-clock time per trial, the
+  same for every variant in a run and recorded on every row. Tasks set no
+  limits of their own.
+- **Far above normal use**: the first runs use generous starting values (200
+  turns, $20 and one hour per trial). After each run, any ceiling below ten
+  times the largest value a trial reached is raised to that. Ceilings are
+  never lowered.
+- **Invisible to the model**: no prompt, system prompt or tool result mentions
+  them, so a trial that stays below them runs as it would with none. A harness
+  test checks that the model's requests are identical under two sets of
+  ceilings, and Claude Code's flags are re-checked whenever its pinned version
+  changes.
+
+A trial that reaches a ceiling is `capped`. It counts as a fail, since a trial
+that ran far past every normal one was not about to finish, and its row
+records which ceiling it reached. Capped trials are a headline count per
+variant, each listed for review, and token figures are given with and without
+them. No decision rests on a ceiling: the report also shows each paired
+pass-rate difference with every capped trial counted as a pass, and if the two
+readings lead to different decisions, the whole comparison is re-run with
+higher ceilings. Re-running only the capped trials would swap the longest
+draws for fresh ones and bias the result toward success.
+
 **Outcomes, by cause:**
 
 | outcome | where | status |
 |-|-|-|
 | pass, fail | `results.jsonl` | `ok` |
 | `answer.json` missing or malformed | `results.jsonl` (fail) | `unparseable` |
-| agent still working at the wall clock, turn or token limit | `results.jsonl` (fail) | `timeout`, `max_turns`, `budget` |
+| agent still working at a ceiling | `results.jsonl` (fail), own count | `capped`, with the ceiling reached |
 | refusal (classified from the transcript) | `results.jsonl` (fail), own metric | `refused` |
 | server or transport died, grader crashed | `errors.jsonl` | error class |
-| the run's `--max-usd` stopped the trial | `errors.jsonl` | `aborted` |
+| the run was interrupted during the trial | `errors.jsonl` | `aborted`; re-run on resume |
 
 A simulator that hangs is stopped by the server's own run timeout and reaches
 the agent as `simulation_failed`, so it is part of the trial, not an error.
@@ -319,8 +353,11 @@ Offline, in `tests/`, with no API calls:
   `.cmd` on Windows, so `measure`-style seed tasks run in CI;
 - each grader on a known-good and a known-bad end state;
 - error classification (a killed server lands in `errors.jsonl`; an agent
-  still calling tools at the ceiling lands in `results.jsonl` as `timeout`),
-  resume, and the served-model assertion.
+  still calling tools at a ceiling lands in `results.jsonl` as `capped`),
+  resume, and the served-model assertion;
+- the ceilings: the model's requests are identical under two sets of them,
+  and a run that reaches its spend cap starts no new trial and cuts none
+  short.
 
 ## 12. Safety and isolation
 
@@ -338,7 +375,15 @@ Offline, in `tests/`, with no API calls:
 No estimate before a pilot. The first paid step is five tasks on one variant;
 its measured `usage` gives tokens per trial (spread, not just mean), dollars
 per full run and wall clock, with the arithmetic shown, and the full run waits
-for the maintainer's yes. `--max-usd` stops a run when spend reaches it.
+for the maintainer's yes. Cost is controlled by that estimate and that yes,
+not by a cap.
+
+The run's `--max-usd` is only a safety net, set at twice the accepted
+estimate. When spend reaches it, the runner starts no new trial, lets running
+trials finish under their own ceilings, and stops; spend can pass it by at
+most those trials' dollar ceilings, and the run resumes where it stopped. It
+cuts no trial short, so it changes no outcome. The summary compares only the
+(task, rep) keys every variant finished, and says how many are missing.
 
 ## 14. Platforms
 
@@ -369,13 +414,21 @@ rather than relying on `PATH` or spicelib's search of `C:/Spice64`.
 Not in the first version: an HTML report, a held-out split, both renderings on
 every run.
 
-## 16. Open questions
+## 16. Decisions
 
-1. Budget, and credentials for each profile.
-2. Models: the default model at its default effort, and which others.
-3. Past session transcripts to mine for tasks.
-4. Machines: Linux or WSL with ngspice for the main suite; Windows for the
+Taken when the design was approved:
+
+1. Budget: none that can shape a trial. Per-trial ceilings sit far above
+   normal use and only stop runaways (§7); the run's spend cap only pauses
+   the run (§13).
+2. Credentials: one API key, used by the `api` profile and, in a scratch
+   home, by the `claude-code` profile.
+3. Models: the default model at its default effort; others only after the
+   baseline.
+4. Tasks: mined from past agent sessions with the server, or three to five
+   maintainer-written cases, each with a line on what makes it hard.
+5. Machines: Linux or WSL with ngspice for the main suite; Windows for the
    `ltspice` suite.
-5. Committing the task set and harness (recommended; runs stay out of git).
-6. The `text_channel` default (§2), which is a product decision ahead of the
-   eval.
+6. The task set and harness are committed; runs and traces stay out of git.
+7. `text_channel` defaults to `"json"` (§2), a product change made on its own
+   ahead of the eval.
