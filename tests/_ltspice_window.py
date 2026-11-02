@@ -17,6 +17,7 @@ from typing import Any
 
 from ltspice_mcp.lib.encoding import decode_windows_1252
 from ltspice_mcp.lib.ltspice_frame import (
+    SAVE,
     VISIBLE_TRACES,
     FrameError,
     LtspiceFrame,
@@ -128,6 +129,11 @@ class FakeFrame(LtspiceFrame):
     the sheet and Cancel leaves it. All as LTspice was recorded doing. A
     world with ``box_up`` is a window waiting on a box of its own.
 
+    Save writes the window's copy of the sheet in front to its file and no
+    longer counts it changed, as LTspice was recorded doing; in a world with
+    ``save_box`` the window puts up a box with those words instead, and in
+    one with ``frame_ignores`` it does nothing.
+
     A pane's window is a number made from its path and how often that path
     was closed before, so one opened again is another window.
     """
@@ -190,6 +196,14 @@ class FakeFrame(LtspiceFrame):
         if label == VISIBLE_TRACES and known and not opened and not world.get("frame_ignores"):
             entry.setdefault("panes", []).insert(0, results)
             entry.setdefault("tied", []).append(results)
+        if label == SAVE and front and not world.get("frame_ignores"):
+            if world.get("save_box"):
+                entry["box_words"] = [world["save_box"]]
+            else:
+                # As the stand-in bridge reads a file it opens.
+                Path(front).write_bytes(entry["designs"][front].encode("cp1252", "replace"))
+                if front in entry.get("unsaved", []):
+                    entry["unsaved"].remove(front)
         self._keep(world)
 
     @staticmethod
@@ -249,7 +263,22 @@ class FakeFrame(LtspiceFrame):
 
     def takes_input(self, pid: int) -> bool:
         world = read_world(self._world)
-        return not (world.get("box_up") or self._entry(world, pid).get("asking"))
+        entry = self._entry(world, pid)
+        return not (world.get("box_up") or entry.get("asking") or entry.get("box_words"))
+
+    def box_words(self, pid: int) -> list[str]:
+        return list(self._entry(read_world(self._world), pid).get("box_words", []))
+
+    def dismiss_boxes(self, pid: int) -> list[str]:
+        """Cancel closes a box and leaves the window as it was, as LTspice was
+        recorded doing; noted under ``answers``."""
+        world = read_world(self._world)
+        entry = self._entry(world, pid)
+        words = entry.pop("box_words", [])
+        if words:
+            entry.setdefault("answers", []).append("cancel")
+        self._keep(world)
+        return words
 
     def save_question(self, pid: int) -> SaveQuestion | None:
         entry = self._entry(read_world(self._world), pid)

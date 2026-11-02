@@ -787,19 +787,20 @@ class TestSheetOpenInAWindow:
                 yield sheet, window.pid
 
     @staticmethod
-    async def _edit(state: SessionState, sheet: Path, value: str) -> dict:
+    async def _edit(
+        state: SessionState, sheet: Path, value: str | None = None, **extra: object
+    ) -> dict:
+        """An edit of R1's value, or with ``extra`` such as ``ops=[]`` and
+        ``save_open_window=True``, against the file as it is now."""
         import hashlib
 
         from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 
         digest = await asyncio.to_thread(lambda: hashlib.sha256(sheet.read_bytes()).hexdigest())
+        ops = [{"op": "set_component_value", "reference": "R1", "value": value}]
         result = await handle_edit_schematic(
             EditSchematicInput.model_validate(
-                {
-                    "path": str(sheet),
-                    "expected_sha256": digest,
-                    "ops": [{"op": "set_component_value", "reference": "R1", "value": value}],
-                }
+                {"path": str(sheet), "expected_sha256": digest, "ops": ops, **extra}
             ),
             state,
         )
@@ -836,6 +837,58 @@ class TestSheetOpenInAWindow:
         assert await asyncio.to_thread(sheet.read_bytes) == committed
         (still,) = await asyncio.to_thread(windows.holding, sheet)
         assert "SYMATTR Value 9k" in still.text
+
+    async def test_a_window_the_user_agreed_to_keep_is_saved_and_the_edit_then_commits(
+        self, ltspice_state: SessionState, open_sheet
+    ):
+        """LTspice saves the sheet from the window, as Ctrl+S would, and an edit
+        made against the saved sheet commits."""
+        import hashlib
+
+        from ltspice_mcp.lib.ltspice_window import file_difference
+
+        sheet, pid = open_sheet
+        windows = ltspice_state.open_windows
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        # Someone changes the sheet in the window and does not save it.
+        changed = held.text.replace("SYMATTR Value 1k", "SYMATTR Value 9k")
+        await asyncio.to_thread(windows.show, held, changed)
+
+        saved = await self._edit(ltspice_state, sheet, ops=[], save_open_window=True)
+
+        assert saved["commit_state"] == "committed", saved
+        assert [(row["pid"], row["saved"]) for row in saved["open_in_ltspice"]] == [(pid, True)]
+        on_disk = await asyncio.to_thread(sheet.read_bytes)
+        assert file_difference(on_disk, changed) is None
+        assert saved["sha256"] == hashlib.sha256(on_disk).hexdigest()
+        await self._window_settled(ltspice_state, pid)
+
+        data = await self._edit(ltspice_state, sheet, "2.2k")
+        assert data["commit_state"] == "committed", data
+
+    async def test_a_window_that_does_not_take_an_edit_is_opened_again_from_the_file(
+        self, ltspice_state: SessionState, open_sheet, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The window is closed and opened again from the committed file, here
+        with the bridge's replacement of its copy made to fail."""
+        from ltspice_mcp.lib.ltspice_bridge import BridgeError
+
+        def does_not_take_it(*_args: object) -> None:
+            raise BridgeError("LTspice did not take it")
+
+        sheet, pid = open_sheet
+        windows = ltspice_state.open_windows
+        monkeypatch.setattr(windows, "show", does_not_take_it)
+
+        data = await self._edit(ltspice_state, sheet, "2.2k")
+
+        assert data["commit_state"] == "committed", data
+        assert [
+            (row["pid"], row["shown"], row.get("reopened")) for row in data["open_in_ltspice"]
+        ] == [(pid, True, True)]
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        assert "SYMATTR Value 2.2k" in held.text
+        await self._window_settled(ltspice_state, pid)
 
     async def test_inspect_lists_the_sheet_the_window_has_in_front(
         self, ltspice_state: SessionState, open_sheet

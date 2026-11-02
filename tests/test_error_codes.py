@@ -647,6 +647,7 @@ FROZEN_ERROR_CODES = (
     "unwrap_warning",
     "widget_unavailable",
     "window_empty_steps",
+    "window_not_saved",
     "windows_native_storage_unavailable",
     "worker_crashed",
 )

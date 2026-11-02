@@ -471,10 +471,11 @@ SHEET_REOPENED = (
     "opens a sheet, so the sheet was closed and reopened."
 )
 ALONE = (
-    "The plot is not tied to the sheet, so clicking a net there does not plot it: "
-    "LTspice opened the sheet before it had results and has unsaved changes to it, so "
-    "the sheet was not closed and reopened. After the user saves or closes it in "
-    "LTspice, showing the run again ties the plot."
+    "The plot is not tied to the sheet, so clicking a net there does not plot it, "
+    "because LTspice opened the sheet before it had results and has unsaved changes "
+    "to it. Ask the user whether to keep those changes. If they agree, call "
+    "edit_schematic with save_open_window=true; the sheet then holds their changes, "
+    "so run it again and show that run."
 )
 
 

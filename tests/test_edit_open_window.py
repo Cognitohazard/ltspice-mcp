@@ -23,14 +23,17 @@ from typing import Any
 import jsonschema
 import pytest
 
+from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib import ltspice_window
 from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
-from ltspice_mcp.lib.ltspice_bridge import BridgeSession
-from ltspice_mcp.lib.ltspice_window import OpenWindows
+from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession
+from ltspice_mcp.lib.ltspice_window import OpenSheet, OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 from tests._ltspice_window import (
     PID,
+    FakeFrame,
     a_window,
     as_ltspice_reads,
     digest,
@@ -41,7 +44,8 @@ from tests._ltspice_window import (
 )
 from tests.conftest import LIVENESS_S, await_until, written
 from tests.fake_ltspice_bridge import silence_of
-from tests.ltspice_bridge_recorder import FIXTURES, INPUTS
+from tests.ltspice_bridge_recorder import FIXTURES, INPUTS, observed
+from tests.ltspice_recorder import NEUTRAL_DIR
 
 #: The stand-in bridge runs under this interpreter, which is what a message names.
 BRIDGE_PROGRAM = Path(sys.executable).name
@@ -74,12 +78,12 @@ class _KeptSessions(OpenWindows):
     """The windows behind the stand-in bridge, each bridge session kept as it
     starts, so that a test can have the one in progress pass its deadline."""
 
-    def __init__(self, command: list[str]) -> None:
-        super().__init__(command, timeout=LIVENESS_S)
+    def __init__(self, world: Path) -> None:
+        super().__init__(fake_command(world), timeout=LIVENESS_S, frame=FakeFrame(world))
         self.sessions: list[BridgeSession] = []
 
-    def _session(self) -> BridgeSession:
-        session = super()._session()
+    def _session(self, waits: float = 0.0) -> BridgeSession:
+        session = super()._session(waits)
         self.sessions.append(session)
         return session
 
@@ -105,7 +109,7 @@ class Window:
     async def silent_until_the_deadline(self, call: Coroutine[Any, Any, dict]) -> dict:
         """Run ``call`` under the liveness cap, and have the session's deadline
         pass once the bridge has gone silent (``silence_of``), and not before."""
-        windows = _KeptSessions(fake_command(self._world))
+        windows = _KeptSessions(self._world)
         self._state.open_windows = windows
         running = asyncio.create_task(call)
         silent = written(silence_of(self._world), str)
@@ -180,11 +184,200 @@ async def test_an_edit_is_refused_while_the_window_holds_a_different_sheet(
             "error": "the open LTspice window differs from the file",
         }
     ]
-    assert "Save the sheet in LTspice (Ctrl+S)" in data["hint"]
+    assert "save_open_window=true" in data["hint"]
     # Neither side was touched.
     assert file_bytes(asc_file) == before
     assert window.text(asc_file) == held
     assert data["sha256"] == hashlib.sha256(before).hexdigest()
+
+
+def a_change(sheet: Path) -> str:
+    """``sheet`` as a window holds it with a resistor value nobody saved."""
+    return decode_windows_1252(file_bytes(sheet)).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+
+
+def holding_a_change(window: Window, sheet: Path, **extra: Any) -> str:
+    """Have the window hold ``a_change`` of ``sheet``; returns that copy."""
+    held = a_change(sheet)
+    window.shows(sheet, held, **extra)
+    return held
+
+
+def write_protected_box(sheet: Path) -> str:
+    """The words of the box LTspice showed when told to save a write-protected
+    sheet, as recorded, for ``sheet``."""
+    (words,) = observed("ltspice26")[
+        "Save of a write-protected sheet leaves the file as it was, takes no input and "
+        "shows a box with these words"
+    ][2]
+    return words.replace(f"{NEUTRAL_DIR}\\locked.asc", str(sheet))
+
+
+async def save(state: SessionState, sheet: Path, **kw: Any) -> dict:
+    return await edit(state, sheet, ops=[], save_open_window=True, **kw)
+
+
+async def test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """The refusal says to ask the user. Once they agree, LTspice saves the
+    sheet from the window, and an edit made against the saved sheet commits."""
+    held = holding_a_change(window, asc_file)
+    refused = await edit(asc_state, asc_file)
+    assert refused["error"]["code"] == "open_window_differs"
+
+    data = await save(asc_state, asc_file)
+
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "committed"
+    assert data["sha256"] == digest(asc_file)
+    assert data["open_in_ltspice"] == [
+        {"pid": PID, "version": "26.1.1", "shown": True, "saved": True}
+    ]
+    assert "Read it again before editing it" in data["hint"]
+    # LTspice wrote the window's copy, and was sent its own Save to do it.
+    assert decode_windows_1252(file_bytes(asc_file)) == held
+    assert read_world(tmp_path / "world.json")["windows"][0]["commands"] == ["Save"]
+
+    edited = await edit(asc_state, asc_file, expected_sha256=data["sha256"])
+    assert edited["commit_state"] == "committed"
+    assert "SYMATTR Value 2.2k" in window.text(asc_file)
+
+
+async def test_nothing_is_saved_where_no_window_holds_a_different_sheet(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    before = file_bytes(asc_file)
+    window.shows(asc_file, as_ltspice_reads(asc_file))
+
+    data = await save(asc_state, asc_file)
+
+    assert data["outcome"] == "complete"
+    assert data["commit_state"] == "not_committed"
+    assert data["hint"] == (
+        "No LTspice window holds a sheet different from the file, so nothing was saved."
+    )
+    assert file_bytes(asc_file) == before
+    assert "commands" not in read_world(tmp_path / "world.json")["windows"][0]
+
+
+async def test_a_stale_revision_saves_nothing(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    holding_a_change(window, asc_file)
+
+    data = await save(asc_state, asc_file, expected_sha256="0" * 64)
+
+    assert data["error"]["code"] == "revision_conflict"
+    assert "commands" not in read_world(tmp_path / "world.json")["windows"][0]
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"ops": SET_VALUE},
+        {"ops": [], "dry_run": True},
+        {"ops": [], "base": "blank"},
+        {"ops": [], "return_views": ["pin_legend"]},
+    ],
+)
+async def test_a_save_is_a_call_of_its_own(
+    asc_state: SessionState, asc_file: Path, window: Window, other: dict
+):
+    """The edit is made in another call, against the saved sheet once read."""
+    holding_a_change(window, asc_file)
+    with pytest.raises(NetlistError, match="save_open_window takes only path and expected_sha256"):
+        await edit(asc_state, asc_file, save_open_window=True, **other)
+
+
+async def test_other_windows_with_the_sheet_open_are_handed_the_saved_one(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """A second LTspice that held the file's sheet would otherwise show the old one."""
+    held = a_change(asc_file)
+    world = tmp_path / "world.json"
+    write_world(
+        world,
+        [
+            a_window({str(asc_file): held}),
+            a_window({str(asc_file): as_ltspice_reads(asc_file)}, pid=PID + 1),
+        ],
+    )
+
+    data = await save(asc_state, asc_file)
+
+    assert data["commit_state"] == "committed"
+    assert data["open_in_ltspice"] == [
+        {"pid": PID, "version": "26.1.1", "shown": True, "saved": True},
+        {"pid": PID + 1, "version": "26.1.1", "shown": True},
+    ]
+    assert [entry["designs"][str(asc_file)] for entry in read_world(world)["windows"]] == [
+        held,
+        held,
+    ]
+
+
+async def test_two_windows_with_different_copies_save_nothing(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """Which copy to keep is the user's choice."""
+    before = file_bytes(asc_file)
+    world = tmp_path / "world.json"
+    write_world(
+        world,
+        [
+            a_window({str(asc_file): a_change(asc_file)}),
+            a_window({str(asc_file): a_change(asc_file).replace("5k", "6k")}, pid=PID + 1),
+        ],
+    )
+
+    data = await save(asc_state, asc_file)
+
+    assert data["error"]["code"] == "window_not_saved"
+    assert data["error"]["message"].startswith(
+        f"LTspice processes {PID} and {PID + 1} each hold a copy of {asc_file.name}"
+    )
+    assert file_bytes(asc_file) == before
+
+
+async def test_the_box_ltspice_shows_instead_of_saving_is_quoted_and_cancelled(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """A write-protected file: LTspice shows a box with only OK, which Cancel
+    closes, leaving the window's copy as it was (recorded)."""
+    before = file_bytes(asc_file)
+    words = write_protected_box(asc_file)
+    held = holding_a_change(window, asc_file, save_box=words)
+
+    data = await save(asc_state, asc_file)
+
+    assert data["outcome"] == "failed"
+    assert data["commit_state"] == "not_committed"
+    assert data["error"]["code"] == "window_not_saved"
+    assert data["error"]["message"] == (
+        f"LTspice did not save {asc_file.name}; it showed a box: {words}. Read the sheet "
+        "again before editing it."
+    )
+    assert file_bytes(asc_file) == before
+    entry = read_world(tmp_path / "world.json")["windows"][0]
+    assert entry["answers"] == ["cancel"] and "box_words" not in entry
+    assert window.text(asc_file) == held
+
+
+async def test_a_window_that_does_not_save_is_reported(
+    asc_state: SessionState, asc_file: Path, window: Window, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(ltspice_window, "_SAVED_S", 0.3)  # timing: the wait under test
+    before = file_bytes(asc_file)
+    holding_a_change(window, asc_file, frame_ignores=True)
+
+    data = await save(asc_state, asc_file)
+
+    assert data["error"]["code"] == "window_not_saved"
+    assert data["error"]["message"].startswith(
+        f"LTspice did not save {asc_file.name} within 0.3 s"
+    )
+    assert file_bytes(asc_file) == before
 
 
 @pytest.mark.parametrize("name", ["older_version", "symbol_attributes"])
@@ -232,7 +425,7 @@ async def test_a_dry_run_reports_a_window_that_differs_and_is_not_refused(
     assert data["commit_state"] == "not_committed"
     assert len(data["observations"]) == 1
     assert "holds a different one from the file" in data["observations"][0]
-    assert "A commit is refused until it is saved or closed." in data["observations"][0]
+    assert "A commit is refused until the window's copy is saved" in data["observations"][0]
     assert window.text(asc_file) == held
     assert "open_in_ltspice" not in data
 
@@ -291,11 +484,13 @@ async def test_a_new_sheet_asks_no_window(asc_state: SessionState, work_dir: Pat
     assert data["observations"] == []
 
 
-async def test_a_window_that_cannot_be_updated_is_reported_and_the_commit_stands(
+async def test_a_window_that_does_not_take_the_edit_is_closed_and_opened_again(
     asc_state: SessionState, asc_file: Path, window: Window
 ):
     """The bridge never answers the request that hands the window the committed
-    sheet; only that request meets the deadline, not the ones before it."""
+    sheet; only that request meets the deadline, not the ones before it. The
+    window still holds the sheet as it was, so it is closed and opened again
+    from the committed file, and it then shows the edit."""
     window.shows(asc_file, as_ltspice_reads(asc_file), silent_on="set_design_content")
     before = file_bytes(asc_file)
 
@@ -306,15 +501,99 @@ async def test_a_window_that_cannot_be_updated_is_reported_and_the_commit_stands
     assert file_bytes(asc_file) != before
     assert data["sha256"] == digest(asc_file)
     assert data["open_in_ltspice"] == [
+        {"pid": PID, "version": "26.1.1", "shown": True, "reopened": True}
+    ]
+    assert window.text(asc_file) == as_ltspice_reads(asc_file)
+    assert "SYMATTR Value 2.2k" in window.text(asc_file)
+    assert "closed there and opened again from the file" in data["hint"]
+
+
+class _DoesNotTakeIt(_KeptSessions):
+    """A window whose request to take a committed sheet fails. With
+    ``meanwhile``, someone changes the sheet in it first; with ``after_all``,
+    the request was carried out all the same."""
+
+    def __init__(
+        self, world: Path, meanwhile: str | None = None, *, after_all: bool = False
+    ) -> None:
+        super().__init__(world)
+        self._world = world
+        self._meanwhile = meanwhile
+        self._after_all = after_all
+
+    def show(self, sheet: OpenSheet, text: str) -> None:
+        if self._after_all:
+            super().show(sheet, text)
+        if self._meanwhile is not None:
+            changed = read_world(self._world)
+            changed["windows"][0]["designs"][sheet.path] = self._meanwhile
+            write_world(self._world, **changed)
+        raise BridgeError("LTspice did not take it")
+
+
+async def test_a_request_carried_out_after_all_is_not_taken_for_a_change(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """A request that timed out may still have been carried out: the window
+    then holds the committed sheet, and is left as it is."""
+    window.shows(asc_file, as_ltspice_reads(asc_file))
+    asc_state.open_windows = _DoesNotTakeIt(tmp_path / "world.json", after_all=True)
+
+    data = await edit(asc_state, asc_file)
+
+    assert data["open_in_ltspice"] == [{"pid": PID, "version": "26.1.1", "shown": True}]
+    assert "SYMATTR Value 2.2k" in window.text(asc_file)
+    assert "closed" not in read_world(tmp_path / "world.json")["windows"][0]
+
+
+async def test_a_window_changed_since_it_was_read_is_left_open_and_reported(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """Closing it would lose what was done there since, so it is not closed."""
+    held = as_ltspice_reads(asc_file)
+    window.shows(asc_file, held)
+    meanwhile = held.replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+    asc_state.open_windows = _DoesNotTakeIt(tmp_path / "world.json", meanwhile)
+
+    data = await edit(asc_state, asc_file)
+
+    assert data["commit_state"] == "committed"
+    assert data["open_in_ltspice"] == [
         {
             "pid": PID,
             "version": "26.1.1",
             "shown": False,
-            "reason": f"{BRIDGE_PROGRAM} did not answer within {LIVENESS_S:g} s and was ended",
+            "reason": (
+                "LTspice did not take it; it was not closed and opened again, because it "
+                "holds changes made there since"
+            ),
         }
     ]
-    assert "could not be updated" in data["hint"]
     assert "saving from it would overwrite this edit" in data["hint"]
+    assert window.text(asc_file) == meanwhile
+    assert "closed" not in read_world(tmp_path / "world.json")["windows"][0]
+
+
+async def test_a_window_that_does_not_close_either_is_reported(
+    asc_state: SessionState,
+    asc_file: Path,
+    window: Window,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(ltspice_window, "_CLOSED_S", 0.3)  # timing: the wait under test
+    window.shows(asc_file, as_ltspice_reads(asc_file), frame_keeps_panes=True)
+    asc_state.open_windows = _DoesNotTakeIt(tmp_path / "world.json")
+
+    data = await edit(asc_state, asc_file)
+
+    assert data["commit_state"] == "committed"
+    (row,) = data["open_in_ltspice"]
+    assert row["shown"] is False and "reopened" not in row
+    assert row["reason"] == (
+        "LTspice did not take it; closing it and opening it again failed too: LTspice "
+        f"did not close {asc_file.name} within 0.3 s"
+    )
 
 
 async def test_a_bridge_that_cannot_say_does_not_stop_the_edit(
