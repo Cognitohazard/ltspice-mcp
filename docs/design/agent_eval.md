@@ -1,7 +1,10 @@
 # Agent evaluation harness — design
 
 Status: approved (draft 3, revised after two rounds of adversarial review,
-with ceilings in place of budgets); not implemented.
+with ceilings in place of budgets). The offline driver, the answer grader and
+four seed tasks are built (step 1a). The profile that calls a model is Claude
+Code on the maintainer's Claude subscription; nothing calls a model until the
+maintainer plans that run.
 
 ## 1. Why, and which decisions it serves
 
@@ -14,7 +17,7 @@ discoverability and need that number before they ship:
   `inspect(kind="reference")` (the listing is about 47 KB in compact mode,
   most of it the recipe union);
 - a detail level for reference search;
-- the defaults of `[tools] listing` and `[tools] text_channel`;
+- the default of `[tools] listing`;
 - regressions from any later surface change (reply shapes, budgets, errors,
   guide text).
 
@@ -27,38 +30,23 @@ with the same model and client, paired.
 Non-goals: ranking models; testing simulator numerics (the recorded-fixture
 tests do that); a CI gate (runs cost money and are opt-in).
 
-## 2. What reaches the model: a finding that comes first
+## 2. What reaches the model
 
 Which channel a client shows the model decides whether a reply carries any
-data, and it is not the same for every client or even for every Claude Code
-session. In Claude Code 2.1.316, the function that turns an MCP tool result
-into the model's tool result does this when the result has
-`structuredContent`:
+data. In Claude Code 2.1.316, read from the CLI's own code, a successful result
+with `structuredContent` reaches the model as `JSON.stringify` of it (plus any
+image blocks) by default, and as its text blocks when a remotely controlled
+flag is on; a failed call (`isError`) reaches it as its text blocks alone. The
+CLI also shows a tool's description, and the server's instructions, up to
+their first 4,096 characters; the server's are shorter.
 
-- by default, the model gets the serialized `structuredContent` (plus any
-  image blocks), and the text blocks are dropped;
-- when a remotely controlled flag is on (`tengu_eventual_noodle`, default
-  off), the model gets the `content` blocks instead, and `structuredContent`
-  only when every text block is blank.
-
-The server's default suits the first case. But under `text_channel =
-"summary"`, a Claude Code session with that flag on reads one summary line per
-reply and no data. The
-eval does not need to establish this; it is a product risk to settle on its own
-(set `text_channel = "json"` by default, or make the summary line carry the
-data). The eval records which rendering a trial used and, in the `claude-code`
-profile, reads what the model actually received from the stream rather than
-assuming it.
-
-Errors take a third path, whichever the flag. A result with `isError` becomes
-an error made of its text blocks alone, joined by newlines; its
-`structuredContent` is not shown. The server puts an error's `code` and its
-recovery `hint` in `structuredContent` and only the message in the text, so
-under `text_channel = "summary"` a Claude Code model reads why a call failed
-but never how to recover. `"json"` carries both, since it replaces the text
-with the serialized `structuredContent`. The same CLI shows a tool's
-description, and the server's instructions, up to their first 4,096
-characters; the server's are shorter.
+The server used to put a one-line summary in the text, so the flag's path gave
+the model no data, and a failed call's text carried the message without its
+code or recovery hint. It now makes every reply's text block its serialized
+`structuredContent`, as the MCP specification recommends, so every path gives
+the model the same data; what is left is spelling (the CLI's `JSON.stringify`
+writes `1` where the server's JSON writes `1.0`). The eval still reads what the
+model received from each trial rather than assuming it.
 
 ## 3. What is under test
 
@@ -117,66 +105,61 @@ variant alike.
 
 ## 5. Client profiles
 
-### 5.1 `api`: a controlled client (default)
-
-A manual tool-use loop on the Anthropic Messages API (`anthropic` SDK), with
-the server's tools proxied from an MCP `ClientSession`. Manual rather than the
-SDK's tool runner because the harness controls exactly what each tool result
-looks like.
-
-- **Tools**: the server's `tools/list` as served, plus harness file tools
-  confined to the workspace (`read_file`, `write_file`, `edit_file`,
-  `list_dir`). No shell: the simulator is reached only through the server.
-- **System prompt**: a frozen preamble with the answer convention, then the
-  server's `initialize` instructions, as Claude Code places them (under its
-  MCP server instructions heading). The workspace path goes in the first user
-  message, not the system prompt, so tools and system cache across trials.
-- **Rendering** of a result with `structuredContent`, recorded per row:
-  `structured` (the serialized `structuredContent` plus image blocks: Claude
-  Code's default) or `content` (the content blocks: Claude Code with the flag
-  on, and clients that ignore `structuredContent`). Runs use `structured`
-  unless a variant is about the text channel. Under both, a result with
-  `isError` reaches the model as its text blocks only (§2), and the
-  serialization is `JSON.stringify`'s (`1` for `1.0`, `1e-7` but
-  `0.000001`), not Python's.
-- **Descriptions and instructions** longer than 4,096 characters are cut
-  there with Claude Code's mark.
-- **Oversized results**: Claude Code saves a tool result over 25,000 tokens
-  to a file and hands the model its path. The profile records each such
-  event and gives the model a short notice; it does not claim to reproduce
-  the file hand-off.
-- **Caching**: a breakpoint on the last system block and one on the latest
-  turn; tools are never reordered within a trial.
-- **Model and effort** are run parameters; the served `model` is asserted
-  against the requested one on every call.
-
-### 5.2 `claude-code`: the real client
+### 5.1 `claude-code`: the profile that calls a model
 
 ```
 claude -p <prompt> --output-format stream-json --verbose
   --strict-mcp-config --mcp-config <file naming the launcher as server "spice">
-  --setting-sources "" --tools Read,Write,Edit,Glob,Grep --disallowedTools Bash
+  --setting-sources "" --tools Read,Write,Edit,Glob --disallowedTools Bash
   --allowedTools "mcp__spice" --permission-mode acceptEdits
   --permission-prompts none
   --no-session-persistence --model <m> --effort <e>
   --max-turns <turn ceiling> --max-budget-usd <dollar ceiling>
 ```
 
-run with `DISABLE_AUTOUPDATER=1`, a pinned CLI version recorded per row, and
-a scratch `HOME` (an empty `.claude/`, credentials from `ANTHROPIC_API_KEY`).
-`--permission-prompts none` denies anything that would prompt, and MCP tools
-prompt unless allowed, hence `--allowedTools "mcp__spice"`.
-`--strict-mcp-config` and empty setting sources keep the operator's MCP servers
-and settings out; the scratch `HOME` keeps their `~/.claude/CLAUDE.md` out,
-which no setting source governs. `--tools` also removes Task, TodoWrite and
-WebFetch, which real sessions have: a fidelity trade-off, stated in the
-report. Usage, tool calls and the tool results the model received are read
-from the stream. `--max-turns` and `--max-budget-usd` carry the trial's
-ceilings (§7). In 2.1.316 they only end the loop and neither reaches the
-model; the spend cap's one other effect is on progress events from shell
-tools, which are off. This profile
-confirms that an `api` result transfers: the baseline and any variant about to
-ship run under it.
+run with `DISABLE_AUTOUPDATER=1`, a pinned CLI version recorded per row, and a
+scratch `HOME` (an empty `.claude/`).
+
+- **Credentials**: the maintainer's Claude subscription, through a token
+  `claude setup-token` makes, in `CLAUDE_CODE_OAUTH_TOKEN` where the eval runs.
+  No API key. The token is never written or committed, and the launcher keeps
+  it from the server.
+- **Isolation**: `--permission-prompts none` denies anything that would
+  prompt, and MCP tools prompt unless allowed, hence `--allowedTools
+  "mcp__spice"`. `--strict-mcp-config` and empty setting sources keep the
+  operator's MCP servers and settings out; the scratch `HOME` keeps their
+  `~/.claude/CLAUDE.md` out, which no setting source governs.
+- **Tools**: only what tasks need. Every built-in tool's definition is sent on
+  every turn, so `--tools` leaves out Grep, Task, TodoWrite and WebFetch, which
+  real sessions have: a fidelity trade-off, stated in the report.
+- **What the model received**: usage, tool calls and the tool results as the
+  model saw them are read from the stream.
+- **Ceilings**: `--max-turns` and `--max-budget-usd` carry the trial's
+  ceilings (§7). In 2.1.316 they only end the loop and neither reaches the
+  model; the spend cap's one other effect is on progress events from shell
+  tools, which are off.
+- **Usage limits**: a trial the plan's usage limit stops is an error row
+  (`usage_limit`), not a fail; the runner starts no new trial and the run
+  resumes once the limit resets.
+- **Offline runs**: `ANTHROPIC_BASE_URL` points the CLI at a local stand-in for
+  the Messages API that plays a task's oracle script, so the real CLI and the
+  real server run end to end with no model. The stand-in also records exactly
+  what the CLI sends the model (system prompt, tool definitions, rendered
+  results, deferred tools), which turns the facts in §2, read from the binary,
+  into tests. Whether this CLI runs against a stand-in is not yet checked; it
+  is the first thing the next build step does.
+
+### 5.2 `api`: the offline driver
+
+A manual tool-use loop with the server's tools proxied from an MCP
+`ClientSession`, driven by scripted models (§11); it never calls an API. It
+tests tasks, graders, rows and ceilings where the CLI is not installed (CI),
+and mimics what Claude Code does: the harness file tools (`read_file`,
+`write_file`, `edit_file`, `list_dir`) confined to the workspace; the server's
+instructions under Claude Code's heading; tool names `mcp__spice__<tool>`;
+`JSON.stringify` serialization; a failed call as its text only; descriptions
+cut at 4,096 characters; a notice for a result over 25,000 tokens. Its
+Anthropic SDK client, and the SDK dependency, go when 5.1 is built.
 
 ## 6. Tasks
 
@@ -313,7 +296,7 @@ total and per `error.code` (including `invalid_arguments`); reference and
 guide lookups; size of each tool result in estimated tokens, total and
 largest; oversized-result events; `usage` per call and summed (input, output,
 cache read, cache write); served model; latency (model time and wall clock,
-separately); retries; guardrail violations; the rendering, CLI version and
+separately); retries; guardrail violations; what the model received (§2), the CLI version and
 grader revision.
 
 Reported per variant:
@@ -334,13 +317,13 @@ Reported per variant:
 - **Variants**: a git ref checked out into a worktree plus a config overlay.
   `baseline` is master with defaults; `v1`, `v2`, … are described in their
   `change.md`.
-- **Paired**: same tasks, reps, model, effort, profile and rendering.
+- **Paired**: same tasks, reps, model, effort and CLI version.
 - **Resolution**: with 30 tasks and 3 reps, a pass-rate difference near 50%
   has an interval of roughly ±17 points; token and tool-call measures resolve
   smaller effects, and are the expected movers for the §1 changes. The plan
   states the effect each decision needs before its run.
-- **Noise floor**, measured rather than assumed: an A/A run (two variants
-  with identical servers) before the first comparison.
+- **Noise floor**, measured rather than assumed: the baseline runs as two
+  identically configured arms, and their difference is the A/A result (§13).
 - **Positive control**, with a known direction and of the kind the decision
   is about: a variant whose recipe schema renames one enum value that tasks
   need, so the published listing is wrong for it, must raise
@@ -351,7 +334,8 @@ Reported per variant:
   size taken from the A/A run: for recipe disclosure, total input tokens down
   while pass rate and `invalid_arguments` stay within noise.
 - **Confirmation**: no held-out split in the first version (30 tasks cannot
-  spare one); a variant chosen under `api` is confirmed under `claude-code`.
+  spare one). Every model run is under `claude-code`, so there is no second
+  profile to confirm against.
 
 ## 10. Output
 
@@ -379,7 +363,10 @@ Offline, in `tests/`, with no API calls:
   resume, and the served-model assertion;
 - the ceilings: the model's requests are identical under two sets of them,
   and a run that reaches its spend cap starts no new trial and cuts none
-  short.
+  short;
+- (with 5.1) the oracle and null scripts again through the real CLI against
+  the stand-in API, where the CLI is installed, and what the CLI sent the
+  model checked against §2.
 
 ## 12. Safety and isolation
 
@@ -392,20 +379,51 @@ Offline, in `tests/`, with no API calls:
   settings excluded.
 - Tasks and fixtures are authored by the project.
 
-## 13. Cost
+## 13. Spending tokens well
 
-No estimate before a pilot. The first paid step is five tasks on one variant;
-its measured `usage` gives tokens per trial (spread, not just mean), dollars
-per full run and wall clock, with the arithmetic shown, and the full run waits
-for the maintainer's yes. Cost is controlled by that estimate and that yes,
-not by a cap.
+Every trial is paid for in the plan's usage, so the suite runs the fewest
+trials that can settle a decision. Efficiency comes from choosing trials, not
+from tighter limits: the ceilings stay far above normal use (§7).
 
-The run's `--max-usd` is only a safety net, set at twice the accepted
-estimate. When spend reaches it, the runner starts no new trial, lets running
-trials finish under their own ceilings, and stops; spend can pass it by at
-most those trials' dollar ceilings, and the run resumes where it stopped. It
-cuts no trial short, so it changes no outcome. The summary compares only the
-(task, rep) keys every variant finished, and says how many are missing.
+- **One model, one client.** The default model at its default effort, under
+  Claude Code. No model sweeps, and no second profile to confirm against.
+- **Small trials.** Each task names its files and the shape of its answer, so a
+  capable agent needs a few calls. The client loads only the tools tasks need
+  (§5.1), the server runs without `run_code`, and the listing stays compact
+  except in the variant that tests it.
+- **Only tasks that bear on the decision.** Before its run, each decision lists
+  the tasks that exercise what its variant changes: for recipe disclosure, the
+  tasks that call `analyze_results`; for reference detail, those that need a
+  lookup. Tasks are chosen by what they exercise, never by results, which
+  would bias the comparison.
+- **Size first.** Most decisions here are about tokens, and total input tokens
+  per trial vary far less than pass rate, so they settle with fewer trials.
+  Pass rate is the guardrail that must stay within noise.
+- **Reps only while a decision is open.** A comparison starts with one rep per
+  (task, variant). A second and a third run only if the interval of the
+  decision's measure still straddles its threshold. Two looks at most, with
+  the rule written down before the run, which raises the false-positive rate
+  only slightly.
+- **No separate A/A run.** The baseline runs as two identically configured
+  arms: their difference is the noise floor, and together they are the
+  baseline.
+- **A small positive control**: one rep on the tasks the renamed enum breaks.
+- **The pilot sets the numbers**: five tasks, one rep, before anything larger
+  is planned.
+
+For scale: a decision that bears on 20 tasks costs 40 trials at one rep, and
+at most 120 if both later looks are needed. Running every task three times in
+every arm, as the first draft did, would take 180 trials for 30 tasks.
+
+**Cost.** No estimate before the pilot. Its measured usage gives tokens per
+trial (the spread, not just the mean), what a decision costs in trials and
+usage, and wall-clock time, with the arithmetic shown; each larger run waits
+for the maintainer's yes. The run's `--max-usd` is only a safety net, on
+Claude Code's own cost estimate, set at twice the accepted one. When it is
+reached the runner starts no new trial, lets running trials finish under their
+ceilings, and stops; the run resumes where it stopped. It cuts no trial short,
+so it changes no outcome, and the summary compares only the (task, rep) keys
+every variant finished.
 
 ## 14. Platforms
 
@@ -415,45 +433,48 @@ rather than relying on `PATH` or spicelib's search of `C:/Spice64`.
 
 ## 15. Plan
 
-0. A command-line smoke test (one `claude-code` call on a trivial task,
-   approved first): the server is allowed, its environment is the launcher's,
-   the operator's settings and `CLAUDE.md` are absent, the stream shows
-   what the model received, and the server's tools are loaded rather than
-   deferred behind tool search (a deferred tool reaches the model as a name
-   until it is searched for, which the `api` profile does not reproduce).
-1. The harness, in three steps, none with paid calls:
-   a. the `api` loop and MCP proxy, the `answer` grader, `analyze` tasks (no
-      simulator), oracle and null scripts, result rows (built: four seed
-      tasks, `tests/test_eval_harness.py`);
-   b. the fake ngspice, the `deck` grader, `measure`, `design` and `debug`
-      tasks;
-   c. the `sheet` grader (its scorer exists) and `schematic` tasks.
-2. The task set reviewed and signed off.
-3. A five-task pilot on one variant, which does two jobs: its grades are
-   reviewed, and its measured usage gives the cost estimate. Then, with
-   consent, the A/A run and the baseline under `api`, then under
-   `claude-code`.
-4. First decisions: `listing` compact vs full; then recipe disclosure (with
-   its positive control) and reference detail as their branches land.
+Nothing in this plan calls a model until the maintainer schedules it.
 
-Not in the first version: an HTML report, a held-out split, both renderings on
-every run.
+1. The harness, with no model calls:
+   a. built: the offline driver and MCP proxy, the `answer` grader, four
+      `analyze` seed tasks, oracle and null scripts, result rows
+      (`tests/test_eval_harness.py`);
+   b. the `claude-code` profile and the stand-in API that runs it offline,
+      starting with whether the CLI runs against a stand-in at all; then the
+      Anthropic SDK client and dependency go;
+   c. the fake ngspice, the `deck` grader, and `measure`, `design` and
+      `debug` tasks;
+   d. the `sheet` grader (its scorer exists) and `schematic` tasks.
+2. The task set, from past sessions or seed tasks, reviewed and signed off,
+   each task tagged with what it exercises.
+3. With the maintainer's token: a one-call smoke test (the server is allowed,
+   its environment is the launcher's, the operator's settings and `CLAUDE.md`
+   are absent, its tools are loaded rather than deferred behind tool search),
+   then a pilot of five tasks at one rep whose grades are reviewed and whose
+   usage sets the numbers.
+4. The baseline, as two identical arms (§13).
+5. Decisions, each on its own tasks with reps added only while open: `listing`
+   compact vs full; recipe disclosure, with its positive control; reference
+   detail.
+
+Not in the first version: an HTML report, a held-out split.
 
 ## 16. Decisions
 
-Taken when the design was approved:
+Taken when the design was approved, and since:
 
 1. Budget: none that can shape a trial. Per-trial ceilings sit far above
    normal use and only stop runaways (§7); the run's spend cap only pauses
    the run (§13).
-2. Credentials: one API key, used by the `api` profile and, in a scratch
-   home, by the `claude-code` profile.
-3. Models: the default model at its default effort; others only after the
-   baseline.
+2. Credentials: the maintainer's Claude subscription through Claude Code
+   (`claude setup-token`), used only where the eval runs. No API key.
+3. Models: the default model at its default effort.
 4. Tasks: mined from past agent sessions with the server, or three to five
    maintainer-written cases, each with a line on what makes it hard.
 5. Machines: Linux or WSL with ngspice for the main suite; Windows for the
    `ltspice` suite.
 6. The task set and harness are committed; runs and traces stay out of git.
-7. `text_channel` defaults to `"json"` (§2), a product change made on its own
-   ahead of the eval.
+7. Token use: the fewest trials that settle a decision (§13).
+8. Done ahead of the eval: every reply's text block is its serialized
+   `structuredContent`, as the MCP specification recommends (§2).
+

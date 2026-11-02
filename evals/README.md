@@ -5,8 +5,8 @@ agent leaves in its workspace, and compares server variants on the same tasks,
 paired. The design, and the reasons behind it, are in
 [`docs/design/agent_eval.md`](../docs/design/agent_eval.md).
 
-Paid runs are opt-in, never part of CI. Everything below except a run with a
-real model works offline.
+Runs that call a model are opt-in and never part of CI. Everything below
+works offline.
 
 ## Commands
 
@@ -24,16 +24,16 @@ server process, and `--model null` answers every task with a constant; neither
 calls the API. The oracle passes every task and the null answer fails every
 task; `tests/test_eval_harness.py` checks both.
 
-A paid run names a model and a spend cap:
+Runs that call a model will use Claude Code on the maintainer's Claude
+subscription, with a token from `claude setup-token`; no API key. That
+profile is not built yet (design §5.1 and §15), and nothing here calls a
+model until such a run is planned. The command line's direct API path is
+going away with it.
 
-```bash
-uv run python -m ltspice_eval run --suite pilot --model claude-opus-5-5 --effort high \
-    --tasks analyze-step-ac-f3db --reps 1 --max-usd 5
-```
-
-`--max-usd` is a safety net, not a budget. When spend reaches it, no new trial
-starts and running trials finish, so it never changes an outcome. Run the same
-command again to resume: a (task, variant, rep) that has a row is skipped.
+A run's `--max-usd` is a safety net, not a budget. When spend reaches it, no
+new trial starts and running trials finish, so it never changes an outcome.
+Run the same command again to resume: a (task, variant, rep) that has a row is
+skipped.
 
 ## Ceilings
 
