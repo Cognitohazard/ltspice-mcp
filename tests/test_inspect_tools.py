@@ -119,6 +119,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "default_simulator",
         "exporter_available",
         "dialects",
+        "simulator_capabilities",
         "persist_jobs",
         "allowed_paths",
         "tool_profile",
@@ -131,6 +132,16 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "render",
     ):
         assert key in data, f"missing capabilities key {key!r}"
+    # The capability table's view for the detected families: each capability's
+    # kind and status here, and where the evidence is read.
+    table = data["simulator_capabilities"]
+    assert set(table["families"]) == {"ltspice", "ngspice"}
+    assert table["evidence"] == "spice://capabilities"
+    assert table["families"]["ngspice"]["native_sweeps"]["status"] == "gap"
+    assert table["families"]["ltspice"]["lint_rules"] == {
+        "kind": "baseline",
+        "status": "supported",
+    }
     # The library door, named where an agent already looks for what the
     # server can do: the import, a session on this working directory, and
     # the reference lookup that replaces guessing an op's arguments.

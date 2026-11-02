@@ -1,11 +1,12 @@
-"""Structured lifecycle events for experiment jobs.
+"""Structured events for experiment jobs and tool calls.
 
 Emits machine-parseable log records on job state transitions — submit,
-start, completion, failure, cancellation, interrupted recovery. Logs go
-through a dedicated ``ltspice_mcp.events`` logger so operators can route
-them to a different sink from the usual debug/info stream.
+start, completion, failure, cancellation, interrupted recovery — and one
+record per tool call (:func:`emit_tool_event`). Logs go through a dedicated
+``ltspice_mcp.events`` logger so operators can route them to a different
+sink from the usual debug/info stream.
 
-Each event carries:
+Each job event carries:
     ts            ISO-8601 timestamp (UTC)
     event         lifecycle state: submitted | started | analyzing
                   | completed | completed_with_failures | failed
@@ -17,6 +18,9 @@ Each event carries:
                   when the event precedes ``started_at``)
     extra keys    anything passed via kwargs (e.g. error, total_cases,
                   recovered_as)
+
+A tool call's event is described in ``docs/design/mcp_surface.md``
+("Server logging").
 
 Payloads are attached to log records via the ``extra`` dict so a
 structured-log shipper (python-json-logger etc.) can pick them up
@@ -30,13 +34,17 @@ format an operator reads.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import ExperimentJob
+
+if TYPE_CHECKING:
+    from mcp import types
 
 logger = logging.getLogger("ltspice_mcp.events")
 
@@ -125,5 +133,43 @@ def emit_job_event(
         event,
         job.job_id,
         suffix,
+        extra={"ltspice_event": payload},
+    )
+
+
+def emit_tool_event(
+    tool: str, duration_s: float, ended: types.CallToolResult | BaseException
+) -> None:
+    """Emit one event for a call of ``tool`` that ``ended`` with its result or
+    by raising, a cancellation included.
+
+    Measuring a reply serializes it again, so nothing is measured unless the
+    record would be emitted.
+    """
+    if not logger.isEnabledFor(logging.INFO):
+        return
+    code = size = None
+    if isinstance(ended, BaseException):
+        outcome = "cancelled" if isinstance(ended, asyncio.CancelledError) else "raised"
+    else:
+        outcome = "error" if ended.is_error else "ok"
+        if ended.is_error:
+            code = (ended.structured_content or {}).get("code")
+        size = len(ended.model_dump_json(by_alias=True, exclude_none=True))
+    payload: dict[str, Any] = {
+        "ts": datetime.now(UTC).isoformat(),
+        "event": "tool_call",
+        "tool": tool,
+        "duration_s": duration_s,
+        "outcome": outcome,
+        "code": code,
+        "reply_chars": size,
+    }
+    logger.info(
+        "tool.%s %s after %.2fs%s",
+        tool,
+        outcome,
+        duration_s,
+        "" if size is None else f", {size} chars",
         extra={"ltspice_event": payload},
     )

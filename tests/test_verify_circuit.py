@@ -32,6 +32,7 @@ from typing import Any, get_args
 import jsonschema
 import pytest
 from pydantic import ValidationError
+from spicelib.simulators.xyce_simulator import XyceSimulator
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
@@ -664,6 +665,7 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
         "symbol_overlap": 0,
         "wire_through_symbol": 0,
         "attribute_text_overlap": 0,
+        "sheet_text_overlap": 0,
     }
     assert quality["rules_run"] == {
         "shared_reference": 0,
@@ -718,6 +720,21 @@ async def test_layout_reports_attribute_text_under_a_ground_flag(
     assert found["evidence"]["detail"] == (
         "R1's text '{Rload*2}' at (168,168) is drawn across the ground at (140,168)"
     )
+
+
+async def test_layout_reports_comments_drawn_over_each_other(state_no_sim, work_dir):
+    """A comment drawn across another: before this rule, sheet text was
+    compared only with part text, so the overlap was checked by eye."""
+    sheet = (
+        "Version 4\nSHEET 1 880 680\n"
+        "TEXT 100 100 Left 2 ;the loop's crossover target\n"
+        "TEXT 160 100 Left 2 ;phase margin at least 45 degrees\n"
+    )
+    asc = _write(work_dir, "notes.asc", sheet)
+    layout = await _run(state_no_sim, path=str(asc), checks=["layout"])
+    (found,) = [f for f in layout["findings"] if f["rule_id"] == "sheet_text_overlap"]
+    assert found["evidence"]["detail"].startswith("The text ")
+    assert layout["rules_run"]["sheet_text_overlap"] == 1
 
 
 async def test_quality_reports_a_part_giving_a_parameter_twice(
@@ -2083,3 +2100,35 @@ class TestRenderAndCompareArguments:
         stays one declaration and the extra half is visibly that tool's own.
         """
         assert issubclass(_model_of(tool, field), shared)
+
+
+class FakeXyce(XyceSimulator):
+    """A Xyce install: a family the validator declares no rules for."""
+
+    spice_exe: typing.ClassVar[list[str]] = ["/fake/path/Xyce"]
+
+
+async def test_a_family_with_no_validator_rules_gets_the_neutral_checks_and_says_so(
+    config, work_dir
+):
+    """A session whose default simulator is Xyce had its decks checked against
+    LTspice's rules, so a .meas named 'q' was a finding Xyce does not have. The
+    check now runs the dialect-neutral rules for a family the capability table
+    declares no validator rules for, and the reply names the declared gap."""
+    deck = work_dir / "rc.cir"
+    deck.write_text(
+        "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n"
+        ".meas tran q FIND V(out) AT 0.5m\n.end\n"
+    )
+    with_ltspice = await _run(_with_ltspice(config), path=str(deck), checks=["syntax"])
+    assert [f["at"]["line"] for f in with_ltspice["findings"]] == [6]
+
+    state = SessionState.create(config, available={"xyce": FakeXyce})
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    assert data["checks_run"] == ["syntax"]
+    assert data["findings"] == []
+    assert any(
+        note.startswith("syntax: No validator rules for Xyce are declared")
+        for note in data["observations"]
+    ), data["observations"]

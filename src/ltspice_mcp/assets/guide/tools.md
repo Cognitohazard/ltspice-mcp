@@ -168,9 +168,10 @@ lint blocks a mismatch. A case that produced nothing is counted in
   For a staircase signal (DAC steps, line reflections), read each level with a
   `value` recipe on its plateau, or take the whole table with a `waveform`
   recipe at `"format": "csv"`; the inline waveform's bucket statistics blur
-  the levels. Runs with no number for a reduced or spec'd field (a failed
-  `.meas`) are counted in `no_value_count`, and a spec stays `indeterminate`
-  while there are any, unless you set `allow_incomplete`.
+  the levels. An inline waveform's value holds the axis once, as `x`, and one
+  `y` per signal in `series`. Runs with no number for a reduced or spec'd
+  field (a failed `.meas`) are counted in `no_value_count`, and a spec stays
+  `indeterminate` while there are any, unless you set `allow_incomplete`.
 - `inspect` reads decks, schematics, libraries and result facts:
   `{"queries": [{"kind": "components", "path": "ldo.cir", "detail": "full"}]}`.
 - `edit_schematic` edits one `.asc` in a transaction. Changing a sheet that
@@ -284,8 +285,8 @@ in order until it fits:
 
 | rung | what is removed |
 |-|-|
-| 0 trim | empty presentation blocks and `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included) |
-| 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
+| 0 trim | empty presentation blocks and `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included); then points of an inline `waveform` whose `max_points` you did not set, thinned to fewer buckets that each keep their minimum and maximum |
+| 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"`, and a `max_points` you set, so any inline waveform may be thinned |
 | 2 shrink | page size; cursors are created for the smaller page, so paging still reaches every row |
 
 Rung 2 lowers one page limit on every list in the reply at once, to the
@@ -303,5 +304,8 @@ observation that the reply is over the budget.
 
 If you omit `budget`, the server applies its own default
 (`[analysis] default_budget`, 4000 tokens) at rung 0 only, so a large response
-loses only its empty blocks and `source_hashes`. Set the config value to `0`
-to turn that off.
+loses only its empty blocks, `source_hashes` and the inline waveform points
+you did not ask for; set `max_points` to keep a count, or use `"format":
+"csv"` for every sample. A receipt thins its attached waveforms either way;
+`analyze_results` over the job reads more. A thinned recipe says so in its
+`warnings`. Set the config value to `0` to turn the default off.

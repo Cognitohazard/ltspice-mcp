@@ -1,8 +1,10 @@
 """MCP server instance with lifespan management and tool dispatch."""
 
 import asyncio
+import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator, Collection
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -22,8 +24,9 @@ from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
-from ltspice_mcp.lib.observability import configure_stderr_logging
-from ltspice_mcp.lib.simulator import SIMULATOR_DISPLAY, no_simulator_message
+from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.observability import configure_stderr_logging, emit_tool_event
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -117,6 +120,13 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "simulator's own libraries, or add .lib/.include directives to the netlist."
     ),
 }
+
+
+#: The recovery for an argument error: the tool's own argument table.
+_ARGUMENT_HINT = (
+    'Correct the call and send it again; inspect(queries=[{{"kind": "reference", '
+    '"query": "{tool}"}}]) lists every argument {tool} takes.'
+)
 
 
 def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
@@ -318,7 +328,7 @@ def build_instructions(
     else:
 
         def disp(name: str) -> str:
-            return SIMULATOR_DISPLAY.get(name, name)
+            return DISPLAY.get(name, name)
 
         if len(available) == 1:
             active = f"Active simulator: {disp(next(iter(available)))}."
@@ -353,16 +363,32 @@ def get_client_capabilities() -> types.ClientCapabilities | None:
     return _client_capabilities.get()
 
 
-def _tool_error(text: str, structured: dict[str, Any] | None = None) -> types.CallToolResult:
+def _tool_error(
+    text: str,
+    *,
+    code: str,
+    error: str | None = None,
+    hint: str | None = None,
+    suggestions: list[dict[str, Any]] | None = None,
+) -> types.CallToolResult:
     """A failed tool call: the message on the text channel, ``is_error`` set.
 
     A tool that fails reports it in its result rather than as a JSON-RPC error,
     which is what lets the calling model read the message and correct itself.
     The SDK turned an exception into this shape for us until MCP SDK 2, which
     raises handler exceptions to the wire instead, so we build it here.
-    ``structured`` mirrors what the caller needs to act on into
-    structuredContent, which a structured-aware client reads instead of text.
+
+    structuredContent is ``{error, code, suggestions?, hint?}``, which a
+    structured-aware client reads instead of the text, so it carries what the
+    caller acts on: the ``code`` a client branches on, the message (``error``,
+    the text unless given), ranked ``suggestions`` to parse rather than regex,
+    and the recovery ``hint``.
     """
+    structured: dict[str, Any] = {"error": text if error is None else error, "code": code}
+    if suggestions:
+        structured["suggestions"] = suggestions
+    if hint:
+        structured["hint"] = hint
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
         structured_content=structured,
@@ -378,6 +404,21 @@ async def list_tools(
 
 
 async def call_tool(
+    ctx: ServerRequestContext, params: types.CallToolRequestParams
+) -> types.CallToolResult:
+    """Answer a tool call, and log one event for it however it ends, a call
+    the client cancels included (``lib/observability.emit_tool_event``)."""
+    started = time.monotonic()
+    try:
+        result = await _answer_tool_call(ctx, params)
+    except BaseException as ended:
+        emit_tool_event(params.name, time.monotonic() - started, ended)
+        raise
+    emit_tool_event(params.name, time.monotonic() - started, result)
+    return result
+
+
+async def _answer_tool_call(
     ctx: ServerRequestContext, params: types.CallToolRequestParams
 ) -> types.CallToolResult:
     """Dispatch tool calls to registered handlers.
@@ -424,7 +465,31 @@ async def call_tool(
     # the index write runs as a background task so it never gates dispatch.
     await _notice_circuit(arguments, state)
 
-    return _with_guide_reminder(await _invoke(registered, name, arguments, state), state)
+    result = _with_guide_reminder(await _invoke(registered, name, arguments, state), state)
+    return _with_text_channel(result, state)
+
+
+def _with_text_channel(result: types.CallToolResult, state: SessionState) -> types.CallToolResult:
+    """Put the serialized ``structuredContent`` in the text block, when the
+    operator set ``[tools] text_channel = "json"``.
+
+    The MCP specification has a tool that returns ``structuredContent`` also
+    return it serialized as text, for a client that passes only the text to
+    the model; under the default summary line, that model reads one line. The
+    text blocks are replaced by the one, because ``structuredContent`` already
+    carries every hint they held. Other blocks, such as an image, stay, and a
+    reply with no ``structuredContent`` keeps its text. Runs after the guide
+    reminder, whose ``hint`` copy is in the data it serializes.
+    """
+    if state.config.text_channel != "json" or result.structured_content is None:
+        return result
+    text = json.dumps(
+        result.structured_content, ensure_ascii=False, separators=(",", ":"), default=str
+    )
+    others = [block for block in result.content if not isinstance(block, types.TextContent)]
+    return result.model_copy(
+        update={"content": [types.TextContent(type="text", text=text), *others]}
+    )
 
 
 def _with_guide_reminder(
@@ -466,7 +531,12 @@ async def _invoke(
         return await registered.handler(arguments or {}, state)
     except ValidationError as e:
         detail = validation_error_detail(name, e, field_owners=state.field_owners)
-        return _tool_error(f"Invalid arguments for {name}: {detail}")
+        message = f"Invalid arguments for {name}: {detail}"
+        # The text names no tool but the one called; the lookup route rides
+        # structuredContent, which a structured-aware client reads instead.
+        return _tool_error(
+            message, code="invalid_arguments", hint=_ARGUMENT_HINT.format(tool=name)
+        )
     except PathSecurityError as e:
         # The caller reads the refusal in the result; the operator reads it on
         # the server's stderr, which is the only channel left for it.
@@ -474,7 +544,9 @@ async def _invoke(
         # The guidance is the whole recovery, so it rides structuredContent too.
         return _tool_error(
             path_denied_text(e, state),
-            {"error": str(e), "code": e.code, "hint": state.sandbox_guidance()},
+            code=e.code,
+            error=str(e),
+            hint=state.sandbox_guidance(),
         )
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
@@ -482,18 +554,10 @@ async def _invoke(
         hint = _get_error_hint(type(e)) if e.show_hint else None
         message = _err.caller_message(e, state.tool_dispatch)
         text = f"{message}\n\n{hint}" if hint else message
-        # When the error carries structured suggestions (e.g. fuzzy model
-        # matches), return them as structuredContent with is_error=True so
-        # clients can parse them without regex'ing the text message.
-        if e.suggestions:
-            # Mirror the hint into structuredContent (self-sufficiency
-            # contract): structured-aware clients drop the text channel, so a
-            # text-only hint would be invisible exactly where it's needed.
-            structured: dict[str, Any] = {"error": message, "suggestions": e.suggestions}
-            if hint:
-                structured["hint"] = hint
-            return _tool_error(text, structured)
-        return _tool_error(text)
+        # The hint is mirrored into structuredContent (self-sufficiency
+        # contract): structured-aware clients drop the text channel, so a
+        # text-only hint would be invisible exactly where it's needed.
+        return _tool_error(text, code=e.code, error=message, hint=hint, suggestions=e.suggestions)
     except Exception as e:
         # Surface the actual exception type + message in the response. A bare
         # "check server logs" is a dead end for an MCP client: the traceback
@@ -501,7 +565,8 @@ async def _invoke(
         # reach. The concrete cause (e.g. "KeyError: 'PinName'") is what makes
         # an unexpected failure diagnosable. Full traceback still goes to logs.
         logger.exception(f"Unexpected error in tool {name}")
-        return _tool_error(f"Internal error in {name}: {type(e).__name__}: {e}")
+        message = f"Internal error in {name}: {type(e).__name__}: {e}"
+        return _tool_error(message, code="internal_error")
 
 
 async def list_resources(

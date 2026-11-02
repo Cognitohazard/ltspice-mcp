@@ -47,6 +47,7 @@ from tests.conftest import (
     stage_recorded_fixture,
     submit_experiment,
 )
+from tests.test_analyze_results import _analyze
 
 # Every rung-0 allowlist the package declares, paired with the schema node whose
 # keys it names. Listed rather than derived, because the pairing is the point:
@@ -843,6 +844,110 @@ class TestServerDefaultBudget:
         assert data is not None
         assert data["failures"], "a failing recipe is a fact, not presentation"
         assert data["coverage"]["runs_analyzed"] >= 1
+
+
+_FIVE_TRACES = ["V(in)", "V(out)", "I(C1)", "I(R1)", "I(V1)"]
+
+
+async def _waveform_reply(
+    state: SessionState, raw: Path, *, budget: int | None = None, **recipe: Any
+) -> dict[str, Any]:
+    """Five traces of one transient, inline, as one ``waveform`` recipe."""
+    extra = {} if budget is None else {"budget": budget}
+    recipes = [{"key": "w", "metric": "waveform", "signals": _FIVE_TRACES, **recipe}]
+    return await _analyze(state, raw, recipes, **extra)
+
+
+def _inline_values(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    return [row["value"] for row in entry["values"]]
+
+
+def _thinning_warnings(entry: dict[str, Any]) -> list[str]:
+    return [warning for warning in entry["warnings"] if "thinned" in warning]
+
+
+@pytest.mark.asyncio
+class TestWaveformSamplesFitTheBudget:
+    """An inline waveform's samples were the one part of a reply no rung could
+    reduce, so five traces of a 221-point transient came back several times
+    over the budget. The samples are already a bounded min/max decimation, so
+    the ladder thins them further to fit, keeping each bucket's extremes."""
+
+    async def test_the_server_default_thins_an_unsized_waveform_to_fit(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        state_no_sim.config.default_budget = 0
+        full = await _waveform_reply(state_no_sim, raw)
+        state_no_sim.config.default_budget = 2000
+        thinned = await _waveform_reply(state_no_sim, raw)
+
+        assert response_budget.estimate_tokens(full) > 2000, "the premise: over the default"
+        assert response_budget.estimate_tokens(thinned) <= 2000
+        (whole,) = _inline_values(full["results"]["w"])
+        (thin,) = _inline_values(thinned["results"]["w"])
+        assert thin["points_total"] == whole["points_total"]
+        assert thin["points_returned"] == len(thin["x"]) < whole["points_returned"]
+        for before, after in zip(whole["series"], thin["series"], strict=True):
+            assert after["signal"] == before["signal"]
+            assert len(after["y"]) == len(thin["x"])
+            assert min(after["y"]) == min(before["y"])
+            assert max(after["y"]) == max(before["y"])
+        (warning,) = _thinning_warnings(thinned["results"]["w"])
+        assert "max_points" in warning
+        # A caller who set no budget is not sent to raise one.
+        assert "'budget'" not in warning
+        assert _observation(thinned, "budget_not_met") is None
+
+    async def test_an_explicit_max_points_stands_under_the_server_default(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A point count the caller chose is an opt-in, which the server's
+        default budget never revokes, even when it is the default count."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        state_no_sim.config.default_budget = 2000
+        data = await _waveform_reply(state_no_sim, raw, max_points=2000)
+
+        (value,) = _inline_values(data["results"]["w"])
+        assert value["points_returned"] == value["points_total"]
+        assert _thinning_warnings(data["results"]["w"]) == []
+
+    async def test_a_caller_budget_thins_an_explicit_max_points_too(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The answer rung revokes the caller's payload-growing opt-ins, and a
+        point count is one."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        state_no_sim.config.default_budget = 0
+        data = await _waveform_reply(state_no_sim, raw, budget=2000, max_points=2000)
+
+        assert response_budget.estimate_tokens(data) <= 2000
+        (value,) = _inline_values(data["results"]["w"])
+        assert value["points_returned"] < value["points_total"]
+        (warning,) = _thinning_warnings(data["results"]["w"])
+        assert "'budget'" in warning
+        assert _observation(data, "budget_truncated") is not None
+
+    async def test_receipts_thin_their_attached_waveform_to_fit(
+        self, state_with_sim: SessionState, grid_deck: Path
+    ):
+        """A receipt's rows preview what analyze_results over the job returns,
+        so its attached waveform is thinned under the server's default too,
+        whatever max_points the request set, and every case keeps its row."""
+        budget = state_with_sim.config.default_budget
+        recipe = {"key": "w", "metric": "waveform", "signals": ["V(in)", "V(out)"]}
+        receipt = await _grid_receipt(state_with_sim, grid_deck, 4, None, recipes=[recipe])
+        status = await _jobs(state_with_sim, action="status", job_id=receipt["job_id"])
+
+        for data in (receipt, status):
+            assert response_budget.estimate_tokens(data) <= budget
+            entry = data["analysis"]["result"]["results"]["w"]
+            values = _inline_values(entry)
+            assert len(values) == 4
+            for value in values:
+                assert value["points_returned"] == len(value["x"]) < value["points_total"]
+            (warning,) = _thinning_warnings(entry)
+            assert "analyze_results" in warning
 
 
 @pytest.mark.asyncio

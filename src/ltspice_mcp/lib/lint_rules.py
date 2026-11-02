@@ -16,12 +16,8 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
-from ltspice_mcp.lib.simulator import (
-    SIMULATOR_DISPLAY,
-    SIMULATORS,
-    current_ngbehavior,
-    simulator_family,
-)
+from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family_for
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, MeasCard, read_instance
@@ -54,11 +50,18 @@ RuleCheck = Callable[["_LintContext", "LintRule"], list[LintFinding]]
 
 @dataclass(frozen=True)
 class LintRule:
-    """Metadata and implementation for one deterministic lint rule."""
+    """Metadata and implementation for one deterministic lint rule.
+
+    ``family`` is the simulator family whose reading of a deck the rule
+    models, None for a rule that holds for every family. ``lint_deck`` runs a
+    rule only for its family, and the capability table (``capabilities``)
+    says a family has lint rules only when a rule declares it.
+    """
 
     rule_id: str
     disposition: Disposition
     check: RuleCheck
+    family: str | None = None
 
 
 class _LintFile(NamedTuple):
@@ -95,10 +98,6 @@ class _LintContext:
     # with the evidence; None when nothing shows one.
     cp1252_reader: str | None = None
 
-    @property
-    def ngspice(self) -> bool:
-        return self.family == "ngspice"
-
     @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
         """``validate_netlist_arity`` over the deck, run once for every arity rule.
@@ -106,7 +105,7 @@ class _LintContext:
         Its one simulator-specific check (a C=/L= primary value) is LTspice's, so
         only an LTspice deck is held to it.
         """
-        return validate_netlist_arity(self.cards, simulator=SIMULATOR_DISPLAY[self.family])
+        return validate_netlist_arity(self.cards, simulator=DISPLAY[self.family])
 
     @functools.cached_property
     def files(self) -> tuple[_LintFile, ...]:
@@ -198,8 +197,6 @@ def _meas_ngspice_batch(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if not context.ngspice:
-        return []
     return [
         _finding(
             context,
@@ -266,8 +263,6 @@ def _meas_trig_degrees(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if context.family != "ltspice":
-        return []
     return [
         _finding(
             context,
@@ -288,8 +283,6 @@ def _step_ngspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if not context.ngspice:
-        return []
     findings = []
     for card in context.cards:
         if card.kind != "directive" or _directive_head(card) != ".step":
@@ -329,8 +322,6 @@ def _lib_section_ngspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    if not context.ngspice:
-        return []
     mode = (
         context.ngbehavior if context.ngbehavior is not None else current_ngbehavior() or ""
     ).casefold()
@@ -367,8 +358,6 @@ def _analysis_count_ltspice(
     """LTspice runs one analysis a deck, with ``.op`` allowed beside it; two
     stop the run ("More than one analysis specified." on LTspice 26, a fatal
     error on XVII, recorded on both)."""
-    if context.family != "ltspice":
-        return []
     analyses = [
         (file.path, card)
         for file in context.files
@@ -404,8 +393,6 @@ def _meas_function_ltspice(
     """A ``.meas`` calling a function only LTspice's waveform viewer has: LTspice
     26 stops at the directive and takes no measurement, XVII fails that one
     (recorded on both)."""
-    if context.family != "ltspice":
-        return []
     findings = []
     for card in context.cards:
         refused = meas_functions_refused(card, "LTspice") if card.kind == "meas" else []
@@ -434,8 +421,6 @@ def _meas_name_ltspice(
     """A ``.meas`` named for a constant of the expression engine (``e``, ``k``,
     ``pi``, ``q``): LTspice 26 refuses the deck, XVII skips that measurement
     (recorded on both)."""
-    if context.family != "ltspice":
-        return []
     return [
         _finding(
             context,
@@ -456,8 +441,6 @@ def _lib_section_ltspice(
     """``.lib file section`` selects a section in ngspice. LTspice has no sections:
     it looks for a file named ``file section`` and stops (recorded on both
     builds)."""
-    if context.family != "ltspice":
-        return []
     findings = []
     for card, section in _sectioned_libs(context):
         findings.append(
@@ -835,7 +818,7 @@ def _byte_85_ltspice(context: _LintContext, rule: LintRule) -> list[LintFinding]
     an ellipsis typed in a Western editor, and half of many double-byte
     characters. Silent when the session's LTspice is known to be XVII.
     """
-    if context.family != "ltspice" or context.cp1252_reader is not None:
+    if context.cp1252_reader is not None:
         return []
     findings: list[LintFinding] = []
     for path, text, _cards, codec in context.files:
@@ -882,8 +865,6 @@ def _node_control_byte_ltspice(context: _LintContext, rule: LintRule) -> list[Li
     ("Expected node name here."); XVII runs it and saves the name with the
     control character, which is not the name the server reads.
     """
-    if context.family != "ltspice":
-        return []
     findings: list[LintFinding] = []
     for path, text, cards, codec in context.files:
         # One scan of the file before any card is read: most 8-bit files hold
@@ -935,27 +916,27 @@ RULES: tuple[LintRule, ...] = (
     # A warning, not blocking: ngspice runs the deck and skips only the
     # top-level .meas, and reading the run relays ngspice's own notice of the
     # skip. Refusing the deck would cost the caller the rest of the run.
-    LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch),
+    LintRule("meas-ngspice-batch", "warning", _meas_ngspice_batch, family="ngspice"),
     # Blocking: on both builds' defaults a .meas that calls a trig function
     # runs cleanly and reads its angle in degrees, where the same expression
     # in a B source is in radians, and a user setting outside the deck can
     # change that unit. The number that comes back is wrong without any sign
     # in the log, which a warning under the default lint mode does not stop.
-    LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees),
-    LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
+    LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees, family="ltspice"),
+    LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice, family="ngspice"),
     # Blocking: LTspice refuses each of these decks before it runs, or, on XVII
     # for a .meas function or name, fails the measurement the caller asked for.
-    LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice),
-    LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice),
-    LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice),
-    LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice),
+    LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice, family="ltspice"),
+    LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice, family="ltspice"),
+    LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice, family="ltspice"),
+    LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice, family="ltspice"),
     # A warning, not blocking: LTspice 24 and later run another circuit than
     # the one the server reads, XVII the same one, and which build will run
     # the deck is not always known here.
-    LintRule("byte-85-ltspice", "warning", _byte_85_ltspice),
+    LintRule("byte-85-ltspice", "warning", _byte_85_ltspice, family="ltspice"),
     # A warning: LTspice 26 refuses the card and says so in its log, while
     # XVII runs it under a name the server does not spell the same way.
-    LintRule("node-control-byte-ltspice", "warning", _node_control_byte_ltspice),
+    LintRule("node-control-byte-ltspice", "warning", _node_control_byte_ltspice, family="ltspice"),
     LintRule("model-missing", "blocking", _model_missing),
     # One rule per validate_netlist_arity check, each at the disposition its
     # declared severity names, so suppressing one never silences another.
@@ -966,7 +947,7 @@ RULES: tuple[LintRule, ...] = (
     # A warning, not blocking: the run still answers a real question at the base
     # value. What matters is that the caller learns the sweep did not happen,
     # since ngspice itself says nothing.
-    LintRule("step-ngspice", "warning", _step_ngspice),
+    LintRule("step-ngspice", "warning", _step_ngspice, family="ngspice"),
     LintRule("include-relative", "warning", _include_relative),
     LintRule("suffix-mega-milli", "warning", _suffix_mega_milli),
     # Blocking, not a warning: a .param TEMP does not set temperature, so the
@@ -1022,15 +1003,12 @@ def lint_deck(
     session's LTspice reads decks as cp1252 (``services.cp1252_ltspice``).
     """
     suppressed = set(suppress)
-    # A raw dialect names its family for every simulator but LTspice, so a
-    # non-LTspice dialect decides; otherwise the simulator class (or recorded
-    # class name) does, and a deck nothing names is linted as LTspice's.
-    named_by_dialect = dialect if dialect in SIMULATORS and dialect != "ltspice" else None
     context = _LintContext(
         text=deck_text,
         path=path,
         cards=drop_title_card(lex(deck_text).cards),
-        family=named_by_dialect or simulator_family(simulator) or "ltspice",
+        # A deck nothing names is linted as the default family's.
+        family=family_for(dialect, simulator) or DEFAULT_FAMILY,
         includes=tuple(includes),
         ngbehavior=ngbehavior,
         codec=codec,
@@ -1039,6 +1017,8 @@ def lint_deck(
     findings: list[LintFinding] = []
     for rule in RULES:
         if rule.rule_id in suppressed:
+            continue
+        if rule.family is not None and rule.family != context.family:
             continue
         findings.extend(rule.check(context, rule))
     return findings

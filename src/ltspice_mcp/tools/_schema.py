@@ -20,7 +20,7 @@ structural descent — so the rule that keeps an argument named ``title`` a
 field is stated once instead of once per pass.
 
 Every other pass here is structural: it changes how a schema is spelled, never
-what it says. On the default listing the prose is not filtered — every
+what it says. On the full listing the prose is not filtered — every
 description on a model is a description a client is shown — so the way the
 surface stays small is that each description is written short.
 ``tests/test_consolidated_contracts.py`` pins both halves: the advertised

@@ -56,6 +56,7 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
+from spicelib.editor.ltspice_utils import TEXT_REGEX, asc_text_align_set
 from spicelib.utils.detect_encoding import EncodingDetectError
 from spicelib.utils.file_search import search_file_in_containers
 
@@ -1031,7 +1032,8 @@ class _AscEditor(AscEditor):
     these, so a block nested further down is read the same way. A block symbol
     that gives a Prefix is the element it names, as a cell is, and LTspice
     reads no sheet for it even beside it (``export-hierarchical-block``;
-    ``docs/spicelib_bugs.md``, Bug 33).
+    ``docs/spicelib_bugs.md``, Bug 33). A comment or directive drawn on its
+    side stays on its side, which spicelib's reader drops (Bug 34).
     """
 
     def __init__(
@@ -1046,6 +1048,21 @@ class _AscEditor(AscEditor):
         # a sheet may place the same block many times.
         self._searched = {} if searched is None else searched
         super().__init__(asc_file, encoding)
+
+    def reset_netlist(self, create_blank: bool = False) -> None:
+        super().reset_netlist(create_blank)
+        # spicelib keeps a text for each TEXT line its pattern matches, in
+        # order, but its pattern leaves the V of VLeft, VRight and the rest out
+        # of the justification it reads, so every one is read upright. Each is
+        # given its whole justification again.
+        with open(self.asc_file_path, encoding=self.encoding) as asc_file:
+            justifications = [
+                line.split()[3]
+                for line in asc_file
+                if line.startswith("TEXT") and TEXT_REGEX.match(line)
+            ]
+        for text, justification in zip(self.directives, justifications, strict=True):
+            asc_text_align_set(text, justification)
 
     def _get_subcircuit(self, symbol: Any) -> Any:
         if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:

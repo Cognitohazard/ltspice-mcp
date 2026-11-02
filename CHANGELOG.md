@@ -8,8 +8,62 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Added
+
+- At `INFO`, the server logs one structured record per tool call on the
+  `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
+  result, an error and its code, a cancellation by the client, or a protocol
+  error), and the size of the reply as sent. Slow calls, calls a client gave
+  up on, and replies too large for a client show in the server's log.
+  Arguments are not logged.
+- A declared table of what each simulator family can do: every capability
+  the server offers, marked baseline or refinement, is `supported` with its
+  evidence (a recorded LTspice behaviour, a file another simulator wrote, or
+  a test that runs it), a `gap` with the reason, or `unverified`. The first
+  declared gaps: QSPICE and Xyce have no lint or validator rules, no
+  hierarchy reader (so no nested instance targeting) and no controlled
+  startup; ngspice has no `.step` and evaluates no top-level `.meas` in a
+  batch run. `inspect(kind="capabilities")` reports the detected families'
+  statuses under `simulator_capabilities`, and the `spice://capabilities`
+  resource (and `spice://capabilities/{family}`) serves the whole table with
+  its evidence. The refusals of a QSPICE run off Windows and of a schematic
+  run on QSPICE or Xyce now read the table.
+
 ### Fixed
 
+- `floating_pin` did not report the pins of a part joined only by a wire
+  running straight between them. LTspice drops that wire and leaves both
+  pins unconnected (recorded: `connectivity/same_instance_bare`), so
+  `verify_circuit` and `edit_schematic` now report each pin as floating,
+  beside the `dropped_wire` finding for the wire. The rule now reads the
+  sheet's nets as LTspice netlists them.
+- `verify_circuit`'s syntax check validated a deck against LTspice's rules
+  whenever the session's default simulator was anything but ngspice, so a
+  QSPICE or Xyce session was told its deck broke rules LTspice has and those
+  simulators do not. It now checks the deck with the dialect-neutral rules
+  only for a family with no declared validator rules, and says so in an
+  observation; with no simulator detected it says the deck was checked as
+  LTspice reads it, instead of choosing LTspice silently.
+- An inline `waveform` could come back at several times the response budget,
+  and a caller's `budget` changed nothing but add `budget_not_met`: its
+  samples were the one part of a reply no rung reduced. Four traces of a
+  1,042-point transient came to about 42,000 estimated tokens. The samples
+  are now thinned to fit, each bucket keeping its minimum and maximum, and
+  the recipe's warnings say so; `points_total` still counts every sample.
+  Under the server's default budget only a waveform whose call sets no
+  `max_points` is thinned, so a count the caller set is kept; a caller's
+  `budget` thins any waveform from its answer rung on. A run receipt thins
+  its attached waveforms whatever their `max_points`, because its rows
+  preview what `analyze_results` over the job returns.
+- An argument error came back as text alone, with no code; a typed failure
+  carried its code only when it also had suggestions, and an unclassified
+  failure carried none. Each now has `structuredContent` with its `code`:
+  `invalid_arguments` for an argument error, with a hint naming the
+  `inspect(kind="reference")` lookup for the tool; the failure's own code for
+  a typed failure; `internal_error` otherwise. A branch name that no branch
+  has (an unknown `action`, or one sent as an object) is reported at the
+  field, as "must be one of 'status', 'wait', …", instead of pydantic's
+  "Input tag … does not match any of the expected tags".
 - Where two collinear wires met at a point that another wire passes through,
   the sheet checks merged the two into one wire and did not join the other
   wire there. LTspice joins it, because each wire end on the point lies on
@@ -158,9 +212,27 @@ tool-surface changes.
   the old name and the new one into the file, kept the part under the old
   name, and reported that the part had no name before. It now renames the
   part, and refuses a name that another part has in any case.
+- Every edit of a sheet turned its comments and directives drawn on their
+  side (`VLeft`, `VRight` and the like) upright, whatever the edit changed:
+  spicelib's reader drops the turn. `edit_schematic` now saves each as the
+  sheet drew it, as LTspice does when it saves a sheet (recorded:
+  `save/shuffled`).
+- The refusal for a missing `raster` extra named ways to install the server
+  with the extra, none of which reaches a server run from a source checkout.
+  It now also names `uv sync --extra raster` for that case.
 
 ### Added
 
+- The sheet rule `sheet_text_overlap` reports a comment, directive or net
+  label drawn across another, by the extent estimated from LTspice's font
+  that `attribute_text_overlap` uses. `verify_circuit` reports it under the
+  `layout` check, and `edit_schematic` with its other findings. Texts at one
+  anchor are left to `stacked_directive`.
+- `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
+  reply's serialized `structuredContent` in its text block, as the MCP
+  specification recommends for a client that passes only the text to the
+  model; under the default, `"summary"`, such a model reads one summary line.
+  `inspect(kind="capabilities")` reports the mode as `text_channel`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the
@@ -219,6 +291,19 @@ tool-surface changes.
 
 ### Changed
 
+- `group_by`'s description in `analyze_results` and in `run_experiments`'
+  `analyze` block names a parameter varied by a variation or within a run,
+  where it named a `.step` axis, a deck command not every simulator has.
+- **Breaking:** an inline `waveform` value sends its axis once, as `x` beside
+  `series`, instead of once in every series: every trace of one plot is read
+  at the same points. A 32-bit trace's samples are written in their shortest
+  32-bit form (`0.99995446`, not `0.9999544620513916`), which reads back as
+  the same 32-bit value.
+- **Breaking:** a default result row no longer carries `snapshot_id`, as it
+  already left out `deck_sha256`. The reply's `source_hashes` row for the
+  row's `source` label has it, and `include.fields: ["snapshot_id"]` puts it
+  back on the row. A `waveform` or `plot` value no longer repeats the run
+  identity its row already carries.
 - **Breaking:** every argument that names a file is `path`, as
   `run_experiments`, `verify_circuit` and `inspect` already spelled it.
   `plot_waveform` takes `path` for `raw_file`. An `analyze_results` source

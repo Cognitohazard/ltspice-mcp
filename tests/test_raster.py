@@ -150,6 +150,8 @@ def test_missing_extra_is_reported_as_the_extra(raster_extra_missing: None) -> N
     assert support.missing == "extra"
     assert support.reason is not None and "'raster' extra" in support.reason
     assert support.remedy is not None and "ltspice-mcp[raster]" in support.remedy
+    # A server run from a source checkout installs the extra into the checkout.
+    assert "uv sync --extra raster" in support.remedy
     assert raster_available() is False
 
 

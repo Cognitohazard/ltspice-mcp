@@ -22,9 +22,10 @@ import psutil
 import pytest
 from spicelib import AscEditor
 
-from ltspice_mcp.api import _detach
+from ltspice_mcp.api import RawResult, _detach
 from ltspice_mcp.api import _session as _api_session
 from ltspice_mcp.api._methods import ApiMethodsMixin
+from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.lib import hidden_desktop, now, parser_process, parser_service, raster
@@ -281,6 +282,19 @@ class FakeSim:
     spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
 
 
+def fake_host(monkeypatch: pytest.MonkeyPatch, platform_key: str) -> None:
+    """Run as if the server ran on ``platform_key``: windows, wsl, linux or darwin."""
+    from ltspice_mcp.lib import simulator as simulator_mod
+
+    monkeypatch.setattr(simulator_mod, "platform_key", lambda: platform_key)
+
+
+@pytest.fixture
+def windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This host is native Windows, the one place QSPICE runs."""
+    fake_host(monkeypatch, "windows")
+
+
 def installed_simulator(*library_dirs: Path, base: type = FakeSim) -> type:
     """A detected simulator whose own model library is ``library_dirs``.
 
@@ -402,6 +416,16 @@ def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
     if log.exists():
         shutil.copy(log, work_dir / f"{name}.log")
     return raw
+
+
+async def staged_raw_result(
+    state: SessionState, work_dir: Path, name: str
+) -> tuple[Path, RawResult]:
+    """A staged recorded fixture and its raw as ``api.load_raw`` hands it back,
+    awaited on the test's own loop."""
+    path = stage_recorded_fixture(work_dir, name)
+    raw = await load_raw_result(state=state, raw_path=path, job_id=None, run_index=0, case_id=None)
+    return path, raw
 
 
 def ngspice_binary_raw(

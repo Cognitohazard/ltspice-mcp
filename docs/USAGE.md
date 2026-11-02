@@ -146,6 +146,7 @@ start_ltspice = true     # start LTspice when asked to show something in it and 
 
 [tools]
 listing = "compact"      # "full" sends every argument description, about 45% more to load
+text_channel = "summary" # "json" repeats each reply's data as text, for clients that ignore structuredContent
 run_code = true          # false removes run_code
 
 [state]
@@ -157,6 +158,13 @@ the tool list, which makes the list a session loads before its first call
 about 45% smaller. The tools accept the same calls either way. The assistant
 looks up an argument with `inspect(kind="reference", query="...")`, and a
 rejected call lists the fields it accepts. `full` sends every description.
+
+**`text_channel`.** A tool reply carries its data as `structuredContent` and
+a one-line summary as text. Claude Code and other clients that read
+`structuredContent` give the assistant the data. A client that passes only
+the text gives it the summary alone, so the assistant sees no results; set
+`text_channel = "json"` for such a client, which puts the data in the text
+too.
 
 **`run_code`** runs a Python snippet in a worker process where `api` is a
 [Python API](#python-api) `Api` open on the server's working directory and
@@ -232,7 +240,9 @@ server with it:
 uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
 ```
 
-With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. The Claude
+With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. For a server
+run from a source checkout, run `uv sync --extra raster` in the checkout; a
+plain `uv sync` already installs it with the development tools. The Claude
 Code plugin and the Claude Desktop extension already include it. The extra's
 rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no other library.
 Restart the server afterwards. The image `plot_waveform` attaches with
@@ -316,9 +326,10 @@ The `lp` measurement comes back as (abridged):
 If the result is off target, the assistant edits the netlist and runs it
 again. A long simulation returns a job ID instead of waiting, and
 `jobs(action="status" | "wait" | "cancel")` checks on the job, waits for it
-or cancels it. Jobs, signals, measurements and the configuration are also
-readable as MCP resources (`spice://results/...`, `spice://netlists/...`,
-`spice://config`).
+or cancels it. Jobs, signals, measurements, the configuration and what each
+simulator family can do are also readable as MCP resources
+(`spice://results/...`, `spice://netlists/...`, `spice://config`,
+`spice://capabilities`).
 
 Sweeps and Monte Carlo are set in the `variations` argument of
 `run_experiments` and have no tools of their own.

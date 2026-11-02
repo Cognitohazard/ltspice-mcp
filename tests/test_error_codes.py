@@ -471,6 +471,7 @@ FROZEN_ERROR_CODES = (
     "inner_model_unresolved",
     "instance_not_found",
     "internal_error",
+    "invalid_arguments",
     "invalid_assignment_value",
     "invalid_at",
     "invalid_circuit_id",

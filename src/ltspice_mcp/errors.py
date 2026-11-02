@@ -48,6 +48,8 @@ def compact_validation_error(
         loc = tuple(error["loc"])
         error_type = error["type"]
         message = error["msg"]
+        if error_type == "union_tag_invalid":
+            loc, message = _tag_mismatch(loc, error.get("ctx") or {}, message)
         key = (loc, error_type, message)
         if key in seen:
             continue
@@ -69,6 +71,29 @@ def compact_validation_error(
     if remaining > 0:
         rendered.append(f"… and {remaining} more")
     return ("; ".join(rendered) or "Validation failed") + "".join(referrals)
+
+
+#: How much of a rejected branch name the rewritten message quotes.
+_TAG_QUOTE_CHARS = 60
+
+
+def _tag_mismatch(
+    loc: tuple[object, ...], ctx: Mapping[str, Any], message: str
+) -> tuple[tuple[object, ...], str]:
+    """A branch name no branch has, said at the field that names the branch.
+
+    pydantic says it as "Input tag '…' found using 'action' does not match any
+    of the expected tags: …", located at the union rather than at the field,
+    and quoting whatever the field held, an object included.
+    """
+    discriminator = str(ctx.get("discriminator", "")).strip("'")
+    expected = ctx.get("expected_tags")
+    if not discriminator or not expected:
+        return loc, message
+    given = str(ctx.get("tag", ""))
+    if len(given) > _TAG_QUOTE_CHARS:
+        given = given[:_TAG_QUOTE_CHARS] + "…"
+    return (*loc, discriminator), f"must be one of {expected}, not {given}"
 
 
 class LTSpiceMCPError(Exception):

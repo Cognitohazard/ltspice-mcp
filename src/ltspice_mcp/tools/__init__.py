@@ -51,8 +51,10 @@ def get_tools(
     ``listing`` selects how the same capabilities are put on the wire
     (``[tools] listing`` in the config):
 
-    * ``full`` — the registered definitions, unchanged. The default, and the
-      only mode whose output is pinned byte for byte.
+    * ``full`` — the registered definitions, unchanged. This function's
+      default, and the only mode whose output is pinned byte for byte. A
+      session is served its ``[tools] listing``, which defaults to
+      ``compact``.
     * ``compact`` — the same tools and the same schemas with every
       per-argument description removed from the published copy. Dispatch is
       untouched, so each tool still accepts exactly what it did.

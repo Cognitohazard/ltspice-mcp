@@ -18,7 +18,6 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.api import RawResult
-from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.recipes import RECIPE_MODELS, _discriminant_of
 from ltspice_mcp.server import call_tool
@@ -28,6 +27,7 @@ from tests.conftest import (
     call_tool_params,
     fake_request_context,
     stage_recorded_fixture,
+    staged_raw_result,
     tool_text,
 )
 from tests.test_analyze_results import EXECUTION_CASES, _analyze
@@ -36,14 +36,6 @@ from tests.test_plot_waveform import _data_blob, _plot, _read
 
 def _raw(state: SessionState, work_dir: Path, fixture: str) -> RawResult:
     return SyncApi(state).load_raw(stage_recorded_fixture(work_dir, fixture))
-
-
-async def _staged(state: SessionState, work_dir: Path, fixture: str) -> tuple[Path, RawResult]:
-    """A staged fixture and the raw as ``api.load_raw`` hands it back, awaited
-    on the test's own loop."""
-    path = stage_recorded_fixture(work_dir, fixture)
-    raw = await load_raw_result(state=state, raw_path=path, job_id=None, run_index=0, case_id=None)
-    return path, raw
 
 
 def _drop(raw: RawResult, step: int = 0) -> np.ndarray:
@@ -134,7 +126,7 @@ class TestRawResultTrace:
 @pytest.mark.asyncio
 class TestRecipes:
     async def test_value_on_a_transient(self, state_no_sim: SessionState, work_dir: Path):
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
         axis = raw.axis()
         index = _nearest(axis, 900e-6)
 
@@ -152,7 +144,7 @@ class TestRecipes:
     async def test_value_reads_each_step_on_its_own_axis(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_step_tran")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_step_tran")
         data = await _analyze(
             state_no_sim,
             path,
@@ -172,7 +164,7 @@ class TestRecipes:
     async def test_value_on_an_ac_run_is_the_complex_difference(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_ac_rc")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_ac_rc")
         freq = float(raw.axis()[40])
         expected = complex(_drop(raw)[40])
 
@@ -186,7 +178,7 @@ class TestRecipes:
         assert value["phase_deg"] == pytest.approx(np.angle(expected, deg=True), abs=1e-9)
 
     async def test_signal_stats(self, state_no_sim: SessionState, work_dir: Path):
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
         data = await _analyze(
             state_no_sim, path, [{"key": "s", "metric": "signal_stats", "signal": "V(in,out)"}]
         )
@@ -200,7 +192,7 @@ class TestRecipes:
         # Across an RC low-pass, V(out)/V(in,out) = 1/(sRC): an integrator whose
         # phase is -90 degrees everywhere and whose unity-gain frequency is the
         # low-pass corner. A wrong subtraction cannot produce both.
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_ac_rc")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_ac_rc")
         index = 70  # a decade above the corner, where |H| is far from 0 dB
         freq = float(raw.axis()[index])
         h = complex(raw.trace("V(out)")[index] / _drop(raw)[index])
@@ -227,7 +219,7 @@ class TestRecipes:
         assert point["magnitude_db"] == pytest.approx(20 * np.log10(abs(h)), abs=1e-6)
 
     async def test_inline_waveform(self, state_no_sim: SessionState, work_dir: Path):
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
         data = await _analyze(
             state_no_sim, path, [{"key": "w", "metric": "waveform", "signals": ["V(in,out)"]}]
         )
@@ -236,7 +228,7 @@ class TestRecipes:
         np.testing.assert_allclose(series["y"], _drop(raw))
 
     async def test_csv_waveform(self, state_no_sim: SessionState, work_dir: Path):
-        path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
+        path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
         data = await _analyze(
             state_no_sim,
             path,
@@ -296,7 +288,7 @@ class TestRecipes:
 
 @pytest.mark.asyncio
 async def test_plot_waveform_draws_the_difference(state_no_sim: SessionState, work_dir: Path):
-    path, raw = await _staged(state_no_sim, work_dir, "ltspice_tran_rc")
+    path, raw = await staged_raw_result(state_no_sim, work_dir, "ltspice_tran_rc")
     data = await _plot(state_no_sim, path=str(path), signals=["V(in,out)"])
     assert data["signals"] == ["V(in,out)"]
     blob = _data_blob(await asyncio.to_thread(_read, Path(data["path"])))
