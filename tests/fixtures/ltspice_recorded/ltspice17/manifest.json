@@ -4279,6 +4279,146 @@
         ".raw"
       ]
     },
+    "draw/ground_flags": {
+      "behaviour": "sheet-drawing",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/ground_flags.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/ground_flags.asc": "fb33a311580b2fef613a88584cbedb24771ca2fc8116d44de9a2d66fd91695db"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/ground_flags.drawn": {
+          "bytes": 654,
+          "sha256": "3c9a479b79a9ce203746aab5687a125f14528fde75119d24c64fa6f5c5f3ea34"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/ground_flags_font_40": {
+      "behaviour": "sheet-drawing",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/ground_flags_font_40.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/ground_flags.asc": "fb33a311580b2fef613a88584cbedb24771ca2fc8116d44de9a2d66fd91695db"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/ground_flags_font_40.drawn": {
+          "bytes": 650,
+          "sha256": "f95aeedb97448359b202e305a8945803ab7bb28fc4f27bd3e090e6b06069bba6"
+        }
+      },
+      "reported_build": null,
+      "settings": {
+        "SchFontSize": "40"
+      },
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/part_text": {
+      "behaviour": "sheet-drawing",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/part_text.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/part_text.asc": "0c82121d2c6fb0da6ec9ee337ee700920c344a6a0da0e6e84fb70ec27e52482e",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/part_text.drawn": {
+          "bytes": 5412,
+          "sha256": "87ded025681d9895d38e2e833d040a2614bd0343efc573bc8f73b446a800ed26"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/part_text_font_40": {
+      "behaviour": "sheet-drawing",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/part_text_font_40.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/part_text.asc": "0c82121d2c6fb0da6ec9ee337ee700920c344a6a0da0e6e84fb70ec27e52482e",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/part_text_font_40.drawn": {
+          "bytes": 5412,
+          "sha256": "33ea3a00e6240444e8a91acc4b457edbfa16f9c3a51a10b8421aec2bad7e78f5"
+        }
+      },
+      "reported_build": null,
+      "settings": {
+        "SchFontSize": "40"
+      },
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/value2": {
+      "behaviour": "sheet-drawing",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/value2.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/value2.asc": "c09d0fcdf187e826a23ddfdfebc30c93c1f5ab6fec75f3c84fc1eabdf6bd5a34",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/value2.drawn": {
+          "bytes": 2023,
+          "sha256": "26aae919edcb6fee0dde7f19047e597eab4a8e956a3ee9d4bd87a55a66d5c2ef"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "export/attributes": {
       "behaviour": "export-attributes",
       "command": [
@@ -9379,6 +9519,7 @@
     "defaults": {
       "Accept_3k4_Notation": "true",
       "AutoDeleteRawFiles": "0",
+      "BoldSchFont": "true",
       "DefaultDeviceLibraries": "true",
       "DefaultDeviceModels": "true",
       "DefaultDoAntiTrapRinging": "true",
@@ -9396,6 +9537,8 @@
       "SaveDeviceCurrents": "true",
       "SaveSubcircuitDeviceCurrents": "false",
       "SaveSubcircuitNodeVoltages": "false",
+      "SchFontSize": "28",
+      "SchematicFont": "3",
       "Solver": "0",
       "SymbolSearchPathDisabled": "false",
       "TSKbypass": "false",

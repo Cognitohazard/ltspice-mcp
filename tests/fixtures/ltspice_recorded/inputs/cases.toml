@@ -272,6 +272,13 @@ extra = ["connectivity/res.asy"]
 summary = "The bytes a build writes when it saves a sheet from its window: its encoding, its line endings, and the order and spelling of its records, for a sheet as the server writes one, the same sheet with its records in another order, the same sheet with CRLF line endings, and a sheet stored in each encoding."
 model = ["lib/asc_document.py", "lib/encoding.py", "lib/schematic_scene.py"]
 
+[behaviour.sheet-drawing]
+summary = "What a build draws for a sheet: the triangle of a ground flag in each orientation and alone, where a part's name and value land at each of the eight placements and how big they are, that a Value2 attribute is drawn only with a visible WINDOW 123 line, and that a value's u is drawn as a micro sign. The text and the triangle both follow the SchFontSize setting."
+model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_renderer.py"]
+# Each [[case]] of kind "draw" opens its sheet in the window and has the window
+# write an image of it; see drive_draw. Each sheet starts with the two longest
+# wires it holds, which give the scale from the image's units to sheet units.
+
 # ---------------------------------------------------------------- decks
 
 [behaviour.deck-encoding]
@@ -1171,3 +1178,42 @@ id = "deck/solver_setting_over_norm"
 behaviour = "options-solver"
 source = "deck/solver_norm.cir"
 ini = { Solver = "1" }
+
+# A sheet opened in the build's window and written out as an image of itself:
+# what is kept is what the image draws, in the image's own units.
+[[case]]
+id = "draw/ground_flags"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/ground_flags.asc"
+
+[[case]]
+id = "draw/ground_flags_font_40"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/ground_flags.asc"
+ini = { SchFontSize = "40" }
+note = "The sheet at a larger text size, which the triangle follows."
+
+[[case]]
+id = "draw/part_text"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/part_text.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "draw/part_text_font_40"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/part_text.asc"
+extra = ["export/res.asy"]
+ini = { SchFontSize = "40" }
+note = "The sheet at a larger text size."
+
+[[case]]
+id = "draw/value2"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/value2.asc"
+extra = ["export/res.asy", "benchmark/voltage.asy"]

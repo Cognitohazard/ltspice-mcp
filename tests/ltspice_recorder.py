@@ -17,7 +17,9 @@ sheet is run in the window (``<exe> -Run <sheet>``), the waveform window is
 given its panes with its own menu commands, and its plot settings are saved
 (``drive_plot``). A save case is the other: a sheet is opened in the window
 (``<exe> <sheet>``) and saved with the schematic window's own Save
-(``drive_save``), because a build writes a sheet no other way. The one
+(``drive_save``), because a build writes a sheet no other way. A draw case
+opens one the same way and has the window write an image of it
+(``drive_draw``), because what a build draws is in no other file. The one
 addition is a trailing ``-ini <file>``: a recording must not depend on the
 settings of the person recording, so each case runs against a copy of the
 build's settings file with the keys that change a result removed
@@ -60,6 +62,7 @@ import locale
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -98,10 +101,10 @@ NEUTRAL_HOME = "C:\\Users\\user"
 #: day, so the builds' different padding of a one-digit day does not arise.
 NEUTRAL_DATE = "Thu Jan 15 00:00:00 2026"
 
-#: Settings that change what a run, an export or the waveform window produces.
-#: They are removed from the copy of the settings file a case runs against, so
-#: the build falls back to its own default for each; a case sets one back with
-#: ``ini = {...}``.
+#: Settings that change what a run, an export, the waveform window or the sheet
+#: window produces. They are removed from the copy of the settings file a case
+#: runs against, so the build falls back to its own default for each; a case
+#: sets one back with ``ini = {...}``.
 BEHAVIOUR_KEYS = frozenset(
     key.casefold()
     for key in (
@@ -148,6 +151,12 @@ BEHAVIOUR_KEYS = frozenset(
         # GridStyle line in every pane, and the phase axis of an AC pane
         # another last number (plot/ac_grid_on). Both builds default it to off.
         "grid",
+        # The sheet window's text, and with it the ground glyph, which is drawn
+        # to the same scale (draw/ground_flags_font_40). Both builds default
+        # the size to 28.
+        "SchFontSize",
+        "BoldSchFont",
+        "SchematicFont",
     )
 )
 
@@ -159,6 +168,7 @@ DEFAULT_KEEP: Mapping[str, tuple[str, ...]] = {
     "fastaccess": ("raw",),
     "plot": ("plt",),
     "save": ("asc",),
+    "draw": ("drawn",),
 }
 
 _RAW_SUFFIXES = (".raw", ".op.raw")
@@ -329,7 +339,9 @@ class Case:
     input differently.
 
     A ``save`` case opens its sheet in the build's window and saves it; what
-    is kept is the sheet as the build wrote it.
+    is kept is the sheet as the build wrote it. A ``draw`` case opens its sheet
+    there and has the window write an image of it; what is kept is what the
+    image draws (``render_drawing``).
 
     A ``plot`` case may name a plot settings file (``plot``), copied beside
     the deck under the deck's name so the waveform window reads it, and the
@@ -752,6 +764,109 @@ def assert_private(
 
 
 # --------------------------------------------------------------------------
+# What a build drew (draw cases)
+# --------------------------------------------------------------------------
+
+#: The records of an enhanced metafile read here, by their record type.
+_EMR_SETTEXTALIGN = 22
+_EMR_MOVETOEX = 27
+_EMR_SELECTOBJECT = 37
+_EMR_ELLIPSE = 42
+_EMR_ARC = 45
+_EMR_LINETO = 54
+_EMR_EXTCREATEFONTINDIRECTW = 82
+_EMR_EXTTEXTOUTW = 84
+#: Those that add nothing to a drawing: the header and the end of the file,
+#: colours, pens and brushes, and the pixel a build sets at each stroke's end.
+_EMR_NOT_DRAWN = frozenset({1, 14, 15, 18, 24, 25, 38, 39, 40})
+
+
+def read_emf(data: bytes) -> dict[str, list[Any]]:
+    """What an image a build wrote of a sheet draws, in the image's own units.
+
+    ``strokes`` are ``[x1, y1, x2, y2]`` in the order drawn, and ``ellipses``
+    and ``arcs`` their bounding boxes and, for an arc, its two ends. Each of
+    ``texts`` gives its point, its box, each character's advance and its font;
+    the box is the text's cell, so it says nothing of how far the glyphs reach
+    inside it. ``other`` counts the records of any other type by that type, so
+    that one a build starts to draw with is seen rather than lost.
+    """
+    strokes: list[list[int]] = []
+    ellipses: list[list[int]] = []
+    arcs: list[list[int]] = []
+    texts: list[dict[str, Any]] = []
+    other: dict[int, int] = {}
+    fonts: dict[int, tuple[int, int, int, str]] = {}
+    font = (0, 0, 0, "")
+    align = 0
+    pen = (0, 0)
+    at = 0
+    while at + 8 <= len(data):
+        kind, size = struct.unpack_from("<II", data, at)
+        if size < 8 or at + size > len(data):
+            break
+        record = data[at : at + size]
+        at += size
+        if kind == _EMR_MOVETOEX:
+            pen = struct.unpack_from("<2i", record, 8)
+        elif kind == _EMR_LINETO:
+            to = struct.unpack_from("<2i", record, 8)
+            strokes.append([*pen, *to])
+            pen = to
+        elif kind == _EMR_ELLIPSE:
+            ellipses.append(list(struct.unpack_from("<4i", record, 8)))
+        elif kind == _EMR_ARC:
+            arcs.append(list(struct.unpack_from("<8i", record, 8)))
+        elif kind == _EMR_SETTEXTALIGN:
+            align = struct.unpack_from("<I", record, 8)[0]
+        elif kind == _EMR_SELECTOBJECT:
+            font = fonts.get(struct.unpack_from("<I", record, 8)[0], font)
+        elif kind == _EMR_EXTCREATEFONTINDIRECTW:
+            handle, height, _width, escapement = struct.unpack_from("<I3i", record, 8)
+            weight = struct.unpack_from("<i", record, 28)[0]
+            face = record[40:104].decode("utf-16-le").split("\0")[0]
+            fonts[handle] = (height, escapement, weight, face)
+        elif kind == _EMR_EXTTEXTOUTW:
+            x, y, count, string_at = struct.unpack_from("<2iII", record, 36)
+            advances_at = struct.unpack_from("<I", record, 72)[0]
+            height, escapement, weight, face = font
+            texts.append(
+                {
+                    "text": record[string_at : string_at + 2 * count].decode("utf-16-le"),
+                    "at": [x, y],
+                    "bounds": list(struct.unpack_from("<4i", record, 8)),
+                    "advances": list(struct.unpack_from(f"<{count}i", record, advances_at)),
+                    "align": align,
+                    "font": face,
+                    "height": height,
+                    "escapement": escapement,
+                    "weight": weight,
+                }
+            )
+        elif kind not in _EMR_NOT_DRAWN:
+            other[kind] = other.get(kind, 0) + 1
+    return {
+        "strokes": strokes,
+        "ellipses": ellipses,
+        "arcs": arcs,
+        "texts": texts,
+        "other": [[kind, other[kind]] for kind in sorted(other)],
+    }
+
+
+def render_drawing(drawing: Mapping[str, list[Any]]) -> bytes:
+    """``drawing`` as a recording keeps it: JSON in ASCII, one item a line, so
+    that a diff shows the stroke or the text that moved."""
+
+    def section(key: str) -> str:
+        items = ",\n".join(json.dumps(item, sort_keys=True) for item in drawing[key])
+        return f'"{key}": [\n{items}\n]'
+
+    body = ",\n".join(section(key) for key in sorted(drawing))
+    return f"{{\n{body}\n}}\n".encode("ascii")
+
+
+# --------------------------------------------------------------------------
 # Launching off the user's desktop
 # --------------------------------------------------------------------------
 
@@ -803,6 +918,17 @@ _SAVE_PLOT = "Save Plot Settings"
 #: An item only the schematic window's menu has, and the item that saves the sheet.
 _LABEL_NET = "Label Net"
 _SAVE = "Save"
+#: The items of the schematic window's menu a draw case sends, and the dialog
+#: the second opens.
+_ZOOM_TO_FIT = "Zoom to Fit"
+_WRITE_IMAGE = "Write image to .emf file"
+_SAVE_AS = "Save As"
+#: The size a draw case gives LTspice's frame, which fits on most displays. How
+#: far a sheet is zoomed sets the numbers in its image, and a frame left as it
+#: opened would put the recording display in them.
+_DRAWING_FRAME = (1280, 800)
+_SWP_NOMOVE = 0x0002
+_SWP_NOZORDER = 0x0004
 
 
 def _menu_commands(exe: Path, marker: str, window: str) -> dict[str, int]:
@@ -847,6 +973,18 @@ def _user32() -> Any:
         "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
         "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
         "GetClientRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
+        "SetWindowPos": (
+            [
+                wintypes.HWND,
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.UINT,
+            ],
+            wintypes.BOOL,
+        ),
         "PostMessageW": (
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
             wintypes.BOOL,
@@ -1127,6 +1265,73 @@ def drive_save(
     return _Ended(stopped=True, exit_code=None)
 
 
+def drive_draw(
+    process: StartedProcess | subprocess.Popen[bytes],
+    desktop: HiddenDesktop,
+    build: Build,
+    case: Case,
+    work: Path,
+    timeout: float,
+) -> _Ended:
+    """Have the schematic window write an image of a draw case's sheet.
+
+    The build is started on the sheet alone, as for a save case. Its frame is
+    given one size and the sheet fitted to it (``_DRAWING_FRAME`` says why).
+    The window's own Write image to .emf file is then sent, its Save As dialog
+    is filled in, and the case ends when the file has been written and holds
+    still. What the image draws is kept as text beside it (``render_drawing``):
+    the image itself holds the display it was written on.
+
+    A message box the build stops on ends the case with what it says, and
+    nothing is kept. A build that writes no image in ``timeout`` fails the
+    recording.
+    """
+    commands = schematic_commands(build.exe)
+    windows = _Windows(desktop, process.pid, case.stem)
+    waits = _Waits(process, BoxWatch(desktop, process.pid, ignore=_SAVE_AS), build, case, timeout)
+    image = work / f"{case.stem}.emf"
+    doing = "open the sheet in its schematic window"
+    try:
+        frame = waits.until(windows.frame, doing)
+        child, client = waits.until(lambda: windows.sheet(frame), doing)
+        _send(client, _WM_MDIACTIVATE, child, 0)
+        waits.settle(doing)
+        doing = "fit the sheet to its window"
+        _user32().SetWindowPos(frame, None, 0, 0, *_DRAWING_FRAME, _SWP_NOMOVE | _SWP_NOZORDER)
+        waits.settle(doing)
+        post_command(child, commands[_ZOOM_TO_FIT])
+        waits.settle(doing)
+        doing = "ask where to write the sheet's image"
+        post_command(child, commands[_WRITE_IMAGE])
+        dialog = waits.until(lambda: windows.dialog(_SAVE_AS), doing)
+        waits.settle(doing)
+        _set_text(_file_name_field(dialog), str(image))
+        waits.saved(image, dialog, _IDOK, "write the sheet's image")
+    except _CaseStop as stop:
+        # As for a save case: Windows does not remove a file that is open.
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        image.unlink(missing_ok=True)
+        return stop.ended
+    drawing = render_drawing(read_emf(image.read_bytes()))
+    (work / f"{case.stem}.drawn").write_bytes(drawing)
+    return _Ended(stopped=True, exit_code=None)
+
+
+def _file_name_field(dialog: int) -> int:
+    """The edit box a Save As dialog takes a file's name in."""
+    field = next((c for c in child_windows(dialog) if window_class(c) == "Edit"), None)
+    if field is None:
+        raise RecorderError(f"the {_SAVE_AS} dialog has no file name field")
+    return field
+
+
+def _set_text(field: int, value: str) -> None:
+    text = ctypes.create_unicode_buffer(value)
+    _send(field, _WM_SETTEXT, 0, ctypes.addressof(text))
+
+
 def _dialog(top_level: Sequence[int], title: str) -> int | None:
     """The dialog titled ``title`` among a process's top-level windows."""
     return next(
@@ -1220,9 +1425,7 @@ def _type_expression(dialog: int, expression: str) -> None:
     below = [c for c in children if window_class(c) == "Edit" and _top(c) >= _top(label)]
     if not below:
         raise RecorderError(f"the {_ADD_TRACES} dialog has no expression field")
-    field = min(below, key=_top)
-    text = ctypes.create_unicode_buffer(expression)
-    _send(field, _WM_SETTEXT, 0, ctypes.addressof(text))
+    _set_text(min(below, key=_top), expression)
 
 
 def recording_host() -> str | None:
@@ -1274,12 +1477,12 @@ def refuse_unread_settings(deck: Path, case_id: str) -> None:
 
 def _command(build: Build, case: Case, deck: Path, ini: Path) -> list[str]:
     # A plot case runs in the window, which a batch run (-b) never opens, and
-    # a save case only opens its sheet there.
+    # a save or draw case only opens its sheet there.
     if case.kind == "netlist":
         mode = ["-netlist"]
     elif case.kind == "plot":
         mode = ["-Run"]
-    elif case.kind == "save":
+    elif case.kind in ("save", "draw"):
         mode = []
     else:
         mode = ["-Run", "-b"]
@@ -1396,6 +1599,8 @@ def _launch(
                 return drive_plot(process, desktop, build, case, work, timeout)
             if case.kind == "save":
                 return drive_save(process, desktop, build, case, work, timeout)
+            if case.kind == "draw":
+                return drive_draw(process, desktop, build, case, work, timeout)
             return _wait(process, case, deck.with_suffix(".raw"), timeout, desktop)
         finally:
             if process.poll() is None:
