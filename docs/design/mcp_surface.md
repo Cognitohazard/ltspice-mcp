@@ -1218,8 +1218,14 @@ a window's copy and does not check. For one that replaces the sheet:
   last changed, and committing would leave two sheets, each missing the
   other's changes. The call then fails with `open_window_differs` at stage
   `window_check`, naming a few of the differing entries, and writes nothing.
-  The user resolves it by saving the window to keep its version, or by
-  closing it without saving to keep the file's. A dry run reports the
+  If the user wants to keep the window's version, a call with
+  `save_open_window: true` and no ops has LTspice save the sheet from that
+  window, as Ctrl+S does, and the reply gives the file's new `sha256`. The
+  caller reads the sheet again before editing it, because it now holds the
+  user's changes. A box LTspice shows instead of saving fails the call with
+  `window_not_saved`, quoting the box, and the server closes the box with
+  Cancel, which leaves the window's copy as it was. To keep the file's version, the user
+  closes the sheet in LTspice without saving. A dry run reports the
   difference in `observations` and is not refused. The comparison is by
   content rather than text, because LTspice returns its own serialization of
   a sheet. That serialization differs from the file it read in the first
@@ -1229,7 +1235,10 @@ a window's copy and does not check. For one that replaces the sheet:
 - **After the commit**, the committed sheet replaces the window's copy;
   LTspice records this as one step in that window's undo history.
   `open_in_ltspice` has one entry per window, `{pid, version, shown,
-  reason?}`. A window that could not be updated (`shown: false`) does not fail
+  reopened?, reason?}`. A window that does not take the committed sheet is
+  closed and opened again from the file (`reopened: true`), if it still holds
+  the sheet as it was before the commit; its undo history goes with it. A
+  window that could not be updated either way (`shown: false`) does not fail
   the call, because the file is committed, but the entry and the `hint` warn
   that the window still shows the old sheet and that saving from it would
   overwrite the edit.

@@ -31,6 +31,7 @@ from ltspice_mcp.lib.ltspice_window import (
     OpenSheet,
     OpenWindows,
     WindowsUnavailable,
+    WindowUpdate,
     content_difference,
     sheet_content,
 )
@@ -192,6 +193,24 @@ class TestRecording:
             ],
             "that plot does, for a sheet that knows of none and for one that knows of its "
             "results": [False, False],
+            # What save_open_window relies on: LTspice's own Save, sent from
+            # outside, writes the window's copy and leaves nothing to ask.
+            "Save writes the window's copy to the file, the first line as LTspice 26 writes it": [
+                True,
+                "Version 4.1",
+            ],
+            "Save asks nothing on the way": True,
+            "saved, it closes without a question": [True, True],
+            # A file it cannot write: a box with only OK, which Cancel closes.
+            "Save of a write-protected sheet leaves the file as it was, takes no input "
+            "and shows a box with these words": [
+                True,
+                False,
+                [
+                    f'Trouble writing schematic "{NEUTRAL_DIR}\\locked.asc"\n\nThe file is write protected.'
+                ],
+            ],
+            "Cancel closes that box, and the window still holds its copy": [True, True],
             "no LTspice was started in its place": True,
         }
 
@@ -330,7 +349,7 @@ def test_the_stand_in_answers_as_ltspice_was_recorded_answering(build: str, tmp_
     }
     files = {f"{NEUTRAL_DIR}\\{name}.asc": recorded_sheet(build, name) for name in opened_later}
     # The sheet the recorder puts results beside and then opens, and the one it closes.
-    for copy in ("placed", "closing"):
+    for copy in ("placed", "closing", "saving"):
         files[f"{NEUTRAL_DIR}\\{copy}.asc"] = recorded_sheet(build, "older_version")
     steps = [
         step for step in load_conversation(FIXTURES / build) if step.get("call") in SERVER_CALLS
@@ -601,7 +620,7 @@ class TestOpenWindows:
         world = tmp_path / "world.json"
         write_world(world, [{"pid": 8, "version": "26.1.1", "designs": {str(sheet): "B\n"}}])
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
-        assert windows.show_each(windows.holding(sheet), "C\n") == [None]
+        assert windows.show_each(windows.holding(sheet), "C\n", b"B\n") == [WindowUpdate()]
         assert read_world(world)["windows"][0]["designs"][str(sheet)] == "C\n"
 
     def test_a_window_that_closed_in_between_is_an_answer_not_an_error(self, tmp_path: Path):
@@ -611,7 +630,9 @@ class TestOpenWindows:
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
         held = windows.holding(sheet)
         write_world(world, [])
-        assert windows.show_each(held, "C\n") == ["no live LTspice instance with that pid"]
+        assert windows.show_each(held, "C\n", b"B\n") == [
+            WindowUpdate("no live LTspice instance with that pid")
+        ]
 
     def test_the_setting_turns_it_off(self):
         windows = OpenWindows.detect(["C:\\anywhere\\LTspice.exe"], enabled=False)

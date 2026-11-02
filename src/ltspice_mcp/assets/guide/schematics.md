@@ -61,8 +61,10 @@ closed and reopened too (`sheet_reopened: true`), which clears its undo
 history in LTspice. This is done only when the sheet in LTspice matches the
 file. If it has changes that are not in the file, the sheet stays open and the
 plot opens separately, with `tied: false` and `differs_from_file: true` in the
-block. Tell the user that clicking nets will work after they save or close the
-sheet in LTspice and you show the run again. A netlist's run has no sheet to
+block. Ask the user whether to keep those changes. If they agree,
+`edit_schematic(path=..., expected_sha256=..., ops=[], save_open_window=true)`
+has LTspice save the sheet, and a new run of it then opens tied to it. A
+netlist's run has no sheet to
 tie to and opens as a separate plot; it is also closed and reopened if it was
 already open.
 
@@ -94,12 +96,19 @@ LTspice (Windows, LTspice 26.1 or later), the server shows each commit to it
 in that window as one step of its undo history. A commit's reply lists the
 window under `open_in_ltspice`, and `shown: true` means the user already sees
 the edit.
-`shown: false` means the window still shows the old sheet and a save from it
-would overwrite yours, so tell the user to close it without saving and open it
-again. An edit that fails with `open_window_differs` wrote nothing, because the
-window's copy differs from the file. Only the user can resolve that, so ask
-them to save the sheet (Ctrl+S) or close it, then read its `sha256` again and
-resubmit.
+If the window does not take the edit, the server closes the sheet there and
+opens it again from the file, which clears its undo history in LTspice; the
+entry then says `reopened: true`. `shown: false` means that failed too, so the
+window still shows the old sheet and a save from it would overwrite yours.
+Tell the user to close it without saving and open it again. An edit that fails with `open_window_differs` wrote nothing, because the
+window's copy differs from the file. Ask the user whether to keep the changes in
+their window. If they agree, call `edit_schematic` with
+`save_open_window=true`, `ops=[]` and the same `expected_sha256`. LTspice then
+saves the sheet as Ctrl+S would, and the reply gives the file's new `sha256`.
+Read the sheet again before you resubmit, because it now holds their changes.
+If they want the file's version instead, they close the sheet in LTspice
+without saving. Pass `save_open_window` only after the user agrees, because it
+writes their unsaved work into the file.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
   `Prefix` replaces its symbol's element letter on export, on both builds, so

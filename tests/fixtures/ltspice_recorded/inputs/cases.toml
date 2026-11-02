@@ -651,8 +651,13 @@ evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json,
 
 [behaviour.sheet-closed-from-outside]
 summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file."
-model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
+model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py", "tools/schematic_edit.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet with no results beside it', made by asking the frame of a window on a desktop of its own. LTspice XVII is not recorded: it has no bridge to find the window through."
+
+[behaviour.sheet-saved-from-outside]
+summary = "What the sheet menu's Save, sent to a window from outside, does to a sheet the bridge handed new text: it writes the window's copy to the file, an older sheet with the first line LTspice 26 writes, asks nothing, and the sheet then closes without a question; and that for a write-protected file it writes nothing and shows a box with only OK, which Cancel closes, leaving the window's copy as it was."
+model = ["lib/ltspice_window.py", "lib/ltspice_frame.py", "tools/schematic_edit.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet to save'; manifest.json, sheet_commands. LTspice XVII has no bridge to find the window through."
 
 [behaviour.plot-tied-to-sheet]
 summary = "That LTspice ties a plot to a sheet, so that clicking a net plots it, when the results are opened from the sheet (a run made in that window, or the sheet's Visible Traces command), and not when the bridge opens them, by the results file's path or by the sheet's; and that the command reads the results file as it is when the command is given."

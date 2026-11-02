@@ -19,6 +19,7 @@ import pytest
 from ltspice_mcp.lib import hidden_desktop, ltspice_frame, pe_menu
 from ltspice_mcp.lib.ltspice_bridge import BridgeSession
 from ltspice_mcp.lib.ltspice_frame import (
+    SAVE,
     VISIBLE_TRACES,
     FrameError,
     LtspiceFrame,
@@ -27,7 +28,13 @@ from ltspice_mcp.lib.ltspice_frame import (
 )
 from tests._ltspice_window import PID, FakeFrame, a_window, fake_command, read_world, write_world
 from tests.conftest import LIVENESS_S
-from tests.ltspice_bridge_recorder import FIXTURES, load_manifest, observed, recorded_builds
+from tests.ltspice_bridge_recorder import (
+    FIXTURES,
+    INPUTS,
+    load_manifest,
+    observed,
+    recorded_builds,
+)
 
 BUILDS = recorded_builds()
 windows_only = pytest.mark.skipif(
@@ -79,8 +86,8 @@ def test_a_build_whose_sheet_menu_lacks_the_label_has_no_such_command(
 @pytest.mark.parametrize("build", BUILDS)
 def test_the_recorded_build_gives_the_label_a_command(build: str):
     recorded = load_manifest(FIXTURES / build)["sheet_commands"]
-    assert set(recorded) == {VISIBLE_TRACES}
-    assert isinstance(recorded[VISIBLE_TRACES], int)
+    assert set(recorded) == {VISIBLE_TRACES, SAVE}
+    assert all(isinstance(command, int) for command in recorded.values())
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +150,10 @@ def test_a_pane_is_the_window_of_its_title_whose_class_begins_as_the_frames_does
 BUTTON, WORDS, BOX = "Button", "Static", hidden_desktop.DIALOG_CLASS
 
 
-def a_box(windows: Windows, box: int, parts: list[str]) -> None:
-    """A box with ``parts`` in it: buttons, and last the words it says."""
+def a_box(windows: Windows, box: int, parts: list[str], title: str = "LTspice") -> None:
+    """A box titled ``title`` with ``parts`` in it: buttons, and last the words it says."""
     windows.classes[box] = BOX
+    windows.texts[box] = title
     windows.children[box] = [box * 10 + place for place in range(len(parts))]
     for child, text in zip(windows.children[box], parts, strict=True):
         windows.texts[child] = text
@@ -174,6 +182,19 @@ def test_the_question_ltspice_was_recorded_asking_is_read_for_the_document_it_na
     frame.answer(question, discard=True)
     frame.answer(question, discard=False)
     assert windows.posted == [(9, 7), (9, 2)]
+
+
+@windows_only
+def test_the_words_of_a_box_are_read_and_a_cursor_dialog_is_not_a_box(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A waveform viewer keeps untitled dialogs of its own for its cursors."""
+    windows = Windows(monkeypatch)
+    windows.frame(7, {71: "amp.asc"})
+    a_box(windows, 8, ["Cursor 1"], title="")
+    a_box(windows, 9, ["OK", "The file is read-only."])
+    frame = LtspiceFrame(lambda _pid: [7, 8, 9])
+    assert frame.box_words(PID) == ["The file is read-only."]
 
 
 @windows_only
@@ -426,3 +447,66 @@ def test_the_stand_in_menu_says_what_ltspice_was_recorded_saying_of_a_sheets_res
         said.append(frame.command_enabled(PID, VISIBLE_TRACES))
 
     assert said == recorded
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_saves_a_sheet_as_ltspice_was_recorded_saving_one(build: str, tmp_path: Path):
+    facts = observed(build)
+    sheet = tmp_path / "saving.asc"
+    shutil.copyfile(INPUTS / "older_version.asc", sheet)
+    on_disk = sheet.read_bytes()
+    world = tmp_path / "world.json"
+    # The window holds the sheet as LTspice was recorded holding it once opened.
+    held = (FIXTURES / build / "sheets" / "older_version.asc").read_text(encoding="utf-8")
+    write_world(world, [a_window({str(sheet): held})])
+    frame = FakeFrame(world)
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        session.attach(PID)
+        changed = held.replace("SYMATTR Value 1k", "SYMATTR Value 4.7k")
+        session.replace_design_text(str(sheet), changed)
+        frame.send(PID, SAVE)
+        saved = sheet.read_bytes()
+        written = saved != on_disk and saved.decode("cp1252") == changed
+        first_line = saved.decode("cp1252").splitlines()[0]
+        assert [written, first_line] == facts[
+            "Save writes the window's copy to the file, the first line as LTspice 26 writes it"
+        ]
+        assert (frame.takes_input(PID) and not frame.box_words(PID)) is facts[
+            "Save asks nothing on the way"
+        ]
+        pane = frame.pane(PID, sheet.name)
+        assert pane is not None
+        frame.close(pane)
+        assert [not frame.is_open(pane), frame.save_question(PID) is None] == facts[
+            "saved, it closes without a question"
+        ]
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_answers_a_save_it_cannot_make_as_ltspice_was_recorded(
+    build: str, tmp_path: Path
+):
+    facts = observed(build)
+    sheet = tmp_path / "locked.asc"
+    sheet.write_text("Version 4.1\n", encoding="utf-8")
+    on_disk = sheet.read_bytes()
+    file_same, takes_input, words = facts[
+        "Save of a write-protected sheet leaves the file as it was, takes no input and "
+        "shows a box with these words"
+    ]
+    world = tmp_path / "world.json"
+    write_world(world, [a_window({str(sheet): "Version 4.1\nchanged\n"})], save_box=words[0])
+    frame = FakeFrame(world)
+
+    frame.send(PID, SAVE)
+    assert [sheet.read_bytes() == on_disk, frame.takes_input(PID), frame.box_words(PID)] == [
+        file_same,
+        takes_input,
+        words,
+    ]
+    assert frame.dismiss_boxes(PID) == words
+    assert [not frame.box_words(PID), frame.takes_input(PID)] == [
+        facts["Cancel closes that box, and the window still holds its copy"][0],
+        True,
+    ]
