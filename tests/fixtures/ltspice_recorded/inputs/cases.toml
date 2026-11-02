@@ -198,7 +198,7 @@ inputs = [
 extra = ["export/res.asy"]
 
 [behaviour.export-instance-names]
-summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own."
+summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own, and what a run's raw calls such a resistor's current."
 model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py"]
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
@@ -1222,3 +1222,13 @@ behaviour = "sheet-drawing"
 kind = "draw"
 source = "draw/value2.asc"
 extra = ["export/res.asy", "benchmark/voltage.asy"]
+
+# A part named without its element letter, on a sheet that runs. The two
+# resistors differ, so each current in the raw says which part it is.
+[[case]]
+id = "export/load_name_op"
+behaviour = "export-instance-names"
+kind = "run"
+source = "export/load_name_op.asc"
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+keep = ["net", "raw"]
