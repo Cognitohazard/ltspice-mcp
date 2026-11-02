@@ -1282,7 +1282,7 @@ split. `wire_pins` accepts `{x, y}` for either endpoint. The point must touch a
 wire, a pin or a label; on a wire's interior the new segment ends there and the wire is
 left whole, so `remove_wire` of that segment restores the sheet. The op's
 `results` entry lists the T under `junctions` as
-`{x, y, via: "endpoint", wire}`, where `wire` is the segment joined. The new
+`{x, y, via: "tee", wire}`, where `wire` is the segment joined. The new
 segment must leave the wire at a right angle, and a point where wires of two
 nets cross is refused, because a wire ending there would join both.
 

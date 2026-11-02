@@ -308,6 +308,10 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
+  wire, a T, is listed under `junctions` with `via: "tee"`. It was
+  `via: "endpoint"`, which read as the end of the existing wire, the opposite
+  of what happened.
 - **Breaking:** `verify_circuit`'s `export_to` defaults to `"managed"`: the
   export check exports a copy in the server's own folder and writes nothing
   next to the schematic. It used to overwrite `<name>.net` beside the sheet
