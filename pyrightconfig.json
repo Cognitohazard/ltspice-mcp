@@ -2,15 +2,19 @@
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.11",
-  "include": ["src", "tests"],
+  "include": ["src", "tests", "evals"],
   "typeCheckingMode": "standard",
   "reportMissingImports": true,
   "reportUnusedVariable": "warning",
   "reportPrivateUsage": "warning",
   "executionEnvironments": [
     {
+      "root": "evals",
+      "extraPaths": ["evals"]
+    },
+    {
       "root": "tests",
-      "extraPaths": ["."],
+      "extraPaths": [".", "evals"],
       "reportPrivateUsage": "none"
     }
   ]

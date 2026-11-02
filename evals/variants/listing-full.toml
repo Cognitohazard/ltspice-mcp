@@ -1,0 +1,4 @@
+description = "every tool definition advertised in full, argument descriptions included"
+
+[config.tools]
+listing = "full"

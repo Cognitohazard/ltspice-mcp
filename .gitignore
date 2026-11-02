@@ -41,6 +41,12 @@ ltspice-mcp.toml
 # Checked-in test fixtures are intentional inputs, not runtime artifacts —
 # never ignore them (recorded real .raw/.log decks back the regression suite).
 !tests/fixtures/**
+# The evaluation harness's task inputs are recorded runs too.
+!evals/tasks/**
+evals/tasks/**/__pycache__/
+
+# Evaluation runs: rows, traces and workspaces, never committed.
+evals/runs/
 
 # packaged Desktop Extensions (build artifacts)
 *.mcpb

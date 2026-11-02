@@ -85,6 +85,8 @@ packages = ["src/ltspice_mcp"]
 only-include = [
     "src",
     "tests",
+    # The agent evaluation harness, which tests/test_eval_harness.py imports.
+    "evals",
     "docs",
     "skills",
     "README.md",
@@ -97,6 +99,9 @@ only-include = [
 
 [dependency-groups]
 dev = [
+    # The agent evaluation harness's API client (evals/). A development
+    # requirement only: the server never imports it.
+    "anthropic>=2.3,<3",
     # The 'raster' extra's rasterizer, and cairosvg, used when it is absent: dev
     # requirements, so both PNG paths run in CI rather than every rasterization
     # test skipping.
@@ -117,7 +122,7 @@ dev = [
 [tool.ruff]
 target-version = "py311"
 line-length = 99
-src = ["src", "tests"]
+src = ["src", "tests", "evals"]
 
 [tool.ruff.lint]
 select = [
@@ -156,6 +161,8 @@ known-first-party = ["ltspice_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The evaluation harness (evals/ltspice_eval) is tested from tests/ too.
+pythonpath = ["evals"]
 addopts = "--strict-markers --tb=short"
 # A wedged test used to consume the whole CI job and report nothing but "the
 # operation was canceled" fifteen minutes later. pytest arms these per test

@@ -1,0 +1,21 @@
+id = "analyze-step-tran-peak"
+category = "analyze"
+requires = []
+note = """
+Choosing among steps: the agent must compare the steps' peaks and report the
+winning step by its parameter value, which only the log's .step lines name.
+"""
+prompt = """
+step_tran.raw in the folder is a stepped transient run; its log, step_tran.log,
+is beside it, and the steps sweep the parameter r. In which step does V(out)
+reach its highest value, and what is that peak? Write the answer to answer.json
+as {"r": <that step's value of r>, "peak_v": <volts>}.
+"""
+
+[grader]
+kind = "answer"
+reference = "grader/reference.json"
+tolerance = { rel = 0.01 }
+
+[grader.fields.r]
+tolerance = { rel = 0.0 }

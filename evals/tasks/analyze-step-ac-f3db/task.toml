@@ -1,0 +1,19 @@
+id = "analyze-step-ac-f3db"
+category = "analyze"
+requires = []
+note = """
+Per-step reading: the answer is one number per .step iteration, in order, so
+reading only the first step, or reducing over steps, fails. The log names the
+step values but not the cutoffs.
+"""
+prompt = """
+step_ac.raw in the folder is a stepped AC run of a filter; its log, step_ac.log,
+is beside it. For each step, at what frequency has V(out) fallen 3 dB below its
+low-frequency level? Write the answer to answer.json as {"f3db_hz": [...]}: one
+number in hertz per step, in step order.
+"""
+
+[grader]
+kind = "answer"
+reference = "grader/reference.json"
+tolerance = { rel = 0.02 }

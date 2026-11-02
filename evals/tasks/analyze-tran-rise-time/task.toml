@@ -1,0 +1,17 @@
+id = "analyze-tran-rise-time"
+category = "analyze"
+requires = []
+note = """
+Trace math with nothing in the log to copy: the log's one .meas is the final
+value, not the rise time. The 0% and 100% levels are the waveform's own.
+"""
+prompt = """
+tran_rc.raw in the folder is a transient run of an RC circuit driven by a step;
+its log, tran_rc.log, is beside it. What is the 10% to 90% rise time of V(out)?
+Write the answer to answer.json as {"rise_time_s": <seconds>}.
+"""
+
+[grader]
+kind = "answer"
+reference = "grader/reference.json"
+tolerance = { rel = 0.02 }

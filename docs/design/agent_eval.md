@@ -50,19 +50,34 @@ data). The eval records which rendering a trial used and, in the `claude-code`
 profile, reads what the model actually received from the stream rather than
 assuming it.
 
+Errors take a third path, whichever the flag. A result with `isError` becomes
+an error made of its text blocks alone, joined by newlines; its
+`structuredContent` is not shown. The server puts an error's `code` and its
+recovery `hint` in `structuredContent` and only the message in the text, so
+under `text_channel = "summary"` a Claude Code model reads why a call failed
+but never how to recover. `"json"` carries both, since it replaces the text
+with the serialized `structuredContent`. The same CLI shows a tool's
+description, and the server's instructions, up to their first 4,096
+characters; the server's are shorter.
+
 ## 3. What is under test
 
 The server as a client sees it: `python -m ltspice_mcp` over stdio with a
 generated `ltspice-mcp.toml`. Both profiles start it through one launcher,
-`python -I evals/launch_server.py <variant>`, which sets its own environment and
-execs the variant checkout's venv Python. The environment starts from the MCP
+`python -I evals/launch_server.py --python <venv python> --cwd <workspace>
+--home <dir>`, which sets its own environment and runs the variant checkout's
+venv Python (in place of itself on POSIX; as a child sharing its stdio on
+Windows, which has no exec). The environment starts from the MCP
 SDK's default list (Windows: `APPDATA HOMEDRIVE HOMEPATH LOCALAPPDATA PATH
 PATHEXT PROCESSOR_ARCHITECTURE SYSTEMDRIVE SYSTEMROOT TEMP USERNAME
 USERPROFILE`; elsewhere `HOME LOGNAME PATH SHELL TERM USER`), adds `TMP`,
 `LANG`/`LC_ALL`, `WSL_DISTRO_NAME` and the trial's `LTSPICE_MCP_HOME`, and
 drops every other `LTSPICE_MCP_*` variable (they override the TOML), plus
 `VIRTUAL_ENV` and `PYTHONPATH`. A launcher is needed because Claude Code, not
-the harness, decides what a stdio server inherits. The model
+the harness, decides what a stdio server inherits. The `api` profile hands the
+launcher its whole environment, as Claude Code does, so the launcher alone
+decides what the server keeps; the MCP SDK on its own would pass only its
+default list. The model
 and the client are the environment the server is evaluated in, fixed within a
 comparison. A variant changes the server only: its configuration, its code
 revision, or both.
@@ -73,8 +88,10 @@ revision, or both.
 evals/
   tasks/<task_id>/task.toml     prompt, category, requirements, grader
   tasks/<task_id>/workspace/    files copied into the trial's workspace
-  tasks/<task_id>/grader/       reference data, never copied into a workspace
+  tasks/<task_id>/grader/       reference.json and make_reference.py, never copied
+  tasks/<task_id>/oracle.py     a scripted solution through the tools
   variants/<name>.toml          server revision + config overlay
+  launch_server.py              the launcher (§3)
   ltspice_eval/                 runner, client profiles, graders, rows
   runs/<suite>/                 results.jsonl, errors.jsonl, traces/ (gitignored)
 ```
@@ -118,7 +135,12 @@ looks like.
   `structured` (the serialized `structuredContent` plus image blocks: Claude
   Code's default) or `content` (the content blocks: Claude Code with the flag
   on, and clients that ignore `structuredContent`). Runs use `structured`
-  unless a variant is about the text channel.
+  unless a variant is about the text channel. Under both, a result with
+  `isError` reaches the model as its text blocks only (§2), and the
+  serialization is `JSON.stringify`'s (`1` for `1.0`, `1e-7` but
+  `0.000001`), not Python's.
+- **Descriptions and instructions** longer than 4,096 characters are cut
+  there with Claude Code's mark.
 - **Oversized results**: Claude Code saves a tool result over 25,000 tokens
   to a file and hands the model its path. The profile records each such
   event and gives the model a short notice; it does not claim to reproduce
@@ -395,11 +417,14 @@ rather than relying on `PATH` or spicelib's search of `C:/Spice64`.
 
 0. A command-line smoke test (one `claude-code` call on a trivial task,
    approved first): the server is allowed, its environment is the launcher's,
-   the operator's settings and `CLAUDE.md` are absent, and the stream shows
-   what the model received.
+   the operator's settings and `CLAUDE.md` are absent, the stream shows
+   what the model received, and the server's tools are loaded rather than
+   deferred behind tool search (a deferred tool reaches the model as a name
+   until it is searched for, which the `api` profile does not reproduce).
 1. The harness, in three steps, none with paid calls:
    a. the `api` loop and MCP proxy, the `answer` grader, `analyze` tasks (no
-      simulator), oracle and null scripts, result rows;
+      simulator), oracle and null scripts, result rows (built: four seed
+      tasks, `tests/test_eval_harness.py`);
    b. the fake ngspice, the `deck` grader, `measure`, `design` and `debug`
       tasks;
    c. the `sheet` grader (its scorer exists) and `schematic` tasks.

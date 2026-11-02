@@ -28,7 +28,7 @@ jobs:
           enable-cache: true
 
       - name: Lint
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ evals/
 
       - name: Type check
         run: uv run pyright

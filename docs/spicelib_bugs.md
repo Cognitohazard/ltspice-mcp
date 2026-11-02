@@ -3556,3 +3556,82 @@ def test_text_on_its_side_is_saved_on_its_side(tmp_path):
 pins the workaround against both recordings, and
 `tests/test_sheet_findings_snapshot.py::test_an_edit_and_a_check_find_the_same_of_a_sheet`
 through an edit of the recorded sheet.
+
+## Bug 35 — `RawRead.get_axis()` on a freshly opened binary raw reports that it has no axis
+
+### Summary
+
+On a binary `.raw` file, `RawRead.get_axis()` raises `RuntimeError: This RAW
+file does not have an axis.` until some trace has been read. The file has an
+axis: once any `get_trace(...).get_wave(...)` call has run, the same
+`get_axis()` returns it. A binary raw is read lazily, and `get_axis` tests
+whether the axis trace has been loaded yet rather than whether the file has
+one.
+
+### Affected code
+
+spicelib 1.5.1, `spicelib/raw/plot_data.py`, `PlotData.get_axis` (~line 779),
+which `RawRead.get_axis` (`spicelib/raw/raw_read.py`, ~line 545) delegates
+to:
+
+```python
+def get_axis(self, step: int = 0):
+    if self._axis:
+        ...
+    else:
+        raise RuntimeError("This RAW file does not have an axis.")
+```
+
+`self._axis` stays `None` on a binary raw until a trace read loads it;
+`self._has_axis`, set from the plot name when the header is parsed, is what
+says whether the file has an axis.
+
+### Reproduction
+
+```python
+from spicelib import RawRead
+
+raw = RawRead("tran_rc.raw")          # any binary transient or AC raw
+raw.get_axis()                        # RuntimeError: This RAW file does not have an axis.
+raw.get_trace("V(out)").get_wave(0)
+len(raw.get_axis())                   # 221: the axis was there all along
+```
+
+`tests/fixtures/ltspice_tran_rc.raw`, `ltspice_ac_rc.raw` and
+`ltspice_step_ac.raw` all show it.
+
+### Impact
+
+A caller that reads the axis first, as most do, is told the file has no
+axis. The message names a real condition (an operating point has no axis), so
+the caller handles it as that condition and reports a valid sweep as a table.
+The server never calls `get_axis` (see Bug 4); the agent evaluation harness's
+reference scripts would have.
+
+### Proposed fix
+
+Test `_has_axis`, and read the axis trace through `get_trace`, which loads it:
+
+```python
+def get_axis(self, step: int = 0):
+    if not self._has_axis:
+        raise RuntimeError("This RAW file does not have an axis.")
+    axis = self.get_trace(0)
+    assert isinstance(axis, Axis)
+    return axis.get_wave(step)
+```
+
+### Suggested upstream test
+
+```python
+def test_axis_of_a_fresh_binary_raw():
+    raw = RawRead("tran_rc.raw")
+    assert len(raw.get_axis()) == raw.get_len()
+```
+
+### Cross-reference
+
+Workaround: `axis()` in `evals/ltspice_eval/references.py` reads trace 0 with
+`get_trace(...).get_wave(...)` instead of calling `get_axis`.
+`tests/test_eval_harness.py::test_the_reference_axis_reads_a_fresh_raw` pins
+it. Once upstream is fixed, `axis()` can call `get_axis`.

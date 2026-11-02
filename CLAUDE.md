@@ -13,12 +13,14 @@ The server has 8 registered tools: `run_experiments` and `jobs` (run and track s
 Run `uv sync` on Python 3.11 or newer. Most of the suite needs no simulator, because recorded `.raw`/`.log` fixtures cover the parse paths offline. `ngspice` on PATH enables the live end-to-end tests; the LTspice integration tests are opt-in (`LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1`).
 
 ```bash
-uv run ruff check --fix src/ tests/
+uv run ruff check --fix src/ tests/ evals/
 uv run pyright
 uv run pytest tests/ -v          # serial by default; add -n auto to run in parallel
 uv run pytest -n0 tests/test_pathutil.py::TestName::test_case -v   # one test, readable output
 python -m ltspice_mcp            # run the server without the console script
 ```
+
+`evals/` holds the agent evaluation harness (`evals/README.md`, design in `docs/design/agent_eval.md`); its tests run offline in `tests/test_eval_harness.py`, and a run that calls the API is never part of CI.
 
 There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, pyright, the suite with coverage on Linux, the suite on Windows, and a dependency audit) on pushes and pull requests to `master`; `publish.yml` runs the same checks and publishes to PyPI on version tags.
 

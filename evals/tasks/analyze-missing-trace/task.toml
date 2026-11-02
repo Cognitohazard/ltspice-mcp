@@ -1,0 +1,17 @@
+id = "analyze-missing-trace"
+category = "analyze"
+requires = []
+note = """
+A negative: the run has no V(fb), so the right answer is null. An agent that
+substitutes the nearest trace (V(out)) answers a number and fails.
+"""
+prompt = """
+ac_rc.raw in the folder is an AC run of a filter; its log, ac_rc.log, is beside
+it. What is the gain of V(fb) at 1 kHz, in dB? Write the answer to answer.json
+as {"gain_db": <number>}, or as {"gain_db": null} if the run cannot tell you.
+"""
+
+[grader]
+kind = "answer"
+reference = "grader/reference.json"
+tolerance = { abs = 0.1 }
