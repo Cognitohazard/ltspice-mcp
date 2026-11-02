@@ -48,6 +48,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, SemanticProfile
+from ltspice_mcp.lib.hierarchy_expr import Environment
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -165,6 +166,10 @@ class XFetTarget:
     model_name: str
     width: float | None
     length: float | None
+    #: The X line's ``m`` times the inner device's ``m``, as ngspice multiplies
+    #: them; ``None`` when either is written but cannot be read, with the reason.
+    multiplier: float | None = 1.0
+    multiplier_reason: str | None = None
 
     @property
     def ref(self) -> str:
@@ -288,6 +293,24 @@ def require_geometry(target: XFetTarget) -> tuple[float, float]:
             "numeric W/L on the instance",
         )
     return target.width, target.length
+
+
+def require_multiplier(target: XFetTarget) -> float:
+    """Return how many parallel copies share the device's draw, or refuse.
+
+    The draw's area is ``m·W·L``. A multiplier the plan could not read has the
+    same problem as unreadable geometry: drawn as one copy, m copies would get
+    a sigma √m too large.
+    """
+    if target.multiplier is None:
+        raise MismatchPlanError(
+            "geometry_not_literal",
+            f"The multiplier of {target.ref!r} cannot be read ({target.multiplier_reason}), "
+            "so a geometry-scaled sigma cannot be computed for it; supply exact "
+            "per-instance values instead, or write m as a number on the X line and "
+            "on the inner device",
+        )
+    return target.multiplier
 
 
 def closure_from_deck(
@@ -467,6 +490,53 @@ def _instances(children: Iterable[tuple[int, SpiceCard]], prefix: str) -> list[S
     ]
 
 
+def _body_environment(
+    x_view: InstanceLine, opener: SpiceCard, children: Iterable[tuple[int, SpiceCard]]
+) -> Environment:
+    """The parameters an inner device's expressions read under one X line.
+
+    The body's defaults (on the ``.subckt`` line, then its own ``.param``
+    cards, as ngspice orders them) overridden by what the X line gives. Only
+    literal values on the X line resolve: this plan reads no deck-level
+    ``.param``.
+    """
+    expressions = dict(SubcktCard.from_card(opener).param_defaults)
+    for _, card in children:
+        if card.kind == "param":
+            for token in tokenize_body(card.body)[1:]:
+                if token.kind == TokenKind.KEY_VALUE and token.key and token.value is not None:
+                    expressions[token.key] = token.value
+    outer = Environment({}, simulator="ngspice")
+    overrides = {key.casefold(): outer.fact(value) for key, value in x_view.params.items()}
+    return Environment(expressions, simulator="ngspice", overrides=overrides)
+
+
+def _device_multiplier(
+    x_view: InstanceLine, inner: InstanceLine, body: Environment
+) -> tuple[float | None, str | None]:
+    """How many parallel copies of ``inner`` ngspice builds under ``x_view``.
+
+    ngspice multiplies an X line's ``m`` into every device of the body, and an
+    inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
+    on top of it, so the copies are the product. An ``m`` absent is 1; one
+    written but not resolvable to a positive number gives ``None`` and why.
+    """
+    product = 1.0
+    for where, text, env in (
+        (f"X line {x_view.ref}", x_view.get_param("M"), Environment({}, simulator="ngspice")),
+        (f"inner device {inner.ref}", inner.get_param("M"), body),
+    ):
+        if text is None:
+            continue
+        fact = env.fact(text)
+        if fact.value is None:
+            return None, f"m={text} on the {where}: {fact.reason}"
+        if not fact.value > 0.0:
+            return None, f"m={text} on the {where} is not positive"
+        product *= fact.value
+    return product, None
+
+
 def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
     """Read LEVEL off the model card an inner device names, binned or not.
 
@@ -617,8 +687,10 @@ def build_plan(
         raw_length = parse_value(view.get_param("L") or "")
         width = None if raw_width is None else raw_width * scale
         length = None if raw_length is None else raw_length * scale
+        body_env = _body_environment(view, def_index.cards[opener_index], children)
         for inner in chosen:
             inner_view = InstanceLine.from_card(inner)
+            multiplier, multiplier_reason = _device_multiplier(view, inner_view, body_env)
             _refuse_preexisting(
                 x_ref, inner_view, MISMATCH_PARAMS, f"inner device {inner_view.ref}"
             )
@@ -640,6 +712,8 @@ def build_plan(
                     model_name=inner_view.model,
                     width=width,
                     length=length,
+                    multiplier=multiplier,
+                    multiplier_reason=multiplier_reason,
                 )
             )
 
@@ -1218,6 +1292,7 @@ def draw_mismatch(
         if rule is None or (rule.avt <= 0.0 and rule.ak <= 0.0):
             continue
         width, length = require_geometry(target)
+        multiplier = require_multiplier(target)
         deltas = sample_instance_mismatch(
             sampler,
             InstanceGeometry(
@@ -1225,6 +1300,7 @@ def draw_mismatch(
                 model_name=target.model_name,
                 width_m=width,
                 length_m=length,
+                multiplier=multiplier,
             ),
             rule,
         )

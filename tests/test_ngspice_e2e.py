@@ -404,6 +404,44 @@ async def test_subckt_macromodel_op_full_stack(ngspice_state: SessionState, work
     assert vout == pytest.approx(2.0, abs=1e-2), voltages
 
 
+async def test_a_multiplier_builds_parallel_copies(ngspice_state: SessionState, work_dir: Path):
+    # Mismatch sampling draws one shift for a card with m and gives it sigma/sqrt(m),
+    # because ngspice builds m parallel devices from that card: m on the device, m on
+    # the X line above it, and m={mult} set from the X line each give m times the
+    # current of one copy. Each drain sits behind 1 ohm, so its drop is its current.
+    net = _write(
+        work_dir,
+        "multiplier.cir",
+        "* device multiplier\n"
+        "Vdd vdd 0 1.8\n"
+        "Vg g 0 1.5\n"
+        "R1 vdd d1 1\n"
+        "M1 d1 g 0 0 NM W=10u L=1u\n"
+        "R4 vdd d4 1\n"
+        "M4 d4 g 0 0 NM W=10u L=1u m=4\n"
+        "RX vdd dx 1\n"
+        "X1 dx g 0 cell m=4\n"
+        "RP vdd dp 1\n"
+        "X2 dp g 0 pcell mult=4\n"
+        ".subckt cell d g s\n"
+        "M0 d g s s NM W=10u L=1u\n"
+        ".ends\n"
+        ".subckt pcell d g s mult=1\n"
+        "M0 d g s s NM W=10u L=1u m={mult}\n"
+        ".ends\n"
+        ".model NM NMOS(LEVEL=1 VTO=0.7 KP=100u)\n"
+        ".op\n"
+        ".end\n",
+    )
+    receipt = await _run_one(ngspice_state, "ng-multiplier", net)
+    op = await _op(ngspice_state, receipt["job_id"])
+    voltages = {name.lower(): value for name, value in op["voltages"].items()}
+    single = 1.8 - voltages["v(d1)"]
+    assert single > 0, voltages
+    for node in ("v(d4)", "v(dx)", "v(dp)"):
+        assert 1.8 - voltages[node] == pytest.approx(4 * single, rel=1e-6), node
+
+
 async def test_mosfet_op_surfaces_device_op_points(ngspice_state: SessionState, work_dir: Path):
     # The absence test for the dropped/mislabeled device internals. A MOSFET in
     # saturation with .save @m1[...] must surface gm/gds/id/vth in the

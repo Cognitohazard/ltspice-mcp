@@ -528,10 +528,6 @@ class TestRandomExpansion:
                 MismatchRule(rule="mismatch", min_wl_um2=bad)
         assert MismatchRule(rule="mismatch", min_wl_um2=1e-2).min_wl_um2 == 1e-2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="mismatch sigma ignores the instance multiplier m; remove this mark with the fix",
-    )
     def test_mismatch_sigma_counts_the_instance_multiplier(self, tmp_path: Path):
         """``m=4`` is four devices in parallel, so its mismatch sigma is half of one's.
 
@@ -560,6 +556,20 @@ class TestRandomExpansion:
 
         assert single != 0.0
         assert four == pytest.approx(single / 2, rel=1e-9)
+
+    def test_mismatch_refuses_a_multiplier_it_cannot_read(self, tmp_path: Path):
+        # Drawn as one copy, a device of several copies would get too large a sigma.
+        circuit = _closure(
+            tmp_path,
+            includes={},
+            root_body=".model NM NMOS(VTO=0.7 KP=100u)\nM1 d g 0 0 NM W=10u L=1u m={k}\n",
+        )
+        variation = _random_rule({"rule": "mismatch", "prefix": "M", "AVT": 3e-3})
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(
+                circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+            )
+        assert exc.value.code == "mismatch_geometry_unresolved"
 
 
 _CORE = ".subckt core in out\nR1 in out 1k\n.ends\n"
@@ -1538,6 +1548,56 @@ class TestMismatchThroughSubcircuits:
         )
         assert "NM__M1" in cases[0].text
         assert "mcpatch" not in cases[0].text
+
+    def _xm1_shift(self, directory: Path, text: str) -> float:
+        """XM1's drawn threshold shift; the stream is keyed by circuit and instance."""
+        directory.mkdir()
+        circuit = _pdk_deck(directory / "pdk.cir", text)
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [self._variation()]), directory / "out"
+        )
+        return cases[0].assignments["random:mismatch:XM1.m0.delvto"]
+
+    def test_an_x_line_multiplier_halves_the_shift_of_four_copies(self, tmp_path: Path):
+        # ngspice builds m copies of every device in the body of an X line
+        # that carries m, all from the one patched card, so they share a draw.
+        one = self._xm1_shift(tmp_path / "one", PDK_DECK)
+        four = self._xm1_shift(
+            tmp_path / "four",
+            PDK_DECK.replace(
+                "XM1 out1 gate 0 0 minifet W=1 L=0.15", "XM1 out1 gate 0 0 minifet W=1 L=0.15 m=4"
+            ),
+        )
+        assert one != 0.0
+        assert four == pytest.approx(one / 2, rel=1e-9)
+
+    def test_an_inner_multiplier_set_from_the_x_line_counts(self, tmp_path: Path):
+        # The foundry spelling: the body multiplies its device by a parameter
+        # (m={mult}) and the X line sets that parameter.
+        def deck(x_params: str) -> str:
+            body = MINI_FET.replace(".param w = 1 l = 0.15", ".param w = 1 l = 0.15 mult = 1")
+            body = body.replace("w = {w} l = {l}", "w = {w} l = {l} m = {mult}")
+            return PDK_DECK.replace(MINI_FET, body).replace(
+                "XM1 out1 gate 0 0 minifet W=1 L=0.15",
+                f"XM1 out1 gate 0 0 minifet W=1 L=0.15{x_params}",
+            )
+
+        one = self._xm1_shift(tmp_path / "one", deck(""))
+        four = self._xm1_shift(tmp_path / "four", deck(" mult=4"))
+        assert one != 0.0
+        assert four == pytest.approx(one / 2, rel=1e-9)
+
+    def test_an_unreadable_multiplier_is_refused_not_drawn_as_one_copy(self, tmp_path: Path):
+        text = PDK_DECK.replace(
+            "XM1 out1 gate 0 0 minifet W=1 L=0.15", "XM1 out1 gate 0 0 minifet W=1 L=0.15 m={k}"
+        )
+        circuit = _pdk_deck(tmp_path / "pdk.cir", text)
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(
+                circuit, expand_variations([circuit], [self._variation()]), tmp_path / "out"
+            )
+        assert exc.value.code == "geometry_not_literal"
+        assert "m={k}" in str(exc.value)
 
 
 class TestMismatchAcrossIncludedFiles:

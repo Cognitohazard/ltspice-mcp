@@ -7,7 +7,7 @@ import fnmatch
 import hashlib
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import product
 from pathlib import Path
@@ -2256,7 +2256,10 @@ def _apply_subckt_mismatch(
     — an aggregate that reports only the draws it made cannot be told apart
     from one where every device was covered.
     """
-    drawn = draw_mismatch(plan, [_engine_rule(rule) for rule in rules], sampler)
+    try:
+        drawn = draw_mismatch(plan, [_engine_rule(rule) for rule in rules], sampler)
+    except MismatchPlanError as exc:
+        raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
     draws: dict[str, float] = {}
     for ref, delvto in drawn.delvto.items():
         draws[f"random:mismatch:{ref}.{VTH_PARAM}"] = delvto
@@ -2302,6 +2305,13 @@ def _apply_mismatch_rule(
                 "model_missing",
                 f"Mismatch instance {instance.ref!r} references missing model "
                 f"{instance.model_name!r}",
+            )
+        if instance.multiplier is None:
+            raise VariationError(
+                "mismatch_geometry_unresolved",
+                f"Mismatch instance {instance.ref!r} gives its multiplier m as something "
+                "other than a positive number, so the area its draw stands for is unknown; "
+                "write m as a number",
             )
         nominals = parse_model_params(base_card)
         mismatch = sample_instance_mismatch(sampler, instance, engine_rule)
@@ -2506,6 +2516,37 @@ def _validate_write_sets(
                         )
 
 
+def _path_multiplier(
+    row: ResolvedInstance, by_path: Mapping[tuple[str, ...], ResolvedInstance]
+) -> float:
+    """How many parallel copies of ``row`` the simulator builds from its one card.
+
+    The product of the device's own ``m`` and the ``m`` of every subcircuit
+    instance above it, each read as hierarchy discovery resolved it in its own
+    scope (so an inner ``m={mult}`` takes the value its X line gives). All
+    the copies share one mismatch draw, so the area the draw stands for is this
+    many times W·L. An ``m`` written but not resolvable to a positive number
+    refuses the rule: drawn as one copy, the sigma would be too large.
+    """
+    product = 1.0
+    for depth in range(1, len(row.instance) + 1):
+        holder = by_path.get(row.instance[:depth])
+        if holder is None:
+            continue
+        fact = dict(holder.parameters).get("m")
+        if fact is None:
+            continue
+        if fact.value is None or not fact.value > 0.0:
+            why = fact.reason or "not a positive number"
+            raise VariationError(
+                "mismatch_geometry_unresolved",
+                f"multiplier m={fact.expression} on {'.'.join(holder.instance)} is unresolved "
+                f"({why}), so the mismatch area of {'.'.join(row.instance)} is unknown",
+            )
+        product *= fact.value
+    return product
+
+
 def _nested_mismatch_edits(
     hierarchy: Hierarchy, rules: Sequence[MismatchRule], sampler: MCSampler, editor: TargetEditor
 ) -> tuple[list[InstanceEdit], dict[str, float]]:
@@ -2515,6 +2556,7 @@ def _nested_mismatch_edits(
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()
+    by_path = {row.instance: row for row in hierarchy.instances}
     for rule in rules:
         if rule.instance is not None:
             selected = select(hierarchy, rule.instance)
@@ -2564,7 +2606,11 @@ def _nested_mismatch_edits(
             delta = sample_instance_mismatch(
                 sampler,
                 InstanceGeometry(
-                    canonical_target(row.instance, "mismatch"), row.model_name or "", width, length
+                    canonical_target(row.instance, "mismatch"),
+                    row.model_name or "",
+                    width,
+                    length,
+                    _path_multiplier(row, by_path),
                 ),
                 _engine_rule(rule),
             )
