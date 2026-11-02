@@ -266,7 +266,7 @@ Read the guide first, every session: inspect(queries=[{{"kind": "guide"}}]) retu
 
 {python_door} Tools: one step per call, with structured, paged replies, charts (plot_waveform), and jobs the server owns. Use Python for anything past a single call; the guide's core compares the two.
 
-Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures.
+Write .cir/.net/.sp decks with your own file tools; change .asc schematics only through edit_schematic. LTspice's own MCP server (set_design_content, start_simulation) edits and runs only the copy open in its window: edit sheets with edit_schematic and run them with run_experiments. Runs are cheap: simulate instead of reasoning it out. A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings and failures.
 """
 
 # Claude Code's client truncates MCP server instructions at 2048 characters;
@@ -295,12 +295,15 @@ _PYTHON_DOOR_LIBRARY = (
 #: the static default the Server is constructed with, and what the tests pin.
 CONSOLIDATED_INSTRUCTIONS = _INSTRUCTIONS_TEMPLATE.format(python_door=_PYTHON_DOOR_TOOL)
 
-#: Sent once, on the first tool reply of a session that has not read the guide.
-#: The instructions ask for the read up front, but a client is not obliged to
-#: show them, and a model that skipped them meets this instead.
+#: Sent once, on the first tool reply of a server that no guide read has
+#: reached. The instructions ask for the read up front, but a client is not
+#: obliged to show them, and a model that skipped them meets this instead. A
+#: restarted server has forgotten an earlier read, and a read inside run_code
+#: does not reach it, so the reminder says what the server knows and no more.
 GUIDE_REMINDER = (
-    'This session has not read the guide. Read its core first: inspect(queries=[{"kind": '
-    '"guide"}]), or api.guide() in Python. Its index names the section for this task.'
+    "This server has not been asked for the guide since it started. If you have not "
+    'read it, read its core first: inspect(queries=[{"kind": "guide"}]), or api.guide() '
+    "in Python. Its index names the section for this task."
 )
 
 
