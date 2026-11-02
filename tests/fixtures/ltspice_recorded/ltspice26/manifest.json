@@ -4327,6 +4327,41 @@
         ".net"
       ]
     },
+    "export/load_name_op": {
+      "behaviour": "export-instance-names",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/load_name_op.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "export/load_name_op.asc": "44bc24716511fff15b4fe4bbbffd82d4af205974d1bcfce691e5bd24bf08d8d7",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "run",
+      "outputs": {
+        "export/load_name_op.net": {
+          "bytes": 131,
+          "sha256": "5cc2bffb005d4332c93f3a35b5e39ec06fe114b06f2ae93cf58763706714e267"
+        },
+        "export/load_name_op.raw": {
+          "bytes": 698,
+          "sha256": "9bf004c6b3f3f10d15c0d9f87a732568feec83bf5eaa61d9f043cf80c85f87ec"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".net",
+        ".raw"
+      ]
+    },
     "export/micro_cp1252": {
       "behaviour": "export-encoding",
       "command": [

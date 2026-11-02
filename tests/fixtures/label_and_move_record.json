@@ -2253,6 +2253,30 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/load_name_op.asc": {
+   "labels": {
+    "proposals": 45,
+    "sha256": "8ac36de244ee76286731e6a69ed9323f511c427fd88416ad8ea1bc758ff0e546",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 6,
+     "placed [a name already here; 1 at the point, 1 named]": 8,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 6,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 6,
+     "placed [ground; 1 at the point, 1 named]": 8,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 8
+    }
+   },
+   "moves": {
+    "proposals": 73,
+    "sha256": "37ae20908ffc4f935a19f5eb8e42ac1778413234058dc207d0565a26aa6b7ec3",
+    "shapes": {
+     "moved": 73
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
    "labels": {
     "proposals": 15,
