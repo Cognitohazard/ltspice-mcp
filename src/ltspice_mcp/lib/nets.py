@@ -139,10 +139,12 @@ class Nets:
 
     A net is an ``int``. A pin may be on a net of its own where others share
     its point. ``runs`` are the runs of wire the netlister keeps, each on its
-    net. A run it drops (``dropped``) joins nothing, and a point on one touches
-    the nets of the pins at both its ends. Labels of one name are one net only
-    through ``folded``, and ``name_key`` is the form the netlister compares
-    names in.
+    net. A run it drops (``dropped``) joins nothing, and a point on one between
+    its ends touches the nets of the pins at both its ends, since anything put
+    there keeps the run. Labels of one name are one net only through
+    ``folded``, and ``name_key`` is the form the netlister compares names in.
+    ``pins`` and ``labels`` are what the nets were made over, in the order
+    given.
     """
 
     def __init__(
@@ -155,6 +157,8 @@ class Nets:
     ) -> None:
         self._pin_net = pins
         self._label_net = labels
+        self.pins: tuple[PinAt, ...] = tuple(pins)
+        self.labels: tuple[LabelAt, ...] = tuple(labels)
         #: The runs the netlister leaves out, in the order it reports them.
         self.dropped = tuple(dropped)
         #: The form two names are compared in: one key, one name.
@@ -165,9 +169,10 @@ class Nets:
         self._label_points = {label.point: net for label, net in labels.items()}
         #: How many pins, labels and kept runs each net holds.
         self._held = Counter([*pins.values(), *labels.values(), *(net for _run, net in runs)])
-        self._runs = SegmentIndex(runs)
+        self._runs = SegmentIndex((run, (run, (net,))) for run, net in runs)
         self._dropped = SegmentIndex(
-            (run.segment, tuple(pins[end] for end in run.ends)) for run in self.dropped
+            (run.segment, (run.segment, tuple(pins[end] for end in run.ends)))
+            for run in self.dropped
         )
         self._folded = fold_by_name(((net, label.text) for label, net in labels.items()), name_key)
 
@@ -188,12 +193,26 @@ class Nets:
         no run of wire the netlister keeps."""
         return self._held[self._pin_net[pin]] == 1
 
+    def kept_at(self, point: Point) -> tuple[int, ...]:
+        """The net of each run of wire the netlister keeps through ``point``, ends included."""
+        return tuple(net for _run, (net,) in self._runs.at(point))
+
+    def runs_through(self, point: Point) -> list[tuple[Segment, tuple[int, ...]]]:
+        """Each run of wire through ``point``, with the nets something put there
+        would touch on it: a run the netlister keeps, ends included, is on its
+        own net; a run it drops, between its ends only, is on the nets of the
+        pins at both ends. At a dropped run's end is one of those pins, and what
+        is put there touches that pin's net alone."""
+        found = list(self._runs.at(point))
+        found += [(run, nets) for run, nets in self._dropped.at(point) if point not in run]
+        return found
+
     def nets_at(self, point: Point) -> tuple[int, ...]:
-        """Every net with a pin or label on ``point`` or a run of wire through it."""
+        """Every net with a pin or label on ``point`` or a run of wire through it
+        (``runs_through``): what something put there would be one node with."""
         found = {self._pin_net[pin] for pin in self._pins_at.get(point, ())}
         if point in self._label_points:
             found.add(self._label_points[point])
-        found.update(self._runs.at(point))
-        for nets in self._dropped.at(point):
+        for _run, nets in self.runs_through(point):
             found.update(nets)
         return tuple(sorted(found))

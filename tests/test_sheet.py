@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.schematic_ops import net_partition, placed_geometry
+from ltspice_mcp.lib.connectivity import NamedNets
+from ltspice_mcp.lib.schematic_ops import placed_geometry, sheet_nets
 from ltspice_mcp.lib.schematic_scene import build_scene
 from ltspice_mcp.lib.sheet import Sheet, read_sheet
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -75,14 +76,17 @@ def test_it_places_what_the_editor_places(sheet: Path, tmp_path: Path) -> None:
         assert part.box.to_origin_size_dict() == geometry["bounding_box"]
     if len(once) == len(read.parts):
         # With no reference repeated or missing, the nets are the editor's too.
-        mine, theirs = read.partition(), net_partition(editor)
-        assert {frozenset(m) for m in mine.members.values()} == {
-            frozenset(m) for m in theirs.members.values()
-        }
-        assert {c: sorted(o) for c, o in mine.pin_owners.items()} == {
-            c: sorted(o) for c, o in theirs.pin_owners.items()
-        }
-        assert mine.label_texts == theirs.label_texts
+        mine, theirs = read.nets(), sheet_nets(editor)
+
+        def groups(nets: NamedNets) -> set[tuple[frozenset[tuple[str, str]], frozenset[str]]]:
+            on_net: dict[int, set[tuple[str, str]]] = {}
+            for pin in nets.pins:
+                on_net.setdefault(nets.of_pin(pin), set()).add((pin.reference, pin.name))
+            for label in nets.labels:
+                on_net.setdefault(nets.of_label(label), set())
+            return {(frozenset(pins), nets.texts(net)) for net, pins in on_net.items()}
+
+        assert groups(mine) == groups(theirs)
 
 
 _SHEET = """Version 4
@@ -146,7 +150,7 @@ class TestAPart:
         read = self._read(tmp_path)
         assert read.wires == ((0, 0, 96, 0),)
         assert read.labels == ((0, 0, "in"),)
-        assert read.partition().label_texts == {(0, 0): {"in"}}
+        assert [(label.point, label.text) for label in read.nets().labels] == [((0, 0), "in")]
 
 
 class TestAPinByName:

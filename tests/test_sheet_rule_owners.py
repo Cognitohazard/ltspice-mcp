@@ -39,6 +39,38 @@ def _called(name: str) -> list[str]:
     ]
 
 
+#: Names of the grouping of a sheet's points by wiring alone, which could not
+#: hold two of LTspice's rules (a wire straight between two pins of one part
+#: joins nothing; of one part's pins alone on a point only the last in
+#: SpiceOrder touches another part's) and was read beside ``Nets``.
+_WIRING_ONLY_NETS = frozenset(
+    {"partition", "label_folded_nets", "net_members", "NetPartition", "labels_per_coord"}
+)
+
+
+def test_which_points_are_one_net_is_answered_by_the_nets_ltspice_makes():
+    """Every reader of a sheet's nets reads ``connectivity.nets_by_ltspice``
+    (``Nets``, ``NamedNets``): ``inspect(kind="net")``, the pin legend, the
+    sheet findings, the edit refusals and the route rules. Nothing outside
+    ``lib/connectivity.py`` imports another grouping, and it defines none."""
+    imported = [
+        f"{module}:{node.lineno} {alias.name}"
+        for module, tree in _modules().items()
+        if module != "lib/connectivity.py"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name in _WIRING_ONLY_NETS
+    ]
+    assert imported == []
+    defined = [
+        node.name
+        for node in ast.walk(_modules()["lib/connectivity.py"])
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in _WIRING_ONLY_NETS
+    ]
+    assert defined == []
+
+
 def _is_parts(node: ast.expr) -> bool:
     """Whether ``node`` is a schematic editor's parts, as the server's code names
     one: ``editor.components`` or ``editor.get_components()``."""

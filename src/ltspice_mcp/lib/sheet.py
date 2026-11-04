@@ -18,9 +18,10 @@ from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
-from ltspice_mcp.lib.connectivity import NetPartition, fold_case, partition
+from ltspice_mcp.lib.connectivity import NamedNets, fold_case, named_nets
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.nets import PinAt
 from ltspice_mcp.lib.symbol_geometry import (
     compute_placed_geometry,
     place_box,
@@ -184,7 +185,15 @@ def missing_part(reference: str, references: Iterable[str]) -> NetlistError:
 def find_pin(
     pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
 ) -> Point:
-    """Where pin ``pin_name`` of part ``reference`` is.
+    """Where pin ``pin_name`` of part ``reference`` is (``placed_pin``)."""
+    pin = placed_pin(pins, reference, symbol, pin_name, problem)
+    return pin.x, pin.y
+
+
+def placed_pin(
+    pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
+) -> PlacedPin:
+    """The pin ``pin_name`` of part ``reference``.
 
     The name is matched against the pin names first, case-insensitively. Only
     when no pin carries it, and it is all digits, is it read as the pin's
@@ -198,13 +207,13 @@ def find_pin(
         raise NetlistError(f"Cannot resolve pins for '{reference}': symbol '{symbol}' {problem}.")
     for pin in pins:
         if pin.name.upper() == pin_name.upper():
-            return pin.x, pin.y
+            return pin
     # A pin with no SpiceOrder line reads as order 0, which is no ordinal.
     ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
     if ordinal:
         for pin in pins:
             if pin.order == ordinal:
-                return pin.x, pin.y
+                return pin
     available = [f"{p.name} ({p.order})" if p.order else p.name for p in pins]
     raise NetlistError(
         f"Pin '{pin_name}' not found on {reference} ({symbol}). Available: "
@@ -275,9 +284,14 @@ class Sheet:
         return tuple(part for part in self.parts if part.reference in named)
 
     def pin_at(self, spec: str) -> Point:
-        """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is, by ``find_pin``.
+        """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is (``pin_named``)."""
+        return self.pin_named(spec).point
 
-        Raises ``NetlistError`` as ``find_pin`` does, for a part that is not
+    def pin_named(self, spec: str) -> PinAt:
+        """The pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) names, as
+        ``nets`` holds it, found by ``placed_pin``.
+
+        Raises ``NetlistError`` as ``placed_pin`` does, for a part that is not
         there, and for a reference two parts share, naming where each is.
         """
         if "." not in spec:
@@ -298,15 +312,18 @@ class Sheet:
             )
         part = named[0]
         problem = "not found" if part.symbol is None else part.symbol.problem
-        return find_pin(part.pins, part.reference, part.symbol_name, pin_name, problem)
+        pin = placed_pin(part.pins, part.reference, part.symbol_name, pin_name, problem)
+        index = next(index for index, each in enumerate(self.parts) if each is part)
+        order = next(order for order, each in enumerate(part.pins) if each is pin)
+        return PinAt((pin.x, pin.y), index, order, part.reference, pin.name)
 
-    def partition(self) -> NetPartition:
-        """The sheet's nets, grouped by ``connectivity.partition``."""
-        return partition(
+    def nets(self) -> NamedNets:
+        """The sheet's nets as LTspice netlists them (``connectivity.named_nets``),
+        each part told from the others by its place in ``parts``."""
+        return named_nets(
             [
-                ((pin.x, pin.y), (part.reference, pin.name))
+                (part.reference, [(pin.name, (pin.x, pin.y)) for pin in part.pins])
                 for part in self.parts
-                for pin in part.pins
             ],
             [((x, y), name) for x, y, name in self.labels],
             [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in self.wires],

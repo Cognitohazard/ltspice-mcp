@@ -1171,8 +1171,11 @@ change, which are the parts its ops place, move, remove, wire or label. A part
 whose value or attributes alone changed keeps its pins where they were and
 joined as they were, so a batch of value changes lists no pins, in `touched`
 or in `wiring.label_only_pins`; its label-only pins are counted under
-`preexisting`. A pin's `net` is the name a label gives its net, null when none
-does. LTspice names such a net only when it exports the sheet (`N001`,
+`preexisting`. A pin's `net` is the names the labels of its net carry, null
+when none does. Nets are the ones LTspice netlists: labels of one name, in any
+case, are one net, a wire straight between two pins of one part joins
+nothing, and of one part's pins alone on a point only the last in SpiceOrder
+touches another part's. LTspice names such a net only when it exports the sheet (`N001`,
 `NC_01` for a pin on nothing), so the name comes from an export and is never
 guessed. A batch with a `compare` exports the committed sheet, and each pin on
 a net that no label names then also has `net_export`, its node in that export.
@@ -1379,9 +1382,15 @@ is refused, as a named label or a pin there is. Where at most one of the two
 wires has a name, the label is placed and the sheet reports the join
 (`joined_at_crossing`), as it does for a pin. Grounding a named net is not
 such a join, because it is what the flag requests, and a second named net may
-be grounded after the first. `inspect(kind: "net")` at a point on a wire's
-interior traces that wire's net and names the wire under `snapped_to_wire`; a
-point where two nets' wires cross is refused as ambiguous.
+be grounded after the first. Names already joined, by a wire between two
+labels or by a shared name, are one net, so joining them again is no short.
+`wire_pins` passes over a pin, a wire's end or a label already on the net of
+either of its ends as a junction, and refuses one on any other net.
+`inspect(kind: "net")` traces the net LTspice netlists from the start it is
+given. At a point on a wire's interior it traces that wire's net and names the
+wire under `snapped_to_wire`; a point where two nets' wires cross, a point on
+a wire LTspice drops between two pins of one part, and a point holding pins on
+separate nets are refused as ambiguous.
 
 **Waveform panes.** `set_plot_panes{analysis, panes}` writes the plot
 settings file that LTspice's waveform window reads when the sheet runs, which

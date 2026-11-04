@@ -7,17 +7,17 @@ coordinate (no wire runs through it): the net-label-soup signature that
 simulates correctly but reads as a wiring list rather than a drawn schematic.
 
 This module holds only the assembly, classification, and pagination logic. The
-connectivity itself — which net a coordinate is on, whether a wire passes
-through it — is resolved by the caller through ``schematic_ops.net_partition``
-and ``connectivity.build_on_wire_predicate`` and handed in as
-plain data + closures, so this stays a pure leaf module (no ``tools`` import,
-no re-implementation of the union-find).
+connectivity itself — which net a pin is on, whether a wire passes through a
+point — is resolved by the caller through ``schematic_ops.sheet_nets`` and
+``connectivity.build_on_wire_predicate`` and handed in as plain data +
+closures, so this stays a pure leaf module (no ``tools`` import, no
+re-implementation of the nets).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import Any, Literal
 
 from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 
@@ -25,9 +25,14 @@ from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_curs
 # tool layer) so this module has no upward dependency.
 DEFAULT_PAGE_SIZE = 100
 
-# Coordinate → its net's display name (a net-label like ``vout``/``0``, or
-# ``None`` when the net is unnamed). Built by the caller from ``net_partition``.
-NetNameOf = Callable[["tuple[int, int]"], "str | None"]
+# A pin, as its part's reference, its place among the part's pins and its
+# coordinate → its net's display name (a net-label like ``vout``/``0``, or
+# ``None`` when the net is unnamed). Built by the caller from ``sheet_nets``.
+NetNameOf = Callable[[str, int, "tuple[int, int]"], "str | None"]
+
+# How a pin is tied to its net: by a wire through it, by a label on it alone,
+# or by neither (floating, or touching another pin only).
+PinTie = Literal["wired", "label", "none"]
 # Coordinate → whether a wire passes through it, and whether a net-label sits on
 # it. Built by the caller from ``build_on_wire_predicate`` and the label set.
 CoordPredicate = Callable[["tuple[int, int]"], bool]
@@ -41,24 +46,46 @@ def build_pin_legend(
 
     ``geometry`` is ``collect_component_geometry``'s output (components with
     resolvable symbol geometry, each with a ``pins`` list). ``net_name_of``
-    resolves a pin coordinate to its net name (``None`` = unnamed net).
+    resolves a pin to its net name (``None`` = unnamed net); two pins of one
+    part on one point may be on separate nets.
     """
     legend: list[dict[str, Any]] = []
     for comp in geometry:
         pins: list[dict[str, Any]] = []
-        for p in comp["pins"]:
+        for index, p in enumerate(comp["pins"]):
             coord = (p["x"], p["y"])
             entry: dict[str, Any] = {
                 "name": p["name"],
                 "x": p["x"],
                 "y": p["y"],
-                "net": net_name_of(coord),
+                "net": net_name_of(comp["ref"], index, coord),
             }
             if p.get("dir") is not None:
                 entry["dir"] = p["dir"]
             pins.append(entry)
         legend.append({"ref": comp["ref"], "pins": pins})
     return legend
+
+
+def pin_ties(
+    geometry: Sequence[Mapping[str, Any]],
+    *,
+    is_wired: CoordPredicate,
+    is_labeled: CoordPredicate,
+) -> Iterator[tuple[Mapping[str, Any], int, PinTie]]:
+    """Each pin of ``geometry``, as its part and its place among the part's
+    pins, with how it is tied to its net: ``wired`` when a wire passes through
+    it, else ``label`` when a label sits on it, else ``none``.
+
+    The one classification of a pin tied by a label alone, which the wiring
+    metric counts (``schematic_ops.wiring_profile``) and
+    :func:`find_label_only_pins` lists.
+    """
+    for comp in geometry:
+        for index, p in enumerate(comp["pins"]):
+            coord = (p["x"], p["y"])
+            tie: PinTie = "wired" if is_wired(coord) else "label" if is_labeled(coord) else "none"
+            yield comp, index, tie
 
 
 def find_label_only_pins(
@@ -68,28 +95,22 @@ def find_label_only_pins(
     is_labeled: CoordPredicate,
     net_name_of: NetNameOf,
 ) -> list[dict[str, Any]]:
-    """Pins connected to their net by a net-label only (no wire through them).
-
-    Same classification as the wiring metric's ``pins_label_only`` (a pin is
-    wired when a wire passes through it, else label-only when a flag sits on
-    it), returned as an addressable list: ``[{ref, pin, net, x, y}]``.
-    """
+    """Pins connected to their net by a net-label only (no wire through them,
+    :func:`pin_ties`), as an addressable list: ``[{ref, pin, net, x, y}]``."""
     out: list[dict[str, Any]] = []
-    for comp in geometry:
-        ref = comp["ref"]
-        for p in comp["pins"]:
-            coord = (p["x"], p["y"])
-            if is_wired(coord) or not is_labeled(coord):
-                continue
-            out.append(
-                {
-                    "ref": ref,
-                    "pin": f"{ref}.{p['name']}",
-                    "net": net_name_of(coord),
-                    "x": p["x"],
-                    "y": p["y"],
-                }
-            )
+    for comp, index, tie in pin_ties(geometry, is_wired=is_wired, is_labeled=is_labeled):
+        if tie != "label":
+            continue
+        ref, p = comp["ref"], comp["pins"][index]
+        out.append(
+            {
+                "ref": ref,
+                "pin": f"{ref}.{p['name']}",
+                "net": net_name_of(ref, index, (p["x"], p["y"])),
+                "x": p["x"],
+                "y": p["y"],
+            }
+        )
     return out
 
 

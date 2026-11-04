@@ -16,8 +16,8 @@ What lives here:
 - ``edit_guard``, which serializes one file's mutation in-process and across
   parallel server sessions (with the files beside it a batch writes,
   ``files_written_beside``), and the cached-editor accessors it wraps;
-- the placement and net-partition geometry (``placed_geometry``,
-  ``resolve_pin``, ``net_partition``, ``trace_nets``), which reads each
+- the placement geometry and the sheet's nets (``placed_geometry``,
+  ``resolve_pin``, ``sheet_nets``), which reads each
   symbol once per request through ``symbol_info_for``, and the route
   planner behind ``wire_pins``, which resolves the ends of a route and asks
   ``lib/routing.py`` what drawing it would do;
@@ -82,15 +82,13 @@ from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
-    NetPartition,
     build_on_wire_predicate,
     fold_case,
     is_ground,
-    label_folded_nets,
     name_key,
     name_keys,
     named_labels,
-    partition,
+    named_nets,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
@@ -98,6 +96,8 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
+from ltspice_mcp.lib.nets import PinAt
+from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
     PlotAnalysis,
@@ -796,67 +796,33 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
     return coords
 
 
-def net_partition(
+def sheet_nets(
     editor: AscEditor,
-    extra_segments: list[tuple[int, int, int, int]] | None = None,
+    extra_segments: Sequence[tuple[int, int, int, int]] = (),
     without: str | None = None,
     geometry: Iterable[dict] | None = None,
-) -> NetPartition:
-    """The sheet's nets, as ``connectivity.partition`` groups its pins, labels and wires.
+) -> NamedNets:
+    """The sheet's nets as LTspice netlists them (``connectivity.named_nets``).
 
     The joining rules, and the recordings each comes from, are in
     ``lib/connectivity.py``; this collects what ``editor`` holds and hands it
-    over.
+    over, each part's pins in SpiceOrder and each part told by its place among
+    the parts.
 
     ``extra_segments`` lets the caller include not-yet-committed wire
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
-    on the post-route net layout. Shared by ``trace_nets`` (labels-per-net)
-    and ``trace_net`` (full net membership). ``without`` leaves one part's
-    pins out: the sheet as it is apart from a part about to be placed or moved.
+    on the post-route net layout. ``without`` leaves one part's pins out: the
+    sheet as it is apart from a part about to be placed or moved.
     ``geometry`` is the parts' geometry when the caller already holds it.
     """
-    pins = [
-        ((pin["x"], pin["y"]), (entry["ref"], pin["name"]))
+    parts = [
+        (entry["ref"], [(pin["name"], (pin["x"], pin["y"])) for pin in entry["pins"]])
         for entry in (collect_component_geometry(editor) if geometry is None else geometry)
         if entry["ref"] != without
-        for pin in entry["pins"]
     ]
     labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    segments += [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in extra_segments or ()]
-    return partition(pins, labels, segments)
-
-
-def trace_nets(
-    editor: AscEditor,
-    extra_segments: list[tuple[int, int, int, int]] | None = None,
-) -> dict[tuple[int, int], frozenset[str]]:
-    """Map each pin/label/wire coordinate to the labels on its net.
-
-    Thin labels-per-coordinate view over :func:`net_partition`. See it for
-    the segment-aware semantics and ``extra_segments`` contract.
-    """
-    return labels_per_coord(net_partition(editor, extra_segments))
-
-
-def labels_per_coord(part: NetPartition) -> dict[tuple[int, int], frozenset[str]]:
-    """:func:`trace_nets` over a partition the caller already holds."""
-    labels_by_root: dict[tuple[int, int], set[str]] = {}
-    for coord, texts in part.label_texts.items():
-        labels_by_root.setdefault(part.root(coord), set()).update(texts)
-
-    return {
-        p: frozenset(labels_by_root.get(part.root(p), set()))
-        for members in part.members.values()
-        for p in members
-    }
-
-
-def _net_label_at(
-    nets: dict[tuple[int, int], frozenset[str]], coord: tuple[int, int]
-) -> frozenset[str]:
-    """Labels on the net at ``coord``; empty when net is unnamed."""
-    return nets.get(coord, frozenset())
+    segments = [*wire_segments_of(editor), *extra_segments]
+    return named_nets(parts, labels, [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments])
 
 
 def _segment_key(
@@ -867,9 +833,7 @@ def _segment_key(
 
 
 def _wire_segment_keys(editor: AscEditor) -> list[tuple[tuple[int, int], tuple[int, int]]]:
-    return [
-        _segment_key((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires
-    ]
+    return [_segment_key(seg[:2], seg[2:]) for seg in wire_segments_of(editor)]
 
 
 def _append_wire_segments(
@@ -913,27 +877,21 @@ def wiring_profile(editor: AscEditor) -> dict[str, int]:
     components with resolvable symbol geometry (unknown symbols are skipped) —
     the denominator that makes the two classified counts interpretable.
     """
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    on_wire = build_on_wire_predicate(segments)
+    segments = wire_segments_of(editor)
     label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
-
-    pins_total = 0
-    pins_wired = 0
-    pins_label_only = 0
-    for entry in collect_component_geometry(editor):
-        for p in entry["pins"]:
-            pins_total += 1
-            coord = (p["x"], p["y"])
-            if on_wire(coord):
-                pins_wired += 1
-            elif coord in label_coords:
-                pins_label_only += 1
-
+    ties = [
+        tie
+        for _part, _index, tie in pin_ties(
+            collect_component_geometry(editor),
+            is_wired=build_on_wire_predicate(((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments),
+            is_labeled=label_coords.__contains__,
+        )
+    ]
     return {
         "wire_segments": len(segments),
-        "pins_total": pins_total,
-        "pins_wired": pins_wired,
-        "pins_label_only": pins_label_only,
+        "pins_total": len(ties),
+        "pins_wired": ties.count("wired"),
+        "pins_label_only": ties.count("label"),
     }
 
 
@@ -1504,32 +1462,35 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
         return shifted(_xy(w.V1), first), shifted(_xy(w.V2), second)
 
     ends = [wire_ends(i, w) for i, w in enumerate(editor.wires)]
-    after = partition(
-        (
+    after = named_nets(
+        [
             (
-                shifted((pin["x"], pin["y"]), entry["ref"] in moved_parts),
-                (entry["ref"], pin["name"]),
+                entry["ref"],
+                [
+                    (pin["name"], shifted((pin["x"], pin["y"]), entry["ref"] in moved_parts))
+                    for pin in entry["pins"]
+                ],
             )
             for entry in geometry.values()
-            for pin in entry["pins"]
-        ),
-        (
+        ],
+        [
             (shifted(_xy(lbl.coord), i in plan.labels), lbl.text)
             for i, lbl in enumerate(editor.labels)
-        ),
+        ],
         ends,
     )
-    # A net of the moved sheet with two names on it joins them; that is a short
-    # unless the sheet as it is already made them one node (names compared as
-    # LTspice compares them, nets that share a name or a ground already one).
-    names_on: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in after.label_texts.items():
-        names_on[after.root(coord)].update(named_labels(texts))
+    # A net of the moved sheet, by its wiring, with two names on it joins them;
+    # that is a short unless the sheet as it is already made them one node
+    # (names compared as LTspice compares them, nets that share a name or a
+    # ground already one).
+    names_on: dict[int, set[str]] = defaultdict(set)
+    for label in after.labels:
+        names_on[after.nets.of_label(label)].update(named_labels([label.text]))
     before: NamedNets | None = None
     for names in names_on.values():
         if len(name_keys(names)) < 2:
             continue
-        before = before or NamedNets(net_partition(editor, geometry=geometry.values()))
+        before = before or sheet_nets(editor, geometry=geometry.values())
         if len({before.net_named(name) for name in names}) > 1:
             raise NetlistError(
                 f"Refused to move: it would join nets that each carry a name {sorted(names)}, "
@@ -1583,12 +1544,14 @@ def _pins_on_crossings(
     """Refuse putting ``reference``'s pins at ``pins`` where one would short two named nets.
 
     A pin on a point where wires cross joins them (the ``pin_at_crossing``
-    recording), as a label there does. Anywhere else a pin lands, on a wire's
+    recording), as a label there does, and a pin on a wire LTspice drops,
+    straight between two pins of one part, keeps the wire, joining those two
+    (``same_instance_pin_inside``). Anywhere else a pin lands, on a wire's
     interior or end, a label or another part's pin, there is one net already,
-    so a crossing is the one way placing or moving a part makes one net of
-    two. Two that each carry a name are a short, refused as a wire or a label
-    that joined them is. Any other join is taken as meant, and the finished
-    sheet says it (the ``joined_at_crossing`` rule).
+    so those are the ways placing or moving a part makes one net of two. Two
+    that each carry a name are a short, refused as a wire or a label that
+    joined them is. Any other join is taken as meant, and the finished sheet
+    says it (the ``joined_at_crossing`` rule).
 
     The sheet is read without the part itself, and ``already`` is where its
     pins are now: what a pin joins from where it already is, is not this
@@ -1596,28 +1559,39 @@ def _pins_on_crossings(
     leaves the sheet as it was.
     """
     wires = wire_segments_of(editor)
-    # Nearly every pin is on one wire or none, and the sheet's nets need not
-    # be worked out for those.
+    # Nearly every pin is on one wire's end or on none, and the sheet's nets
+    # need not be worked out for those.
     on_wires = [
         (pin, through)
         for pin in pins
-        if (pin["x"], pin["y"]) not in already
-        and len(through := wires_through((pin["x"], pin["y"]), wires)) > 1
+        if (point := (pin["x"], pin["y"])) not in already
+        and (through := wires_through(point, wires))
+        and (len(through) > 1 or point not in (through[0][:2], through[0][2:]))
     ]
     if not on_wires:
         return
-    nets = NamedNets(net_partition(editor, without=reference))
+    nets = sheet_nets(editor, without=reference)
     for pin, through in on_wires:
-        joined = nets.joined_at(seg[:2] for seg in through)
-        if len(joined.named) > 1:
-            listed = "; ".join(str(sorted(names)) for names in joined.named)
+        joined = nets.joined_at((pin["x"], pin["y"]))
+        if len(joined.named) < 2:
+            continue
+        listed = "; ".join(str(sorted(names)) for names in joined.named)
+        if len(through) == 1:
             raise NetlistError(
                 f"Refused to {doing}: {reference}.{pin['name']} would land at "
-                f"({pin['x']},{pin['y']}), where "
-                f"wires of nets that each carry a name cross ({listed}). A pin on a "
-                "crossing joins the wires, shorting those nets together. Put the part "
-                "where the pin is on the one wire it is meant for."
+                f"({pin['x']},{pin['y']}) on the wire {segment_text(through[0])}, which "
+                "runs straight between two pins of one part and which LTspice leaves out "
+                "of the netlist. A pin on it keeps the wire, joining nets that each carry "
+                f"a name ({listed}) and shorting them together. Put the part where the "
+                "pin is on the one net it is meant for."
             )
+        raise NetlistError(
+            f"Refused to {doing}: {reference}.{pin['name']} would land at "
+            f"({pin['x']},{pin['y']}), where "
+            f"wires of nets that each carry a name cross ({listed}). A pin on a "
+            "crossing joins the wires, shorting those nets together. Put the part "
+            "where the pin is on the one wire it is meant for."
+        )
 
 
 def _placed_component_data(
@@ -1708,16 +1682,22 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> None:
     (``joined_at_crossing``), a label still on nothing (``dangling_label``).
     """
     # A FLAG anywhere along a wire, its interior included, joins that wire's
-    # net, and one at a crossing joins both (see connectivity.partition for the
-    # export record). It is one node with whatever sits on its point, and with
+    # net, and one at a crossing joins both (see lib/connectivity.py for the
+    # export records). It is one node with whatever sits on its point, and with
     # every net already of its name; ground is no name (NamedNets.joined_at).
-    through = wires_through((x, y), wire_segments_of(editor))
     grounding = is_ground(net)
-    joined = NamedNets(net_partition(editor)).joined_at(
-        (seg[:2] for seg in through), at=(x, y), name=None if grounding else net
-    )
+    nets = sheet_nets(editor)
+    joined = nets.joined_at((x, y), landing=True, name=None if grounding else net)
     if len(joined.named) > 1:
         listed = "; ".join(f"{sorted(names)}" for names in joined.named)
+        if grounding and len(set(nets.wired_at((x, y)))) < 2:
+            # Not a crossing: a wire LTspice drops between two pins of one
+            # part, which a flag on it keeps.
+            raise NetlistError(
+                f"Refused to add ground at ({x},{y}): the flag would join nets that each "
+                f"carry a name ({listed}), shorting them together and to ground. Put the "
+                "flag on a point of the one net it is meant for."
+            )
         if grounding:
             raise NetlistError(
                 f"Refused to add ground at ({x},{y}): wires of nets that each carry a "
@@ -1755,10 +1735,10 @@ def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
 def wires_of_one_net(
     coord: tuple[int, int],
     segments: Sequence[tuple[int, int, int, int]],
-    net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
+    nets: NamedNets,
     remedy: str,
 ) -> list[tuple[int, int, int, int]]:
-    """:func:`wires_through` for a point that must name one net.
+    """:func:`wires_through` for a point that must name one net of ``nets``.
 
     Refuses, naming the wires and ending with ``remedy``, when the point is
     where wires of separate nets cross: LTspice leaves a plain crossing unjoined
@@ -1766,7 +1746,7 @@ def wires_of_one_net(
     alone. An empty list means the point touches no wire.
     """
     through = wires_through(coord, segments)
-    if len({net_of(s[:2]) for s in through}) > 1:
+    if len(set(nets.wired_at(coord))) > 1:
         listed = "; ".join(segment_text(s) for s in through)
         raise NetlistError(
             f"({coord[0]},{coord[1]}) is where wires on separate nets cross ({listed}); "
@@ -1784,32 +1764,31 @@ def _resolve_route_endpoint(
     endpoint: "str | GridPoint",
     editor: AscEditor,
     existing_wires: list[tuple[int, int, int, int]],
-    node_coords: "Container[tuple[int, int]]",
-    net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
-) -> tuple[tuple[int, int], tuple[int, int]]:
-    """Resolve one ``wire_pins`` endpoint to its coordinate and an anchor.
+    nets: NamedNets,
+) -> tuple[int, int]:
+    """Resolve one ``wire_pins`` endpoint, on the sheet whose nets are ``nets``,
+    to its coordinate.
 
-    The anchor is a pin, label or wire end on the endpoint's net before the
-    route is drawn, for looking the net up. A pin or label reference resolves
-    through :func:`resolve_pin` and is its own anchor. A coordinate must already
-    touch the circuit: at a pin or a net label (``node_coords``), its own
-    anchor, or anywhere along a wire. An end there connects to it, and one on a
-    wire's interior is a T-junction LTspice joins without the wire being split.
+    A pin or label reference resolves through :func:`resolve_pin`. A coordinate
+    must already touch the circuit: at a pin or a net label, or anywhere along
+    a wire. An end there connects to it, and one on a wire's interior is a
+    T-junction LTspice joins without the wire being split.
     A label's point is how a route reaches a label that stands on nothing, one
     of several labels of one name, or a ground, none of which ``net:NAME`` can
     name. A coordinate where wires of separate nets cross is refused, because a
     wire ending there would join all of them.
     """
     if isinstance(endpoint, str):
-        coord = resolve_pin(endpoint, editor)
-        return coord, coord
+        return resolve_pin(endpoint, editor)
     coord = (endpoint.x, endpoint.y)
-    if coord in node_coords:
-        return coord, coord
+    if any(pin.point == coord for pin in nets.pins) or any(
+        label.point == coord for label in nets.labels
+    ):
+        return coord
     through = wires_of_one_net(
         coord,
         existing_wires,
-        net_of,
+        nets,
         "A wire ending there would join them all; end the route on a point of "
         "just the wire you mean.",
     )
@@ -1820,7 +1799,7 @@ def _resolve_route_endpoint(
             "point, place a net label there first, and to turn a corner there, give "
             "it as a waypoint instead."
         )
-    return coord, through[0][:2]
+    return coord
 
 
 def _plan_connect_route(
@@ -1844,17 +1823,11 @@ def _plan_connect_route(
     """
     component_geo = collect_component_geometry(editor)
     existing_wires = wire_segments_of(editor)
-    part_before = net_partition(editor)
-    net_of = label_folded_nets(part_before)
-    node_coords = part_before.pin_owners.keys() | part_before.label_texts.keys()
+    before = sheet_nets(editor, geometry=component_geo)
     from_name, to_name = _endpoint_name(from_pin), _endpoint_name(to_pin)
 
-    (x1, y1), from_anchor = _resolve_route_endpoint(
-        from_pin, editor, existing_wires, node_coords, net_of
-    )
-    (x2, y2), to_anchor = _resolve_route_endpoint(
-        to_pin, editor, existing_wires, node_coords, net_of
-    )
+    x1, y1 = _resolve_route_endpoint(from_pin, editor, existing_wires, before)
+    x2, y2 = _resolve_route_endpoint(to_pin, editor, existing_wires, before)
 
     if (x1, y1) == (x2, y2) and not waypoints:
         raise NetlistError(
@@ -1888,32 +1861,41 @@ def _plan_connect_route(
     # geometry complaint. An end given as ``net:NAME`` is on the net of that
     # label and is checked like a pin: naming the net one end is on does not
     # make joining it to another named net any less a short. A coordinate
-    # endpoint on a wire's interior reads the labels of that wire's net.
+    # endpoint on a wire's interior reads the names of that wire's net.
     # Two-phase check:
-    #   1) BEFORE state — endpoints resolve to two different already-named
+    #   1) BEFORE state — the endpoints are on two different already-named
     #      nets (the standard short).
     #   2) AFTER state — proposed route drags a mid-segment label into
     #      the union, merging an additional named net.
-    # Names are compared as LTspice compares them (name_key): a net named
-    # VOUT and one named Vout are one node already.
-    nets_before = labels_per_coord(part_before)
-    from_labels_before = named_labels(_net_label_at(nets_before, from_anchor))
-    to_labels_before = named_labels(_net_label_at(nets_before, to_anchor))
-    from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
-    if from_keys and to_keys and from_keys.isdisjoint(to_keys):
+    # Nets are the ones LTspice makes, names compared as LTspice compares them
+    # (name_key): a net named VOUT and one named Vout, or two names a wire
+    # already joins, are one node already.
+    from_nets, to_nets = before.at((x1, y1)), before.at((x2, y2))
+    from_labels_before = set().union(*(before.names(net) for net in from_nets))
+    to_labels_before = set().union(*(before.names(net) for net in to_nets))
+    named = [net for net in sorted(from_nets | to_nets) if before.names(net)]
+    if len(named) > 1:
+        if from_labels_before and to_labels_before:
+            joined = (
+                f"{from_name} is on net {sorted(from_labels_before)} and {to_name} is on "
+                f"net {sorted(to_labels_before)}. Connecting them would short the two "
+                "named nets."
+            )
+        else:
+            listed = "; ".join(str(sorted(before.names(net))) for net in named)
+            joined = (
+                f"the route would join nets that each carry a name ({listed}), shorting "
+                "them together."
+            )
         raise NetlistError(
             f"Refused to connect {from_name} to {to_name}: "
-            f"Net-label conflict — {from_name} is on net "
-            f"{sorted(from_labels_before)} and {to_name} is on net "
-            f"{sorted(to_labels_before)}. Connecting them would short "
-            f"the two named nets. To join them on purpose, give both the "
+            f"Net-label conflict — {joined} To join them on purpose, give both the "
             f"same name: remove one side's labels with remove_net_label "
             f"and label it with the other's name; no wire is needed."
         )
-    nets_after = trace_nets(editor, extra_segments=segments)
-    from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))
-    to_labels_after = named_labels(_net_label_at(nets_after, (x2, y2)))
-    unioned = from_labels_after | to_labels_after
+    from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
+    after = sheet_nets(editor, extra_segments=segments, geometry=component_geo)
+    unioned = set().union(*(after.names(net) for net in after.at((x1, y1)) | after.at((x2, y2))))
     if len(name_keys(unioned)) >= 2:
         # Some labels seen post-route weren't there pre-route on
         # either endpoint — that's the mid-segment case.
@@ -1936,8 +1918,11 @@ def _plan_connect_route(
     # (see same_instance_dropped_segments), so reporting the tie as connected
     # would be a lie. The fix is a route change, so surface it before route
     # geometry.
+    pin_owners: dict[tuple[int, int], list[tuple[str, str]]] = {}
+    for pin in before.pins:
+        pin_owners.setdefault(pin.point, []).append((pin.reference, pin.name))
     dropped = same_instance_dropped_segments(
-        part_before.pin_owners, segments, part_before.label_texts.keys()
+        pin_owners, segments, [label.point for label in before.labels]
     )
     if dropped:
         ref = dropped[0]["ref"]
@@ -1956,8 +1941,8 @@ def _plan_connect_route(
         )
 
     # Everything else said of a route is routing.judge's, which reads the sheet
-    # as plain data: the parts with their pins, the wires, and the partition
-    # worked out above. A route across a part is not judged at all here: the
+    # as plain data: the parts with their pins, the wires, and the nets worked
+    # out above. A route across a part is not judged at all here: the
     # finished sheet's own rule says it.
     view = SheetView(
         parts=tuple(
@@ -1973,11 +1958,10 @@ def _plan_connect_route(
         points=tuple(points),
         segments=tuple(segments),
         ends=((x1, y1), (x2, y2)),
-        anchors=(from_anchor, to_anchor),
         end_names=(from_name, to_name),
         ends_by_coordinate=(not isinstance(from_pin, str), not isinstance(to_pin, str)),
     )
-    judged = judge(view, part_before, route)
+    judged = judge(view, before, route)
     if judged.refusals:
         error_lines = [f"Refused to connect {from_name} to {to_name}:"]
         error_lines.extend(f"  {found.detail}" for found in judged.refusals)
@@ -2585,26 +2569,27 @@ def apply_op_inplace(
                 # fact, not a pin fact: cutting a duplicated bridge between two
                 # wired stubs splits the net while every pin still touches some
                 # wire, so a floating-pin scan blesses exactly the cut this
-                # guard exists to refuse. The oracle is the net partition.
-                part_before = net_partition(editor)
-                nets_before: dict[tuple[int, int], list[tuple[int, int]]] = {}
-                for coord in part_before.pin_owners:
-                    nets_before.setdefault(part_before.root(coord), []).append(coord)
+                # guard exists to refuse. The oracle is the sheet's wired nets.
+                nets_before = sheet_nets(editor).nets
+                on_net: dict[int, list[PinAt]] = {}
+                for pin in nets_before.pins:
+                    on_net.setdefault(nets_before.of_pin(pin), []).append(pin)
                 original, editor.wires = editor.wires, kept
-                part_after = net_partition(editor)
-                for coords in nets_before.values():
-                    sides: dict[tuple[int, int], list[tuple[int, int]]] = {}
-                    for coord in coords:
-                        sides.setdefault(part_after.root(coord), []).append(coord)
+                nets_after = sheet_nets(editor).nets
+                for pins in on_net.values():
+                    sides: dict[int, list[PinAt]] = {}
+                    for pin in pins:
+                        sides.setdefault(nets_after.of_pin(pin), []).append(pin)
                     if len(sides) < 2:
                         continue
                     editor.wires = original
 
-                    def _side_names(side: list[tuple[int, int]]) -> str:
+                    def _side_names(side: list[PinAt]) -> str:
                         names = [
-                            f"{ref}.{pin}" if pin else ref
-                            for c in sorted(side)
-                            for ref, pin in part_before.pin_owners[c]
+                            f"{pin.reference}.{pin.name}" if pin.name else pin.reference
+                            for pin in sorted(
+                                side, key=lambda pin: (pin.point, pin.part, pin.order)
+                            )
                         ]
                         return ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
 

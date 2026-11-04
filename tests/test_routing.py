@@ -2,14 +2,14 @@
 
 What the planner answers on real sheets is held to a record in
 ``test_route_planner_record.py``. This holds each rule to what it means, with
-no editor and no file: a view, a partition and a route.
+no editor and no file: a view, the nets LTspice makes of it, and a route.
 """
 
 from __future__ import annotations
 
 from itertools import pairwise
 
-from ltspice_mcp.lib.connectivity import NetPartition, partition
+from ltspice_mcp.lib.connectivity import NamedNets, named_nets
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.routing import RULES, Judgement, Route, judge
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
@@ -28,21 +28,17 @@ def sheet(
     parts: tuple[Part, ...] = (),
     wires: tuple[tuple[int, int, int, int], ...] = (),
     labels: tuple[tuple[int, int, str], ...] = (),
-) -> tuple[SheetView, NetPartition]:
+) -> tuple[SheetView, NamedNets]:
     view = SheetView(parts=parts, wires=wires, labels=labels)
-    nets = partition(
-        [((x, y), (part.ref, name)) for part in parts for name, x, y in part.pins],
+    nets = named_nets(
+        [(part.ref, [(name, (x, y)) for name, x, y in part.pins]) for part in parts],
         [((x, y), text) for x, y, text in labels],
         [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wires],
     )
     return view, nets
 
 
-def route(
-    *points: Point,
-    by_coordinate: tuple[bool, bool] = (False, False),
-    anchors: tuple[Point, Point] | None = None,
-) -> Route:
+def route(*points: Point, by_coordinate: tuple[bool, bool] = (False, False)) -> Route:
     """A route through ``points`` in the order given, from the first to the last."""
     start, end = points[0], points[-1]
     segments = tuple((a[0], a[1], b[0], b[1]) for a, b in pairwise(points))
@@ -50,7 +46,6 @@ def route(
         points=points,
         segments=segments,
         ends=(start, end),
-        anchors=anchors or (start, end),
         end_names=("FROM", "TO"),
         ends_by_coordinate=by_coordinate,
     )
@@ -96,6 +91,16 @@ class TestARouteThatMayBeDrawn:
         assert rules(found) == []
         assert found.junctions == [{"x": 200, "y": 0, "via": "pin", "pin": "R2.1"}]
 
+    def test_a_pin_on_its_net_by_wiring_away_from_its_ends_is_a_junction(self) -> None:
+        """R2.1 is on the route's net through a wire that reaches neither end of
+        the route: on its net all the same, as a wire's end there would be."""
+        parts = (resistor("R1", 0, 48), resistor("R2", 200, 48), resistor("R3", 400, 48))
+        rail = ((0, 0, 0, -64), (0, -64, 200, -64), (200, -64, 200, 0))
+        view, nets = sheet(parts=parts, wires=rail)
+        found = judge(view, nets, route((0, 0), (400, 0)))
+        assert rules(found) == []
+        assert found.junctions == [{"x": 200, "y": 0, "via": "pin", "pin": "R2.1"}]
+
     def test_a_part_it_crosses_is_not_its_to_say(self) -> None:
         """That is the sheet rule's, of the sheet once the route is drawn."""
         view, nets = sheet(parts=(resistor("R1", 200, 100),))
@@ -136,11 +141,9 @@ class TestARouteThatIsRefused:
 
     def test_an_end_whose_leg_runs_along_the_wire_it_is_on(self) -> None:
         view, nets = sheet(wires=((0, 0, 400, 0),))
-        along = route((200, 0), (500, 0), by_coordinate=(True, False), anchors=((0, 0), (500, 0)))
+        along = route((200, 0), (500, 0), by_coordinate=(True, False))
         assert rules(judge(view, nets, along)) == ["route_along_its_end"]
-        away = route(
-            (200, 0), (200, 200), by_coordinate=(True, False), anchors=((0, 0), (200, 200))
-        )
+        away = route((200, 0), (200, 200), by_coordinate=(True, False))
         found = judge(view, nets, away)
         assert rules(found) == []
         assert found.junctions == [
@@ -178,7 +181,10 @@ class TestARouteThatIsRefused:
         assert "the net label 'SIG' at (200,100), on net 'SIG'" in refusal.detail
 
     def test_onto_its_own_net_the_same_contact_is_a_junction(self) -> None:
-        view, nets = sheet(wires=((0, 100, 400, 100),), labels=((200, 100, "SIG"),))
-        found = judge(view, nets, route((200, 0), (200, 200), anchors=((0, 100), (200, 200))))
+        """The route starts at a label of the same name, which is one node with it."""
+        view, nets = sheet(
+            wires=((0, 100, 400, 100),), labels=((200, 100, "SIG"), (200, 0, "SIG"))
+        )
+        found = judge(view, nets, route((200, 0), (200, 200)))
         assert rules(found) == []
         assert found.junctions == [{"x": 200, "y": 100, "via": "label", "label": "SIG"}]

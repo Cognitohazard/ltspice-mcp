@@ -20,7 +20,7 @@ way — the way verify_circuit does; a mismatch or an export failure there is
 reported but never un-commits the sheet.
 """
 
-# The op models, the in-place applier and the net-partition helpers are the
+# The op models, the in-place applier and the sheet's nets are the
 # shared engine in lib/schematic_ops.py, imported rather than duplicated.
 from __future__ import annotations
 
@@ -80,8 +80,9 @@ from ltspice_mcp.lib.schematic_ops import (
     placed_geometry,
     require_asc,
     run_op_batch,
+    sheet_nets,
     symbols_of,
-    trace_nets,
+    wire_segments_of,
     wiring_profile,
 )
 from ltspice_mcp.lib.schematic_scene import (
@@ -659,15 +660,15 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
 def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]]:
     """The pin legend (only when ``include_legend``) and the label-only pins of a placed editor.
 
-    A label-only pin has no wire through it, so its net holds nothing but what
-    sits at its own coordinate, and its net name is the labels there — read
-    without tracing the sheet. The whole-sheet trace (``trace_nets``, the
-    union-find over every segment and point) runs only for the legend, which
-    names the net of every pin. The plain results go to the pure
+    A label-only pin has no wire through it, so its net name is the labels at
+    its own coordinate, read without working out the sheet's nets. The nets
+    LTspice makes of the whole sheet (``sheet_nets``) are worked out only for
+    the legend, which names the net of every pin with the labels of that net,
+    nets that share a name being one. The plain results go to the pure
     ``lib/pin_legend`` builders.
     """
     geometry = collect_component_geometry(editor)
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
+    segments = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wire_segments_of(editor)]
     labels_at: dict[tuple[int, int], set[str]] = {}
     for lbl in editor.labels:
         labels_at.setdefault((int(lbl.coord.X), int(lbl.coord.Y)), set()).add(lbl.text)
@@ -679,12 +680,15 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
         geometry,
         is_wired=build_on_wire_predicate(segments),
         is_labeled=lambda c: c in labels_at,
-        net_name_of=lambda c: net_name(labels_at.get(c, ())),
+        net_name_of=lambda _ref, _index, c: net_name(labels_at.get(c, ())),
     )
     if not include_legend:
         return [], label_only
-    nets = trace_nets(editor)
-    return build_pin_legend(geometry, lambda c: net_name(nets.get(c, ()))), label_only
+    nets = sheet_nets(editor, geometry=geometry)
+    names = {
+        (pin.reference, pin.order): net_name(nets.texts(nets.of_pin(pin))) for pin in nets.pins
+    }
+    return build_pin_legend(geometry, lambda ref, index, _c: names[ref, index]), label_only
 
 
 async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:

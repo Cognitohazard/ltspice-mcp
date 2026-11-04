@@ -35,22 +35,20 @@ from __future__ import annotations
 
 import itertools
 import re
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, Literal
 
 from ltspice_mcp.lib.connectivity import (
-    NetPartition,
+    NamedNets,
     build_on_wire_predicate,
     build_wire_counter,
     crossing_points,
     fold_case,
     is_ground,
-    label_folded_nets,
     name_key,
     nets_by_ltspice,
-    partition,
     point_on_segment,
 )
 from ltspice_mcp.lib.geometry import BBox
@@ -58,6 +56,7 @@ from ltspice_mcp.lib.nets import LabelAt, Nets, PinAt
 from ltspice_mcp.lib.spice_lex import copies_by_name, key_value_tokens
 
 Point = tuple[int, int]
+Segment = tuple[Point, Point]
 Family = Literal["electrical", "structural", "drawing"]
 Scope = Literal["point", "wire", "part", "net", "sheet"]
 Check = Literal["symbols", "layout", "quality", "export"]
@@ -377,9 +376,9 @@ class _Index:
         self.wires = [(a, b) for a, b in every if a != b]
         self.on_a_wire = build_on_wire_predicate(self.wires)
         self.wires_through = build_wire_counter(self.wires)
-        #: As ``on_a_wire``, counting the point of a wire of no length too.
-        self.on_any_wire = build_on_wire_predicate(every)
         self.pins_at = {(x, y) for part in view.parts for _name, x, y in part.pins}
+        #: Whether a label on a point is on a pin or a wire (``label_connects``).
+        self.label_connects = label_connects(self.pins_at, every)
         self.labelled = {(x, y) for x, y, _text in view.labels}
         #: The parts whose symbols were found, by their place in the view: the
         #: only ones whose extent is known.
@@ -407,27 +406,36 @@ class _Index:
         ]
 
     @cached_property
-    def nets(self) -> Nets:
-        """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
-        labels = [
+    def marks(self) -> list[LabelAt]:
+        """Every label, ground flags among them, in the view's order."""
+        return [
             LabelAt((x, y), index, text) for index, (x, y, text) in enumerate(self.view.labels)
         ]
-        return nets_by_ltspice(self.pins, labels, self.every_wire)
+
+    @cached_property
+    def nets(self) -> Nets:
+        """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
+        return nets_by_ltspice(self.pins, self.marks, self.every_wire)
+
+    def nets_without(self, points: Collection[Point]) -> NamedNets:
+        """The sheet's nets, named, with the pins and labels on ``points`` left out."""
+        return NamedNets(
+            nets_by_ltspice(
+                [pin for pin in self.pins if pin.point not in points],
+                [label for label in self.marks if label.point not in points],
+                self.every_wire,
+            )
+        )
 
 
-def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
-    """The sheet's nets as its wiring joins them (``connectivity.partition``),
-    leaving out the pins and labels on the points in ``without``."""
-    return partition(
-        (
-            ((x, y), (part.name, name))
-            for part in view.parts
-            for name, x, y in part.pins
-            if (x, y) not in without
-        ),
-        (((x, y), text) for x, y, text in view.labels if (x, y) not in without),
-        [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in view.wires],
-    )
+def label_connects(pins: Iterable[Point], wires: Iterable[Segment]) -> Callable[[Point], bool]:
+    """Whether a label on a point is on something: a pin there, or a wire through
+    it, one of no length on the point included. The one test of a label on
+    nothing, for the ``dangling_label`` rule and for the drawing's marker of an
+    unconnected flag."""
+    pin_points = set(pins)
+    on_wire = build_on_wire_predicate(wires)
+    return lambda point: point in pin_points or on_wire(point)
 
 
 def _net_name(labels: list[tuple[Point, str]]) -> str:
@@ -604,16 +612,15 @@ def _nets_with_two_names(ix: _Index) -> list[Finding]:
     # One node per label-folded net, names compared as LTspice compares them,
     # ground no name. Each name is given in the spelling LTspice gives it.
     named = [
-        ((x, y), name)
-        for x, y, text in ix.view.labels
-        if (name := text.strip()) and not is_ground(name)
+        (label, name) for label in ix.marks if (name := label.text.strip()) and not is_ground(name)
     ]
-    if len({name_key(name) for _point, name in named}) < 2:
+    if len({name_key(name) for _label, name in named}) < 2:
         return []
-    net_of = label_folded_nets(_wired_nets(ix.view))
-    nets: dict[Point, dict[str, list[tuple[Point, str]]]] = {}
-    for point, name in named:
-        nets.setdefault(net_of(point), {}).setdefault(name_key(name), []).append((point, name))
+    folded = NamedNets(ix.nets)
+    nets: dict[int, dict[str, list[tuple[Point, str]]]] = {}
+    for label, name in named:
+        by_key = nets.setdefault(folded.of_label(label), {})
+        by_key.setdefault(name_key(name), []).append((label.point, name))
     found: list[Finding] = []
     for by_key in nets.values():
         if len(by_key) < 2:
@@ -655,10 +662,10 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
     }
     if not crossings:
         return []
-    net_of = label_folded_nets(_wired_nets(ix.view, without=crossings))
+    apart = ix.nets_without(crossings)
     found: list[Finding] = []
     for point, through in sorted(crossings.items()):
-        nets = {net_of(a) for a, _b in through}
+        nets: set[int] = set().union(*apart.wired_at(point))
         if len(nets) < 2:
             continue
         what = ", ".join(on[point])
@@ -762,7 +769,7 @@ def _dangling_labels(ix: _Index) -> list[Finding]:
             facts={"label": text},
         )
         for x, y, text in ix.view.labels
-        if (x, y) not in ix.pins_at and not ix.on_any_wire((x, y))
+        if not ix.label_connects((x, y))
     ]
 
 

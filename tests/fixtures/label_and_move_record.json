@@ -141,9 +141,17 @@
     "x": 208,
     "y": 128
    },
+   "refused: Refused to add ground at (#,#): the flag would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together and to ground. Put the flag on a point of the one net it is meant for. [ground; 1 at the point, 2 named]": {
+    "net": "0",
+    "refused": "Refused to add ground at (96,144): the flag would join nets that each carry a name (['a']; ['b']), shorting them together and to ground. Put the flag on a point of the one net it is meant for.",
+    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc",
+    "there": "ground; 1 at the point, 2 named",
+    "x": 96,
+    "y": 144
+   },
    "refused: Refused to add ground at (#,#): wires of nets that each carry a name cross there (['\u2026']; ['\u2026']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for. [ground; 2 at the point, 2 named]": {
     "net": "0",
-    "refused": "Refused to add ground at (96,96): wires of nets that each carry a name cross there (['a']; ['b']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for.",
+    "refused": "Refused to add ground at (96,96): wires of nets that each carry a name cross there (['b']; ['a']). A ground flag on a crossing joins the wires, shorting those nets together and to ground. Put the flag on a point of the one wire it is meant for.",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "ground; 2 at the point, 2 named",
     "x": 96,
@@ -151,7 +159,7 @@
    },
    "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": {
     "net": "b",
-    "refused": "Refused to add net 'b' at (0,96): the label would join nets that each carry a name (['a']; ['b']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
+    "refused": "Refused to add net 'b' at (0,96): the label would join nets that each carry a name (['b']; ['a']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a name already elsewhere; 1 at the point, 1 named",
     "x": 0,
@@ -165,17 +173,33 @@
     "x": 96,
     "y": 400
    },
+   "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 1 at the point, 2 named]": {
+    "net": "a",
+    "refused": "Refused to add net 'a' at (96,144): the label would join nets that each carry a name (['a']; ['b']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
+    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc",
+    "there": "a name already here; 1 at the point, 2 named",
+    "x": 96,
+    "y": 144
+   },
    "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 2 at the point, 2 named]": {
     "net": "a",
-    "refused": "Refused to add net 'a' at (96,96): the label would join nets that each carry a name (['a']; ['b']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
+    "refused": "Refused to add net 'a' at (96,96): the label would join nets that each carry a name (['b']; ['a']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a name already here; 2 at the point, 2 named",
     "x": 96,
     "y": 96
    },
+   "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 1 at the point, 2 named]": {
+    "net": "a_name_no_sheet_has",
+    "refused": "Refused to add net 'a_name_no_sheet_has' at (96,144): the label would join nets that each carry a name (['a']; ['b']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
+    "sheet": "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc",
+    "there": "a new name; 1 at the point, 2 named",
+    "x": 96,
+    "y": 144
+   },
    "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 2 at the point, 2 named]": {
     "net": "a_name_no_sheet_has",
-    "refused": "Refused to add net 'a_name_no_sheet_has' at (96,96): the label would join nets that each carry a name (['a']; ['b']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
+    "refused": "Refused to add net 'a_name_no_sheet_has' at (96,96): the label would join nets that each carry a name (['b']; ['a']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a new name; 2 at the point, 2 named",
     "x": 96,
@@ -183,7 +207,7 @@
    },
    "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 2 at the point, 2 named]": {
     "net": "c",
-    "refused": "Refused to add net 'c' at (96,96): the label would join nets that each carry a name (['a']; ['c']; ['b']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
+    "refused": "Refused to add net 'c' at (96,96): the label would join nets that each carry a name (['b']; ['a']; ['c']), shorting them together. To join them on purpose, give both the same name: remove one side's labels with remove_net_label and label it with the other's name.",
     "sheet": "fixtures/crossings/every_kind.asc",
     "there": "a name already elsewhere; 2 at the point, 2 named",
     "x": 96,
@@ -217,7 +241,7 @@
    },
    "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": {
     "reference": "R1",
-    "refused": "Refused to move R1: R1.1 would land at (96,96), where wires of nets that each carry a name cross (['a']; ['b']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.",
+    "refused": "Refused to move R1: R1.1 would land at (96,96), where wires of nets that each carry a name cross (['b']; ['a']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.",
     "sheet": "fixtures/crossings/every_kind.asc",
     "x": 96,
     "y": 144
@@ -252,15 +276,15 @@
   "fixtures/crossings/every_kind.asc": {
    "labels": {
     "proposals": 264,
-    "sha256": "3ab169ae9eb5a72bc0a3290f80b92d814a02116a1ab5052a128bc3dfde01347e",
+    "sha256": "7901405e2d1e22e7970e267badac329d8e3fdc1348df30f11219417294eb29ba",
     "shapes": {
-     "placed [a name already elsewhere; 0 at the point, 0 named]": 4,
-     "placed [a name already elsewhere; 1 at the point, 0 named]": 120,
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 8,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 116,
      "placed [a name already here; 1 at the point, 1 named]": 8,
-     "placed [a new name; 0 at the point, 0 named]": 1,
-     "placed [a new name; 1 at the point, 0 named]": 30,
-     "placed [ground; 0 at the point, 0 named]": 1,
-     "placed [ground; 1 at the point, 0 named]": 30,
+     "placed [a new name; 0 at the point, 0 named]": 2,
+     "placed [a new name; 1 at the point, 0 named]": 29,
+     "placed [ground; 0 at the point, 0 named]": 2,
+     "placed [ground; 1 at the point, 0 named]": 29,
      "placed [ground; 1 at the point, 1 named]": 8,
      "placed | sheet: joined_at_crossing [a name already elsewhere; 2 at the point, 0 named]": 8,
      "placed | sheet: joined_at_crossing [a name already here; 2 at the point, 1 named]": 2,
@@ -279,7 +303,7 @@
    },
    "moves": {
     "proposals": 168,
-    "sha256": "46451ae22cc03b1cd919cfef9bf39a65f1398abe296e4c6c1a6d26ba5fd8b3c1",
+    "sha256": "9d0d40e96ef0d04d0da6d4cba6565737083dd6eb25b5c1156e6989a5e7b794ed",
     "shapes": {
      "moved": 136,
      "moved | sheet: joined_at_crossing": 24,
@@ -472,7 +496,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/common_source_drawn.asc": {
    "labels": {
     "proposals": 130,
-    "sha256": "ec3efb0c83b6d27a31a3573eab0921c0a0a2f91a432712922767aae18675d247",
+    "sha256": "83c72e203af0dea0474f9f0b0d3746f8f6a8b3ac4e7ad2d26ef8b626e4ea54e8",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 33,
@@ -522,7 +546,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/diff_pair_drawn.asc": {
    "labels": {
     "proposals": 408,
-    "sha256": "c39ab3a140a1e0e3f1901a8ae440c4f8bda10bddf12f4edaf638fcb1bdaa9667",
+    "sha256": "8c78f6adb96c2a0d85415409ae71b5e2cb17a050438677449a57da6207903dd1",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 6,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 72,
@@ -572,7 +596,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/nmos_mirror_drawn.asc": {
    "labels": {
     "proposals": 180,
-    "sha256": "f13bbb02c168879a9a75e93055cbe52f87e92567ed89c2925e21967da22fadcd",
+    "sha256": "8f641213626aec8de5c65274820c62f1d56e38124a9e915afd42943cb59b8d48",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 30,
@@ -857,7 +881,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_drawn.asc": {
    "labels": {
     "proposals": 425,
-    "sha256": "60af8554a3be796c629ec055a997f40f8f6ea60e3c25dde6274a6d1a9117df1e",
+    "sha256": "3f9fe22f8536e055406cf1412050f197df32b4d26d78c8452bb53b688a893242",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 5,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 149,
@@ -901,7 +925,7 @@
   "fixtures/ltspice_recorded/inputs/benchmark/two_stage_opamp_moved.asc": {
    "labels": {
     "proposals": 425,
-    "sha256": "60af8554a3be796c629ec055a997f40f8f6ea60e3c25dde6274a6d1a9117df1e",
+    "sha256": "3f9fe22f8536e055406cf1412050f197df32b4d26d78c8452bb53b688a893242",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 5,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 149,
@@ -1558,14 +1582,18 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_inline_vertex.asc": {
    "labels": {
     "proposals": 32,
-    "sha256": "c5261a49cc099381968b1ffc9a4c6bc7f41ea5165daaad21d2e0b61b97686a59",
+    "sha256": "a953d8590875b7405fb5bc55f565b1d7b2a6bb129513ab182a0af63692207789",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [ground; 0 at the point, 0 named]": 1,
-     "placed [ground; 1 at the point, 1 named]": 7,
-     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 14,
-     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 7
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add ground at (#,#): the flag would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together and to ground. Put the flag on a point of the one net it is meant for. [ground; 1 at the point, 2 named]": 3,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 1 at the point, 2 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 1 at the point, 2 named]": 3
     }
    },
    "moves": {
@@ -1689,14 +1717,18 @@
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_wire.asc": {
    "labels": {
     "proposals": 24,
-    "sha256": "668d3ff12d16e34fb8b101d4b8232080c8db832346eb41e8e35abace42d47535",
+    "sha256": "757ee9823882148f4cea643046403b9b0bc782a7802cd8374e715bf0bc9bb7b7",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [ground; 0 at the point, 0 named]": 1,
-     "placed [ground; 1 at the point, 1 named]": 5,
-     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 10,
-     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 5
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add ground at (#,#): the flag would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together and to ground. Put the flag on a point of the one net it is meant for. [ground; 1 at the point, 2 named]": 1,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 1 at the point, 2 named]": 2,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 1 at the point, 2 named]": 1
     }
    },
    "moves": {
@@ -3011,7 +3043,7 @@
   "fixtures/nmos4_mirrored_quarter_turns.asc": {
    "labels": {
     "proposals": 140,
-    "sha256": "7c7dd62d98b07547de81574cd96f123112a8becd92af976f2b646a8f648475ee",
+    "sha256": "33d9579978fd4c784c3f817191c9abd2dd6b74f4bd2a9f48a898ee2a0e0ec3f4",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
      "placed [a name already elsewhere; 1 at the point, 0 named]": 16,
