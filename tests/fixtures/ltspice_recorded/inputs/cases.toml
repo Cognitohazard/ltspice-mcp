@@ -369,6 +369,18 @@ inputs = [
     "deck/subckt_param_precedence.cir",
 ]
 
+[behaviour.mos-instance-mismatch]
+summary = "How each build takes a mismatch draw on a MOSFET inside a subcircuit: whether it applies the delvto and mulu0 instance parameters ngspice takes on a BSIM3 or BSIM4 device, against a model with vth0 shifted or u0 scaled by the same amount, and whether delvto shifts a p-channel device's signed threshold or its magnitude; that a model card copied with vth0 shifted or u0 scaled takes effect on BSIM3 and BSIM4; and that a subcircuit copy uses the copy of a local or top-level model it names."
+model = ["lib/subckt_mismatch.py", "lib/variations.py", "lib/instance_targeting.py"]
+inputs = [
+    "deck/mos_delvto_bsim4.cir",
+    "deck/mos_mulu0_bsim4.cir",
+    "deck/mos_delvto_bsim3.cir",
+    "deck/mos_mulu0_bsim3.cir",
+    "deck/mos_model_variants.cir",
+    "deck/subckt_model_copy.cir",
+]
+
 [behaviour.deck-includes]
 summary = "How .include and .lib are resolved: a file beside the deck, and a .lib that names a section."
 model = ["lib/deck_staging.py", "lib/lint_rules.py", "lib/runner_base.py"]
@@ -449,13 +461,15 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.mos-multiplier]
-summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line and of m={mult} set from it, which the server counts only under ngspice."
+summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line, one or two levels up, and of m={mult} set from it: both ignore the X line's m, so an LTspice draw counts only the device's own."
 model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
 # Each device's drain is fed through a 0 V source, so the operating-point raw
 # holds its current: one copy (V1) against m=4 on the card (V4), and in the
 # second deck one copy in a body against m=4 on the X line (VX) and against a
-# body whose device takes m={mult} from mult=4 on the X line (VP).
-inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir"]
+# body whose device takes m={mult} from mult=4 on the X line (VP). The third
+# deck does the same two subcircuit levels down: m=4 on the outer X line (VO),
+# on the inner one (VI), and mult=4 passed down both (VP).
+inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir", "deck/subckt_multiplier_nested.cir"]
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
