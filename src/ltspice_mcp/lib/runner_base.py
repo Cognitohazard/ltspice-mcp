@@ -36,7 +36,7 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
-from ltspice_mcp.lib.simulator_build import ltspice_before_24, reported_build
+from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
 from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, lex_deck, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
@@ -446,7 +446,9 @@ def collect_run_outcome(
     )
 
 
-def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
+def inject_logopinfo(
+    netlist_path: Path, simulator: type, job_id: str, *, reported: str | None = None
+) -> Path:
     """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
 
     LTspice 24 and later write each semiconductor's small-signal operating
@@ -473,7 +475,9 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
-    if ltspice_before_24(simulator):
+    # ``reported`` is the build an earlier run on this executable named
+    # (``services.reported_build_of``): an LTspice before 24 under another name.
+    if ltspice_before_24(executable_path(simulator), reported):
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path

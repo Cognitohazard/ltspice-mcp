@@ -188,7 +188,6 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    ltspice_before_24,
 )
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
@@ -2128,7 +2127,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
         if family == "ngspice"
         else None,
-        xvii_names=family == "ltspice" and ltspice_before_24(simulator),
+        xvii_names=family == "ltspice" and services.simulator_before_24(state, simulator),
     )
     sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(

@@ -545,6 +545,10 @@ class _Execution:
     # own snapshot and each report the same transition.
     claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
     persistence_error: Exception | None = None
+    #: The build an earlier run on this job's executable reported, read on the
+    #: loop as the job starts: with the executable's name, what tells whether it
+    #: is an LTspice before 24 (``simulator_build.ltspice_before_24``).
+    reported_build: str | None = None
 
     @property
     def job(self) -> ExperimentJob:
@@ -977,6 +981,8 @@ class ExperimentRunner(RunnerBase):
                 job_deadline_s=recorded.job_deadline_s,
                 simulator_seed=recorded.simulator_seed,
             )
+        from ltspice_mcp.lib.services import reported_build_of
+
         return _Execution(
             # Without the staging closure: this execution outlives the
             # submission call, and the closure holds that whole scope.
@@ -986,6 +992,7 @@ class ExperimentRunner(RunnerBase):
             capacity=capacity,
             run_timeout_s=run_timeout_s,
             run_timeout_source=run_timeout_source,
+            reported_build=reported_build_of(request.state, job.simulator_executable),
         )
 
     async def _run_job(self, execution: _Execution) -> None:
@@ -1302,7 +1309,12 @@ class ExperimentRunner(RunnerBase):
             # and every provenance check compare against. No-op for ngspice and for
             # decks with no .op. The run_token stamp keeps concurrent cases sharing
             # one staged deck from clobbering each other's copy.
-            run_deck = inject_logopinfo(case.staged_deck, self.simulator_class, case.run_token)
+            run_deck = inject_logopinfo(
+                case.staged_deck,
+                self.simulator_class,
+                case.run_token,
+                reported=execution.reported_build,
+            )
             # On ngspice, a `.control` script replaces the raw the simulator would
             # otherwise write, so a scripted deck that never calls write/wrdata
             # produces no rawfile at all and every recipe over the case reads

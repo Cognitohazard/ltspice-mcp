@@ -67,8 +67,8 @@ from ltspice_mcp.lib.result_observations import (
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
-    is_cp1252_ltspice_build,
-    is_cp1252_ltspice_executable,
+    executable_identity,
+    ltspice_before_24,
     same_executable,
 )
 from ltspice_mcp.state import SessionState
@@ -521,10 +521,12 @@ def reported_version(
     """
     if executable is None:
         return None
+    # A snapshot: a worker thread reads this too, while the loop adds jobs.
+    jobs = tuple(state.all_jobs.values())
     latest = max(
         (
             (case.completed_at or job.started_at, job, case)
-            for job in state.all_jobs.values()
+            for job in jobs
             if same_executable(job.simulator_executable, executable)
             for case in job.cases
             if case.simulator_version
@@ -540,24 +542,38 @@ def reported_version(
 
 
 def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
-    """The evidence that ``executable`` is an LTspice that decodes decks as cp1252.
+    """The evidence that ``executable`` is an LTspice before 24, which decodes
+    decks as cp1252, or None.
 
     LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
     (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
-    LTspice 24 and later read the UTF-8 they write. Which one an executable is
-    shows in its own name (``XVIIx64.exe``), or in the build the latest run on
-    it reported, the one ``inspect(kind="capabilities")`` reports. Neither
-    launches the simulator. Any other simulator answers None. The answer names
-    the evidence, for a finding to cite.
+    LTspice 24 and later read the UTF-8 they write. The same builds refuse
+    ``.options logopinfo`` and name subcircuit instances without their X, so
+    every decision about them asks here, or passes the same two facts to
+    ``simulator_build.ltspice_before_24``: the executable's own name
+    (``XVIIx64.exe``), and the build the latest run on it reported, the one
+    ``inspect(kind="capabilities")`` reports. Neither launches the simulator.
+    Any other simulator answers None. The answer names the evidence, for a
+    finding to cite.
     """
     if executable is None:
         return None
-    if is_cp1252_ltspice_executable(executable.path):
-        return executable.path
+    return ltspice_before_24(executable.path, reported_build_of(state, executable))
+
+
+def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
+    """The build the latest run on ``executable`` reported (``reported_version``),
+    without which run did."""
     reported = reported_version(state, executable)
-    if reported is not None and is_cp1252_ltspice_build(reported[0]):
-        return f"{reported[0]} ({executable.path})"
-    return None
+    return reported[0] if reported is not None else None
+
+
+def simulator_before_24(state: SessionState, simulator: type | None) -> bool:
+    """``cp1252_ltspice`` for a simulator class: whether it launches an LTspice
+    before 24. Blocking (the executable is identified): call off the loop."""
+    if simulator is None:
+        return False
+    return cp1252_ltspice(state, executable_identity(simulator)) is not None
 
 
 # Absolute worker deadline; the supervisor confirms owned-tree cleanup before
