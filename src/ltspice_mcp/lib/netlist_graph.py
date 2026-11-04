@@ -442,6 +442,11 @@ class GraphComparison:
     ``structurally_equivalent`` is the wiring-only verdict (the 1-WL histogram
     check, ground pinned, anchor labels ignored) — it can be True while
     ``equivalent`` is False when only values or anchor placement differ.
+
+    Directives are not part of it: this module compares connectivity. The
+    tools' equivalence mode (``tools/verify.py``, ``compare_equivalence``)
+    adds the directive comparison of ``netlist_diff`` to this verdict, so a
+    caller asking whether two decks are the same circuit goes through it.
     """
 
     equivalent: bool
