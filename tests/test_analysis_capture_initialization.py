@@ -65,7 +65,13 @@ async def test_console_mutation_cannot_rebind_relay_to_new_manifest(
     manifest = data["source_hashes"][0]
     assert manifest["snapshot_id"] == captures[0].snapshot_id
     assert manifest["console_sha256"] == hashlib.sha256(before).hexdigest()
-    assert "meas" not in data["results"]
+    # The recipe keeps its entry, with no rows and a pointer to the failure.
+    meas = data["results"]["meas"]
+    assert (
+        not meas.get("values")
+        and not meas.get("per_run", {}).get("items")
+        and any(warning.startswith("No rows:") for warning in meas["warnings"])
+    )
     assert any(failure["code"] == "source_drift" for failure in data["failures"])
     failures = [item for item in data["observations"] if item["code"] == "solve_failure"]
     assert bool(failures) == bool(before)

@@ -176,9 +176,9 @@ def test_a_log_source_selects_no_plot():
 def test_api_validates_selection_before_loading(state_no_sim):
     api = SyncApi(state_no_sim)
     for empty in ("", "  "):
-        with pytest.raises(TypeError, match="path is empty"):
+        with pytest.raises(ApiValidationError, match="path is empty"):
             api.load_raw(empty)
-        with pytest.raises(TypeError, match="path is empty"):
+        with pytest.raises(ApiValidationError, match="path is empty"):
             api.measurements(empty)
     invalid_indices: list[Any] = [-1, True, "1", 1.0]
     for index in invalid_indices:
