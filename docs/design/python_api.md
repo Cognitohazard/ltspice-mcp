@@ -400,9 +400,12 @@ Default (automatic) mode **drops** the two presentation controls, `budget`
 and `execution.wait_s`, and lists each dropped field in the result's
 `warnings`. Neither is part of a request's idempotency fingerprint, so an MCP
 call replayed through the API with them attached is the same request. It
-**rejects** any field, at any depth, named `cursor`, `continuation`,
-`continue` or `view_cursors` or ending in `_cursor` or `_cursors`, with an
-`ApiValidationError` that names `raw_page=True` as the fix. It never changes
+**rejects** any of the operation's own fields, at any depth, named `cursor`,
+`continuation`, `continue` or `view_cursors` or ending in `_cursor` or
+`_cursors`, with an `ApiValidationError` that names `raw_page=True` as the fix.
+A key that is the caller's own data, such as a parameter named `budget` or
+`bias_cursor` in an `assign` variation, is not a control and passes as
+written. It never changes
 request fields that are part of the fingerprint. It passes `per_run`,
 `outliers` and `signals_available` exactly as the caller wrote them, so
 replaying an MCP request through the API cannot cause an idempotency conflict.
