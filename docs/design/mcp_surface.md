@@ -1956,8 +1956,13 @@ instance list, or every MOS inside a subcircuit instance by that instance's
 list. Such a device gets its draw as `delvto` and `mulu0` instance
 parameters, which needs its model to resolve to an ngspice-compatible BSIM3
 or BSIM4 model, and the draw uses the device's W and L after `assign`
-variations are applied. Draws across circuits are independent; correlated
-Monte Carlo across decks is not supported.
+variations are applied. The area a draw stands for is `m·W·L`, where m is the
+product of the device's own `m` and the `m` of every subcircuit instance
+above it (an inner `m={mult}` resolves in the scope its X line sets), because
+the simulator builds that many parallel copies from one card and they share
+the draw. An `m` that does not resolve to a positive number refuses the
+request with `mismatch_geometry_unresolved`. Draws across circuits are
+independent; correlated Monte Carlo across decks is not supported.
 
 ### A.2 Recipe
 

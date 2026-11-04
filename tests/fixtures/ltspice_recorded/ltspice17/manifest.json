@@ -7864,6 +7864,38 @@
         ".log"
       ]
     },
+    "raw/mos_multiplier": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_multiplier.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/mos_multiplier.cir": "9aaa42a15bb1728b0b31b010f05dd0ba22bf7069788a67ef04020c6433ddc08e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/mos_multiplier.log": {
+          "bytes": 1285,
+          "sha256": "938aeb3825d27de777dac5289cb6f6baaeb3df14af41d00b3281ee3664734d61"
+        },
+        "raw/mos_multiplier.raw": {
+          "bytes": 1406,
+          "sha256": "bb7dfbbc799a0ba79e2c491dd2d9786ad733d28ab1c798cad4065775777c1f94"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "raw/noise": {
       "behaviour": "raw-noise",
       "command": [
@@ -8563,6 +8595,38 @@
         ".log",
         ".log.raw",
         ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/subckt_multiplier": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_multiplier.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/subckt_multiplier.cir": "7a739b38e130e35bce548da4cd0c7fbf276d9e4764f4eb9b72696c23405b3ee0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/subckt_multiplier.log": {
+          "bytes": 1617,
+          "sha256": "6b1ae4d861b6b80e7896696ad61bd05ac6fc75c58efd2c6c35bfba1e2fa565c6"
+        },
+        "raw/subckt_multiplier.raw": {
+          "bytes": 1620,
+          "sha256": "51575dd59464fd806d057914aea6ccf9c2dd2f90cf5cbc979985f0db8b288a17"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
         ".raw"
       ]
     },

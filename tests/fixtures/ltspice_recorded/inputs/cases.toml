@@ -14,7 +14,9 @@
 # cannot: another switch, a setting, a run stopped part way.
 #
 # A behaviour with no input says why: `evidence` when the build's manifest
-# records it some other way, `unrecordable` when nothing can.
+# records it some other way, `unrecordable` when nothing can. A behaviour
+# whose inputs are written but not yet recorded says how to record them in
+# `pending`, which comes out with the recording.
 
 # ---------------------------------------------------------------- schematics
 
@@ -445,6 +447,15 @@ inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.ci
 summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
 model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
+
+[behaviour.mos-multiplier]
+summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line and of m={mult} set from it, which the server counts only under ngspice."
+model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
+# Each device's drain is fed through a 0 V source, so the operating-point raw
+# holds its current: one copy (V1) against m=4 on the card (V4), and in the
+# second deck one copy in a body against m=4 on the X line (VX) and against a
+# body whose device takes m={mult} from mult=4 on the X line (VP).
+inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir"]
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."

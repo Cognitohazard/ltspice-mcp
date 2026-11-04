@@ -912,13 +912,15 @@ def test_profiled_flat_mismatch_retains_model_clone_engine(tmp_path, simulator):
 _FLAT_MISMATCH_SEED = 13
 
 
-def _flat_mismatch_case(tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=100u)"):
+def _flat_mismatch_case(
+    tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=100u)", m1_params=""
+):
     from ltspice_mcp.lib.variations import CircuitDeck
 
     circuit = CircuitDeck(
         "bench",
         tmp_path / "flat.cir",
-        f"* flat\n{models}\nM1 a g 0 0 n w=2u l=1u\nM2 b g 0 0 n w=2u l=1u\n.end\n",
+        f"* flat\n{models}\nM1 a g 0 0 n w=2u l=1u{m1_params}\nM2 b g 0 0 n w=2u l=1u\n.end\n",
         semantic_profile=SemanticProfile("ngspice", "hsa"),
     )
     (case,) = materialize(
@@ -955,6 +957,63 @@ def _drawn_mismatch(avt=0.0, ak=0.0):
         InstanceGeometry(canonical_target(("M1",), "mismatch"), "n", 2e-6, 1e-6),
         MismatchRule(prefix="M1", avt=avt, ak=ak),
     )
+
+
+def _nested_threshold_shift(tmp_path, xa_line):
+    """The threshold shift drawn for XA.Xleaf.M0 with ``xa_line`` as XA's card."""
+    from dataclasses import replace
+
+    tmp_path.mkdir()
+    circuit = target_circuit(tmp_path)
+    circuit = replace(circuit, text=circuit.text.replace("XA a g block\n", xa_line + "\n"))
+    (case,) = materialize(
+        circuit,
+        tmp_path,
+        [
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 17,
+                "rules": [{"rule": "mismatch", "instance": ["XA", "Xleaf", "M0"], "AVT": 0.003}],
+            }
+        ],
+    )
+    (shift,) = [value for key, value in case.assignments.items() if "delvto" in key]
+    return shift
+
+
+def test_nested_mismatch_counts_the_multiplier_of_an_instance_above(tmp_path):
+    # ngspice builds m copies of every device below an X line that carries m,
+    # all from one card, so the four leaf copies share the one draw.
+    one = _nested_threshold_shift(tmp_path / "one", "XA a g block")
+    four = _nested_threshold_shift(tmp_path / "four", "XA a g block m=4")
+    assert one != 0.0
+    assert four == pytest.approx(one / 2, rel=1e-9)
+
+
+def test_nested_mismatch_refuses_a_multiplier_it_cannot_resolve(tmp_path):
+    from ltspice_mcp.lib.variations import VariationError
+
+    with pytest.raises(VariationError) as exc:
+        _nested_threshold_shift(tmp_path / "unknown", "XA a g block m={nowhere}")
+    assert exc.value.code == "mismatch_geometry_unresolved"
+    assert "XA" in str(exc.value)
+
+
+def test_flat_mismatch_counts_the_device_multiplier(tmp_path):
+    from ltspice_mcp.lib.instance_targeting import canonical_target
+
+    def vto(directory, m1_params):
+        directory.mkdir()
+        case, _ = _flat_mismatch_case(
+            directory, {"prefix": "M1", "AVT": 0.003}, m1_params=m1_params
+        )
+        return case.assignments[canonical_target(("M1",), "model_parameter", "VTO")] - 0.5
+
+    one = vto(tmp_path / "one", "")
+    four = vto(tmp_path / "four", " m=4")
+    assert one != 0.0
+    assert four == pytest.approx(one / 2, rel=1e-9)
 
 
 def test_flat_mismatch_shifts_vth_additively_and_scales_k(tmp_path):

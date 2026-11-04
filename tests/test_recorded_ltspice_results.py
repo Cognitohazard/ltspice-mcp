@@ -248,6 +248,14 @@ class TestRawLayouts:
         assert values["v(out)"] == pytest.approx(4.0)
         assert values["i(r1)"] == pytest.approx(1e-3)
 
+    def test_a_card_with_m_is_that_many_copies_of_one_device(self, build: str, tmp_path: Path):
+        """``m=4`` on a MOSFET card draws four times one copy's current: the
+        parallel copies of one card that a mismatch draw's area of m·W·L
+        stands for."""
+        values = rec.operating_point(build, "raw/mos_multiplier", tmp_path)
+        assert values["i(v1)"] != 0.0
+        assert values["i(v4)"] == pytest.approx(4 * values["i(v1)"], rel=1e-6)
+
     def test_a_transfer_function_is_one_point_of_gain_and_two_impedances(
         self, build: str, tmp_path: Path
     ):
