@@ -1761,8 +1761,8 @@ def test_the_arguments_this_tool_no_longer_takes(payload: dict):
 # Post-commit reference stage
 # ---------------------------------------------------------------------------
 
-_REF_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
-_REF_DECK_DIFFERENT = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
+_REF_DECK = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
+_REF_DECK_DIFFERENT = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
 
 
 @pytest.mark.parametrize("as_text", [False, True], ids=["file", "text"])
@@ -1836,7 +1836,7 @@ async def test_reference_anchors_are_honoured(asc_state, monkeypatch):
     # The same divider with its nets renamed: wired alike, so it matches by
     # structure, but the name 'out' now sits on the source node instead of
     # the R1-R2 junction. Only an anchor on 'out' can tell the two apart.
-    renamed = "Vin out 0 5\nR1 out mid 1k\nR2 mid 0 2k\n.end\n"
+    renamed = "* divider\nVin out 0 5\nR1 out mid 1k\nR2 mid 0 2k\n.end\n"
 
     async def fake_export(_copy, _state):
         return renamed

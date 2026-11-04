@@ -109,12 +109,6 @@
   "reply": "da66f49261a1438f",
   "sheet": "2f66633286ed1ad2"
  },
- "15e4130d3e261039": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
-  ]
- },
  "161ec7cad16b149e": {
   "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
   "raised": "PathSecurityError"
@@ -259,10 +253,6 @@
   "reply": "ce01b95855f32e4c",
   "sheet": null
  },
- "3b64bc1e4b69ddbf": {
-  "reply": "05b42f65b143eee4",
-  "sheet": "2f66633286ed1ad2"
- },
  "3c607bf385bc73ce": {
   "reply": "71ba0f89d49b64e7",
   "sheet": "1f1cd547b8f9866c"
@@ -303,10 +293,6 @@
   "reply": "51f76c8de495098f",
   "sheet": "2385a94d791ae910"
  },
- "424f96e03b173027": {
-  "reply": "99d02b0d6fcd34b7",
-  "sheet": "2f66633286ed1ad2"
- },
  "42688f25350414b1": {
   "reply": "080beaef858a5932",
   "sheet": null
@@ -327,9 +313,17 @@
   "reply": "14b1202757be85a6",
   "sheet": "99098b43e1a2502f"
  },
+ "4893e9e06717b1fa": {
+  "reply": "cabc9934c7860555",
+  "sheet": "2f66633286ed1ad2"
+ },
  "4988ccd77bb5b49b": {
   "reply": "a9727fb77be15207",
   "sheet": null
+ },
+ "49b237b529fefba3": {
+  "reply": "b64e4b798a2fd0f1",
+  "sheet": "2f66633286ed1ad2"
  },
  "49dbc8dd8f5d8530": {
   "reply": "b3871a260687a443",
@@ -362,10 +356,6 @@
  "520cd74059d063d8": {
   "reply": "e157ed6164d2ab20",
   "sheet": "b3a2468022b86f34"
- },
- "52c22e1c458a67f9": {
-  "reply": "8859d30049e381a3",
-  "sheet": "2f66633286ed1ad2"
  },
  "5454ff3013c8c973": {
   "reply": "90621a0f04ddf74f",
@@ -415,6 +405,10 @@
   "reply": "0429d7231863f84f",
   "sheet": "2f66633286ed1ad2"
  },
+ "5c465ed7e1482d74": {
+  "reply": "833ec9047d1f52b4",
+  "sheet": "168171de437364ed"
+ },
  "5d68115229d12721": {
   "reply": "eb2093043bd04b8b",
   "sheet": "9a63168c465b5051"
@@ -447,6 +441,10 @@
   "reply": "f65c401ba2ef4cab",
   "sheet": "29c596fe49dd2953"
  },
+ "6f30a5c17d8061fa": {
+  "reply": "95ccd84f6a88b983",
+  "sheet": "2f66633286ed1ad2"
+ },
  "70999886d38716ae": {
   "reply": "2a7e9759c107f95d",
   "sheet": "0fe4a46d4fb4e6e1"
@@ -471,17 +469,9 @@
   "reply": "771fde3bdb1a18dc",
   "sheet": "2f66633286ed1ad2"
  },
- "75220193841833f6": {
-  "reply": "0ef64af9c22e0748",
-  "sheet": "2f66633286ed1ad2"
- },
  "76002f8becada871": {
   "reply": "64a24e3f7bbef407",
   "sheet": null
- },
- "76a1277d7d8e30a0": {
-  "reply": "63463e9ac6c6eab6",
-  "sheet": "2f66633286ed1ad2"
  },
  "7730613626972320": {
   "varies": [
@@ -542,6 +532,10 @@
   "reply": "5f07aa9b96b62206",
   "sheet": "b3a2468022b86f34"
  },
+ "825fd5fcfe343674": {
+  "reply": "571e70de7dd58030",
+  "sheet": "2f66633286ed1ad2"
+ },
  "826f456b44c3f35e": {
   "reply": "ec09aa5231f29774",
   "sheet": "d70da2388e3f4613"
@@ -550,19 +544,9 @@
   "reply": "ca6dc1e3d0d5f094",
   "sheet": "2f66633286ed1ad2"
  },
- "840b21e0cd9f257c": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
-  ]
- },
  "8609dba91ef941a4": {
   "reply": "600b3dd9cc6098e6",
   "sheet": null
- },
- "869a655beadc118c": {
-  "reply": "14cb0655355e2e04",
-  "sheet": "2f66633286ed1ad2"
  },
  "8a3a981f86b74b0c": {
   "reply": "6218bc40fc837db0",
@@ -575,6 +559,10 @@
  "8b6af8dbe6061b05": {
   "reply": "46f9ac884017282c",
   "sheet": "e25eabc5d902e620"
+ },
+ "8b7c4f092a46be4d": {
+  "reply": "63463e9ac6c6eab6",
+  "sheet": "2f66633286ed1ad2"
  },
  "8c859c845317d993": {
   "reply": "c138bfe523bb8f2a",
@@ -592,10 +580,6 @@
   "reply": "22c0134b1a17b336",
   "sheet": "2f66633286ed1ad2"
  },
- "8e0c29d7c26f099b": {
-  "reply": "aa2ba9a283f82ec1",
-  "sheet": "2f66633286ed1ad2"
- },
  "8e73991b1ab00a01": {
   "reply": "b85ae5b0edfaa5ee",
   "sheet": "b3a2468022b86f34"
@@ -606,6 +590,10 @@
  },
  "8fe6525d5a8b6725": {
   "reply": "181c08e54161b125",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "92a78848ffccc50e": {
+  "reply": "9aac9f242909f8ec",
   "sheet": "2f66633286ed1ad2"
  },
  "92b83a6efbc37995": {
@@ -646,6 +634,10 @@
  },
  "988c0a891f8eefd3": {
   "reply": "b005a808d6443e3f",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "98df56349f7cd178": {
+  "reply": "8178db197f6b7fe8",
   "sheet": "2f66633286ed1ad2"
  },
  "9a09da71e06b8cc1": {
@@ -711,10 +703,6 @@
   "reply": "41b8322185f7f499",
   "sheet": "2f66633286ed1ad2"
  },
- "aa630f9ab2c89c04": {
-  "reply": "7ecf440aa16b9ce5",
-  "sheet": "2f66633286ed1ad2"
- },
  "abde1b61253f8cde": {
   "reply": "08cc53627b347879",
   "sheet": null
@@ -751,10 +739,6 @@
   "reply": "42a8d8b9e6a4ee05",
   "sheet": null
  },
- "af5f98e034906054": {
-  "reply": "833ec9047d1f52b4",
-  "sheet": "168171de437364ed"
- },
  "b01c37835206a32b": {
   "reply": "fe8bd4e468507139",
   "sheet": "be2910d5a44c2ad2"
@@ -763,6 +747,12 @@
   "reply": "88afe94b3aed1407",
   "sheet": "6e9880d2e1a04bf2"
  },
+ "b2248071a87411cb": {
+  "varies": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ]
+ },
  "b2354362f75ea826": {
   "reply": "d13a011986dcef6a",
   "sheet": "e51a879c905062d9"
@@ -770,6 +760,10 @@
  "b29304002677e1ad": {
   "reply": "04c090d697a13988",
   "sheet": "5fcd33e31cbd8c08"
+ },
+ "b2f8f88670dcac31": {
+  "reply": "14cb0655355e2e04",
+  "sheet": "2f66633286ed1ad2"
  },
  "b2feb6dd31f56804": {
   "message": "save_open_window takes only path and expected_sha256, with ops=[]: save the sheet, read it again, then edit it in another call.",
@@ -852,10 +846,6 @@
   "reply": "6136755e62fd9740",
   "sheet": "087779c62714d69a"
  },
- "cb55c78b07f5831d": {
-  "reply": "cabc9934c7860555",
-  "sheet": "2f66633286ed1ad2"
- },
  "cc48c73ad9ba2d29": {
   "reply": "f7443f63825f05c2",
   "sheet": null
@@ -876,6 +866,12 @@
   "reply": "8f5adc6c2b2c728c",
   "sheet": "7e46f18271775e61"
  },
+ "d64e32ee03771aa3": {
+  "varies": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ]
+ },
  "d6dbbb34c69c0ef3": {
   "reply": "f2d67fe2261f08df",
   "sheet": "159ab54529afe730"
@@ -892,10 +888,6 @@
   "reply": "6767a03effdfa250",
   "sheet": "49b1144b74853f95"
  },
- "d8ed7b2a9fe8a185": {
-  "reply": "571e70de7dd58030",
-  "sheet": "2f66633286ed1ad2"
- },
  "db77815d0ce91cd2": {
   "reply": "0b3a3be09e91fab1",
   "sheet": "4f700298c191ce88"
@@ -903,6 +895,10 @@
  "dccf8cfcb04d202d": {
   "reply": "63536ade3c45ac6e",
   "sheet": null
+ },
+ "de25805084b48eb8": {
+  "reply": "99d02b0d6fcd34b7",
+  "sheet": "2f66633286ed1ad2"
  },
  "deb9b54d1e0c4433": {
   "reply": "7c8a5cb903efe45e",
@@ -1033,6 +1029,10 @@
  "f126121f96b8225a": {
   "reply": "c23016c2fe29a8ec",
   "sheet": "c071ac08a8bd3d19"
+ },
+ "f15dd2710520e691": {
+  "reply": "7ecf440aa16b9ce5",
+  "sheet": "2f66633286ed1ad2"
  },
  "f1ee1be960776a6e": {
   "reply": "516f5855e9ad7183",
