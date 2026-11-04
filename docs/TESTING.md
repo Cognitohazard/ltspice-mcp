@@ -104,12 +104,46 @@ for the parser or starts a process, and the parser's entry module
 its first request or imports any decoding code; `test_parser_process.py`
 checks both. Its checks that set `sys.platform` to another value run anywhere
 and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
-native macOS interpreter and skip elsewhere; a pass there also shows only the
-refusal and does not show a working macOS parser. Supporting macOS needs
+native macOS interpreter, run in CI's macOS job and skip elsewhere; a pass
+there also shows only the refusal and does not show a working macOS parser.
+Supporting macOS needs
 native tests there of the hard memory limit, applied before any decoding code
 is imported, and of the parser's cleanup after a deadline, after repeated
 cancellation and after the server process dies, including a child process
 that tries to break away from the parser's process tree.
+
+CI also runs the suite on a native macOS runner (`check-macos` in
+`.github/workflows/checks.yml`): Python 3.12, ngspice and Cairo from
+Homebrew, one xdist worker per core, and no coverage gate. Because the server
+refuses to parse there, a test that reads a result fails there for that reason
+alone, and `tests/parser_refusal.py` reports it as skipped, with the refusal as
+its reason. On a host whose parser refuses, that plugin records each refusal
+the supervisor's check raises while a test runs, and reports a test that fails
+after one as skipped; the check itself still runs and raises. A test that meets
+the refusal and passes is reported as passed, and any other failure stays a
+failure. The plugin cannot see a refusal in a process the test started itself
+(a program that runs the supervisor, or the parser's entry module started
+directly), so such a test carries the plugin's `needs_parsing` mark, which
+skips it with the same reason; the tests of a warm parser, which is called past
+the supervisor's check, skip in their shared fixture. On Linux and Windows the
+plugin changes no report, and `test_parser_refusal.py` checks both behaviours
+on every platform.
+
+The server also refuses a recoverable ngspice run on macOS, because its
+controlled startup is verified on Linux and Windows only (the capability
+table's `controlled_startup` entry; `recovery_startup_unsupported`). A test
+that runs one carries `needs_controlled_startup` from `tests/conftest.py`, or
+skips on `CONTROLLED_STARTUP_REFUSED` there, which asks the server's own check,
+so it skips where the server refuses and runs wherever the table says the
+startup is verified.
+
+Everything else runs on macOS and must pass: schematic editing and rendering,
+netlist and deck checks, the job and run machinery, the decoders called in the
+test's own process, the `run_code` worker, the refusal checks above, and the
+ngspice end-to-end tests that do not read a result. The job runs with `-ra`,
+so its summary lists every skip with its reason. About 680 tests skip for the
+parser refusal, most of them in the tests of `analyze_results`,
+`plot_waveform`, the recorded LTspice results and the parser itself.
 
 The optional Sky130 integration tests find a `sky130A` root containing
 `libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need

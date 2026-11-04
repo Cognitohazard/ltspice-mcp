@@ -213,7 +213,7 @@ async def _runaway_tree(calls, task: asyncio.Task):
         directories = await await_until(
             lambda: calls["directories"], what="the parse to reach its parser call"
         )
-        return await _started(directories[0])
+        return await _started(directories[0], task)
     except BaseException:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

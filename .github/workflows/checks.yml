@@ -103,6 +103,47 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v -n auto
 
+  check-macos:
+    # The suite on a native macOS interpreter, on the matrix's middle
+    # interpreter as on Windows. The server refuses to parse results on macOS
+    # (lib/parser_bootstrap.py, docs/TESTING.md "Platforms and the release
+    # gate"), so a test that fails only because of that refusal is reported as
+    # skipped with the refusal as its reason (tests/parser_refusal.py). It also
+    # refuses a recoverable ngspice run there, and a test of one skips
+    # (needs_controlled_startup in tests/conftest.py). Everything else must
+    # pass here.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Pin Python 3.12
+        run: uv python pin "3.12"
+
+      - name: Install ngspice and cairo (the real-ngspice e2e tier and the raster tier)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install ngspice cairo
+
+      # No coverage gate: every test that reads a result skips here, so the
+      # whole-package coverage falls below the Linux floor for a reason that
+      # says nothing about macOS. -ra lists every skip with its reason.
+      # Homebrew's library folder is not on dyld's default search path on Apple
+      # silicon, so cairocffi finds libcairo only through the fallback path. It
+      # is exported inside the step because macOS removes DYLD_* variables from
+      # the environment of a protected program such as /bin/bash.
+      - name: Test
+        run: |
+          export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
+          uv run pytest tests/ -v -n auto -ra
+
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import shutil
-import sys
 from pathlib import Path
 
 import jsonschema
@@ -25,15 +24,12 @@ from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store, path_digest
 from ltspice_mcp.tools import experiments, receipts
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA
-from tests.conftest import LIVENESS_S
+from tests.conftest import LIVENESS_S, needs_controlled_startup
 from tests.test_resume_surface import _DECK, _fail_second_case, _state
 
 pytestmark = [
     pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH"),
-    pytest.mark.skipif(
-        sys.platform not in {"linux", "win32"},
-        reason="Recoverable ngspice startup is verified on Linux and native Windows only",
-    ),
+    needs_controlled_startup,
 ]
 
 
