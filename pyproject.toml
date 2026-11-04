@@ -169,8 +169,6 @@ known-first-party = ["ltspice_mcp"]
 # Readers of connectivity.partition and its helpers.
 "src/ltspice_mcp/lib/routing.py" = ["TID251"]
 "src/ltspice_mcp/lib/schematic_ops.py" = ["TID251"]
-"src/ltspice_mcp/lib/sheet.py" = ["TID251"]
-"src/ltspice_mcp/tools/inspect_tools.py" = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
