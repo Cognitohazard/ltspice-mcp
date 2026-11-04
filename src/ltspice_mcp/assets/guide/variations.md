@@ -22,7 +22,9 @@ first, then bare names:
 | a component reference (`R1`, `C2`) | substitute that component's value |
 
 A name that matches neither a declared parameter nor a component is an
-`ambiguous_target` error.
+`ambiguous_target` error. A schematic part named `Load` that LTspice exports
+as `R§Load` is a target as `Load` or `RLoad` too; `RLoad` names it whichever
+simulator runs the deck.
 
 `combine` sets how several targets in one entry combine. `"grid"` (default)
 takes the cartesian product, and `"zip"` runs the i-th value of every target

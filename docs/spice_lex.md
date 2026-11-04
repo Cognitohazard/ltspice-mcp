@@ -542,6 +542,7 @@ def rename_model(cards, old_name, new_name, *, scope=()) -> int: ...
 def value_suffix_sites(cards) -> list[ValueSuffixSite]: ...  # non-ASCII at a scale-suffix position
 def fold_micro_suffix_cards(cards) -> tuple[ValueSuffixSite, ...]: ...  # µ/μ suffix -> u, in place
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None: ...  # R§Load -> RLoad wherever named
+def section_sign_names(ref: str) -> tuple[str, ...]: ...  # R§Load -> ("RLoad", "Load")
 
 # lib/encoding.py — shared text decoding
 def decode_spice_bytes(raw: bytes) -> str: ...

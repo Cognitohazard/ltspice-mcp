@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ltspice_mcp.lib import montecarlo
+from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -39,8 +39,10 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_arity,
 )
 from ltspice_mcp.lib.variations import (
+    AssignVariation,
     CircuitDeck,
     RandomVariation,
+    VariationError,
     expand_variations,
     materialize_variants,
 )
@@ -330,6 +332,74 @@ def test_a_section_sign_marks_where_an_instance_name_starts(
     traces = rec.operating_point(build, case_id, tmp_path)
     assert traces["v(a)"] == pytest.approx(1000.0)
     assert set(traces) == {"v(a)", "i(i1)", "i(load)"}
+
+
+SECTION_SIGN_DECKS = ["deck/section_sign_utf8", "deck/section_sign_cp1252"]
+
+
+def variant_values(text: str, path: Path, target: str, scratch: Path) -> dict[str, str]:
+    """Each instance's value in the case deck one assignment of ``target`` writes."""
+    circuit = CircuitDeck("dut", path, text)
+    variation = AssignVariation(kind="assign", assign={target: ["2k"]})
+    (case,) = materialize_variants(circuit, expand_variations([circuit], [variation]), scratch)
+    return {
+        line.ref: line.value or "" for line in map(read_instance, lex(case.text).cards) if line
+    }
+
+
+def drawn_for(text: str, path: Path, target: str, scratch: Path) -> list[str]:
+    """The references a random component rule on ``target`` draws for."""
+    circuit = CircuitDeck("dut", path, text)
+    rule = {"rule": "component", "target": target, "tolerance": 0.1}
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+    (case,) = materialize_variants(circuit, expand_variations([circuit], [variation]), scratch)
+    prefix = "random:component:"
+    return sorted(
+        name.removeprefix(prefix) for name in case.assignments if name.startswith(prefix)
+    )
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SECTION_SIGN_DECKS)))
+@pytest.mark.parametrize("for_ngspice", [False, True], ids=["ltspice", "ngspice"])
+def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
+    build: str, case_id: str, for_ngspice: bool, tmp_path: Path
+):
+    """A variation names ``R§Load`` as the sheet does (``Load``), as LTspice's
+    results do (``I(Load)``, recorded) or as ``verify_circuit`` reports it
+    (``RLoad``), and ``RLoad`` names it on either simulator's copy of the
+    deck, though ngspice's has the marker taken out."""
+    assert "i(load)" in rec.operating_point(build, case_id, tmp_path / "raw")
+    export = tmp_path / "load.net"
+    export.write_bytes((INPUTS / rec.CASES.case(case_id).source).read_bytes())
+    _stem, data = deck_prep._read_export(export, for_ngspice=for_ngspice)
+    text = decode_spice_bytes_with_encoding(data)[0]
+    (load,) = [
+        line.ref
+        for line in map(read_instance, lex(text).cards)
+        if line and line.nodes == ["a", "0"]
+    ]
+    names = ["RLoad"] if for_ngspice else ["R§Load", "RLoad", "Load", "load"]
+    for index, target in enumerate(names):
+        values = variant_values(text, export, target, tmp_path / str(index))
+        assert values == {"I1": "1", load: "2k"}, target
+        assert drawn_for(text, export, target, tmp_path / f"random{index}") == [load], target
+
+
+def test_a_name_two_parts_answer_to_is_refused(tmp_path: Path):
+    """``RLoad`` is both a part and the other name of ``R§Load``, which an
+    ngspice copy would also call ``RLoad``: no target can mean one of them."""
+    text = deck_text("deck/section_sign_utf8").replace(".op", "RLoad a 0 3k\n.op")
+    path = tmp_path / "load.cir"
+    with pytest.raises(VariationError) as exc:
+        variant_values(text, path, "RLoad", tmp_path / "out")
+    assert exc.value.code == "ambiguous_target"
+    with pytest.raises(VariationError) as exc:
+        drawn_for(text, path, "RLoad", tmp_path / "random")
+    assert exc.value.code == "ambiguous_target"
+    assert variant_values(text, path, "Load", tmp_path / "load")["R§Load"] == "2k"
+    assert drawn_for(text, path, "R*", tmp_path / "glob") == ["RLoad", "R§Load"]
 
 
 #: The bytes cp1252 gives no character, each with the letter that follows it

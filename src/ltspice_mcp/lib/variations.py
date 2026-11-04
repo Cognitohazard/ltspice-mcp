@@ -62,7 +62,7 @@ from ltspice_mcp.lib.montecarlo import (
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
-from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards
+from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
     MOBILITY_PARAM,
@@ -472,6 +472,17 @@ class _DeckTargets:
     components: dict[str, list[_Site]]
     models_by_ref: dict[str, str]
     model_names: dict[str, list[_Site]]
+    #: The other names of each component LTspice exported with its section
+    #: sign (``spice_lex_ops.section_sign_names``), by case-folded name.
+    aliases: dict[str, list[_Site]] = field(default_factory=dict)
+
+    def component_sites(self, folded: str) -> list[_Site]:
+        """The components an exact target names: a reference as written, or
+        another name of an instance exported as ``R§Load`` (``RLoad``, as an
+        ngspice copy names it, or ``Load``, as LTspice's results do), so one
+        target names the part on either simulator. A name that is one part's
+        reference and another's other name returns both, and is refused."""
+        return [*self.components.get(folded, []), *self.aliases.get(folded, [])]
 
 
 @dataclass(frozen=True)
@@ -974,6 +985,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     components: dict[str, list[_Site]] = {}
     models_by_ref: dict[str, str] = {}
     model_names: dict[str, list[_Site]] = {}
+    aliases: dict[str, list[_Site]] = {}
     cards = lex(text).cards
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if card.kind == "param":
@@ -991,9 +1003,10 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
                 view = InstanceLine.from_card(card)
             except ValueError:
                 continue
-            components.setdefault(view.ref.casefold(), []).append(
-                _Site(view.ref, card.scope, section)
-            )
+            site = _Site(view.ref, card.scope, section)
+            components.setdefault(view.ref.casefold(), []).append(site)
+            for alias in section_sign_names(view.ref):
+                aliases.setdefault(alias.casefold(), []).append(site)
             if view.model is not None:
                 models_by_ref.setdefault(view.ref.casefold(), view.ref)
     return _DeckTargets(
@@ -1001,6 +1014,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
         components=components,
         models_by_ref=models_by_ref,
         model_names=model_names,
+        aliases=aliases,
     )
 
 
@@ -1201,7 +1215,7 @@ def _resolve_assignment(
     matches = [
         file.index
         for file in closure.files
-        if folded in file.targets.params or folded in file.targets.components
+        if folded in file.targets.params or file.targets.component_sites(folded)
     ]
     if not matches:
         raise VariationError(
@@ -1225,7 +1239,9 @@ def _resolve_assignment(
                 site=site,
             ),
         )
-    site = _select_site(closure, index, targets.components[folded], what="target", target=target)
+    site = _select_site(
+        closure, index, targets.component_sites(folded), what="target", target=target
+    )
     return (
         ResolvedAssignment(
             target=target,
@@ -1425,6 +1441,11 @@ def _require_numeric_assignment(
         ) from exc
 
 
+def _is_glob(pattern: str) -> bool:
+    """Whether a target holds a wildcard, which makes it a set query."""
+    return any(char in pattern for char in "*?[")
+
+
 def _resolve_random_rule_targets(
     closure: _DeckClosure,
     rule: ComponentRule | ParamRule | ModelRule,
@@ -1449,13 +1470,25 @@ def _resolve_random_rule_targets(
         by_ref: dict[str, list[tuple[_ClosureFile, _Site]]] = {}
         for file in closure.files:
             for folded, sites in file.targets.components.items():
-                if fnmatch.fnmatchcase(folded, pattern):
+                # A part exported as ``R§Load`` answers to ``RLoad`` and ``Load``
+                # too, so a target works on either simulator's copy of the deck.
+                names = (folded, *section_sign_names(folded))
+                if any(fnmatch.fnmatchcase(name, pattern) for name in names):
                     by_ref.setdefault(folded, []).extend((file, site) for site in sites)
         if not by_ref:
             raise VariationError(
                 "ambiguous_target",
                 f"Circuit {closure.circuit_id!r}: random component target {rule.target!r} "
                 f"matches no component{_closure_scope(closure)}",
+            )
+        if len(by_ref) > 1 and not _is_glob(pattern):
+            # One plain name that is one part's reference and another's other
+            # name: no target can mean one of them on both simulators.
+            raise VariationError(
+                "ambiguous_target",
+                f"Circuit {closure.circuit_id!r}: random component target {rule.target!r} "
+                f"names {len(by_ref)} components ({', '.join(sorted(by_ref))}); name the "
+                "one you mean as the deck writes it",
             )
         _refuse_repeated_reference(closure, rule.target, by_ref)
         refs_by_file: dict[int, set[str]] = {}

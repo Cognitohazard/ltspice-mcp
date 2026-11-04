@@ -1853,6 +1853,10 @@ each tool's `inputSchema`.
   Otherwise, a declared .param name -> parameter substitution;
   else a component reference        -> value substitution;
   else                              -> ambiguous_target.
+  A part LTspice exports as `R§Load` is also named by `RLoad` (its name on
+  an ngspice copy, and in verify_circuit) and by `Load` (its name on the
+  sheet and in LTspice's results); a name two parts answer to is refused as
+  ambiguous_target. The same holds for a random `component` rule's target.
 
   At least one assign or instances target is required. `parameter` is required
   only for attribute "parameter". An `instances` target selects one instance
