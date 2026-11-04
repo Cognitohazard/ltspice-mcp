@@ -27,9 +27,11 @@ import pytest
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster, wsl
 from ltspice_mcp.lib.deck_staging import stage_deck
+from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
+from ltspice_mcp.tools._base import ALWAYS_PRESENT
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests.conftest import installed_simulator, needs_raster, symlink_or_skip
 
@@ -161,10 +163,11 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     # The Python API's confirmation destination: the interpreter that
     # has the package, and whether it is a durable path or a throwaway one.
     python_facts = data["python"]
-    for key in ("executable", "install_kind", "ephemeral", "package_location"):
+    for key in ("executable", "install_kind", "package_location"):
         assert key in python_facts, f"missing python fact {key!r}"
-    assert isinstance(python_facts["ephemeral"], bool)
-    assert data["diagnostics"] == []
+    # A throwaway interpreter says so; a durable one leaves the false flag out.
+    assert python_facts.get("ephemeral", False) is (python_facts["install_kind"] == "uvx-cache")
+    assert "diagnostics" not in data
     for lim in (
         "max_experiment_cases",
         "analysis_budget_s",
@@ -193,8 +196,10 @@ def _executables(state: SessionState) -> dict[str, SimulatorExecutable | None]:
 
 async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "capabilities"}])
-    assert res["data"] == insp._do_capabilities(
-        cap_state, raster.raster_support(), _executables(cap_state)
+    # The whole report, as a reply sends it: without the fields that say nothing.
+    assert res["data"] == omit_silent(
+        insp._do_capabilities(cap_state, raster.raster_support(), _executables(cap_state)),
+        ALWAYS_PRESENT["inspect"],
     )
 
 
@@ -224,7 +229,8 @@ async def test_capabilities_reports_png_rendering(cap_state: SessionState):
     """An agent deciding between an inline PNG and a file path asks here first,
     rather than rendering to find out."""
     (res,) = await _run(cap_state, [{"kind": "capabilities"}])
-    assert res["data"]["render"] == {"png": True, "missing": None, "reason": None, "remedy": None}
+    # Nothing is missing, so nothing names a remedy.
+    assert res["data"]["render"] == {"png": True}
 
 
 @pytest.mark.parametrize(
@@ -285,7 +291,7 @@ async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: S
             assert "restart" not in remediation["action"], name
         else:
             assert "restart" in remediation["action"], f"{name}: fix must end in a restart"
-        assert remediation["excluded_by_allowlist"] is False
+        assert "excluded_by_allowlist" not in remediation
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +349,7 @@ async def test_net_asc_geometric(asc_file: Path, asc_state: SessionState):
     assert data["source"] == "schematic"
     assert "filtered" in data["labels"]
     assert "start" in data
-    assert isinstance(data["pins"], list)
+    assert isinstance(data.get("pins", []), list)
 
 
 async def test_net_asc_takes_a_bare_label_name_as_a_netlist_does(
@@ -466,7 +472,7 @@ async def test_net_asc_coordinates_advance_across_pages(
     (first,) = await _run(asc_state, [query])
     assert first["ok"] is True
     assert first["data"]["coordinates_truncated"] is True
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     assert cursor is not None, "coordinates reported truncated with no cursor to reach the rest"
     total = first["data"]["total_coordinates"]
     page1 = first["data"]["coordinates"]
@@ -480,12 +486,12 @@ async def test_net_asc_coordinates_advance_across_pages(
 
     # Walk to exhaustion: every vertex appears exactly once across the pages.
     seen = list(page1) + list(page2)
-    cursor = second["next_cursor"]
+    cursor = second.get("next_cursor")
     pages = 2
     while cursor is not None:
         (nxt,) = await _run(asc_state, [{**query, "cursor": cursor}])
         seen.extend(nxt["data"]["coordinates"])
-        cursor = nxt["next_cursor"]
+        cursor = nxt.get("next_cursor")
         pages += 1
         assert pages < 20, "cursor failed to terminate"
     assert len(seen) == total
@@ -515,13 +521,13 @@ async def test_page_counters_cover_every_collection_the_item_pages(
 
     # Walking to exhaustion accounts for exactly the rows the first page promised.
     seen = page["returned"]
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     while cursor is not None:
         (nxt,) = await _run(asc_state, [{**query, "cursor": cursor}])
         assert nxt["page"]["total"] == page["total"]
-        assert not nxt["page"]["truncated"] or nxt["page"]["returned"] < nxt["page"]["total"]
+        assert not nxt["page"].get("truncated") or nxt["page"]["returned"] < nxt["page"]["total"]
         seen += nxt["page"]["returned"]
-        cursor = nxt["next_cursor"]
+        cursor = nxt.get("next_cursor")
     assert seen == page["total"]
 
 
@@ -890,7 +896,7 @@ async def test_model_search_without_libs_rejects_a_cursor_after_a_library_edit(
     query = {"kind": "model", "mode": "search", "query": "2N3905"}
     (first,) = await _run(library_state, [query])
     assert first["ok"] is True, first
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     assert cursor is not None
 
     shipped = simulator_library / "cmp" / "standard.bjt"
@@ -909,7 +915,7 @@ async def test_model_search_without_libs_or_a_simulator_finds_nothing(
 ):
     (res,) = await _run(state_no_sim, [{"kind": "model", "mode": "search", "query": "2N3904"}])
     assert res["ok"] is True, res
-    assert res["data"]["results"] == []
+    assert "results" not in res["data"]
     assert res["data"]["total"] == 0
 
 
@@ -1045,7 +1051,7 @@ async def test_cursor_paging_and_resumption(
         assert res["ok"] is True
         seen.extend(c["reference"] for c in res["data"]["components"])
         pages += 1
-        cursor = res["next_cursor"]
+        cursor = res.get("next_cursor")
         if cursor is None:
             break
         assert pages < 10, "cursor failed to terminate"
@@ -1069,7 +1075,7 @@ async def test_cursor_minted_before_an_edit_is_rejected(
     monkeypatch.setattr(insp, "_PAGE_SIZE", 2)
     path = str(netlist)
     (first,) = await _run(state_no_sim, [{"kind": "components", "path": path}])
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     assert cursor is not None
 
     await asyncio.to_thread(
@@ -1107,7 +1113,7 @@ async def test_model_cursor_minted_before_a_library_edit_is_rejected(
 
     (first,) = await _run(state_no_sim, [query])
     assert first["ok"] is True
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     assert cursor is not None
 
     await asyncio.to_thread(
@@ -1126,7 +1132,7 @@ async def test_tampered_cursor_isolated(
     monkeypatch.setattr(insp, "_PAGE_SIZE", 2)
     path = str(netlist)
     (first,) = await _run(state_no_sim, [{"kind": "components", "path": path}])
-    good_cursor = first["next_cursor"]
+    good_cursor = first.get("next_cursor")
     assert good_cursor is not None
     tampered = ("A" if good_cursor[0] != "A" else "B") + good_cursor[1:]
     (res,) = await _run(state_no_sim, [{"kind": "components", "path": path, "cursor": tampered}])
@@ -1142,7 +1148,7 @@ async def test_cross_query_cursor_rejected(
     path = str(netlist)
     # Cursor from an unfiltered components listing...
     (first,) = await _run(state_no_sim, [{"kind": "components", "path": path}])
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     assert cursor is not None
     # ...replayed against a prefix-filtered listing (different identity signature).
     (res,) = await _run(
@@ -1297,7 +1303,7 @@ async def test_reference_without_a_query_returns_the_table_of_contents(
 async def test_reference_says_so_when_nothing_matches(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "reference", "query": "zzz quuxbar"}])
     data = res["data"]
-    assert data["matches"] == [] and data["total_matches"] == 0
+    assert "matches" not in data and data["total_matches"] == 0
     assert "inspect(kind='guide')" in data["hint"]
 
 

@@ -15,8 +15,8 @@ not its bytes, so two ways of writing the same records compare equal.
   compared.
 - **The answer** is a digest of the committed sheet's records, grouped by kind
   in their order, each formatted, with LF line endings and the sheet's codec;
-  and a digest of the complete reply, with paths, digests and the build id
-  replaced. A call that raised keeps the error's type and message, with the
+  and a digest of the complete reply as it is sent (without the fields that
+  say nothing), with paths, digests and the build id replaced. A call that raised keeps the error's type and message, with the
   same replacements.
 - **A call answering differently** fails the test that made it. A call that
   answered two ways while the record was made is kept as varying, with the
@@ -56,7 +56,7 @@ from ltspice_mcp.errors import LTSpiceMCPError
 from ltspice_mcp.lib import asc_document
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.tools import schematic_edit
-from ltspice_mcp.tools._base import safe_path
+from ltspice_mcp.tools._base import ALWAYS_PRESENT, reply_payload, safe_path
 from tests._proposal_record import write_record
 from tests._schematic_fixtures import TESTS
 from tests.ltspice_recorder import path_pattern
@@ -268,7 +268,11 @@ async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool =
         message = scrubbed(str(exc), folders, tokens, given)
         _observe(key, {"raised": type(exc).__name__, "message": message})
         raise
-    data = schematic_edit.complete_edit_schematic_data(evaluation, args)
+    # The complete reply as it is sent: without the fields that say nothing.
+    data = reply_payload(
+        schematic_edit.complete_edit_schematic_data(evaluation, args),
+        ALWAYS_PRESENT["edit_schematic"],
+    )
     sheet = None
     if data.get("commit_state") == "committed":
         after = target.read_bytes()

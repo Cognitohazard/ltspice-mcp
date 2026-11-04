@@ -219,7 +219,7 @@ def paginate_pair(
     Each collection advances by its own offset — both ride in the cursor — so
     successive pages repeat neither, and neither is capped at its first page.
     ``truncated`` and ``next_cursor`` cover the pair: a cursor is minted while
-    *either* collection has more, which keeps "page until next_cursor is null"
+    *either* collection has more, which keeps "page until next_cursor is absent"
     the correct stop rule. Each collection's own exhaustion is reported beside it
     (``primary_truncated`` / ``secondary_truncated``) so the caller can tell which
     one continues — the pair-level ``truncated`` cannot say.

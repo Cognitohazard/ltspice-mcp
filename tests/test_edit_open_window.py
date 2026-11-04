@@ -160,7 +160,7 @@ async def test_a_committed_edit_is_shown_in_the_window_that_has_the_sheet_open(
     assert window.text(asc_file) == as_the_server_reads(asc_file)
     assert "SYMATTR Value 2.2k" in window.text(asc_file)
     assert "now shows it" in data["hint"]
-    assert data["observations"] == []
+    assert "observations" not in data
 
 
 async def test_an_edit_is_refused_while_the_window_holds_a_different_sheet(
@@ -439,7 +439,7 @@ async def test_a_sheet_no_window_has_open_is_edited_as_before(
     assert "open_in_ltspice" not in data
     assert data["hint"].startswith("Committed.")
     assert "LTspice" not in data["hint"]
-    assert data["observations"] == []
+    assert "observations" not in data
 
 
 @pytest.mark.parametrize(
@@ -460,9 +460,9 @@ async def test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window(
     data = await edit(asc_state, asc_file, ops=ops)
 
     assert data["outcome"] == "complete"
-    assert data["observations"] == []
+    assert "observations" not in data
     assert "open_in_ltspice" not in data
-    assert "window_check" not in [stage["stage"] for stage in data["stages"]]
+    assert "window_check" not in [stage["stage"] for stage in data.get("stages", [])]
     assert file_bytes(asc_file) == before
     assert window.text(asc_file) == held
 
@@ -481,7 +481,7 @@ async def test_a_new_sheet_asks_no_window(asc_state: SessionState, work_dir: Pat
     )
 
     assert data["outcome"] == "complete"
-    assert data["observations"] == []
+    assert "observations" not in data
 
 
 async def test_a_window_that_does_not_take_the_edit_is_closed_and_opened_again(

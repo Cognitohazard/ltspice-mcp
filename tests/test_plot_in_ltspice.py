@@ -160,7 +160,7 @@ async def test_the_run_is_opened_in_ltspice_with_its_traces_named(
     assert window["shown"] == window["panes"] == [str(raw)]
     assert "closed" not in window
     # Asked for in LTspice, the chart is not opened in a browser as well.
-    assert data["opened"] is False
+    assert "opened" not in data
     # The chart and its numbers are made all the same.
     assert was_written(data["path"])
     assert data["traces"]
@@ -304,7 +304,7 @@ async def test_settings_saved_from_ltspice_are_left_as_they_are(
     data = await plot(state_no_sim, path=str(raw), signals=["V(out)"], in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
-    assert data["ltspice"]["plot_settings"] is None
+    assert "plot_settings" not in data["ltspice"]
     assert "was saved from LTspice and is left as it is" in data["ltspice"]["note"]
     assert read(raw.with_suffix(".plt")) == saved
     # What the window draws in place of the trace asked for: the transient
@@ -312,7 +312,8 @@ async def test_settings_saved_from_ltspice_are_left_as_they_are(
     # of another kind.
     section = read_plot_settings(saved).section(TRAN)
     held = plot_settings.pane_specs(section.panes if section is not None else ())
-    assert data["ltspice"]["saved_panes"] == held
+    # None held, the reply leaves the list out.
+    assert data["ltspice"].get("saved_panes", []) == held
     if case_id == "plot/one_trace":
         assert held == [{"traces": ["V(out)"], "x_scale": "linear", "y_scale": "linear"}]
     # There is no sheet here, so no edit that could replace them is named.
@@ -401,7 +402,7 @@ async def test_a_run_whose_plot_settings_are_not_recorded_is_opened_without_any(
     data = await plot(state_no_sim, path=str(raw), dialect="ngspice", in_ltspice=True)
 
     assert data["ltspice"]["shown"] is True
-    assert data["ltspice"]["plot_settings"] is None
+    assert "plot_settings" not in data["ltspice"]
     assert "is not recorded" in data["ltspice"]["note"]
     assert "saved_panes" not in data["ltspice"]
     assert not raw.with_suffix(".plt").exists()
@@ -436,7 +437,6 @@ async def test_where_windows_cannot_be_reached_it_says_so_and_writes_nothing(
     assert data["ltspice"] == {
         "shown": False,
         "results": str(raw),
-        "plot_settings": None,
         "panes": [["V(out)"]],
         "reason": "LTspice windows cannot be reached here: needs the server on Windows itself",
     }
@@ -936,7 +936,7 @@ async def test_a_sheet_ltspice_knows_has_results_is_shown_them_where_it_stands(
 
     shown = data["ltspice"]
     assert shown["shown"] is True
-    assert shown["differs_from_file"] is False
+    assert "differs_from_file" not in shown
     assert "sheet_reopened" not in shown
     assert read(sheet.with_suffix(".raw")) == read(raw)
     window = read_world(world)["windows"][0]
@@ -957,7 +957,6 @@ async def test_with_no_window_nothing_is_put_beside_the_sheet(
     assert shown == {
         "shown": False,
         "results": str(raw),
-        "plot_settings": None,
         "panes": [["V(out)"]],
         "reason": "no LTspice window is open, and none is started for this",
     }
@@ -1034,7 +1033,7 @@ async def test_a_sheets_saved_traces_are_named_with_the_edit_that_replaces_them(
     assert shown["saved_panes"] == [
         {"traces": ["V(in)-V(out)", "V(out)*I(R1)"], "x_scale": "linear", "y_scale": "linear"}
     ]
-    assert shown["plot_settings"] is None
+    assert "plot_settings" not in shown
     assert shown["note"] == (
         f"{TIED} amp.plt was "
         "saved from LTspice and is left as it is, so the window shows the traces saved "
@@ -1192,8 +1191,6 @@ async def test_a_sheets_stepped_operating_point_is_opened_from_the_sheet_without
         "shown": True,
         "sheet": str(sheet),
         "results": str(sheet.with_suffix(".raw")),
-        "plot_settings": None,
-        "panes": [],
         "tied": True,
         "pid": PID,
         "version": "26.1.1",
@@ -1226,7 +1223,7 @@ async def test_no_plot_settings_are_written_for_a_plot_with_no_axis(
 
     shown = data["ltspice"]
     assert shown["shown"] is True
-    assert shown["plot_settings"] is None
+    assert "plot_settings" not in shown
     assert shown["note"] == NO_TRACES_NAMED
     assert read(raw.with_suffix(".plt")) == before
     assert read_world(world)["windows"][0]["shown"] == [str(raw)]

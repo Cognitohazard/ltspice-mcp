@@ -1480,7 +1480,7 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                     "difference": {"type": "string"},
                     "plot_settings": {
                         "type": ["string", "null"],
-                        "description": "The .plt written beside it; null when none was.",
+                        "description": "The .plt written beside it; absent when none was.",
                     },
                     "saved_panes": {
                         "type": "array",
@@ -1496,7 +1496,7 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
                         "description": (
                             "The panes, top first, of a .plt saved from LTspice that "
                             "was left as it is: what the window draws in place of "
-                            "panes, in the form set_plot_panes takes. Empty when it "
+                            "panes, in the form set_plot_panes takes. Absent when it "
                             "holds none for this run."
                         ),
                     },

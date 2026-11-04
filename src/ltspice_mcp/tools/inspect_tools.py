@@ -2541,7 +2541,7 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
 _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "section": {
         "type": ["string", "null"],
-        "description": "The section read; null for the core and its index.",
+        "description": "The section read; absent for the core and its index.",
     },
     "title": {"type": "string"},
     "text": {"type": "string", "description": "Markdown."},

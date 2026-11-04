@@ -108,7 +108,7 @@ async def test_with_no_name_it_lists_the_documents(state: SessionState):
     ]
     assert (data["total"], data["returned"]) == (2, 2)
     assert "Read one with name" in data["hint"]
-    assert item["next_cursor"] is None
+    assert "next_cursor" not in item
 
 
 @pytest.mark.parametrize("name", ["MEAS-REFERENCE.md", "meas-reference", " MEAS-REFERENCE.MD "])
@@ -160,7 +160,7 @@ async def test_a_long_document_is_paged_at_a_heading(
     assert first["next_cursor"] is not None
     rest = await ask(state, name="MEAS-REFERENCE.md", cursor=first["next_cursor"])
 
-    assert rest["next_cursor"] is None
+    assert "next_cursor" not in rest
     assert first["data"]["sections"] + rest["data"]["sections"] == whole
 
 

@@ -156,7 +156,7 @@ async def test_netlist_default_runs_the_text_deck_checks(state_no_sim, work_dir)
 async def test_netlist_rejects_asc_only_check(state_no_sim, work_dir):
     deck = _write(work_dir, "d.cir", _BASE)
     data = await _run(state_no_sim, path=str(deck), checks=["symbols"])
-    assert data["checks_run"] == []
+    assert "checks_run" not in data
     reasons = {s["check"]: s["reason"] for s in data["checks_skipped"]}
     assert "not applicable to a netlist file" in reasons["symbols"]
 
@@ -175,7 +175,7 @@ async def test_asc_rejects_syntax_check(state_no_sim, work_dir, asc_symbols):
     data = await _run(state_no_sim, path=str(asc), checks=["syntax"])
     reasons = {s["check"]: s["reason"] for s in data["checks_skipped"]}
     assert "not applicable to a .asc file" in reasons["syntax"]
-    assert data["checks_run"] == []
+    assert "checks_run" not in data
 
 
 @pytest.mark.parametrize("suffix", [".sp", ".spice"])
@@ -244,7 +244,7 @@ async def test_micro_signs_are_one_observation_per_file_when_no_misreading_reade
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "observation"
     assert finding["at"] == {"file": str(deck), "line": 3}
     assert finding["subject"] == "rc.net"
@@ -275,7 +275,7 @@ async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xv
 
     data = await _run(state, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "warning"
     assert finding["at"] == {"file": str(deck), "line": 3}
     assert finding["subject"] == "23µ"
@@ -294,7 +294,7 @@ async def test_a_cp1252_micro_sign_read_by_xvii_stays_an_observation(config, wor
 
     data = await _run(state, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "observation"
     assert data["outcome"] == "complete"
 
@@ -307,7 +307,7 @@ async def test_an_xvii_export_stored_as_utf8_warns(state_no_sim, work_dir):
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "warning"
     assert finding["evidence"]["reader"] == UNNAMED_EXPORT_WRITER
 
@@ -359,7 +359,7 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
 
     data = await _run(state, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "warning"
     assert finding["evidence"]["reader"] == (
         f"Linear Technology Corporation LTspice XVII ({program})"
@@ -375,7 +375,7 @@ async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, 
 
     data = await _run(state, path=str(deck), checks=["syntax"])
 
-    shown = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    shown = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert len(shown) == vc.FINDING_RULE_CAP
     assert (
         f"value_suffix_micro_sign: showing {vc.FINDING_RULE_CAP} of 60 findings"
@@ -389,7 +389,7 @@ async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir)
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["evidence"]["tokens"] == ["10μs"]
     assert finding["evidence"]["lines"] == [2]
 
@@ -402,7 +402,7 @@ async def test_syntax_blocks_a_mis_decoded_micro_suffix(state_no_sim, work_dir):
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_mojibake"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_mojibake"]
     assert finding["severity"] == "error"
     assert finding["evidence"]["reads_as"] == "23"
     assert finding["evidence"]["likely_intended"] == "23u"
@@ -491,7 +491,7 @@ async def test_syntax_flags_trig_in_a_measurement_on_ltspice(state_no_sim, work_
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    found = [f for f in data["findings"] if f["rule_id"] == "meas_trig_degrees"]
+    found = [f for f in data.get("findings", []) if f["rule_id"] == "meas_trig_degrees"]
     assert [(f["subject"], f["at"]["line"], f["evidence"]["functions"]) for f in found] == [
         ("a", 3, ["cos"]),
         ("p", 4, ["atan2"]),
@@ -526,7 +526,7 @@ async def test_an_exports_own_micro_signs_are_not_reported(
     data = await _run(state, path=str(asc), checks=["export"])
 
     assert data["export"]["netlist"]
-    assert [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"] == []
+    assert [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"] == []
     assert data["outcome"] == "complete"
     assert asc.read_bytes() == before
 
@@ -543,7 +543,7 @@ async def test_an_exports_micro_signs_warn_when_the_sessions_xvii_misreads_them(
 
     data = await _run(state, path=str(asc), checks=["export"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+    (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "warning"
     assert finding["at"] == {"file": data["export"]["netlist"], "line": 3}
     assert finding["evidence"]["reader"] == FakeXVII.spice_exe[0]
@@ -596,8 +596,8 @@ async def test_an_exports_relative_include_resolves_beside_the_schematic(
         export_to="managed",
     )
 
-    assert data["failures"] == []
-    assert [f for f in data["findings"] if f["rule_id"] == "path_denied"] == []
+    assert "failures" not in data
+    assert [f for f in data.get("findings", []) if f["rule_id"] == "path_denied"] == []
     assert data["comparison"]["equivalent"] is True
     assert sorted(p.name for p in project_dir.iterdir()) == ["amp.asc", "models.inc", "ref.net"]
 
@@ -817,7 +817,7 @@ async def test_reference_outside_sandbox_names_the_text_alternative(state_no_sim
     names the alternative a caller can act on without widening the sandbox."""
     deck = _write(work_dir, "cand.cir", _BASE)
     data = await _run(state_no_sim, path=str(deck), reference="/outside/ref.cir")
-    finding = next(f for f in data["findings"] if f["rule_id"] == "path_denied")
+    finding = next(f for f in data.get("findings", []) if f["rule_id"] == "path_denied")
     assert "netlist text itself" in finding["evidence"]["detail"]
 
 
@@ -1022,7 +1022,7 @@ async def test_unreadable_reference_contract_differs_by_mode_as_documented(state
     missing = str(work_dir / "never_written.cir")
 
     equiv = await _run(state_no_sim, path=str(deck), reference=missing)
-    assert equiv["comparison"] is None
+    assert "comparison" not in equiv
     assert [f["stage"] for f in equiv["failures"]] == ["compare"]
     assert "compare" not in equiv["checks_run"]
 
@@ -1030,7 +1030,7 @@ async def test_unreadable_reference_contract_differs_by_mode_as_documented(state
         state_no_sim, path=str(deck), reference=missing, compare_mode="structural_diff"
     )
     assert structural["comparison"]["equivalent"] is None
-    assert structural["failures"] == []
+    assert "failures" not in structural
     assert structural["warnings"]
     assert "compare" in structural["checks_run"]
 
@@ -1047,7 +1047,7 @@ async def test_clean_comparison_emits_no_warnings(state_no_sim, work_dir):
     data = await _run(
         state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
     )
-    assert data["warnings"] == []
+    assert "warnings" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -1075,7 +1075,8 @@ def _empty_delta() -> dict[str, list]:
 
 
 def _delta(comparison: dict) -> dict[str, list]:
-    return {key: comparison[key] for key in STRUCTURAL_DELTA_PROPS}
+    # An empty list of changes is left out of the reply, so it reads as empty here.
+    return {key: comparison.get(key, []) for key in STRUCTURAL_DELTA_PROPS}
 
 
 @pytest.fixture
@@ -1111,10 +1112,10 @@ async def test_unchanged_sheet_against_its_own_asc_reports_no_changes(exporting_
 
     data = await _diff_exported(exporting_state, sheet, sheet, export_to="managed")
 
-    assert data["failures"] == []
+    assert "failures" not in data
     assert _delta(data["comparison"]) == _empty_delta()
     assert data["comparison"]["equivalent"] is True
-    assert data["warnings"] == []
+    assert "warnings" not in data
     assert data["outcome"] == "complete"
     # Exporting the reference staged a copy; nothing was written beside it.
     assert not (work_dir / "amp.net").exists()
@@ -1145,7 +1146,7 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
         export_to="managed",
     )
 
-    assert data["failures"] == []
+    assert "failures" not in data
     assert data["comparison"]["mode"] == "equivalence"
     assert data["comparison"]["equivalent"] is True
     assert not (work_dir / "amp.net").exists()
@@ -1182,7 +1183,7 @@ async def test_default_model_line_counts_when_the_reference_declares_that_model(
     comparison = data["comparison"]
     assert comparison["directives_added"] == [".model NMOS NMOS"]
     assert comparison["directives_removed"] == [".model NMOS NMOS(KP=50u)"]
-    assert comparison["components_changed"] == []
+    assert "components_changed" not in comparison
 
 
 async def test_a_directive_is_compared_whole_across_continuation_lines(state_no_sim, work_dir):
@@ -1237,7 +1238,7 @@ async def test_only_the_exporter_boilerplate_is_normalized(state_no_sim, work_di
     )
 
     assert data["comparison"]["directives_added"] == [".lib models/opamps.lib"]
-    assert data["comparison"]["directives_removed"] == []
+    assert "directives_removed" not in data["comparison"]
 
 
 @pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
@@ -1252,7 +1253,7 @@ async def test_asc_reference_without_ltspice_fails_the_compare(
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), compare_mode=mode)
 
-    assert data["comparison"] is None
+    assert "comparison" not in data
     assert [f["stage"] for f in data["failures"]] == ["compare"]
     assert "LTspice" in data["failures"][0]["error"]
     assert data["outcome"] == "partial"
@@ -1270,7 +1271,7 @@ async def test_asc_text_reference_is_refused(exporting_state, work_dir):
         compare_mode="structural_diff",
     )
 
-    assert data["comparison"] is None
+    assert "comparison" not in data
     assert [f["stage"] for f in data["failures"]] == ["compare"]
     assert ".asc" in data["failures"][0]["error"]
 
@@ -1311,7 +1312,7 @@ async def test_escaping_include_denied_no_read(state_no_sim, work_dir, spelling)
     ref = _write(work_dir, "ref.cir", "* r\nR1 in out 1k\n.end\n")
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
-    denied = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
+    denied = [f for f in data.get("findings", []) if f["rule_id"] == "path_denied"]
     assert denied, "the escaping include must surface a path_denied finding"
     assert include in denied[0]["subject"]
     assert denied[0]["at"]["file"] == str(deck)
@@ -1337,8 +1338,10 @@ async def test_parent_relative_include_inside_the_roots_is_read(state_no_sim, wo
 
     data = await _run(state_no_sim, path=str(deck), reference=str(ref), checks=["compare"])
 
-    assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"], data["findings"]
-    assert data["comparison"]["unresolved_subckts"] == []
+    assert not [f for f in data.get("findings", []) if f["rule_id"] == "path_denied"], data.get(
+        "findings"
+    )
+    assert "unresolved_subckts" not in data["comparison"]
     assert data["comparison"]["equivalent"] is True
 
 
@@ -1373,8 +1376,8 @@ async def test_simulator_library_include_is_read_though_the_sandbox_denies_it(
 
     data = await _run(state, path=str(deck), reference=str(ref), checks=["compare"])
 
-    assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"]
-    assert data["comparison"]["unresolved_subckts"] == []
+    assert not [f for f in data.get("findings", []) if f["rule_id"] == "path_denied"]
+    assert "unresolved_subckts" not in data["comparison"]
     assert data["comparison"]["equivalent"] is True
 
 
@@ -1399,7 +1402,7 @@ async def test_netlist_quality_reports_a_node_with_one_terminal(state_no_sim, wo
     deck = _write(work_dir, "dangling.cir", _DANGLING_NODE_DECK)
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
     assert data["checks_run"] == ["quality"]
-    dangling = [f for f in data["findings"] if f["rule_id"] == "dangling_node"]
+    dangling = [f for f in data.get("findings", []) if f["rule_id"] == "dangling_node"]
     assert len(dangling) == 1, data["findings"]
     assert "out" in dangling[0]["evidence"]["detail"]
     assert dangling[0]["at"]["file"] == str(deck)
@@ -1412,7 +1415,7 @@ async def test_netlist_quality_reports_a_node_with_one_terminal(state_no_sim, wo
 async def test_netlist_quality_reports_a_directive_naming_nothing(state_no_sim, work_dir):
     deck = _write(work_dir, "probe.cir", _UNDEFINED_REF_DECK)
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
-    missing = [f for f in data["findings"] if f["rule_id"] == "undefined_reference"]
+    missing = [f for f in data.get("findings", []) if f["rule_id"] == "undefined_reference"]
     assert len(missing) == 1, data["findings"]
     assert "vref" in missing[0]["evidence"]["detail"]
     assert missing[0]["severity"] == "warning"
@@ -1422,7 +1425,7 @@ async def test_netlist_quality_reports_a_directive_naming_nothing(state_no_sim, 
 async def test_netlist_quality_reports_a_net_with_no_dc_path_to_ground(state_no_sim, work_dir):
     deck = _write(work_dir, "floating.cir", _FLOATING_NET_DECK)
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
-    floating = [f for f in data["findings"] if f["rule_id"] == "floating_net"]
+    floating = [f for f in data.get("findings", []) if f["rule_id"] == "floating_net"]
     assert len(floating) == 1, data["findings"]
     assert "mid" in floating[0]["evidence"]["detail"]
     assert floating[0]["severity"] == "warning"
@@ -1438,7 +1441,7 @@ async def test_netlist_quality_reports_a_parameter_given_twice(state_no_sim, wor
         "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=2 Vh=0.5 vt=4.15\nR1 out 0 1k\n.op\n.end\n",
     )
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
-    twice = [f for f in data["findings"] if f["rule_id"] == "duplicate_parameter"]
+    twice = [f for f in data.get("findings", []) if f["rule_id"] == "duplicate_parameter"]
     assert len(twice) == 1, data["findings"]
     assert "A1 gives vt 2 times: Vt=2, vt=4.15." in twice[0]["evidence"]["detail"]
     assert twice[0]["at"]["line"] == 2
@@ -1457,7 +1460,9 @@ async def test_netlist_quality_reports_a_model_or_subcircuit_giving_a_parameter_
     )
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
     details = [
-        f["evidence"]["detail"] for f in data["findings"] if f["rule_id"] == "duplicate_parameter"
+        f["evidence"]["detail"]
+        for f in data.get("findings", [])
+        if f["rule_id"] == "duplicate_parameter"
     ]
     assert any("NM gives vto 2 times: VTO=0.7, vto=0.8." in d for d in details), details
     assert any("amp gives g 2 times: g=1, G=2." in d for d in details), details
@@ -1467,7 +1472,7 @@ async def test_netlist_quality_silent_on_a_clean_deck(state_no_sim, work_dir):
     deck = _write(work_dir, "clean.cir", _BASE)
     data = await _run(state_no_sim, path=str(deck), checks=["quality"])
     assert data["checks_run"] == ["quality"]
-    assert data["findings"] == []
+    assert "findings" not in data
     assert data["outcome"] == "complete"
 
 
@@ -1489,7 +1494,7 @@ _TEXT_OVERLAP_ASC = (
 async def test_quality_fires_on_label_island(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "island.asc", _LABEL_ISLAND_ASC)
     data = await _run(state_no_sim, path=str(asc), checks=["quality"])
-    islands = [f for f in data["findings"] if f["rule_id"] == "label_island"]
+    islands = [f for f in data.get("findings", []) if f["rule_id"] == "label_island"]
     assert len(islands) == 1
     assert islands[0]["subject"] == "sig"
     assert islands[0]["evidence"]["stub_count"] == 2
@@ -1500,14 +1505,14 @@ async def test_quality_fires_on_label_island(state_no_sim, work_dir, asc_symbols
 async def test_quality_silent_on_clean_sheet(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "clean.asc", _CLEAN_ASC)
     data = await _run(state_no_sim, path=str(asc), checks=["quality"])
-    assert data["findings"] == []
+    assert "findings" not in data
     assert data["outcome"] == "complete"
 
 
 async def test_quality_fires_on_text_overlap(state_no_sim, work_dir, asc_symbols):
     asc = _write(work_dir, "overlap.asc", _TEXT_OVERLAP_ASC)
     data = await _run(state_no_sim, path=str(asc), checks=["quality"])
-    overlaps = [f for f in data["findings"] if f["rule_id"] == "text_in_symbol_body"]
+    overlaps = [f for f in data.get("findings", []) if f["rule_id"] == "text_in_symbol_body"]
     assert overlaps, "text anchored inside a symbol body should fire"
     for f in overlaps:
         assert f["at"]["file"] == str(asc)
@@ -1544,7 +1549,7 @@ async def test_records_the_drawing_leaves_out_on_purpose_are_not_reported(
     trace, so leaving them out of the drawing is not a gap in any check."""
     asc = _write(work_dir, "ports.asc", _PORT_AND_DATA_LABEL_ASC)
     data = await _run(state_no_sim, path=str(asc), checks=["quality"])
-    assert [o for o in data["observations"] if "IOPIN" in o or "DATAFLAG" in o] == []
+    assert [o for o in data.get("observations", []) if "IOPIN" in o or "DATAFLAG" in o] == []
 
 
 # ---------------------------------------------------------------------------
@@ -1569,9 +1574,9 @@ async def test_render_svg(state_no_sim, work_dir, asc_symbols, monkeypatch):
     assert render["path"].endswith(".svg")
     assert Path(render["path"]).is_file()  # noqa: ASYNC240
     assert render["sha256"]
-    assert render["downscaled"] is False
+    assert "downscaled" not in render
     # mode="only" skips every check.
-    assert data["checks_run"] == []
+    assert "checks_run" not in data
     assert calls["n"] == 0, "render.mode='only' must not run the layout checks"
 
 
@@ -1655,7 +1660,7 @@ async def test_the_default_format_falling_back_is_not_a_failure(
     asc = _write(work_dir, "rd.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only"})
     assert data["render"]["image_format"] == "svg"
-    assert data["failures"] == []
+    assert "failures" not in data
     assert data["outcome"] == "complete"
     assert "'raster' extra" in data["render"]["note"]
     assert "ltspice-mcp[raster]" in data["hint"]
@@ -1709,8 +1714,8 @@ async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, 
     assert [c.type for c in result.content] == ["text"]
     assert markup not in result.content[0].text
     # SVG was what the caller asked for: nothing to explain.
-    assert render["note"] is None
-    assert data["failures"] == []
+    assert "note" not in render
+    assert "failures" not in data
     assert data["outcome"] == "complete"
 
 
@@ -1743,9 +1748,9 @@ async def test_artifact_delivery_returns_no_markup(state_no_sim, work_dir, asc_s
         state_no_sim,
     )
     data = _assert_schema(result)
-    assert data["render"]["returned_inline"] is False
+    assert "returned_inline" not in data["render"]
     assert "svg" not in data["render"]
-    assert data["render"]["note"] is None
+    assert "note" not in data["render"]
     assert [c.type for c in result.content] == ["text"]
 
 
@@ -1871,6 +1876,50 @@ async def test_a_failed_default_export_names_the_mode_that_writes_nothing_beside
     (failure,) = data["failures"]
     assert failure["stage"] == "export"
     assert "export_to='managed'" in failure["remedy"]
+
+
+class TestAReplyWithoutAComparisonSaysWhy:
+    """``comparison`` is left out whenever compare did not produce one, so the
+    reply says why in a field with content: a ``checks_skipped`` row or a
+    ``failures`` row, never silence."""
+
+    async def test_no_reference_is_a_skipped_check(self, state_no_sim, work_dir):
+        deck = _write(work_dir, "rc.cir", "* rc\nR1 a 0 1k\n.op\n.end\n")
+        data = await _run(state_no_sim, path=str(deck))
+        assert "comparison" not in data
+        assert {"check": "compare", "reason": "no reference supplied"} in data["checks_skipped"]
+
+    async def test_a_reference_compared_is_a_check_that_ran(self, state_no_sim, work_dir):
+        deck = _write(work_dir, "rc.cir", "* rc\nR1 a 0 1k\n.op\n.end\n")
+        data = await _run(state_no_sim, path=str(deck), reference=str(deck), checks=["compare"])
+        assert "compare" in data["checks_run"]
+        assert data["comparison"]["equivalent"] is True
+
+    async def test_an_export_that_ran_and_wrote_nothing_is_named_as_such(
+        self, config, work_dir, asc_symbols, monkeypatch
+    ):
+        """Two facts once read the same: an export that never ran and one that ran
+        and failed. The second has its failure row, and the skipped compare says
+        which of the two it was."""
+
+        def refused(_cls, asc_path, timeout=0):
+            raise PermissionError(f"[Errno 13] Permission denied: '{asc_path}'")
+
+        monkeypatch.setattr(vc, "_create_netlist", refused)
+        state = _with_ltspice(config)
+        asc = _write(work_dir, "ro.asc", _RES_ASC)
+        reference = _write(work_dir, "ref.cir", "* ref\nR1 a 0 1k\n.end\n")
+
+        data = await _run(
+            state, path=str(asc), reference=str(reference), checks=["export", "compare"]
+        )
+
+        assert "comparison" not in data
+        assert [failure["stage"] for failure in data["failures"]] == ["export"]
+        assert {
+            "check": "compare",
+            "reason": "the export ran and wrote no netlist to compare",
+        } in data["checks_skipped"]
 
 
 async def test_managed_export_is_non_destructive(config, work_dir, asc_symbols, monkeypatch):
@@ -2127,7 +2176,7 @@ async def test_a_family_with_no_validator_rules_gets_the_neutral_checks_and_says
     data = await _run(state, path=str(deck), checks=["syntax"])
 
     assert data["checks_run"] == ["syntax"]
-    assert data["findings"] == []
+    assert "findings" not in data
     assert any(
         note.startswith("syntax: No validator rules for Xyce are declared")
         for note in data["observations"]

@@ -351,7 +351,10 @@ class TestTheDoorsAgree:
         data = (await _inspect_guide(state, section))["results"][0]["data"]
         uri = "spice://guide" if section is None else f"spice://guide/{section}"
         assert data["text"] == Api.guide(section) == _resource_text(uri, state)
-        assert data["section"] == section
+        # The core is no section, and a reply leaves out a field that says nothing.
+        assert data.get("section", None) == section and ("section" in data) == (
+            section is not None
+        )
         assert data["title"] == guide.title_of(section)
 
     async def test_an_unknown_section_fails_only_its_item(self, work_dir: Path):

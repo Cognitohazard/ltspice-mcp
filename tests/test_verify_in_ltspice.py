@@ -63,7 +63,6 @@ async def test_the_sheet_is_opened_in_the_window_and_put_in_front(
         "path": str(asc_file),
         "pid": PID,
         "version": "26.1.1",
-        "already_open": False,
     }
     window = window_of(world)
     assert list(window["designs"]) == [str(asc_file)]
@@ -91,7 +90,6 @@ async def test_a_sheet_the_window_already_has_is_put_in_front_as_it_holds_it(
         "pid": PID,
         "version": "26.1.1",
         "already_open": True,
-        "differs_from_file": False,
     }
     assert window_of(world)["active"] == str(asc_file)
     assert data["hint"].endswith("In front in LTspice.")
@@ -135,7 +133,6 @@ async def test_a_netlist_is_opened_too(asc_state: SessionState, work_dir: Path, 
         "path": str(deck),
         "pid": PID,
         "version": "26.1.1",
-        "already_open": False,
     }
     assert list(window_of(world)["designs"]) == [str(deck)]
 
@@ -154,7 +151,6 @@ async def test_with_no_window_open_ltspice_is_started_and_shows_it(
         "path": str(asc_file),
         "pid": STARTED_PID,
         "version": "26.1.1",
-        "already_open": False,
         "started": True,
     }
     assert start.calls == 1

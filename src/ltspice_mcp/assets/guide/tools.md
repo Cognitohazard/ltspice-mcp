@@ -239,7 +239,7 @@ blocks printed in the log, as `name = value` entries and `Index frequency`
 table rows. Omit `plot_index` on log views. Each native row includes its
 block's first and last line numbers (`line_start`, `line_end`), the reason
 the block ended (`closed_by`) and its printed title; complex values are given
-as `real` and `imag`, a unit the log does not print is null, and rows are not
+as `real` and `imag`, a unit the log does not print is left out, and rows are not
 assigned to a plot or step. A log that reads without error does not show that
 the simulation finished. A read by `job_id` works once all the job's runs have
 finished, and only on a case that is `produced` or kept a partial raw
@@ -287,7 +287,7 @@ in order until it fits:
 
 | rung | what is removed |
 |-|-|
-| 0 trim | empty presentation blocks and `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included); then points of an inline `waveform` whose `max_points` you did not set, thinned to fewer buckets that each keep their minimum and maximum |
+| 0 trim | `source_hashes`, the row per source that repeats its label, plot and file snapshot (an attached analysis's included); then points of an inline `waveform` whose `max_points` you did not set, thinned to fewer buckets that each keep their minimum and maximum |
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"`, and a `max_points` you set, so any inline waveform may be thinned |
 | 2 shrink | page size; cursors are created for the smaller page, so paging still reaches every row |
 
@@ -306,7 +306,7 @@ observation that the reply is over the budget.
 
 If you omit `budget`, the server applies its own default
 (`[analysis] default_budget`, 4000 tokens) at rung 0 only, so a large response
-loses only its empty blocks, `source_hashes` and the inline waveform points
+loses only `source_hashes` and the inline waveform points
 you did not ask for; set `max_points` to keep a count, or use `"format":
 "csv"` for every sample. A receipt thins its attached waveforms either way;
 `analyze_results` over the job reads more. A thinned recipe says so in its

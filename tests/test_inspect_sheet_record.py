@@ -75,14 +75,14 @@ def _net(item: dict[str, Any]) -> dict[str, Any]:
         return {"error": item["error"]["code"]}
     data = item["data"]
     coordinates = json.dumps(data.get("coordinates", []), sort_keys=True)
+    # Each field as the reply carries it: a field the reply leaves out because
+    # it says nothing (an empty list, a false flag) is left out here too.
     said: dict[str, Any] = {
-        "labels": data.get("labels", []),
-        "pins": data.get("pins", []),
-        "total_pins": data.get("total_pins"),
-        "is_shorted": data.get("is_shorted"),
-        "total_coordinates": data.get("total_coordinates"),
-        "coordinates_sha256": hashlib.sha256(coordinates.encode("utf-8")).hexdigest()[:16],
+        key: data[key]
+        for key in ("labels", "pins", "total_pins", "is_shorted", "total_coordinates")
+        if key in data
     }
+    said["coordinates_sha256"] = hashlib.sha256(coordinates.encode("utf-8")).hexdigest()[:16]
     for key in ("snapped_to_wire", "warnings"):
         if key in data:
             said[key] = data[key]

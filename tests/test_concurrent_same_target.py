@@ -222,7 +222,7 @@ async def test_identical_request_id_submits_one_job(
     assert [p.stem for p in _job_records(work_dir)] == [first["job_id"]]
     # The replay says so rather than looking like a second run, on its own
     # receipt; the record it was answered from is left as it was.
-    replayed = [d for d in (first, second) if d["replayed"]]
+    replayed = [d for d in (first, second) if d.get("replayed")]
     assert len(replayed) == 1, "exactly one response is the replay"
     record = state_with_sim.all_jobs[first["job_id"]]
     assert not [o for o in record.observations if o.get("code") == "idempotent_replay"]
@@ -665,17 +665,17 @@ async def test_simultaneous_cancels_of_one_job_report_one_outcome(
     for data in (first, second):
         assert data["outcome"] != "error", data
         assert data["status"] == "cancelled", data
-        assert data["failures"] == []
+        assert "failures" not in data
     job = state_with_sim.all_jobs[job_id]
     assert job.status == "cancelled"
     assert all(case.status == "cancelled" for case in job.cases)
     # A case is cancelled once. One call carries the transitions it made; the
     # other reports none, because by the time it looked there was nothing left
     # non-terminal to stop — never a second transition out of a terminal status.
-    reporting = [data for data in (first, second) if data["items"]]
+    reporting = [data for data in (first, second) if data.get("items")]
     assert len(reporting) == 1, f"both cancels claimed the same transitions: {reporting}"
     assert [row["prior_status"] for row in reporting[0]["items"]] == ["queued"]
-    quiet = next(data for data in (first, second) if not data["items"])
+    quiet = next(data for data in (first, second) if not data.get("items"))
     assert "no cancellation was needed" in quiet["hint"]
     assert not callbacks, f"a case stopped while queued still reached the simulator: {callbacks}"
 

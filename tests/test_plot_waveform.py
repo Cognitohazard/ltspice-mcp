@@ -465,7 +465,7 @@ class TestRender:
         data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
         assert data["analysis_type"] == "transient"
         assert data["panels"] == 1
-        assert data["opened"] is False  # open=False
+        assert "opened" not in data  # open=False
         out = Path(data["path"])
         assert (work_dir / ".ltspice-mcp" / "plots") in out.parents
         html = _read(out)
@@ -473,7 +473,7 @@ class TestRender:
         blob = _data_blob(html)
         assert blob["analysis_type"] == "transient" and len(blob["panels"]) == 1
         # Nothing restates the reply's own fields (counts, `opened`).
-        assert data["observations"] == []
+        assert "observations" not in data
 
     async def test_a_raw_in_its_own_folder_plots_into_the_store(
         self, state_no_sim: SessionState, project_dir: Path
@@ -498,7 +498,7 @@ class TestRender:
         assert blob["panels"][1]["y_label"] == "Phase (deg)"
         assert blob["panels"][0]["x_scale"] == "log"
         # One RC pole stays within ±180 deg, where unwrapped and wrapped agree.
-        assert not any(o["code"] == "phase_unwrapped" for o in data["observations"])
+        assert not any(o["code"] == "phase_unwrapped" for o in data.get("observations", []))
 
     async def test_a_phase_past_180_degrees_is_reported_unwrapped(
         self, state_no_sim: SessionState, work_dir: Path
@@ -579,7 +579,7 @@ class TestRender:
         assert data["series_count"] == data["n_steps"]  # one trace per step
         # Distinct per-step time vectors change no number in the reply, so
         # nothing is said about them.
-        assert not data["observations"]
+        assert not data.get("observations")
         blob = _data_blob(_read(Path(data["path"])))
         # One table per step: each step keeps its own time vector.
         assert len(blob["panels"][0]["tables"]) == data["n_steps"]
@@ -626,7 +626,7 @@ class TestRender:
         # The autouse conformance hook validates structuredContent vs output_schema.
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], format="json")
-        assert {"path", "analysis_type", "opened", "observations"} <= data.keys()
+        assert {"path", "analysis_type", "delivery", "traces"} <= data.keys()
 
 
 # --- delivery / opener / security ------------------------------------------
@@ -756,8 +756,8 @@ class TestWidgetDelivery:
 
         sc = result.structured_content
         assert sc["delivery"] == "ui"
-        assert sc["opened"] is False
-        assert sc["observations"] == []
+        assert "opened" not in sc
+        assert "observations" not in sc
 
     async def test_ui_widget_spec_is_decimated_small(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -1111,7 +1111,8 @@ class TestPanelLayout:
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_noise_rc")
         data = await _plot(state_no_sim, path=str(raw), signals="all")
-        units = {t["signal"]: t["unit"] for t in data["traces"]}
+        # A trace with no unit has none in the reply.
+        units = {t["signal"]: t.get("unit") for t in data["traces"]}
         # The raw spells its noise traces in lower case.
         assert units["v(onoise)"] == "V/√Hz"
         assert units["gain"] is None
@@ -1245,9 +1246,9 @@ class TestOpenDefault:
         )
         assert opens == []
         sc = result.structured_content
-        assert sc["opened"] is False
+        assert "opened" not in sc
         # The caller's own setting is not echoed back as an observation.
-        assert sc["observations"] == []
+        assert "observations" not in sc
 
     async def test_a_call_overrides_the_config(
         self, state_no_sim: SessionState, work_dir: Path, opens: list[Path]

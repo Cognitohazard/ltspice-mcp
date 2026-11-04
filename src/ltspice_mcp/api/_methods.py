@@ -233,6 +233,35 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
         return await coroutine
 
 
+async def _replying_as(tool: str, coroutine: Coroutine[Any, Any, _T]) -> _T:
+    """Run one complete-mode coroutine with ``tool``'s reply fields named.
+
+    The replies built inside, and the response budget's measurement of them,
+    keep that tool's fields as its MCP replies do. Named inside the coroutine
+    for the reason the automatic-mode flag is.
+    """
+    from ltspice_mcp.tools._base import replying_as  # deferred with the tool modules
+
+    with replying_as(tool):
+        return await coroutine
+
+
+def _api_reply(tool: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A complete result as ``tool``'s reply sends it: the fields that say
+    nothing left out, by the same rule and the same kept fields as the MCP
+    reply (``lib/reply_fields.py``), so the two have one shape."""
+    from ltspice_mcp.lib.reply_fields import omit_silent
+    from ltspice_mcp.tools._base import reply_kept  # deferred with the tool modules
+
+    return dict(omit_silent(payload, reply_kept(tool)))
+
+
+def _lean_error(tool: str, exc: ApiCallError) -> ApiCallError:
+    """``exc`` with its payload as ``tool``'s reply sends it."""
+    exc.payload = _api_reply(tool, exc.payload)
+    return exc
+
+
 def _payload_message(payload: Mapping[str, Any]) -> str | None:
     """The message an error envelope carries, if it carries one."""
     error = payload.get("error")
@@ -818,14 +847,18 @@ class ApiMethodsMixin(ABC):
         coroutine = (
             _handler_page(handler, request, self._state)
             if raw_page
-            else _through_auto_door(collector(request, self._state))
+            else _through_auto_door(_replying_as(name, collector(request, self._state)))
         )
-        payload = self._marshal(
-            coroutine,
-            cancelable=_resolve_cancel(cancelable, request),
-            cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
-        )
-        return _with_warnings(payload, dropped)
+        try:
+            payload = self._marshal(
+                coroutine,
+                cancelable=_resolve_cancel(cancelable, request),
+                cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
+            )
+        except ApiCallError as exc:
+            _lean_error(name, exc)
+            raise
+        return _with_warnings(_api_reply(name, payload), dropped)
 
     @catalogued
     def run_experiments(
@@ -897,8 +930,15 @@ class ApiMethodsMixin(ABC):
         try:
             if waited_job is not None:
                 self.wait(waited_job)
-            complete = self._marshal(
-                _through_auto_door(_complete_run_receipt(receipt, request, self._state))
+            complete = _api_reply(
+                "run_experiments",
+                self._marshal(
+                    _through_auto_door(
+                        _replying_as(
+                            "run_experiments", _complete_run_receipt(receipt, request, self._state)
+                        )
+                    )
+                ),
             )
             return _with_warnings(complete if wait else _note_process_owned_job(complete), dropped)
         except KeyboardInterrupt as exc:
@@ -940,7 +980,7 @@ class ApiMethodsMixin(ABC):
             raise _collector_error(handoff.receipt, exc) from exc
         return _with_warnings(
             _note_detached_owner(
-                handoff.receipt,
+                _api_reply("run_experiments", handoff.receipt),
                 owner_pid=owner_pid if owner_pid is not None else handoff.supervisor_pid,
                 log_file=handoff.log_file,
             ),
@@ -997,7 +1037,9 @@ class ApiMethodsMixin(ABC):
                 )
             except Exception as exc:
                 evaluation = jobs.failed_jobs_evaluation(request, exc, self._state)
-                raise ApiCallError(str(exc), payload=jobs.complete_jobs_data(evaluation)) from exc
+                raise ApiCallError(
+                    str(exc), payload=_api_reply("jobs", jobs.complete_jobs_data(evaluation))
+                ) from exc
 
         payload["control_token"] = self._marshal(authorize())
         handoff = _detach.submit(
@@ -1036,9 +1078,9 @@ class ApiMethodsMixin(ABC):
                     self._state,
                     prior=prior,
                 )
-                data = jobs.complete_jobs_data(evaluation)
+                data = _api_reply("jobs", jobs.complete_jobs_data(evaluation))
                 raise ApiCallError(data["error"]["message"], payload=data) from exc
-        return _with_warnings(handoff.receipt, dropped)
+        return _with_warnings(_api_reply("jobs", handoff.receipt), dropped)
 
     def wait(
         self,

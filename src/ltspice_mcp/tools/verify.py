@@ -312,7 +312,7 @@ _EXPORT_SCHEMA: dict[str, Any] = {
             "required": list(STRUCTURAL_DELTA_PROPS),
             "description": (
                 "sidecar mode only: the structural delta between the .net that was "
-                "already on disk and the one just exported. Null when there was no "
+                "already on disk and the one just exported. Absent when there was no "
                 "prior file or the export was managed."
             ),
         },
@@ -584,8 +584,9 @@ _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
 COMPARISON_SCHEMA: dict[str, Any] = {
     "type": ["object", "null"],
     "description": (
-        "The reference comparison, null when no reference was supplied or compare "
-        "did not run. 'mode' selects which keys are present."
+        "The reference comparison, present when compare ran (checks_run lists it); "
+        "otherwise checks_skipped or failures says why it did not. 'mode' selects "
+        "which keys are present."
     ),
     "properties": {
         "mode": {
@@ -2458,7 +2459,14 @@ async def evaluate_verify_circuit(
         # --- compare ------------------------------------------------------------
         if wanted.get("compare") and reference is not None:
             if candidate is None:
-                skip("compare", "the exported netlist is required and the export did not run")
+                # Two different facts, so two reasons: an export that ran and
+                # wrote no netlist has its own failure row beside this one.
+                skip(
+                    "compare",
+                    "the export ran and wrote no netlist to compare"
+                    if "export" in checks_run
+                    else "the exported netlist is required and the export did not run",
+                )
             else:
                 assert compare is not None  # guarded by `reference is not None`
                 ref_source = reference if isinstance(reference, Path) else path
@@ -2530,7 +2538,7 @@ async def evaluate_verify_circuit(
     data.update(
         {
             "checks_run": checks_run,
-            **({"rules_run": rules_run} if rules_run else {}),
+            "rules_run": rules_run,
             "checks_skipped": skipped,
             "findings": findings,
             "observations": [event for event in observation_events if isinstance(event, str)],

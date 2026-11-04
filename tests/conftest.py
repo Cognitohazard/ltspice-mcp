@@ -6,6 +6,7 @@ import ctypes
 import functools
 import importlib.abc
 import inspect
+import math
 import os
 import re
 import shutil
@@ -1600,6 +1601,15 @@ def _enforce_output_schema_conformance():
     helper. An emission with no schema-declaring frame inside that window is
     not validated and not reported: a response built outside any declared
     handler, or one nested deeper than the window, passes unchecked.
+
+    The same hook holds every emission to the reply-field rule
+    (``lib/reply_fields.py``): a reply that carries an empty list, an empty
+    object, a null, a false flag or an implied sub-answer fails, unless the
+    field is on the replying tool's ``ALWAYS_PRESENT`` list or the null stands
+    for a number that is not finite (``sanitize_payload`` writes those and says
+    so in ``warnings``). The replying tool is found on the call stack, apart
+    from the one the reply builder was told, so a reply built under the wrong
+    tool's list fails too. That keeps every new field under the rule.
     """
     import sys
 
@@ -1634,12 +1644,52 @@ def _enforce_output_schema_conformance():
             if code not in contracts:
                 contracts[code] = (obj.__name__, jsonschema.Draft202012Validator(schema))
 
-    def _validate(result) -> None:
+    from ltspice_mcp.lib.reply_fields import silent_fields
+    from ltspice_mcp.tools._base import ALL_KEPT, ALWAYS_PRESENT, registry
+
+    # The registered tools, by the code object of the handler each wraps.
+    tool_of_code = {
+        getattr(rt.handler, "__wrapped__", rt.handler).__code__: rt.definition.name
+        for rt in registry._registered
+    }
+
+    def _replying_tool(frame) -> str | None:
+        """The outermost registered tool on the stack: the one whose reply this is."""
+        tool = None
+        while frame is not None:
+            tool = tool_of_code.get(frame.f_code, tool)
+            frame = frame.f_back
+        return tool
+
+    def _nonfinite_paths(value, path=()):
+        if isinstance(value, float) and not math.isfinite(value):
+            yield path
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                yield from _nonfinite_paths(item, (*path, key))
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                yield from _nonfinite_paths(item, (*path, index))
+
+    def _hold_to_reply_rule(sc, data, frame) -> None:
+        tool = _replying_tool(frame)
+        kept = ALL_KEPT if tool is None else ALWAYS_PRESENT[tool]
+        silent = list(silent_fields(sc, kept, allowed_nulls=frozenset(_nonfinite_paths(data))))
+        if silent:
+            named = ", ".join(".".join(str(part) for part in at) for at in silent[:5])
+            raise AssertionError(
+                f"{tool or 'a reply'}: structuredContent carries fields that say nothing "
+                f"({named}{' and more' if len(silent) > 5 else ''}). Leave them out, or "
+                "keep one on the tool's ALWAYS_PRESENT list with the reason."
+            )
+
+    def _validate(result, data=None) -> None:
         sc = result.structured_content
         if sc is None:
             return
         # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.
         frame = sys._getframe(2)
+        _hold_to_reply_rule(sc, data, frame)
         for _ in range(_FRAME_WINDOW):
             if frame is None:
                 return
@@ -1664,12 +1714,12 @@ def _enforce_output_schema_conformance():
         # already validated this result — don't pay the stack walk and
         # schema validation twice per emission.
         if fmt != "json":
-            _validate(result)
+            _validate(result, data)
         return result
 
     def checked_json_response(data):
         result = original_json(data)
-        _validate(result)
+        _validate(result, data)
         return result
 
     # Handlers bind these helpers at import time (``from _base import

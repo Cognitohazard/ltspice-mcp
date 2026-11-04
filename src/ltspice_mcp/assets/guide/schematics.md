@@ -18,7 +18,7 @@ together, and the first one that fails aborts the batch with nothing written,
 so batch a whole build into one call. Place components with the
 `add_component` op. The response's `touched` view lists their placed pins and
 nets, and `warnings` reports any overlap. A pin on a net that no label names
-has `net: null`; with a `compare`, it also has `net_export`, the name LTspice's
+has no `net`; with a `compare`, it has `net_export`, the name LTspice's
 export gives it (`N001`). `inspect(kind="symbol")` previews the same geometry
 before you place anything, and lists every attribute the symbol has
 (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes

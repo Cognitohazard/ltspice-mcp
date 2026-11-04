@@ -826,20 +826,14 @@ def _lean_row(
 ) -> dict[str, Any]:
     """Default row rendering — the answer channel.
 
-    Drops attribution keys that carry nothing (null step_index, empty
-    step_values — the row schema declares no required keys, so absent and
-    empty mean the same thing), drops the per-row deck and file digests
-    (provenance, reachable via include.fields; the file digest is also on the
-    reply's source_hashes), and renders ``value`` by the metric's own
-    ``lean_value`` (see _LEAN_VALUES).
+    Drops the per-row deck and file digests (provenance, reachable via
+    include.fields; the file digest is also on the reply's source_hashes), and
+    renders ``value`` by the metric's own ``lean_value`` (see _LEAN_VALUES).
+    Attribution keys that carry nothing (a null step_index, empty step_values)
+    are left out with every other such field, when the reply is sent
+    (``tools/_base.reply_payload``).
     """
-    out: dict[str, Any] = {}
-    for key, item in row.items():
-        if key in _LEAN_ROW_DROPPED:
-            continue
-        if item is None or item == {} or item == []:
-            continue
-        out[key] = item
+    out: dict[str, Any] = {key: item for key, item in row.items() if key not in _LEAN_ROW_DROPPED}
     value = row.get("value")
     out["value"] = lean_value(value) if isinstance(value, dict) else value
     return out
@@ -1065,7 +1059,7 @@ async def _resolve_sources(
                     kind="provenance",
                     detail=(
                         f"Source {source_input.label!r} is an imported result path; "
-                        "deck_sha256 is null because no producing job was supplied."
+                        "its rows have no deck_sha256 because no producing job was supplied."
                     ),
                 )
             )
@@ -3311,10 +3305,11 @@ def _assemble(
     hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
+    # The summary line follows the reply's rule: a count of nothing is not said.
     text = (
         f"analyze_results: {outcome}; {len(results)} recipe result(s), "
-        f"{len(failures)} failure(s), "
-        f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
+        + (f"{len(failures)} failure(s), " if failures else "")
+        + f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
     )
     return data, text
 
@@ -3672,12 +3667,10 @@ def _entry_surfaces(entry: dict[str, Any]) -> list[list[Any]]:
 
 # Rung 0's allowlist, declared as data rather than spelled inside the ``if``
 # that applies it: a rung that exempts content is the one place a checker can
-# silently lose coverage, so it has to be a list a test can read. ``_REMOVE_``
-# names optional keys (dropped only when empty), ``_EMPTY_`` required ones
-# (emptied in place, never deleted) — pinned against this tool's own schema by
-# tests/test_response_budget.py.
-_TRIM_REMOVE_RESULT: tuple[str, ...] = ("groups", "values")
-_TRIM_REMOVE_ENVELOPE: tuple[str, ...] = ("signals_available",)
+# silently lose coverage, so it has to be a list a test can read. ``_EMPTY_``
+# names the blocks the rung empties, which the reply then leaves out — pinned
+# against this tool's own schema by tests/test_response_budget.py. A block that
+# is already empty needs no entry: every reply leaves it out.
 # The identity echo is the audit trail, not the way back — rows carry their own
 # source label and case_id, and a run is addressed by manifest_id and job_id.
 _TRIM_EMPTY_ENVELOPE: tuple[str, ...] = ("source_hashes",)
@@ -3695,10 +3688,8 @@ def trim_analysis(data: dict[str, Any], *, keep_provenance: bool = False) -> lis
     Idempotent, so the ladder may re-apply it to an envelope it already
     degraded on the way down.
     """
-    for entry in data["results"].values():
-        response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
     empty = () if keep_provenance else _TRIM_EMPTY_ENVELOPE
-    return response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
+    return response_budget.apply_trim(data, empty=empty)
 
 
 #: The fewest points a budget thins an inline series to: sixteen buckets, each
