@@ -18,15 +18,17 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
+from typing import Annotated, Any, ClassVar, Literal, NoReturn, Self, TypeAlias, get_args
 
 from mcp import types
 from pydantic import (
     Field,
     TypeAdapter,
+    ValidationError,
     ValidatorFunctionWrapHandler,
     model_validator,
 )
+from pydantic_core import InitErrorDetails
 
 from ltspice_mcp.errors import (
     JobNotFoundError,
@@ -149,6 +151,8 @@ class JobsInput(ToolInput):
     ) -> Any:
         """Validate the base name as whichever action the payload names."""
         if cls is JobsInput and isinstance(data, dict):
+            if "action" not in data:
+                _refuse_without_action(data)
             return _JOBS_ADAPTER.validate_python(data)
         return handler(data)
 
@@ -359,6 +363,30 @@ def _action_fields() -> Iterator[tuple[str, str, dict[str, Any], bool]]:
         for name, field in schema["properties"].items():
             if name not in shared:
                 yield action, name, field, name in required
+
+
+def _refuse_without_action(data: dict[str, Any]) -> NoReturn:
+    """Refuse a call that names no action: for the action, and for each field
+    no action takes, such as a misspelled ``action``.
+
+    The union alone stops at the missing action and says nothing of the other
+    fields, so a misspelling of ``action`` would go unnamed.
+    """
+    taken = set(jobs_input_schema()["properties"])
+    errors: list[InitErrorDetails] = [
+        {
+            "type": "union_tag_not_found",
+            "loc": (),
+            "input": data,
+            "ctx": {"discriminator": "'action'"},
+        }
+    ]
+    errors.extend(
+        {"type": "extra_forbidden", "loc": (name,), "input": value}
+        for name, value in data.items()
+        if name not in taken
+    )
+    raise ValidationError.from_exception_data(JobsInput.__name__, errors)
 
 
 def jobs_input_schema() -> dict[str, Any]:

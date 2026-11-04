@@ -61,6 +61,18 @@ tool-surface changes.
 
 ### Fixed
 
+- An argument refusal names the fix for a field it does not know: an unknown
+  field is answered with the names its place takes, the closest first ("Did
+  you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
+  it said only that the field was not permitted. A missing field that chooses
+  a branch is answered with the values it takes (`jobs` without `action`,
+  an `edit_schematic` op without `op`), where pydantic's "Unable to extract
+  tag using discriminator" named neither; a `jobs` call without `action` also
+  names the fields no action takes, such as a misspelled `action`.
+- `verify_circuit` places a refused include at the line of the `.include` or
+  `.lib` that names it, in the deck or in the included file that holds it,
+  where it gave the deck alone. A refused `compare.reference` is filed under
+  the reference, where it was filed under the circuit, which had been read.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its

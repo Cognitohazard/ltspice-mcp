@@ -1582,6 +1582,72 @@ def _isolated_state_home(tmp_path_factory: pytest.TempPathFactory) -> Iterator[N
 _FRAME_WINDOW = 25
 
 
+def _is_check_finding(value: dict) -> bool:
+    """A lint or check finding in the shared shape (``FINDING_SCHEMA``)."""
+    return {"rule_id", "severity", "at", "subject"} <= value.keys() and isinstance(
+        value["at"], dict
+    )
+
+
+def _is_sheet_finding(value: dict) -> bool:
+    """A sheet finding as ``edit_schematic`` reports it (``VALIDATION_WARNINGS_SCHEMA``)."""
+    from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
+
+    return "message" in value and value.get("kind") in VALIDATION_WARNING_KINDS
+
+
+#: Check findings about a file as a whole, which the file alone places, with
+#: the reason no line or part can.
+FILE_LEVEL_RULES: dict[str, str] = {
+    "path_denied": (
+        "The file named by an argument was refused, so it was never read. A refused "
+        "include is placed at its directive's line instead."
+    ),
+    "lex_error": "The deck did not lex, so it has no cards to point into.",
+}
+
+
+def _placed(finding: dict) -> bool:
+    """Whether a finding says where it is: a line, coordinates or a part reference."""
+    if _is_check_finding(finding):
+        at = finding["at"]
+        evidence = finding.get("evidence")
+        parts = (
+            evidence.get("refs") or evidence.get("instances")
+            if isinstance(evidence, dict)
+            else None
+        )
+        if finding["rule_id"] in FILE_LEVEL_RULES and finding["subject"] in (
+            at["file"],
+            Path(at["file"]).name,
+        ):
+            return True
+        return "line" in at or {"x", "y"} <= at.keys() or bool(parts)
+    return (
+        {"x", "y"} <= finding.keys()
+        or bool(finding.get("points"))
+        or {"from", "to"} <= finding.keys()
+        or bool(finding.get("ref"))
+        or bool(finding.get("refs"))
+    )
+
+
+def unplaced_findings(value: typing.Any, path: tuple = ()) -> Iterator[tuple[tuple, dict]]:
+    """Every finding in a reply that says nowhere where it is, with its path.
+
+    Design principle "Validate before write" (``docs/DESIGN.md``): a finding
+    names the place, so the caller goes to it instead of searching the file.
+    """
+    if isinstance(value, dict):
+        if (_is_check_finding(value) or _is_sheet_finding(value)) and not _placed(value):
+            yield path, value
+        for key, item in value.items():
+            yield from unplaced_findings(item, (*path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from unplaced_findings(item, (*path, index))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
     """Validate every structuredContent emitted during the suite against the
@@ -1688,6 +1754,16 @@ def _enforce_output_schema_conformance():
                 "keep one on the tool's ALWAYS_PRESENT list with the reason."
             )
 
+    def _hold_findings_to_a_place(sc, frame) -> None:
+        unplaced = list(unplaced_findings(sc))
+        if unplaced:
+            path, finding = unplaced[0]
+            named = ".".join(str(part) for part in path) or "<root>"
+            raise AssertionError(
+                f"{_replying_tool(frame) or 'a reply'}: the finding at {named} says nowhere "
+                f"where it is ({finding}). Give it a line, coordinates or a part reference."
+            )
+
     def _validate(result, data=None) -> None:
         sc = result.structured_content
         if sc is None:
@@ -1695,6 +1771,7 @@ def _enforce_output_schema_conformance():
         # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.
         frame = sys._getframe(2)
         _hold_to_reply_rule(sc, data, frame)
+        _hold_findings_to_a_place(sc, frame)
         for _ in range(_FRAME_WINDOW):
             if frame is None:
                 return

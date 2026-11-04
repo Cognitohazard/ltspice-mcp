@@ -1,5 +1,6 @@
 """Error hierarchy for ltspice-mcp server."""
 
+import difflib
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
@@ -14,6 +15,8 @@ def compact_validation_error(
     field_owners: Mapping[str, Sequence[str]] | None = None,
     nested: Mapping[str, Sequence[str]] | None = None,
     renamed: Mapping[str, str] | None = None,
+    accepted: Mapping[str, Sequence[str]] | None = None,
+    tags: Mapping[str, Sequence[str]] | None = None,
 ) -> str:
     """Render validation failures without input echoes or documentation URLs.
 
@@ -22,13 +25,21 @@ def compact_validation_error(
     ``circuits[].path``), named first, and ``field_owners`` to the tools
     that take it at their top level. An unknown field at any depth that is
     a name this tool retired is referred to the one that replaced it, by
-    ``renamed``.
+    ``renamed``. An unknown field with no such referral is answered with the
+    names its place takes, from ``accepted`` (the place spelled as the
+    reference table spells it: ``""`` for the tool's own arguments,
+    ``circuits[]`` inside each circuit), the closest one first.
+
+    A missing field that chooses a branch (``action``, ``op``) is answered
+    with the values it takes, from ``tags``, keyed by the field's name.
     """
     if not isinstance(exc, ValidationError):
         return str(exc)
     renamed = renamed or {}
     nested = nested or {}
     field_owners = field_owners or {}
+    accepted = accepted or {}
+    tags = tags or {}
 
     def referral(field: str) -> str:
         if field in renamed:
@@ -56,6 +67,8 @@ def compact_validation_error(
         message = error["msg"]
         if error_type == "union_tag_invalid":
             loc, message = _tag_mismatch(loc, error.get("ctx") or {}, message)
+        elif error_type == "union_tag_not_found":
+            loc, message = _tag_missing(loc, error.get("ctx") or {}, message, tags)
         key = (loc, error_type, message)
         if key in seen:
             continue
@@ -66,8 +79,10 @@ def compact_validation_error(
             continue
         if field in renamed or (len(loc) == 1 and (field in nested or field in field_owners)):
             sentence = referral(field)
-            if sentence not in referrals:
-                referrals.append(sentence)
+        else:
+            sentence = _accepted_here(field, loc[:-1], accepted)
+        if sentence and sentence not in referrals:
+            referrals.append(sentence)
 
     rendered = [
         f"{'.'.join(str(part) for part in loc) or '<root>'}: {message}"
@@ -76,7 +91,57 @@ def compact_validation_error(
     remaining = len(entries) - _MAX_VALIDATION_ERRORS
     if remaining > 0:
         rendered.append(f"… and {remaining} more")
-    return ("; ".join(rendered) or "Validation failed") + "".join(referrals)
+    text = "; ".join(rendered) or "Validation failed"
+    return text + ("." if referrals else "") + "".join(referrals)
+
+
+def _place(loc: Sequence[object]) -> str:
+    """A location as the reference table spells a field's place: ``("circuits",
+    0)`` is ``circuits[]``, the tool's own arguments are ``""``."""
+    place = ""
+    for part in loc:
+        if isinstance(part, int):
+            place += "[]"
+        else:
+            place += f".{part}" if place else str(part)
+    return place
+
+
+def _accepted_here(
+    field: str, loc: Sequence[object], accepted: Mapping[str, Sequence[str]]
+) -> str:
+    """The names the place of an unknown ``field`` takes, the closest first."""
+    place = _place(loc)
+    names = list(accepted.get(place, ()))
+    if not names:
+        return ""
+    close = difflib.get_close_matches(field, names, n=1)
+    guess = f" Did you mean {close[0]!r} for {field!r}?" if close else ""
+    where = "This tool takes" if not place else f"{place} takes"
+    return f"{guess} {where} {', '.join(names)}."
+
+
+def _tag_missing(
+    loc: tuple[object, ...],
+    ctx: Mapping[str, Any],
+    message: str,
+    tags: Mapping[str, Sequence[str]],
+) -> tuple[tuple[object, ...], str]:
+    """A missing field that chooses a branch, said at that field with the
+    values it takes.
+
+    pydantic says it as "Unable to extract tag using discriminator '…'",
+    located at the union rather than at the missing field.
+    """
+    discriminator = str(ctx.get("discriminator", "")).strip("'")
+    if not discriminator:
+        return loc, message
+    values = tags.get(discriminator)
+    if not values:
+        return (*loc, discriminator), "Field required"
+    return (*loc, discriminator), "Field required, one of " + ", ".join(
+        repr(value) for value in values
+    )
 
 
 #: How much of a rejected branch name the rewritten message quotes.

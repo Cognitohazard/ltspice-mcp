@@ -920,6 +920,8 @@ def validation_error_detail(
         field_owners=field_owners,
         nested=None if field_owners is None else _nested_fields(tool),
         renamed=RENAMED_ARGUMENTS.get(tool),
+        accepted=None if field_owners is None else _accepted_fields(tool),
+        tags=_branch_names(tool),
     )
     if not isinstance(exc, ValidationError):
         return detail
@@ -954,6 +956,31 @@ def _nested_fields(tool: str) -> dict[str, tuple[str, ...]]:
                 if "." in field.name:
                     nested.setdefault(field.name.rsplit(".", 1)[-1], []).append(field.name)
     return {name: tuple(paths) for name, paths in nested.items()}
+
+
+@functools.cache
+def _accepted_fields(tool: str) -> dict[str, tuple[str, ...]]:
+    """The names each place in ``tool``'s own arguments takes, by place:
+    ``""`` for the top level, ``circuits[]`` inside each circuit."""
+    accepted: dict[str, list[str]] = {}
+    for entry in build_index():
+        if entry.tool == tool and entry.family == "argument":
+            for field in entry.fields:
+                place, _, name = field.name.rpartition(".")
+                accepted.setdefault(place, []).append(name)
+    return {place: tuple(names) for place, names in accepted.items()}
+
+
+@functools.cache
+def _branch_names(tool: str) -> dict[str, tuple[str, ...]]:
+    """The branches of each of ``tool``'s discriminated arguments, by the name
+    of the field that chooses one (``action``, ``op``)."""
+    names: dict[str, list[str]] = {}
+    for source in _sources():
+        if source.tool == tool and source.discriminator is not None:
+            values = names.setdefault(source.discriminator, [])
+            values.extend(name for name, _, _ in source.branches if name not in values)
+    return {discriminator: tuple(values) for discriminator, values in names.items()}
 
 
 def _field_line(field: FieldEntry) -> str:
