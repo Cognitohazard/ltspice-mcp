@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.recipes import StepSelector
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
@@ -207,3 +208,15 @@ async def test_either_name_of_a_stepped_temperature_selects_and_groups_its_steps
         ({axis: 27.0}, 1),
         ({axis: 125.0}, 1),
     ]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_an_axis_named_as_the_deck_spells_it_selects_the_step(build: str):
+    """The deck steps ``Rv`` (``.step param Rv list 1k 2k``) and both builds
+    print the name lower-cased in the log, ``.step rv=2000``
+    (``log/meas_when_threshold_tran_step``). SPICE compares names without
+    case, so the deck's spelling names the axis."""
+    steps = parse_step_iterations(rec.recorded(build, "log/meas_when_threshold_tran_step.log"))
+    assert steps == [{"rv": 1000.0}, {"rv": 2000.0}]
+    assert StepSelector(axis="Rv", value="2k").pick(steps) == 1
+    assert StepSelector(axis="RV", value=1000).pick(steps) == 0

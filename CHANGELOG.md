@@ -379,6 +379,11 @@ tool-surface changes.
   one-frequency `.ac`), so a selector or `group_by` that worked on one failed
   on the other; it is now named as the deck's `.step` names it, and
   `temperature` also selects it.
+- A step selector or `group_by` that named a stepped parameter as the deck
+  spells it, such as `Rv`, was refused, or grouped every run under null:
+  both LTspice builds print the name lower-cased in the log, `.step rv=1000`
+  (recorded: `log/meas_when_threshold_tran_step`). A step axis now matches
+  in any case, as SPICE compares names.
 - A stepped run's summary copied the log header's temperature into every
   step's row. When the run steps its temperature, the header holds the first
   step's value on LTspice 26 and the last step's on LTspice XVII, so a row

@@ -214,13 +214,20 @@ class Window(StrictModel):
 def step_axis_key(axis: str, values: Mapping[str, Any]) -> str:
     """The key of one step's ``values`` that a caller's step-axis name reads.
 
-    The name itself where a step holds it. A stepped temperature is held as
-    the deck's ``.step temp`` names it; LTspice's raw of a stepped operating
-    point calls the same values ``temperature``, so that name reads them too.
+    The name itself where a step holds it, else the one that differs from it
+    only in case: SPICE compares names without case, and both LTspice builds
+    print a parameter the deck steps as ``Rv`` as ``.step rv=...`` in the log
+    (recorded: ``log/meas_when_threshold_tran_step``). A stepped temperature
+    is held as the deck's ``.step temp`` names it; LTspice's raw of a stepped
+    operating point calls the same values ``temperature``, so that name reads
+    them too.
     """
-    if axis not in values and axis.casefold() == "temperature" and STEPPED_TEMPERATURE in values:
+    if axis in values:
+        return axis
+    folded = axis.casefold()
+    if folded == "temperature" and STEPPED_TEMPERATURE in values:
         return STEPPED_TEMPERATURE
-    return axis
+    return next((key for key in values if key.casefold() == folded), axis)
 
 
 def _step_number(value: Any) -> float | None:
