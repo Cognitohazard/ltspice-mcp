@@ -77,6 +77,19 @@ tool-surface changes.
 
 ### Fixed
 
+- An argument refusal names the fix for a field it does not know: an unknown
+  field is answered with the names its place takes, the closest first ("Did
+  you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
+  it said only that the field was not permitted. A missing field that chooses
+  a branch is answered with the values it takes (`jobs` without `action`,
+  an `edit_schematic` op without `op`), where pydantic's "Unable to extract
+  tag using discriminator" named neither. The item's fields that no branch
+  takes are refused beside it, so a misspelled `action` or `op` is named
+  (validation stopped at the missing field and never reached them).
+- `verify_circuit` places a refused include at the line of the `.include` or
+  `.lib` that names it, in the deck or in the included file that holds it,
+  where it gave the deck alone. A refused `compare.reference` is filed under
+  the reference, where it was filed under the circuit, which had been read.
 - A Pelgrom `mismatch` rule ignored a device's multiplier `m`. The simulator
   builds m parallel copies from one card and they share its one draw, so
   their area is `m·W·L`, but the draw took the area of a single copy: a device
@@ -362,6 +375,8 @@ tool-surface changes.
   `window_pid` names the one the user chose to save, the other windows are
   handed the saved sheet, and a save without it, or with a process that
   holds no different copy, fails with `window_not_chosen`.
+  `open_window="save"` replaces `save_open_window=true`, added earlier in
+  this release; a call that still sends `save_open_window` is told so.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the

@@ -18,6 +18,7 @@ import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from pathlib import Path
+from types import ModuleType
 
 import psutil
 import pytest
@@ -40,6 +41,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
 from tests import schedule_jitter, sheet_edit_record
 from tests._schematic_fixtures import SUITE_LIBRARY_DIR
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
@@ -551,15 +553,30 @@ def fake_simulator(
     return recorded
 
 
+def rc_transient_deck(directory: Path) -> Path:
+    """An RC step-response deck, the circuit ``recorded_fixture_simulator``'s
+    default recording (``ltspice_tran_rc``) stands for: V(out) charges to 1."""
+    deck = directory / "rc.cir"
+    deck.write_text(
+        "V1 in 0 PULSE(0 1 0 1n 1n 1m 2m)\nR1 in out 1k\nC1 out 0 100n\n.tran 1m\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return deck
+
+
 def recorded_fixture_simulator(
     monkeypatch: pytest.MonkeyPatch, fixture: str = "ltspice_tran_rc"
-) -> None:
+) -> list[str]:
     """Instant engine behind ``ExperimentRunner.submit_netlist`` that hands back
     a recorded real-LTspice raw+log pair, so analysis stages parse genuine
     simulator artifacts rather than a mock byte string. Name a different
-    *fixture* to run a job over stepped artifacts."""
+    *fixture* to run a job over stepped artifacts. Returns the list each
+    launch's run filename is appended to."""
+    launched: list[str] = []
 
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
+        launched.append(run_filename)
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
         shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)
@@ -568,6 +585,7 @@ def recorded_fixture_simulator(
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+    return launched
 
 
 def resolve_local_ref(schema: dict, node: dict) -> dict:
@@ -1044,6 +1062,30 @@ def make_experiment_job(
     return job
 
 
+def copied_sheet(directory: Path, name: str = "amp") -> Path:
+    """A sheet of the suite's (``Draft1.asc``) copied to ``directory`` as ``name``."""
+    sheet = directory / f"{name}.asc"
+    shutil.copyfile(FIXTURES_DIR / "Draft1.asc", sheet)
+    return sheet
+
+
+def job_that_ran(state: SessionState, sheet: Path, work_dir: Path, **job: typing.Any) -> Path:
+    """A finished job ``placed`` that ran ``sheet`` as it is now, its results (a
+    recorded LTspice run) in a folder of the job's own under another name.
+    Returns the results file."""
+    from ltspice_mcp.lib.deck_staging import sha256_file
+
+    kept = work_dir / "runs" / "placed"
+    kept.mkdir(parents=True)
+    raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
+    made = make_experiment_job(state, job_id="placed", raw=raw, **job)
+    for case in made.cases:
+        case.circuit_path = sheet
+    made.sources[0].path = sheet
+    made.sources[0].sha256 = sha256_file(sheet)
+    return raw
+
+
 class _FakeSession:
     """Stub MCP session — progress calls are no-ops."""
 
@@ -1078,6 +1120,43 @@ def call_tool_params(name: str, arguments: dict | None = None):
     from mcp import types
 
     return types.CallToolRequestParams(name=name, arguments=arguments)
+
+
+async def dispatch(state: SessionState, tool: str, arguments: dict | None = None):
+    """One ``tools/call`` through the server's own dispatch (``server.call_tool``),
+    as a client reaches the server."""
+    from ltspice_mcp.server import call_tool
+
+    return await call_tool(fake_request_context(state), call_tool_params(tool, arguments))
+
+
+async def dispatched(state: SessionState, tool: str, **arguments: typing.Any) -> dict:
+    """The ``structuredContent`` of one ``tools/call`` through the server's dispatch."""
+    result = await dispatch(state, tool, arguments)
+    data = result.structured_content
+    assert data is not None, result.content
+    return data
+
+
+def advertised_input_schemas() -> dict[str, dict[str, typing.Any]]:
+    """Every registered tool's input schema, as ``tools/list`` advertises it."""
+    from ltspice_mcp.tools._base import registry
+
+    return {rt.definition.name: rt.definition.input_schema for rt in registry._registered}
+
+
+def property_names(schema: typing.Any) -> set[str]:
+    """Every property name anywhere in a JSON schema, its definitions included."""
+    names: set[str] = set()
+    if isinstance(schema, dict):
+        if isinstance(schema.get("properties"), dict):
+            names.update(schema["properties"])
+        for value in schema.values():
+            names |= property_names(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            names |= property_names(item)
+    return names
 
 
 def tool_text(result) -> str:
@@ -1582,6 +1661,139 @@ def _isolated_state_home(tmp_path_factory: pytest.TempPathFactory) -> Iterator[N
 _FRAME_WINDOW = 25
 
 
+_CHECK_FINDING_KEYS = frozenset({"rule_id", "severity", "at", "subject"})
+_SHEET_FINDING_KINDS = frozenset(VALIDATION_WARNING_KINDS)
+
+
+def _is_check_finding(value: dict) -> bool:
+    """A lint or check finding in the shared shape (``FINDING_SCHEMA``)."""
+    return value.keys() >= _CHECK_FINDING_KEYS and isinstance(value["at"], dict)
+
+
+def _is_sheet_finding(value: dict) -> bool:
+    """A sheet finding as ``edit_schematic`` reports it (``VALIDATION_WARNINGS_SCHEMA``)."""
+    return "message" in value and value.get("kind") in _SHEET_FINDING_KINDS
+
+
+#: Check findings about a file as a whole, which the file alone places, with
+#: the reason no line or part can.
+FILE_LEVEL_RULES: dict[str, str] = {
+    "path_denied": (
+        "The file named by an argument was refused, so it was never read. A refused "
+        "include is placed at its directive's line instead."
+    ),
+    "lex_error": "The lexer's error names no line, though the card it stopped in has one.",
+}
+
+
+def _placed(finding: dict) -> bool:
+    """Whether a finding says where it is: a line, coordinates or a part reference."""
+    if _is_check_finding(finding):
+        at = finding["at"]
+        evidence = finding.get("evidence")
+        parts = (
+            evidence.get("refs") or evidence.get("instances")
+            if isinstance(evidence, dict)
+            else None
+        )
+        if finding["rule_id"] in FILE_LEVEL_RULES and finding["subject"] in (
+            at["file"],
+            Path(at["file"]).name,
+        ):
+            return True
+        return "line" in at or {"x", "y"} <= at.keys() or bool(parts)
+    return (
+        {"x", "y"} <= finding.keys()
+        or bool(finding.get("points"))
+        or {"from", "to"} <= finding.keys()
+        or bool(finding.get("ref"))
+        or bool(finding.get("refs"))
+    )
+
+
+def unplaced_findings(value: typing.Any, path: tuple = ()) -> Iterator[tuple[tuple, dict]]:
+    """Every finding in a reply that says nowhere where it is, with its path.
+
+    Design principle "Validate before write" (``docs/DESIGN.md``): a finding
+    names the place, so the caller goes to it instead of searching the file.
+    """
+    if isinstance(value, dict):
+        if (_is_check_finding(value) or _is_sheet_finding(value)) and not _placed(value):
+            yield path, value
+        items: typing.Iterable = value.items()
+    elif isinstance(value, list):
+        items = enumerate(value)
+    else:
+        return
+    for key, item in items:
+        if isinstance(item, (dict, list)):
+            yield from unplaced_findings(item, (*path, key))
+
+
+def tool_modules() -> set[ModuleType]:
+    """Every module of the ``ltspice_mcp.tools`` package."""
+    import ltspice_mcp.tools as tools_pkg
+
+    return {
+        module
+        for module in vars(tools_pkg).values()
+        if isinstance(module, ModuleType) and module.__name__.startswith("ltspice_mcp.tools.")
+    }
+
+
+def declared_output_schemas() -> Iterator[tuple[ModuleType, Callable, dict]]:
+    """Every handler in the tool modules that declares a ``structuredContent``
+    contract (``@registry.tool`` or ``@declare_output_schema``), with its module
+    and that schema. The one scan the reply checker and the schema walks use."""
+    for module in tool_modules():
+        for obj in vars(module).values():
+            schema = getattr(obj, "__output_schema__", None)
+            if schema is not None and callable(obj):
+                yield module, obj, schema
+
+
+#: Fields that continue a cut list from where it stopped.
+CONTINUATIONS = frozenset({"next_cursor", "cursor", "continue", "next"})
+
+
+def _names_the_list(outer: dict, name: str) -> bool:
+    """Whether an object's ``hint`` or ``warnings`` says something of the list
+    ``name``: the prose way on for a list that has no cursor of its own."""
+    said = [outer.get("hint"), *(outer.get("warnings") or ())]
+    return any(isinstance(line, str) and name in line for line in said)
+
+
+def cut_without_continuation(
+    value: typing.Any, path: tuple = (), around: tuple[dict, ...] = ()
+) -> Iterator[tuple]:
+    """Every list a reply says it cut short (``truncated: true``) that gives no
+    way on: no cursor in it or around it within its reply item, no hint beside
+    the flag, and no hint or warning around it that names the list.
+
+    Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says
+    how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
+    holds the declared schemas to the same rule.
+    """
+    if isinstance(value, dict):
+        if value.get("truncated") is True:
+            scope = (*around, value)
+            name = str(path[-1]) if path else ""
+            if not (
+                "hint" in value
+                or any(outer.get(key) for outer in scope for key in CONTINUATIONS)
+                or (name and any(_names_the_list(outer, name) for outer in around))
+            ):
+                yield path
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                yield from cut_without_continuation(item, (*path, key), (*around, value))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            if isinstance(item, (dict, list)):
+                # A list's item is a reply item of its own.
+                yield from cut_without_continuation(item, (*path, index), ())
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
     """Validate every structuredContent emitted during the suite against the
@@ -1622,27 +1834,16 @@ def _enforce_output_schema_conformance():
     # (the frame that emits; __wrapped__ unwraps the registry's validation
     # wrapper), so two same-named handlers in different modules cannot share
     # a validator.
-    from types import ModuleType
-
     import jsonschema
 
     import ltspice_mcp.tools as tools_pkg
     from ltspice_mcp.tools import _base as base_mod
 
-    tool_modules = {
-        mod
-        for mod in vars(tools_pkg).values()
-        if isinstance(mod, ModuleType) and mod.__name__.startswith("ltspice_mcp.tools.")
-    }
     contracts: dict = {}  # code object -> (handler name, compiled validator)
-    for mod in tool_modules:
-        for obj in vars(mod).values():
-            schema = getattr(obj, "__output_schema__", None)
-            if schema is None or not callable(obj):
-                continue
-            code = getattr(obj, "__wrapped__", obj).__code__
-            if code not in contracts:
-                contracts[code] = (obj.__name__, jsonschema.Draft202012Validator(schema))
+    for _, handler, schema in declared_output_schemas():
+        code = getattr(handler, "__wrapped__", handler).__code__
+        if code not in contracts:
+            contracts[code] = (handler.__name__, jsonschema.Draft202012Validator(schema))
 
     from ltspice_mcp.lib.reply_fields import silent_fields
     from ltspice_mcp.tools._base import ALL_KEPT, ALWAYS_PRESENT, registry
@@ -1688,6 +1889,27 @@ def _enforce_output_schema_conformance():
                 "keep one on the tool's ALWAYS_PRESENT list with the reason."
             )
 
+    def _dotted(path: tuple) -> str:
+        return ".".join(str(part) for part in path) or "<root>"
+
+    def _hold_findings_to_a_place(sc, frame) -> None:
+        unplaced = next(unplaced_findings(sc), None)
+        if unplaced is not None:
+            path, finding = unplaced
+            raise AssertionError(
+                f"{_replying_tool(frame) or 'a reply'}: the finding at {_dotted(path)} says nowhere "
+                f"where it is ({finding}). Give it a line, coordinates or a part reference."
+            )
+
+    def _hold_cut_lists_to_a_way_on(sc, frame) -> None:
+        stranded = next(cut_without_continuation(sc), None)
+        if stranded is not None:
+            raise AssertionError(
+                f"{_replying_tool(frame) or 'a reply'}: the list at {_dotted(stranded)} was cut short "
+                "and the reply gives no way to read the rest: a next_cursor, a hint "
+                "beside the flag, or a hint or warning around it that names the list."
+            )
+
     def _validate(result, data=None) -> None:
         sc = result.structured_content
         if sc is None:
@@ -1695,6 +1917,8 @@ def _enforce_output_schema_conformance():
         # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.
         frame = sys._getframe(2)
         _hold_to_reply_rule(sc, data, frame)
+        _hold_findings_to_a_place(sc, frame)
+        _hold_cut_lists_to_a_way_on(sc, frame)
         for _ in range(_FRAME_WINDOW):
             if frame is None:
                 return
@@ -1742,7 +1966,7 @@ def _enforce_output_schema_conformance():
     # live for the canonical binding; it cannot prove no alias exists. Keep
     # the canonical names when adding tool modules.
     saved = []
-    for mod in tool_modules | {base_mod, tools_pkg}:
+    for mod in tool_modules() | {base_mod, tools_pkg}:
         for attr, checked, orig in (
             ("format_response", checked_format_response, original_format),
             ("json_response", checked_json_response, original_json),
