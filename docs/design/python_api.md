@@ -361,7 +361,7 @@ Each of the six methods has its `reference()` text as its `__doc__`, so
 as does any relative entry in `allowed_paths` (such as a config file's
 `allowed_paths = ["."]`). The MCP server resolves a relative path from the
 first allowed directory when there is a sandbox, and from its working
-directory otherwise.
+directory otherwise; its `spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 
@@ -371,7 +371,9 @@ directory otherwise.
   server would return it as an `isError` result instead. A
   `PathSecurityError` gets one note (PEP 678) with the same guidance as a tool
   call's `hint`, so the traceback shows what to change (with a sandbox, the
-  setting that defines it); its type and message are not changed.
+  setting that defines it); its type and message are not changed. The note
+  names `working_dir` as the folder a relative path is taken from, since that
+  is where the API takes it from.
 - A result with `isError=True` raises `ApiCallError`, which contains the
   complete structured payload and has the attributes `code`, `commit_state`,
   `job_id` and `control_token`. When the error comes after a job was submitted

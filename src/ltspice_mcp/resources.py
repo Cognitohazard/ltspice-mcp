@@ -96,7 +96,10 @@ def get_static_resources() -> list[types.Resource]:
         types.Resource(
             name="netlists",
             uri="spice://netlists/",
-            description="List of netlist files in the working directory",
+            description=(
+                "List of netlist files in the folder a relative path is read from: "
+                "the working directory, or the first allowed path under a sandbox"
+            ),
             mime_type="application/json",
         ),
         types.Resource(
@@ -314,15 +317,20 @@ def _read_config(
 def _read_netlists_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List all netlist files in the working directory."""
+    """List the netlist files in the folder a relative name is read from.
+
+    That folder is the one ``spice://netlists/{filename}`` resolves a name
+    in: the working directory, or the first allowed path when a sandbox is
+    set. Listing any other folder would advertise URIs the read refuses.
+    """
     del params
-    working_dir = state.working_dir
+    folder = state.relative_base()
     # quote(): a listed URI must survive whatever normalization a client
     # applies to it and come back through dispatch's unquote — a raw space or
     # 'µ' here would list a resource the read path can never serve.
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
-        for f in working_dir.iterdir()
+        for f in folder.iterdir()
         if f.is_file() and f.suffix.lower() in CIRCUIT_EXTENSIONS
     ]
     netlists.sort(key=lambda x: x["name"])

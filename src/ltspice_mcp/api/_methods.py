@@ -783,16 +783,20 @@ class ApiMethodsMixin(ABC):
         A refused path gets the same guidance a tool call's does, as a note
         on the exception: a script, or a ``run_code`` snippet, sees it in the
         traceback, and the exception's type and message stay what they were.
+        The note is written under the same anchor as the call, so the folder
+        it says relative paths are taken from is the one this door used.
         """
+        base = self._state.config.working_dir
         try:
             return self._call(
-                _anchored_on(self._state.config.working_dir, coroutine),
+                _anchored_on(base, coroutine),
                 cancelable=cancelable,
                 cancel_on_interrupt=cancel_on_interrupt,
                 preserve_interrupt=preserve_interrupt,
             )
         except PathSecurityError as exc:
-            exc.add_note(self._state.sandbox_guidance())
+            with relative_paths_from(base):
+                exc.add_note(self._state.sandbox_guidance())
             raise
 
     def _dispatch(
