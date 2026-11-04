@@ -182,46 +182,74 @@ async def test_asc_rejects_syntax_check(state_no_sim, work_dir, asc_symbols):
 #: want of LTspice and not for want of a reference.
 _REFERENCE = {"reference": "* ref\nR1 a 0 1k\n.end\n"}
 
-#: (file kind, arguments besides the path, the outcome). The first group asks
-#: by name for a check this session cannot run: the outcome is ``failed`` when
-#: nothing the caller asked for came back, and ``partial`` when something did.
-#: The second group leaves out only checks the caller did not ask for, so the
-#: outcome stays ``complete``.
+#: (file kind, arguments besides the path, the outcome, the checks asked for
+#: that did not run). The first group asks for a check this session cannot
+#: run: the outcome is ``failed`` when nothing the caller asked for came back,
+#: and ``partial`` when something did, and the hint names each such check with
+#: its reason. Comparing a sheet asks for the export it reads, so both are
+#: named. The second group leaves out only checks the caller did not ask for,
+#: so the outcome stays ``complete``.
 _REQUESTED_CHECK_CASES = [
-    pytest.param("asc", {"checks": ["export"]}, "failed", id="asc-export-alone"),
+    pytest.param("asc", {"checks": ["export"]}, "failed", ["export"], id="asc-export-alone"),
     pytest.param(
-        "asc", {"checks": ["layout", "export"]}, "partial", id="asc-export-beside-layout"
+        "asc",
+        {"checks": ["layout", "export"]},
+        "partial",
+        ["export"],
+        id="asc-export-beside-layout",
     ),
     pytest.param(
         "asc",
         {"checks": ["export"], "render": {"format": "svg"}},
         "partial",
+        ["export"],
         id="asc-export-beside-a-render",
     ),
-    pytest.param("asc", {"compare": _REFERENCE}, "partial", id="asc-compare-by-reference"),
     pytest.param(
         "asc",
-        {"checks": ["export", "compare"], "compare": _REFERENCE},
-        "failed",
-        id="asc-export-and-compare",
+        {"compare": _REFERENCE},
+        "partial",
+        ["export", "compare"],
+        id="asc-compare-by-reference",
     ),
-    pytest.param("netlist", {"checks": ["symbols"]}, "failed", id="netlist-sheet-check-alone"),
     pytest.param(
-        "netlist", {"checks": ["syntax", "export"]}, "partial", id="netlist-sheet-check-beside"
+        "asc",
+        {"checks": ["compare"], "compare": _REFERENCE},
+        "failed",
+        ["export", "compare"],
+        id="asc-compare-alone",
     ),
-    pytest.param("netlist", {"checks": ["compare"]}, "failed", id="netlist-compare-no-reference"),
-    pytest.param("asc", {}, "complete", id="asc-default-list"),
-    pytest.param("netlist", {}, "complete", id="netlist-default-list"),
+    pytest.param(
+        "netlist", {"checks": ["symbols"]}, "failed", ["symbols"], id="netlist-sheet-check-alone"
+    ),
+    pytest.param(
+        "netlist",
+        {"checks": ["syntax", "export"]},
+        "partial",
+        ["export"],
+        id="netlist-sheet-check-beside",
+    ),
+    pytest.param(
+        "netlist",
+        {"checks": ["compare"]},
+        "failed",
+        ["compare"],
+        id="netlist-compare-no-reference",
+    ),
+    pytest.param("asc", {}, "complete", [], id="asc-default-list"),
+    pytest.param("netlist", {}, "complete", [], id="netlist-default-list"),
     pytest.param(
         "asc",
         {"checks": ["layout"], "compare": _REFERENCE},
         "complete",
+        [],
         id="asc-compare-left-out-of-checks",
     ),
     pytest.param(
         "asc",
         {"render": {"mode": "only", "format": "svg"}, "compare": _REFERENCE},
         "complete",
+        [],
         id="asc-render-only",
     ),
 ]
@@ -235,16 +263,15 @@ def _requested_check_path(work_dir: Path, kind: str) -> Path:
     return _write(work_dir, "clean.cir", _BASE)
 
 
-def _assert_requested_check_outcome(data: dict, arguments: dict, expected: str) -> None:
+def _assert_requested_check_outcome(data: dict, expected: str, not_run: list[str]) -> None:
     assert "findings" not in data, data
     assert "failures" not in data, data
     assert data["outcome"] == expected, data
-    skipped = {row["check"]: row["reason"] for row in data.get("checks_skipped", ())}
-    unmet = [check for check in arguments.get("checks", ()) if check in skipped]
-    if expected != "complete":
-        unmet = unmet or ["compare"]
-        assert all(check in data["hint"] for check in unmet), data["hint"]
-        assert all(skipped[check] in data["hint"] for check in unmet), data["hint"]
+    reasons = {row["check"]: row["reason"] for row in data.get("checks_skipped", ())}
+    for check in not_run:
+        assert f"{check} ({reasons[check]})" in data["hint"], data["hint"]
+    if not not_run:
+        assert data["hint"].startswith("No problems found in the checks that ran."), data["hint"]
 
 
 class TestARequestedCheckThatDidNotRunIsAShortfall:
@@ -259,9 +286,9 @@ class TestARequestedCheckThatDidNotRunIsAShortfall:
     API, which returns the evaluation's own payload. The session has no LTspice,
     so ``export`` cannot run, and neither can a compare of a sheet."""
 
-    @pytest.mark.parametrize(("kind", "arguments", "expected"), _REQUESTED_CHECK_CASES)
+    @pytest.mark.parametrize(("kind", "arguments", "expected", "not_run"), _REQUESTED_CHECK_CASES)
     async def test_through_the_server(
-        self, state_no_sim, work_dir, asc_symbols, kind, arguments, expected
+        self, state_no_sim, work_dir, asc_symbols, kind, arguments, expected, not_run
     ):
         path = _requested_check_path(work_dir, kind)
         result = await dispatch(state_no_sim, "verify_circuit", {"path": str(path), **arguments})
@@ -269,15 +296,15 @@ class TestARequestedCheckThatDidNotRunIsAShortfall:
         # Nothing the caller sent was refused: each check says why it did not
         # run, so the call itself is not an error.
         assert not result.is_error
-        _assert_requested_check_outcome(data, arguments, expected)
+        _assert_requested_check_outcome(data, expected, not_run)
 
-    @pytest.mark.parametrize(("kind", "arguments", "expected"), _REQUESTED_CHECK_CASES)
+    @pytest.mark.parametrize(("kind", "arguments", "expected", "not_run"), _REQUESTED_CHECK_CASES)
     def test_through_the_python_api(
-        self, state_no_sim, work_dir, asc_symbols, kind, arguments, expected
+        self, state_no_sim, work_dir, asc_symbols, kind, arguments, expected, not_run
     ):
         path = _requested_check_path(work_dir, kind)
         data = SyncApi(state_no_sim).verify_circuit(path=str(path), **arguments)
-        _assert_requested_check_outcome(data, arguments, expected)
+        _assert_requested_check_outcome(data, expected, not_run)
 
 
 @pytest.mark.parametrize("suffix", [".sp", ".spice"])
