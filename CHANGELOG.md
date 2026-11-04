@@ -286,6 +286,193 @@ tool-surface changes.
 - The refusal for a missing `raster` extra named ways to install the server
   with the extra, none of which reaches a server run from a source checkout.
   It now also names `uv sync --extra raster` for that case.
+- A measurement whose value LTspice printed as something other than a number
+  failed the run's whole measurements section, so every measurement of the
+  run was lost. LTspice prints a `WHEN`'s threshold as the deck writes it, a
+  parameter, an expression or another measurement included (recorded:
+  `log/meas_when_threshold_tran`, `log/meas_when_threshold_ac`). Such a value
+  now fails its own entry: its value is null and the entry carries
+  `unreadable`, the line LTspice printed and the reason. Every other
+  measurement reads. The entry is the same in the run summary, in `inspect`'s
+  `measurements` view, in the Python API's `measurements` and, as
+  `value.unreadable`, in the `measurements` recipe's row, which also lists the
+  name in `failed_measurements`.
+- Every stepped `.fra` run on LTspice 26 lost all its measurements: LTspice 26
+  prints the margins in its measurement table with their units (`90.6295°`,
+  and `infdB` for a gain margin whose phase never crosses). A number followed
+  by `°` or `dB`, and `inf`, now reads as that number, and an infinite margin
+  is null with the section's count of non-finite values.
+- The `save-meas-coverage` lint refused a `.meas` on `V(a,b)` in a deck whose
+  `.save` lists `V(a)` and `V(b)`, though both LTspice builds measure it, and
+  `.save V(a,b)` saves `V(a)` and `V(b)` (recorded:
+  `deck/save_pair_both_nodes`, `deck/save_pair_as_pair`). A voltage between
+  two nodes, neither of them ground, now stands for its two nodes in the
+  `.meas` and in the `.save`. A voltage against ground is compared as
+  written, since neither build measures `V(a,0)` with only `V(a)` saved
+  (recorded: `deck/save_pair_to_ground`). The linter version is 11.
+- LTspice reads neither a deck's first line, its title, nor any card after a
+  top-level `.end` (recorded: `deck/title_card`, `deck/title_directive`,
+  `deck/after_end`), but several readers did. The equivalence compare counted
+  a title that reads as a part as a second component; the structural diff
+  counted a title `.param` as a directive; `inspect(kind="net")` listed a part
+  after `.end` on its node; the linter refused a deck for an analysis after
+  `.end`; a title `.tran` counted as a requested analysis; and
+  `verify_circuit`'s directive check walked physical lines, so it checked a
+  title that reads as a `.meas` and missed a `.meas` whose function sits on a
+  `+` continuation line, which the linter refuses. Every reader of a deck now
+  skips both, and the directive check reads whole cards. The run observations
+  also find a source whose value sits on a `+` line past a comment, and no
+  longer take a `;` comment on a `.four` card for a requested signal.
+- `verify_circuit` called `R1 a b 4R7` and `R1 a b 4.7` different circuits,
+  and a `random` rule on a `4R7` resistor was refused as having no numeric
+  nominal, though both LTspice builds run it at 4.7 (recorded:
+  `deck/suffix_shorthand`, `deck/suffix_unknown`). The equivalence compare and
+  the variation rules' nominals (component and `.param` rules, `.model`
+  nominals, MOSFET `W`/`L` and `.option scale`) now read a value as LTspice
+  does.
+- A capacitor or inductor defined by its charge or flux (`C1 b 0 Q=100n*x`,
+  `L1 c 0 Flux=1m*x`) was read as one node and a value of 0, so
+  `inspect(kind="net")` left it off ground and the equivalence compare called
+  a rewiring of it a value change. Both LTspice builds run it between its two
+  nodes (recorded: `deck/keyword_values`), and both are now read.
+- The `mismatch` rule's BSIM check read a model's `LEVEL` from the card's raw
+  lines, so a full-line comment such as `* level=1 was the old model` between
+  its `+` lines decided the level and a BSIM device was refused; `level=54.0`
+  read as no level. The level is now read from the card's own `LEVEL=`.
+- A `mismatch` rule for a top-level MOSFET rewrote the first card of that name
+  in any scope. With a transistor of the same name inside an earlier
+  `.subckt`, the variant model went to every instance of the subcircuit while
+  the device the receipt reported ran at nominal. The rule now rewrites the
+  card it drew for.
+- The equivalence compare merged two definitions of one subcircuit into the
+  first, where the first should win alone; read a `.lib tt` section line
+  inside a library as an include of a file named `tt`; and flattened every
+  section of a library whatever section the deck selected, so
+  `.lib corners.lib ff` gave every corner's parts and reported `tt` and `ff`
+  as missing includes. It now reads each definition's own body and only the
+  selected section, and a run's requirements follow includes the same way.
+- A variation rule naming a part that LTspice exports as `R§Load` by `RLoad`,
+  the name `verify_circuit` reports, or by `Load`, the name in its results,
+  was refused on an LTspice run, while an ngspice run took `RLoad` and refused
+  `R§Load` (recorded: `deck/section_sign_utf8`, `deck/section_sign_cp1252`).
+  `RLoad` now finds the part on either simulator and `Load` on LTspice, and a
+  name that is one part's reference and another part's other name is refused
+  as ambiguous.
+- `inspect(kind="net")` on a netlist answered `at="M1.D"` with an empty net
+  named `M1.D`, which reads as nothing being on the drain. A netlist card has
+  no pin names, so a name after one of the deck's references is refused as
+  `invalid_at`, naming the `REF.<terminal>` form and its range, unless a node
+  of the deck is called that.
+- A step selector's value written in SPICE notation (`2k`, `0.68k`) matched no
+  step, and the selector fell back to the first step without a word. It is
+  now read as every other value of a request: a number picks the nearest
+  step, and a value or axis the run does not have is refused with the ones it
+  has. A stepped temperature was named `temp` on one run and `temperature` on
+  a run LTspice stores a point a step (a stepped `.op`, `.tf` or
+  one-frequency `.ac`), so a selector or `group_by` that worked on one failed
+  on the other; it is now named as the deck's `.step` names it, and
+  `temperature` also selects it.
+- A stepped run's summary copied the log header's temperature into every
+  step's row. When the run steps its temperature, the header holds the first
+  step's value on LTspice 26 and the last step's on LTspice XVII, so a row
+  for the 27 °C step said -40 or 125. Each row now gives its own step's
+  temperature, and leaves `temp_c` out when that step's is not known.
+- A measurement named as the deck spells it, such as `Vout_Max`, was not
+  found by the `measurements` recipe's `names` (an empty map), by a `field`
+  keyed by it (an indeterminate spec) or by `compute_measurement_stats`,
+  while `inspect` found it. A measurement name now matches in any case, and
+  a name the log does not hold fails the run, naming the ones it does hold.
+- The `bode_filter` recipe read a cutoff, and a resonance's bandwidth and Q,
+  at a rounded -3.0 dB, while the AC summary and a crossing at the half-power
+  level used -3.0103 dB, so a 1 kHz RC's corner came out at 997.3 Hz. Every
+  -3 dB reading now uses the half-power level.
+- A phase crossing searched for inside a frequency window was unwrapped from
+  the window's first sample, so past a phase wrap a -270° crossing read as
+  +90° and a -180° crossing could be lost. The phase is now unwrapped over
+  the whole sweep and then windowed.
+- `RawResult.compare(signals=...)` refused a differential signal that
+  `trace()` reads, such as `V(a,b)`, as not a signal of both results. It now
+  resolves each name as `trace()` does.
+- A raw whose `Command` field named its writer inside a longer word, such as
+  `QSPICE64`, was refused as an ambiguous dialect when read by path, while
+  the progress of a running job named it. Both now read the field by one
+  rule: a simulator's name opening a word, with a build number or word after
+  it allowed.
+- An LTspice XVII installed under another file name was handed
+  `.options logopinfo`, which XVII refuses, so its `.op` runs failed. Whether
+  a build predates LTspice 24 is now read from its file name and from the
+  build an earlier run on it reported.
+- Once a stopped server's process id was reused, which happens quickly on
+  Windows, its running job was never reconciled: `jobs(wait)` returned at
+  once and said to wait again, `Api.wait` spun, and `jobs(cancel)` was
+  allowed without a token and then failed. A job record now carries its
+  owner's process start marker (`owner_start`) beside the pid, and the server
+  decides which jobs it runs from its own registry. A record whose `status`
+  is not one the server writes is refused as malformed.
+- A `run_experiments` replay of a request whose job's owner had exited
+  reconciled the job in memory only, so the record stayed `running` on disk
+  and other sessions could report its cases differently. The replay now
+  reads the job as every other read of a job id does.
+- `jobs(wait, wait_for="runs")` could return while reads of the job's runs
+  still refused with `job_not_terminal`, until the job's next checkpoint or
+  its owner's next write. A job's runs are now readable once every case has
+  finished, by its status or by its cases, for the wait and every read alike.
+- `jobs(runs)` counted an interrupted job whose cases had all written their
+  results as a failed call, while `jobs(status)`, `jobs(wait)` and the
+  `run_experiments` receipt reported it complete. It now reports the
+  receipt's outcome.
+- An error raised under a narrower type of a hinted family reached the caller
+  with no recovery hint, and one reported inside a reply (a coverage row, a
+  batch item, a `jobs` error) was hinted only by its exact type. Both now
+  take the nearest hint in the error's family.
+- The note on `spice://results/{job}/signals` and `/measurements` told the
+  caller to read a case with `analyze_results` and arguments it does not
+  take. It now names the `inspect` results query. Every referral in the
+  server's text and the guide is now checked against the arguments its tool
+  takes.
+- With `[security] allowed_paths` whose first entry is not the working
+  directory, every URI `spice://netlists/` listed read back as not found,
+  and the Python API's note on a refused path named the wrong base for
+  relative paths. Both now take relative paths from one base.
+- In the Python API, a sweep over a parameter named `budget` came back with a
+  false warning that `budget` was ignored, and one named `bias_cursor` was
+  refused, though the MCP tool took both. Only the controls an operation's
+  own arguments declare are now treated as wire-only.
+- `verify_circuit` cut each rule's findings at 25, and `analyze_results` its
+  failure rows at 100, with no way to read the rest, and `verify_circuit`'s
+  hint counted the cut list. Each cut now gives the full count and names the
+  Python API call that returns every entry, and where it runs. A failure in
+  the attached analysis now says where its `api` snippet runs, as an
+  `analyze_results` failure does.
+- `inspect(kind="net")`, the pin legend, the edit refusals and the route
+  rules read a sheet's nets by its wiring alone, where LTspice drops a wire
+  running straight between two pins of one part (recorded:
+  `connectivity/same_instance_wire`). On such a sheet `inspect` said both
+  pins were on one shorted net, the legend named both `a/b`, and a label
+  `b` on `R1.1` was accepted although it shorts R1. Every reader now reads
+  the nets LTspice netlists. With it, `wire_pins` no longer refuses joining
+  two names a wire already joins; a route treats a pin, a wire's end and a
+  label it passes alike, as a junction on either end's net and a refusal on
+  any other; a pin, label or route end placed between the ends of a dropped
+  wire keeps that wire, and a short it makes is refused; and `inspect`
+  refuses a start on a dropped wire as ambiguous.
+- `inspect(kind="symbols")` listed symbol files in subfolders of the sheet's
+  folder, which neither LTspice build finds by a bare name, so `add_component`
+  refused a name the listing had just offered. It now lists the sheet's own
+  folder and each library in full, where a bare name is found.
+- `edit_schematic` found each part's symbol by spicelib's own search, unlike
+  `inspect`, `verify_circuit` and the drawing. It refused a sheet naming
+  `lib\part` with `part.asy` beside it, which LTspice XVII netlists, and
+  opened a sheet whose bare `part` sits in a subfolder, which neither build
+  netlists. It now finds symbols as the other tools do.
+- A directive written with two spaces after `TEXT` was shown by `inspect`
+  and `verify_circuit` and deleted from the file by the next `edit_schematic`
+  call, with no warning, because spicelib's reader skips such a line.
+  `edit_schematic` now refuses to edit a sheet with a text, wire or flag line
+  its editor did not read, naming the first such text line.
+- `set_component_value` refused `1u Rser={0.1 * k}` with advice to put the
+  expression in braces, although it is braced and the write would have set
+  it. The check now splits the value as the write does.
 
 ### Added
 
@@ -493,6 +680,64 @@ tool-surface changes.
   `add_directive`, read as one that did not run. `remove_directive` names
   each text it removed, with its kind and place (`removed_texts`), which a
   `regex:` match otherwise leaves unknown.
+- **Breaking:** `analyze_results` reports a source that names nothing as the
+  other tools do: an unknown `job_id` and a `path` with no file are rows of
+  `coverage.missing_cases`, coded `job_not_found` and `result_unreadable`,
+  each with its recovery hint. An unknown job was a row coded
+  `source_unavailable` with no hint, and a missing file failed its recipe.
+  `jobs` follows an error's message with its recovery hint, where it repeated
+  the message, and a failed `inspect` query carries the hint too.
+- **Breaking:** an unreadable page cursor is `invalid_cursor` on every tool,
+  with a hint to page from the cursor the same tool returned. `analyze_results`
+  called it `result_unreadable` and `edit_schematic` `netlist_invalid`.
+- **Breaking:** an invalid recipe in `run_experiments`' attached `analyze`
+  block is refused as `recipe_invalid` at stage `validate`, not retryable, as
+  `analyze_results` refuses it. It was `submission_failed` with
+  `retryable: true`, so a client that honoured the flag resent the same
+  request. A set `include.per_run.cursor` in the block is refused before
+  anything runs, where the analysis failed on it after every run.
+- **Breaking:** the Python API's `load_raw`, `measurements` and
+  `device_op_points` raise `ApiValidationError` (a `ValueError`) for a source
+  named twice or not at all, an empty path, or a case selector beside a path,
+  as `analyze_results` does. They raised `TypeError`.
+- **Breaking:** `analyze_results` keeps an entry in `results` for every recipe
+  the page reached, in request order. A recipe that failed on every run, was
+  invalid or read a missing file lost its key, so `result["results"][key]`
+  raised `KeyError` for some causes only. Such a recipe now has no rows and,
+  when it failed, a `No rows:` warning naming the failures. The attached
+  analysis and the Python API give the same entries.
+- **Breaking:** the attached analysis's `include.fields`, and `run_fields` on
+  `run_experiments` and `jobs(runs)`, read a dotted path as `analyze_results`
+  reads `include.fields`: a path starts at a key the rows carry or is refused
+  naming them, a one-segment name reads under `value`, and a `run_fields` path
+  that no row on the page reaches is reported in `warnings`. A bare name in
+  the attached block projected every row to `{}`, and a mistyped `run_fields`
+  path emptied every run row, without a warning.
+- **Breaking:** a value above its cap is served at the cap with a note,
+  instead of refused, for `inspect`'s results and reference `limit`,
+  `run_code`'s `timeout_s` and the `waveform` recipe's `max_points`.
+  `plot_waveform` and the `waveform` recipe now say when they hold
+  `max_points` at its ceiling.
+- **Breaking:** `remove_directive` and `move` name texts by one rule: a
+  literal names every text equal to it, surrounding space ignored, and
+  `regex:` names every text the pattern is found in, case-sensitive.
+  `remove_directive` removes every text it names. It removed only the first
+  copy of a literal and matched a `regex:` against directives only, from
+  their start and ignoring case, while `move` searched every text anywhere and
+  case-sensitively, so one pattern could move a directive and not remove it.
+- **Breaking:** every op, every pin reference and `inspect(kind="net")` on a
+  sheet name a part by its reference in any case, as LTspice compares
+  references: the reference as spelled, else the one that differs from it
+  only in case. A reference that names no part is refused with one message
+  that lists the parts there are.
+- **Breaking:** a shutdown, the server's or the Python API's `close()`, stops
+  the cases it runs as failed with `server_restarted`, as a crash leaves them,
+  so a default resume retries them; it left them cancelled, which only
+  `retry_cancelled` retried. `server_shutdown` is no longer written, and a
+  default resume also retries a case recorded with it.
+- **Breaking:** `jobs(place_beside_sheet)` refuses a job whose cases are still
+  running with `job_not_terminal`, where it copied a finished case beside its
+  sheet while the others ran.
 
 ## [0.7.0] - 2026-10-22
 
