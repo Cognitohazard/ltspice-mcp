@@ -3556,3 +3556,128 @@ def test_text_on_its_side_is_saved_on_its_side(tmp_path):
 pins the workaround against both recordings, and
 `tests/test_sheet_findings_snapshot.py::test_an_edit_and_a_check_find_the_same_of_a_sheet`
 through an edit of the recorded sheet.
+
+---
+
+## Bug 35 — `LTSpiceLogReader` keeps a stepped table's unit-suffixed values as text
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-04.
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepped-table loop; `try_convert_value` in
+`spicelib/log/logfile_data.py`).
+**Our workaround:** `log_parser.printed_measurement` in
+`src/ltspice_mcp/lib/log_parser.py` reads such a value as its number, in
+`parse_measurements` and in the measurements check of `lib/log_decode.py`.
+
+### Summary
+
+LTspice 26 prints a stepped frequency response analysis's margins in the
+log's measurement table with their units: a phase margin as `90.6295°`, and a
+gain margin whose phase never crosses 0 degrees as `infdB`. The stepped-table
+loop converts each cell with `try_convert_value`, which tries `int`,
+`float`, `complex` and `LTComplex` and otherwise keeps the text. None of them
+reads a number followed by `°` or `dB`, so the reader's dataset holds the
+strings `'90.6295°'` and `'infdB'` where every other measurement holds a
+number, and nothing says the value was not read.
+
+### Affected code
+
+```python
+# ltsteps.py, LTSpiceLogReader.__init__, stepped measurement tables
+tokens = line.split("\t")
+...
+meas = tokens[1:]  # remove the first token
+measurements.append(try_convert_value(meas))
+```
+
+```python
+# logfile_data.py
+def try_convert_value(value):
+    ...
+    try:
+        ans = int(value)
+    except ValueError:
+        try:
+            ans = float(value)
+        except ValueError:
+            try:
+                ans = complex(value)
+            except ValueError:
+                try:
+                    ans = LTComplex(value)
+                except ValueError:
+                    ans = value.strip()
+    return ans
+```
+
+### Reproduction
+
+The table LTspice 26.1.1 wrote for a `.fra` run under `.step param r list 1k
+2k` (recorded as `tests/fixtures/ltspice_recorded/ltspice26/raw/fra_step.log`):
+
+```
+Measurement: PhaseMargin_1
+  step	PhaseMargin	at
+     1	90.6295°	15900.4
+     2	90.1991°	8007.62
+
+Measurement: GainMargin_1
+  step	GainMargin	at
+     1	infdB	inf
+     2	infdB	inf
+```
+
+```python
+from spicelib.log.ltsteps import LTSpiceLogReader
+reader = LTSpiceLogReader("fra_step.log")
+reader.dataset["phasemargin_1"]     # ['90.6295°', '90.1991°']
+reader.dataset["phasemargin_1_at"]  # [15900.4, 8007.62]
+reader.dataset["gainmargin_1"]      # ['infdB', 'infdB']
+```
+
+### Impact
+
+A caller that does arithmetic on the measurements of a stepped `.fra` run
+gets strings for its margins. A reader that requires numbers has to refuse
+the value, and before our workaround this project refused the whole
+measurements section of such a log, losing every other measurement with it.
+
+### Proposed fix
+
+Read a number followed by a unit LTspice prints as that number before
+falling back to the text, in `try_convert_value`:
+
+```python
+_UNIT_NUMBER = re.compile(
+    r"([-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
+)
+...
+                except ValueError:
+                    match = _UNIT_NUMBER.fullmatch(value.strip())
+                    ans = float(match.group(1)) if match else value.strip()
+```
+
+### Suggested upstream test
+
+```python
+def test_stepped_table_values_with_units_read_as_numbers(tmp_path):
+    log = tmp_path / "fra_step.log"
+    log.write_text(
+        "Circuit: * fra\n\n.step r=1000\n.step r=2000\n\n"
+        "Measurement: PhaseMargin_1\n  step\tPhaseMargin\tat\n"
+        "     1\t90.6295°\t15900.4\n     2\t90.1991°\t8007.62\n\n"
+        "Measurement: GainMargin_1\n  step\tGainMargin\tat\n"
+        "     1\tinfdB\tinf\n     2\tinfdB\tinf\n",
+        encoding="utf-8",
+    )
+    reader = LTSpiceLogReader(str(log))
+    assert reader.dataset["phasemargin_1"] == [90.6295, 90.1991]
+    assert reader.dataset["gainmargin_1"] == [math.inf, math.inf]
+```
+
+### Cross-reference
+
+`tests/test_recorded_log_measurements.py::test_a_stepped_fra_runs_margins_read_as_the_numbers_printed`
+pins the workaround against the recording, and
+`::test_every_recorded_logs_measurements_decode` decodes every recorded log
+of both builds.

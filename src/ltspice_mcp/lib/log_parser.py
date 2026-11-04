@@ -1223,6 +1223,22 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
 #: spicelib has turned it into a complex number (sin(pi) is not exactly 0).
 _REAL_ANGLE_TOLERANCE = 1e-9
 
+# LTspice 26 prints a stepped frequency response analysis's margins in its
+# measurement table with their units: a phase margin as ``90.6295°``, and a
+# gain margin whose phase never crosses as ``infdB`` (the recorded
+# raw/fra_step). spicelib keeps such a value as text.
+_RE_PRINTED_WITH_UNIT = re.compile(
+    r"(?P<number>[-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
+)
+
+
+def printed_measurement(value: str) -> float | None:
+    """A measurement LTspice printed as a number with its unit, read as the
+    number (``90.6295°`` is 90.6295, ``infdB`` infinite); None for any other
+    text."""
+    match = _RE_PRINTED_WITH_UNIT.fullmatch(value.strip())
+    return float(match["number"]) if match else None
+
 
 def _complex_measurement(value: complex) -> float:
     """One AC .meas result, which LTspice prints as ``(<magnitude>dB,<angle>°)``.
@@ -1326,6 +1342,8 @@ def parse_measurements(
                 out.append(_complex_measurement(val))
             elif hasattr(val, "item") and not isinstance(val, str):
                 out.append(float(val.item()))  # numpy scalar
+            elif isinstance(val, str) and (number := printed_measurement(val)) is not None:
+                out.append(number)
             else:
                 try:
                     out.append(float(val))

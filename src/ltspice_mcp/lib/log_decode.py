@@ -280,6 +280,10 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
                             value is not None
                             and not isinstance(value, complex)
                             and str(value).upper() != "FAILED"
+                            and not (
+                                isinstance(value, str)
+                                and log_parser.printed_measurement(value) is not None
+                            )
                         ):
                             try:
                                 float(value)
