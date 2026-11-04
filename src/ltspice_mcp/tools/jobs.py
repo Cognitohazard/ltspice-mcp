@@ -913,8 +913,19 @@ async def _place_case_beside_sheet(
     Refused where LTspice's window could not take them as the sheet's own: a
     case with no results, a netlist's run, a run of another simulator, and a
     sheet changed since the job read it, whose results would not match it.
+    Refused too while the job's runs are not all done, as every read of a job's
+    runs is (``services.runs_unready``).
     """
     case = _case_to_place(job, case_id)
+    unready = services.runs_unready(job)
+    if unready is not None:
+        raise _JobsActionError(
+            "job_not_terminal",
+            f"{unready}; wait for them with jobs(action='wait', job_id='{job.job_id}', "
+            "wait_for='runs').",
+            stage="resolution",
+            retryable=True,
+        )
     if case.status != "produced" or case.raw_file is None:
         raise _JobsActionError(
             "case_not_produced",

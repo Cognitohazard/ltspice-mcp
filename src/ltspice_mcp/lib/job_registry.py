@@ -349,6 +349,8 @@ class JobRegistry:
         """
         live = self.live.get(job.job_id)
         if live is not None:
+            if finished(live.job, wait_for):
+                return live.job, False
             done = await live.wait(timeout_s, wait_for=wait_for)
             return live.job, not done
         if finished(job, wait_for):

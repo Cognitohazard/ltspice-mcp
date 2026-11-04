@@ -44,7 +44,7 @@ from ltspice_mcp.lib.experiment_types import (
     has_readable_raw,
     partial_raw,
 )
-from ltspice_mcp.lib.job_lifecycle import runs_terminal
+from ltspice_mcp.lib.job_lifecycle import runs_done
 from ltspice_mcp.lib.log_parser import LogDiagnostics, device_key
 from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
@@ -332,6 +332,30 @@ def partial_raw_observation(case: ExperimentCase, held: dict[str, Any]) -> dict[
     }
 
 
+def runs_unready(job: ExperimentJob) -> str | None:
+    """Why ``job``'s runs cannot be read yet, or None once they can.
+
+    The one readiness rule for everything that reads a job's runs by its id:
+    ``analyze_results``, ``inspect``, ``plot_waveform``, the Python API's
+    reads and ``jobs(place_beside_sheet)``. A job's runs are read once every
+    run has finished (``job_lifecycle.runs_done``), which is the moment
+    ``jobs(wait, wait_for="runs")`` returns, and not before: a case read while
+    its siblings still run would be the answer to a different question than
+    the job's. Which of them can be read is then the case's own answer
+    (``case_unreadable``).
+    """
+    if runs_done(job):
+        return None
+    return f"Experiment job {job.job_id!r} has no readable runs yet (status={job.status!r})"
+
+
+def case_unreadable(case: ExperimentCase) -> str | None:
+    """Why a read of ``case``, of a job whose runs are done, takes no raw, or
+    None when it does: the case produced one, or was stopped and kept what its
+    run wrote (``partial_raw``). The answer is the case's failure summary."""
+    return None if has_readable_raw(case) else failure_summary(case)
+
+
 def experiment_run_context(
     job: ExperimentJob,
     state: SessionState,
@@ -352,10 +376,9 @@ def experiment_run_context(
     """
     job_id = job.job_id
     # Per-case readiness is still gated case by case below.
-    if not runs_terminal(job.status):
-        raise ResultError(
-            f"Experiment job {job_id!r} has no readable runs yet (status={job.status!r})"
-        )
+    unready = runs_unready(job)
+    if unready is not None:
+        raise ResultError(unready)
     if case_id is None and run_index is None:
         run_index = 0
     matches = [
@@ -379,10 +402,11 @@ def case_run_context(
     other_raw: OtherRawKind | None = None,
 ) -> RunContext:
     """``experiment_run_context`` for a caller already holding the case, of a
-    job whose runs it has checked are terminal. A caller reading every case of
-    a job takes each this way rather than finding it again by its id."""
+    job whose runs it has checked are done (``runs_unready``). A caller reading
+    every case of a job takes each this way rather than finding it again by
+    its id."""
     job_id = job.job_id
-    if not has_readable_raw(case) or (require_raw and case.raw_file is None):
+    if case_unreadable(case) is not None or (require_raw and case.raw_file is None):
         raise ResultError(_no_raw_result(job_id, case))
     raw = case.raw_file
     if other_raw is not None:

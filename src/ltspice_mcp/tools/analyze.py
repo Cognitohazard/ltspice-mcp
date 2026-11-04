@@ -44,9 +44,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
-from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
-from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
@@ -1091,17 +1089,15 @@ async def _resolve_sources(
         source_jobs[job.job_id] = str(record) if record.is_file() else None
 
         # Per-case readiness is gated below, not here.
-        if not runs_terminal(job.status):
+        unready = services.runs_unready(job)
+        if unready is not None:
             missing.append(
                 {
                     "label": source_input.label,
                     "case_id": None,
                     "run_index": None,
                     "code": "job_not_terminal",
-                    "detail": (
-                        f"Experiment job {job.job_id!r} has no readable runs yet "
-                        f"(status={job.status!r})"
-                    ),
+                    "detail": unready,
                 }
             )
             continue
@@ -1134,14 +1130,15 @@ async def _resolve_sources(
         else:
             selected = list(job.cases)
         for case in selected:
-            if not has_readable_raw(case):
+            unreadable = services.case_unreadable(case)
+            if unreadable is not None:
                 missing.append(
                     {
                         "label": source_input.label,
                         "case_id": case.case_id,
                         "run_index": case.run_index,
                         "code": "raw_not_produced",
-                        "detail": failure_summary(case),
+                        "detail": unreadable,
                     }
                 )
                 continue

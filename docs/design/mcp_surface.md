@@ -581,7 +581,9 @@ its analysis are terminal; the status sequence is
 `queued -> running -> analyzing -> completed | completed_with_failures | failed | cancelled`,
 and a job whose server stopped before its runs finished is `interrupted`.
 The dwell and `jobs(wait)` wait for full terminality by default;
-`jobs(wait, wait_for: "runs")` returns once the runs are terminal. Cancelling
+`jobs(wait, wait_for: "runs")` returns once the runs are terminal: once every
+case's status is terminal, which can be just before the job's status changes.
+From then on every read of the job's runs accepts it. Cancelling
 during analysis cancels the stage and keeps the run artifacts. An analysis
 failure puts the job in `completed_with_failures` with an `analysis_error`; a
 new `analyze_results` call can still analyze the runs. After a server restart,
@@ -824,7 +826,9 @@ accepts `budget`. The input schema declares one branch per action, keyed by
   out of a job that ran one case (otherwise `case_id_required`). The copy is
   made under the sheet's lock, and the job keeps its own. A case that
   produced no results (`case_not_produced`) or whose results are no longer
-  there (`results_missing`), a netlist's run (`not_a_sheet`),
+  there (`results_missing`), a case of a job whose runs are not all terminal
+  yet (`job_not_terminal`, as every read of a job's runs is refused until
+  then), a netlist's run (`not_a_sheet`),
   another simulator's run (`not_ltspice`), and a sheet that is missing
   (`sheet_missing`) or changed since the job read it (`sheet_changed`) are
   refused, and nothing is written. The sheet's `.plt` is left as it is.
@@ -1040,8 +1044,10 @@ continuation replays them.
   writer whose filesystem clock runs more than that tick behind this
   machine's. A deadline never lets a changed source pass; the source is read
   again or reported.
-- A job's artifacts are read only once the job is terminal and the case
-  produced them.
+- A job's runs are read once they are all terminal, as `jobs(wait, wait_for:
+  "runs")` reports them, and a case is read when it produced results or kept
+  a partial raw when it was stopped. Until then the source is a
+  `coverage.missing_cases` row with code `job_not_terminal`.
 - Before any recipe runs, the server reads every source once to record its
   file hashes and the simulator errors its log reports. A timeout during this
   first read raises `analysis_deadline` and creates no result set or cursor;
