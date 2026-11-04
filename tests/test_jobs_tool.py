@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import re
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +32,7 @@ from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
@@ -164,20 +164,13 @@ def _args(action: str, **values) -> JobsInput:
     return JobsInput.model_validate({"action": action, **values})
 
 
-def _actions_named(description: str) -> set[str]:
-    """The actions a published jobs field's description lists before its sentences.
-
-    Each sentence of such a description starts with the actions it is about,
-    separated by commas, then ``(required)`` where they require the field, then
-    a colon. Only words that are actions count, so a colon inside a sentence's
-    own text is not read as a list.
-    """
-    named: set[str] = set()
-    for match in re.finditer(r"(?:^|\. )((?:\w+, )*\w+)(?: \(required\))?: ", description):
-        actions = set(match.group(1).split(", "))
-        if actions <= set(JOBS_ACTIONS):
-            named |= actions
-    return named
+def _fields_by_action(description: str) -> dict[str, list[str]]:
+    """The "Fields by action: a: x, y; b: z." sentence of the jobs description."""
+    listed = description.split("Fields by action: ", 1)[1].removesuffix(".")
+    return {
+        action: fields.split(", ")
+        for action, fields in (part.split(": ", 1) for part in listed.split("; "))
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -348,51 +341,34 @@ class TestAcceptedArgumentSpellings:
 
 
 class TestAdvertisedActionFields:
-    """What the published schema says each action takes.
+    """What the published definition says each action takes.
 
     The schema is one flat object, because Claude's API refuses a tool whose
     input schema has a combinator at its top level and a client then drops
     the tool. Which action takes which field, which a branch per action used
-    to show, is in each field's description, and ``JobsInput`` refuses a field
-    the action does not take.
+    to show, is listed in the tool's description: the compact listing a
+    session is served by default drops every argument description, but keeps
+    that one. ``JobsInput`` refuses a field the action does not take.
     """
 
-    @pytest.mark.parametrize(
-        ("action", "expected"),
-        [
-            ("status", {"job_id", "request_id"}),
-            ("wait", {"job_id", "request_id", "timeout_s", "wait_for"}),
-            ("cancel", {"job_id", "request_id", "control_token"}),
-            ("list", {"circuit", "limit", "cursor"}),
-            ("runs", {"job_id", "request_id", "cursor", "run_fields"}),
-            (
-                "resume",
-                {
-                    "job_id",
-                    "resume_request_id",
-                    "control_token",
-                    "case_ids",
-                    "retry_failed",
-                    "retry_cancelled",
-                    "wait_s",
-                },
-            ),
-            ("place_beside_sheet", {"job_id", "request_id", "case_id"}),
-        ],
-    )
-    def test_each_field_names_the_actions_that_take_it(self, action: str, expected: set[str]):
-        properties = build_input_schema(JobsInput)["properties"]
-        named = {
-            name
-            for name, field in properties.items()
-            if name not in ("action", "budget") and action in _actions_named(field["description"])
-        }
-        assert named == expected
+    @pytest.mark.parametrize("model", JobsInput.VARIANTS, ids=JOBS_ACTIONS)
+    def test_the_compact_listing_names_each_actions_fields(self, model: type[JobsInput]):
+        defs, _ = get_tools(listing="compact")
+        description = next(d for d in defs if d.name == "jobs").description or ""
+        action = get_args(model.model_fields["action"].annotation)[0]
+        listed = _fields_by_action(description)[action]
+        assert {name.removesuffix(" (required)") for name in listed} == (
+            set(model.model_fields) - set(JobsInput.model_fields)
+        )
 
-    def test_a_field_an_action_requires_says_so(self):
-        properties = build_input_schema(JobsInput)["properties"]
-        assert "resume (required): " in properties["job_id"]["description"]
-        assert properties["resume_request_id"]["description"].startswith("resume (required): ")
+    def test_a_field_an_action_requires_is_marked(self):
+        resume = _fields_by_action(jobs_module.jobs_fields_by_action())["resume"]
+        assert resume[:2] == ["job_id (required)", "resume_request_id (required)"]
+
+    def test_a_field_actions_describe_differently_says_which_is_which(self):
+        description = build_input_schema(JobsInput)["properties"]["job_id"]["description"]
+        assert description.startswith("status, wait, cancel, runs, place_beside_sheet: ")
+        assert "resume: Terminal lineage head to resume." in description
 
     def test_every_field_is_published_at_the_top_level(self):
         """A client that reads `properties` and stops there sees every field."""
@@ -403,16 +379,18 @@ class TestAdvertisedActionFields:
         assert schema["required"] == ["action"]
         assert schema["additionalProperties"] is False
 
-    def test_a_field_two_actions_type_differently_stops_the_build(self):
-        """One published field cannot carry two types, so the build refuses it
-        rather than publish one action's type for both."""
+    @pytest.mark.parametrize(
+        "runs_field",
+        [{"type": "string"}, {"type": "integer", "default": 10}],
+        ids=["another-type", "another-default"],
+    )
+    def test_a_field_two_actions_declare_differently_stops_the_build(self, runs_field: dict):
+        """One published field cannot carry two types or two defaults, so the
+        build refuses it rather than publish one action's for both."""
         with pytest.raises(TypeError, match="'limit'"):
             jobs_module._flat_jobs_field(
                 "limit",
-                [
-                    ("list", {"type": "integer"}, False),
-                    ("runs", {"type": "string"}, False),
-                ],
+                [("list", {"type": "integer", "default": 50}), ("runs", runs_field)],
             )
 
     @pytest.mark.parametrize(

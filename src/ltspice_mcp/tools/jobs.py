@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
@@ -113,8 +114,8 @@ class JobsInput(ToolInput):
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
             "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
             "cases of a recoverable job; 'place_beside_sheet' copies a case's "
-            "results beside its sheet. Each field below starts with the actions "
-            "that take it; any other action refuses it."
+            "results beside its sheet. Each action takes only its own fields, "
+            "listed in the tool's description."
         ),
     )
     budget: int | None = Field(
@@ -337,21 +338,38 @@ JOBS_ACTIONS: tuple[str, ...] = tuple(
 )
 
 
-#: The fields every action takes, published once without a list of actions.
-_SHARED_JOBS_FIELDS = frozenset({"action", "budget"})
-
 _NULL_SCHEMA: dict[str, Any] = {"type": "null"}
 
 
+def _action_fields() -> Iterator[tuple[str, str, dict[str, Any], bool]]:
+    """Each action's own fields in advertised order: action, name, schema, required.
+
+    The fields ``JobsInput`` itself declares are every action's and are left
+    out. A field holding a nested model is refused, since one flat field
+    could not carry its definitions.
+    """
+    shared = JobsInput.model_fields
+    for model, action in zip(JobsInput.VARIANTS, JOBS_ACTIONS, strict=True):
+        schema = model.model_json_schema()
+        if "$defs" in schema:
+            raise TypeError(
+                f"jobs action {action!r} has a nested model, which cannot be flattened"
+            )
+        required = set(schema.get("required", ()))
+        for name, field in schema["properties"].items():
+            if name not in shared:
+                yield action, name, field, name in required
+
+
 def jobs_input_schema() -> dict[str, Any]:
-    """The actions as one flat object: every field any action takes, each saying which.
+    """The actions as one flat object: every field any action takes.
 
     Claude's API refuses a tool whose input schema has ``oneOf``, ``allOf`` or
     ``anyOf`` at its top level, and a client that cannot send such a tool to
     the model drops it from the session, so the actions are not published as
-    branches. What a branch per action showed, which action takes which
-    field, is in each field's description instead, which starts with the
-    actions that take it and says where one requires it.
+    branches. Which action takes which field, which a branch per action
+    showed, is in the tool's description (``jobs_fields_by_action``): a
+    compact listing drops every argument description, but keeps that one.
 
     Nothing on the server validates a call against the published schema:
     ``JobsInput`` routes on ``action`` and refuses a field that action does not
@@ -360,79 +378,79 @@ def jobs_input_schema() -> dict[str, Any]:
     one the server would take.
 
     Built from the action models, so a field added to an action is published
-    with it. A field two actions declare with different types stops the
-    build, because one published field cannot carry both.
+    with it. A field two actions declare differently stops the build, because
+    one published field cannot carry both.
     """
-    takers: dict[str, list[tuple[str, dict[str, Any], bool]]] = {}
-    defs: dict[str, Any] = {}
-    for model, action in zip(JobsInput.VARIANTS, JOBS_ACTIONS, strict=True):
-        schema = model.model_json_schema(ref_template="#/$defs/{model}")
-        defs.update(schema.get("$defs", {}))
-        required = set(schema.get("required", ()))
-        for name, field in schema["properties"].items():
-            if name not in _SHARED_JOBS_FIELDS:
-                takers.setdefault(name, []).append((action, field, name in required))
+    takers: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for action, name, field, _required in _action_fields():
+        takers.setdefault(name, []).append((action, field))
     shared = JobsInput.model_json_schema()["properties"]
     properties: dict[str, Any] = {
+        **shared,
         "action": {
             "type": "string",
             "enum": list(JOBS_ACTIONS),
             "description": shared["action"]["description"],
         },
-        "budget": shared["budget"],
     }
-    for name, entries in takers.items():
-        properties[name] = _flat_jobs_field(name, entries)
-    flat: dict[str, Any] = {
+    properties.update({name: _flat_jobs_field(name, entries) for name, entries in takers.items()})
+    return {
         "type": "object",
         "properties": properties,
         "required": ["action"],
         "additionalProperties": False,
     }
-    if defs:
-        flat["$defs"] = defs
-    return flat
 
 
-def _flat_jobs_field(name: str, entries: list[tuple[str, dict[str, Any], bool]]) -> dict[str, Any]:
+def jobs_fields_by_action() -> str:
+    """The sentence of the tool's description that lists each action's own fields.
+
+    A compact listing drops every argument description, so this is where a
+    client that is served one learns which action takes which field.
+    """
+    by_action: dict[str, list[str]] = {}
+    for action, name, _field, required in _action_fields():
+        by_action.setdefault(action, []).append(f"{name} (required)" if required else name)
+    listed = "; ".join(f"{action}: {', '.join(names)}" for action, names in by_action.items())
+    return f"Fields by action: {listed}."
+
+
+def _flat_jobs_field(name: str, entries: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
     """One published field for every action that takes ``name``.
 
-    The type is the actions' common one, allowing null where any action does,
-    since a call may omit the field for every action but one that requires it.
-    The description gives each action's own sentence after the actions that
-    share it.
+    It allows null where any action does, since a call may leave it out for
+    every action but one that requires it. Where the actions describe it
+    differently, its description gives each sentence after the actions it is
+    about.
     """
-    shapes = [_without_prose(field) for _action, field, _required in entries]
-    kinds = [_without_null(shape) for shape in shapes]
-    if any(kind != kinds[0] for kind in kinds[1:]):
-        actions = ", ".join(action for action, _field, _required in entries)
-        raise TypeError(f"jobs field {name!r} has different types in the actions {actions}")
-    published = next((shape for shape in shapes if _allows_null(shape)), shapes[0])
-    groups: dict[tuple[str, bool], list[str]] = {}
-    for action, field, required in entries:
-        groups.setdefault((field.get("description", ""), required), []).append(action)
-    sentences = []
-    for (description, required), actions in groups.items():
-        head = ", ".join(actions) + (" (required)" if required else "")
-        sentences.append(f"{head}: {description}" if description else f"{head}.")
-    return {**published, "description": " ".join(sentences)}
+    fields = [field for _action, field in entries]
+    if any(_value_shape(field) != _value_shape(fields[0]) for field in fields[1:]):
+        actions = ", ".join(action for action, _field in entries)
+        raise TypeError(f"jobs field {name!r} is declared differently by the actions {actions}")
+    published = next(
+        (field for field in fields if _NULL_SCHEMA in field.get("anyOf", ())), fields[0]
+    )
+    by_description: dict[str, list[str]] = {}
+    for action, field in entries:
+        by_description.setdefault(field.get("description", ""), []).append(action)
+    if len(by_description) == 1:
+        description = next(iter(by_description))
+    else:
+        description = " ".join(
+            f"{', '.join(actions)}: {text}" for text, actions in by_description.items()
+        )
+    return {**published, "description": description}
 
 
-def _without_prose(field: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in field.items() if key not in ("description", "title")}
-
-
-def _allows_null(shape: dict[str, Any]) -> bool:
-    return _NULL_SCHEMA in shape.get("anyOf", ())
-
-
-def _without_null(shape: dict[str, Any]) -> dict[str, Any]:
-    """The shape an action accepts when it is given a value: no null, no default."""
-    rest = {key: value for key, value in shape.items() if key not in ("anyOf", "default")}
-    members = [member for member in shape.get("anyOf", ()) if member != _NULL_SCHEMA]
-    if len(members) == 1:
-        return {**rest, **members[0]}
-    return {**rest, "anyOf": members} if members else rest
+def _value_shape(field: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
+    """What an action accepts when given a value: its types and constraints, and
+    its default, leaving out null, a null default and prose."""
+    members = [member for member in field.get("anyOf", [field]) if member != _NULL_SCHEMA]
+    prose = ("description", "title", "default")
+    return (
+        [{key: value for key, value in member.items() if key not in prose} for member in members],
+        field.get("default"),
+    )
 
 
 _JOBS_ERROR_SCHEMA: dict[str, Any] = {
@@ -1652,7 +1670,7 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         " 'resume' creates a child of a terminal recoverable head, preserving "
         "produced cases; use a new resume_request_id for each retry. "
         "'place_beside_sheet' copies a case's results beside the .asc it ran, "
-        "where LTspice's window opens them."
+        "where LTspice's window opens them. " + jobs_fields_by_action()
     ),
     input_model=JobsInput,
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,

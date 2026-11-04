@@ -55,12 +55,21 @@ class TestDispatchTable:
 
 class TestToolSchemas:
     def test_all_schemas_valid(self):
+        """Every input schema is one an MCP client can hand to a model.
+
+        Claude's API refuses a tool whose input schema has ``oneOf``, ``allOf``
+        or ``anyOf`` at its top level, and a client that cannot send such a
+        tool drops it from the session: that is how ``jobs`` went missing from
+        Claude Code sessions while the server listed it.
+        """
         defs, _ = get_tools()
         for tool_def in defs:
             schema = tool_def.input_schema
             assert schema, f"{tool_def.name}: no inputSchema"
             assert schema.get("type") == "object", f"{tool_def.name}: schema type is not 'object'"
             assert "properties" in schema, f"{tool_def.name}: no properties"
+            combinators = sorted({"oneOf", "allOf", "anyOf"} & schema.keys())
+            assert not combinators, f"{tool_def.name}: top-level {combinators}"
 
     def test_required_fields_in_properties(self):
         defs, _ = get_tools()

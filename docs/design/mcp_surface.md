@@ -797,10 +797,13 @@ and name different jobs, the call fails with `selector_conflict`.
 Each action accepts only its own fields and rejects others; every action also
 accepts `budget`. The input schema is one flat object, because Claude's API
 refuses a tool whose input schema has `oneOf`, `allOf` or `anyOf` at its top
-level and a client then drops the tool. Each field's description starts with
-the actions that take it and says where one requires it, and the tool refuses
-a field the action does not take, naming both. The output shape is
-discriminated on the echoed `action`:
+level and a client then drops the tool. The tool's description lists each
+action's fields and marks the ones an action requires, generated from the
+action models, so the compact listing, which drops argument descriptions,
+still says which action takes which field. A field two actions describe
+differently names each action before its sentence. The tool refuses a field
+the action does not take, naming both. The output shape is discriminated on
+the echoed `action`:
 
 - `status` / `wait` return the §3.1 receipt **without** `control_token`, plus
   `analysis_status` and, for `wait`, `timed_out`. The receipt includes

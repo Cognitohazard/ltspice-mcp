@@ -34,11 +34,12 @@ tool-surface changes.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its
-  input schema is now one flat object. Each field's description starts with
-  the actions that take it and says where one requires it, and the tool
-  still refuses a field the action does not take, naming both. The tool's
-  definition is also about 40% smaller. A test holds every tool's input
-  schema to an object with no `oneOf`, `allOf` or `anyOf` at its top level.
+  input schema is now one flat object, and the tool's description lists each
+  action's fields and marks the ones an action requires, so the compact
+  listing still says which action takes which field. The tool still refuses
+  a field the action does not take, naming both. The tool's definition is
+  also about 40% smaller. A test holds every tool's input schema to an
+  object with no `oneOf`, `allOf` or `anyOf` at its top level.
 - The read-the-guide reminder said the session had not read the guide when
   the server had only restarted, as after a reconnect, or when the guide was
   read through `api.guide()` inside `run_code`, neither of which the server
