@@ -159,7 +159,7 @@ TRANSIENT_FIELDS_BY_MODE: dict[str, frozenset[str]] = {
 # surface can call and which reads these same models; the Python API's
 # catalogue; and the guide. The helper owning it makes the pointer structural,
 # not a per-call-site convention.
-_DORMANT_POINTER = (
+DORMANT_POINTER = (
     " Full arguments: inspect(kind='reference', query='{metric}'), "
     "api.reference('analyze_results'), or guide section 'tools'."
 )
@@ -195,7 +195,7 @@ def _dormant_wire_stub() -> ConfigDict:
         schema.update(
             {
                 "type": "object",
-                "description": summary + _DORMANT_POINTER.format(metric=metric["const"]),
+                "description": summary + DORMANT_POINTER.format(metric=metric["const"]),
                 "properties": {"metric": metric},
                 "required": ["metric"],
             }

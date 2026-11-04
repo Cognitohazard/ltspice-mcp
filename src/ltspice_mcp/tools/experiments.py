@@ -77,6 +77,7 @@ from ltspice_mcp.lib.pdk_native import (
 from ltspice_mcp.lib.recent import is_circuit_file
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
+    DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
     validate_recipe,
@@ -402,17 +403,16 @@ class AttachedAnalysis(
 #: by every client in every session whether or not it ever attaches an
 #: analysis, to say something already said one tool away. What a caller cannot
 #: derive is which metrics exist, so that is what the stub keeps — the same
-#: bargain the dormant recipe branches strike, including their two-channel
-#: pointer and their deliberate permissiveness: no ``additionalProperties``,
+#: bargain the dormant recipe branches strike, including their pointer
+#: (the same text) and their deliberate permissiveness: no ``additionalProperties``,
 #: so a client pre-validating a full recipe against this shape still sends it.
 #: The model behind it is the real union, and every attached recipe is
 #: validated at submission, before a deck is staged.
 _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "type": "object",
     "description": (
-        "One entry of analyze_results.recipes: same grammar, same metrics, "
-        "validated at submission. Fields per metric: "
-        "api.reference('analyze_results') or guide section 'tools'."
+        "An analyze_results.recipes entry, checked on submit."
+        + DORMANT_POINTER.format(metric="<metric>")
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},

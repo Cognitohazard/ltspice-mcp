@@ -418,20 +418,22 @@ def _read_results_list(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-def _per_run_read_pointer(job_id: str, state: SessionState) -> str:
+def _per_run_read_pointer(job_id: str, view: str, state: SessionState) -> str:
     """Why a per-job read has to go somewhere else, for this job.
 
     Both per-job result routes addressed a single run by job id. Every job is
     an experiment, and an experiment's runs are case-addressed, so the read
-    goes to the tool that takes a case.
+    goes to the query that takes a case: ``inspect``'s results query, in the
+    route's own ``view``.
     """
     # Resolved and discarded: it raises JobNotFoundError for an id that names
     # nothing, so an unknown job never gets the authoritative-sounding answer
     # below.
     services.resolve_job(job_id, state)
     return (
-        f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
-        "with analyze_results (job_id plus run_index or case_id)."
+        f"Job {job_id} is an experiment; its runs are case-addressed. Read one "
+        f'with inspect(queries=[{{"kind": "results", "view": "{view}", '
+        f'"job_id": "{job_id}", "case_id": ...}}]), or run_index in place of case_id.'
     )
 
 
@@ -441,7 +443,11 @@ def _read_signals(
 ) -> types.ReadResourceResult:
     """Explain where a job's trace names are read from."""
     job_id = params["job_id"]
-    data = {"job_id": job_id, "signals": [], "note": _per_run_read_pointer(job_id, state)}
+    data = {
+        "job_id": job_id,
+        "signals": [],
+        "note": _per_run_read_pointer(job_id, "signals", state),
+    }
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
@@ -454,7 +460,7 @@ def _read_measurements(
     data: dict[str, Any] = {
         "job_id": job_id,
         "measurements": {},
-        "note": _per_run_read_pointer(job_id, state),
+        "note": _per_run_read_pointer(job_id, "measurements", state),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))
 

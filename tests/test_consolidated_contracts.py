@@ -936,13 +936,13 @@ class TestDormantRecipeWireStubs:
 
     def test_reference_still_renders_the_stubbed_field_trees(self):
         from ltspice_mcp.api import _reference
-        from ltspice_mcp.lib.recipes import _DORMANT_POINTER
+        from ltspice_mcp.lib.recipes import DORMANT_POINTER
 
         text = _reference.reference("analyze_results")
         # The catalogue renders from the live models; the wire stub appearing
         # here would mean the renderer started reading the advertised schema —
         # exactly the regression that would also erase the field trees.
-        assert _DORMANT_POINTER not in text
+        assert DORMANT_POINTER not in text
         for metric, fields in {
             "noise_integral": ("from_hz", "to_hz"),
             "periodic": ("signal", "window"),

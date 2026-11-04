@@ -674,7 +674,7 @@ class Store:
     def detached_dir(self) -> Path:
         """Hand-off files and console logs for per-job detached owner processes.
 
-        A ``run_experiments(detach=True)`` call writes its request here, the
+        An ``api.run_experiments(detach=True)`` call writes its request here, the
         owner it spawns writes the receipt back here, and the owner's stdout
         and stderr go to a log here. All three carry the ``request_id``'s
         digest so a person can find one call's files, and a per-call ``nonce``

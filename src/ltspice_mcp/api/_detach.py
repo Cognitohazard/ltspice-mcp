@@ -1,6 +1,6 @@
 """Spawning and talking to a per-job detached owner.
 
-The caller's half of `run_experiments(wait=False, detach=True)`. It writes the
+The caller's half of `api.run_experiments(wait=False, detach=True)`. It writes the
 request, starts `python -m ltspice_mcp.detached_owner` in its own session, and
 blocks until that process reports a durable receipt — or dies, or runs out of
 time trying.

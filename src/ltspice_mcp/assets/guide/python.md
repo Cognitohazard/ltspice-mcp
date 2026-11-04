@@ -76,7 +76,7 @@ starting the engine.
   the job keeps running.
 - A job belongs to the process that submitted it and stops when that process
   exits. In `run_code` that process is the worker, so a worker restart
-  interrupts the jobs it owned. `run_experiments(wait=False, detach=True)`
+  interrupts the jobs it owned. `api.run_experiments(wait=False, detach=True)`
   hands the job to an owner process of its own, so it outlives yours;
   `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
 
