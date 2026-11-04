@@ -672,6 +672,23 @@ uv run python scripts/build_benchmark.py table
 uv run python scripts/build_benchmark.py score SHEET.asc NETLIST.cir
 ```
 
+## Timing small runs
+
+The suite times nothing, so a slower run path shows only when it is measured.
+`scripts/benchmark_small_runs.py` times, through the Python API, booting the
+engine, a 5-case `.op` sweep on ngspice, reading ten recorded raws and one
+`edit_schematic` batch compared with a reference, and compares each with a
+baseline taken on the same machine. A run that needs a simulator this machine
+lacks is reported as skipped. It reports a slowdown and always exits 0:
+
+```bash
+uv run python scripts/benchmark_small_runs.py --record   # store the baseline
+uv run python scripts/benchmark_small_runs.py            # compare with it
+```
+
+The baseline (`.benchmark_small_runs.json`) belongs to its machine and is not
+committed.
+
 ## Conventions
 
 - **Behavior-named test files.** Name a test file for the behavior it covers,
