@@ -24,6 +24,7 @@ from ltspice_mcp.config import (
 )
 from ltspice_mcp.lib import capabilities, hidden_desktop
 from ltspice_mcp.lib.families import FAMILIES
+from ltspice_mcp.lib.parser_bootstrap import containment_refusal
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
@@ -732,6 +733,22 @@ def simulator_remediation(name: str, config: ServerConfig) -> dict[str, object]:
     return remediation
 
 
+def result_reading_note() -> str | None:
+    """The sentence that tells a caller up front that no result can be read on
+    this host, or None where results can be read.
+
+    Where the parser cannot be contained (``containment_refusal``, macOS), a
+    run starts but every read of its results is refused, so an agent told only
+    how to install a simulator would install one and then meet the refusal.
+    """
+    if containment_refusal() is None:
+        return None
+    return (
+        "This host cannot read simulation results: every .raw/.log read is "
+        "refused; inspect(kind='capabilities') says why under result_reading."
+    )
+
+
 def no_simulator_message(short: bool = False) -> str:
     """Actionable 'no simulator detected' text shared by instructions and errors.
 
@@ -740,7 +757,9 @@ def no_simulator_message(short: bool = False) -> str:
     agent installs ngspice and then loops on the same error.
 
     ``short`` is the compact form for the consolidated profile's instructions,
-    which must fit a client-side truncation budget with the guide body intact.
+    which must fit a client-side truncation budget with the guide body intact;
+    the instructions state ``result_reading_note`` themselves, so it carries
+    no note of its own.
     """
     if short:
         return (
@@ -748,13 +767,15 @@ def no_simulator_message(short: bool = False) -> str:
             "MCP server (it detects at startup). Authoring and .asc editing "
             "still work."
         )
-    return (
+    message = (
         f"No SPICE simulator detected. To run simulations, {install_hint()}, then "
         "restart (reconnect) this MCP server so it re-detects — detection happens "
         "at startup, so a just-installed simulator is invisible until then. If you "
         "cannot install one, tell the user. Netlist authoring/validation and .asc "
         "editing work without a simulator."
     )
+    note = result_reading_note()
+    return message if note is None else f"{message} {note}"
 
 
 def _resolve_enabled_names(

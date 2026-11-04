@@ -3,6 +3,7 @@
 import io
 import json
 import re
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from ltspice_mcp.errors import (
     LTSpiceMCPError,
     NetlistError,
     PathSecurityError,
+    SimulationError,
 )
 from ltspice_mcp.server import (
     CONSOLIDATED_INSTRUCTIONS,
@@ -33,7 +35,7 @@ from ltspice_mcp.server import (
     server,
 )
 from ltspice_mcp.state import SessionState
-from tests._text import names, says
+from tests._text import flat, names, says
 from tests.conftest import (
     REGISTERED_TOOLS,
     SERVED_WITHOUT_RUN_CODE,
@@ -118,6 +120,39 @@ class _NG:
     pass
 
 
+class TestNoSimulatorError:
+    """The error a run meets when no simulator was detected."""
+
+    @pytest.mark.parametrize("platform", ["darwin", "freebsd14"])
+    def test_says_results_cannot_be_read_where_parsing_is_refused(
+        self, config: ServerConfig, monkeypatch: pytest.MonkeyPatch, platform: str
+    ):
+        """Installing a simulator there gives runs whose results are refused,
+        so the way out it names is not the whole story."""
+        from ltspice_mcp.tools._base import require_simulator
+
+        state = SessionState.create(config, available={})
+        monkeypatch.setattr(sys, "platform", platform)
+        with pytest.raises(SimulationError) as caught:
+            require_simulator(state)
+        message = str(caught.value)
+        assert says(message, "No SPICE simulator detected", "restart")
+        assert says(message, "cannot read simulation results", "result_reading")
+
+    @pytest.mark.parametrize("platform", ["linux", "win32"])
+    def test_says_nothing_of_result_reading_where_results_are_read(
+        self, config: ServerConfig, monkeypatch: pytest.MonkeyPatch, platform: str
+    ):
+        from ltspice_mcp.tools._base import require_simulator
+
+        state = SessionState.create(config, available={})
+        monkeypatch.setattr(sys, "platform", platform)
+        with pytest.raises(SimulationError) as caught:
+            require_simulator(state)
+        assert says(str(caught.value), "No SPICE simulator detected")
+        assert not says(str(caught.value), "cannot read simulation results")
+
+
 class TestBuildInstructions:
     """The runtime-prepended line must name the actually-detected simulators."""
 
@@ -152,6 +187,32 @@ class TestBuildInstructions:
         assert not says(text, "ngspice (default)")
         assert not says(text, "not detected")
 
+    @pytest.mark.parametrize("platform", ["darwin", "freebsd14"])
+    def test_a_host_that_refuses_result_reads_says_so_up_front(
+        self, monkeypatch: pytest.MonkeyPatch, platform: str
+    ):
+        """Every .raw and .log read is refused where the parser cannot be
+        contained, so the instructions say so before a run, with or without a
+        simulator, and point at the report that gives the reason."""
+        monkeypatch.setattr(sys, "platform", platform)
+        for text in (
+            build_instructions({}, None),
+            build_instructions({"ngspice": _NG}, _NG),
+            build_instructions({"ltspice": _LT, "ngspice": _NG}, _LT),
+        ):
+            active = text.split("\n\n", 1)[0]
+            assert says(active, "cannot read simulation results", "result_reading")
+            # Once: the short no-simulator line leaves it to this note.
+            assert flat(active).count("cannot read simulation results") == 1
+
+    @pytest.mark.parametrize("platform", ["linux", "win32"])
+    def test_a_host_that_reads_results_does_not_mention_it(
+        self, monkeypatch: pytest.MonkeyPatch, platform: str
+    ):
+        monkeypatch.setattr(sys, "platform", platform)
+        for text in (build_instructions({}, None), build_instructions({"ngspice": _NG}, _NG)):
+            assert not says(text, "cannot read simulation results")
+
     def test_the_instructions_fit_the_client_budget(self):
         """Claude Code truncates server instructions at 2048 chars; the tail
         (the result-trust guidance) must survive under every prefix shape — a
@@ -177,20 +238,27 @@ class TestBuildInstructions:
                 served={"run_code"},
             ),
         ]
-        # The no-simulator prefix embeds a platform-specific install hint, and
-        # the longest of those is not the one this test happens to run on.
+        # The no-simulator prefix embeds a platform-specific install hint, and a
+        # host that refuses result reads (macOS) adds a line to every shape; the
+        # longest of those is not the one this test happens to run on.
         from ltspice_mcp.lib import simulator as simulator_module
 
-        for wsl, system in (
-            (True, "Linux"),
-            (False, "Linux"),
-            (False, "Darwin"),
-            (False, "Windows"),
+        for wsl, system, sys_platform in (
+            (True, "Linux", "linux"),
+            (False, "Linux", "linux"),
+            (False, "Darwin", "darwin"),
+            (False, "Windows", "win32"),
         ):
             with pytest.MonkeyPatch.context() as mp:
                 mp.setattr(simulator_module, "is_wsl", lambda wsl=wsl: wsl)
                 mp.setattr(simulator_module.platform, "system", lambda system=system: system)
+                mp.setattr(sys, "platform", sys_platform)
                 worst_cases.append(build_instructions({}, None))
+                worst_cases.append(
+                    build_instructions(
+                        {"ngspice": _NG, "qspice": _LT, "xyce": _NG}, _NG, served={"run_code"}
+                    )
+                )
         for text in worst_cases:
             assert len(text) <= _INSTRUCTIONS_BUDGET, (
                 f"instructions {len(text)} chars > {_INSTRUCTIONS_BUDGET} client truncation budget"

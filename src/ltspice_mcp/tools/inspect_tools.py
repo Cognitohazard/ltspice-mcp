@@ -166,6 +166,7 @@ from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import OpenDesign, WindowsUnavailable
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
+from ltspice_mcp.lib.parser_bootstrap import containment_refusal
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, segment_text
@@ -525,6 +526,7 @@ CapabilityField: TypeAlias = Literal[
     "exporter_available",
     "render",
     "open_window_sync",
+    "result_reading",
     "dialects",
     "simulator_capabilities",
     "diagnostics",
@@ -544,8 +546,8 @@ class CapabilitiesQuery(StrictModel):
     """What this server can do: detected simulators with their executables, last
     reported builds and raw dialects, which a run can select and what each can
     do here; the named executables, whether the .asc exporter is available,
-    job persistence, the sandbox, the configured limits, and the linter
-    version."""
+    whether this host can read results at all, job persistence, the sandbox,
+    the configured limits, and the linter version."""
 
     kind: Literal["capabilities"]
     fields: list[CapabilityField] | None = Field(
@@ -1123,6 +1125,13 @@ def _selection_facts(cls: type) -> dict[str, Any]:
     return {"selectable": False, "refusal": refusal}
 
 
+def _result_reading() -> dict[str, Any]:
+    """Whether a .raw or .log can be read on this host, from the same check that
+    refuses every parse where it cannot, and the refusal's reason."""
+    refusal = containment_refusal()
+    return {"available": refusal is None, "reason": refusal}
+
+
 def _do_capabilities(
     state: SessionState,
     raster: RasterSupport,
@@ -1188,6 +1197,10 @@ def _do_capabilities(
             # Whether in_ltspice starts LTspice when no window is open.
             "starts_ltspice": state.open_windows.starts_ltspice,
         },
+        # Whether this host can read a .raw or .log at all. Where the parser
+        # cannot be contained (macOS), every read is refused, so a run there
+        # starts but its results cannot be read; asked here before running.
+        "result_reading": _result_reading(),
         "dialects": {
             name: dialect_for_simulator_name(cls.__name__)
             for name, cls in state.available_simulators.items()

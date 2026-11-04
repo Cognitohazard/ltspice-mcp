@@ -1602,8 +1602,12 @@ cursors where listed:
     exporter presence (`exporter_available`); `open_window_sync: {available,
     reason, starts_ltspice}` (whether edit_schematic keeps a sheet open in an
     LTspice window in step with its file, and whether in_ltspice starts
-    LTspice when no window is open); dialects; `simulator_capabilities:
-    {families: {<family>: {<capability>: {kind, status, reason?}}}, evidence}`
+    LTspice when no window is open); `result_reading: {available, reason}`
+    (whether this host can read a `.raw` or `.log` at all: where the parser
+    cannot be contained, as on macOS, every read is refused with
+    `unsupported_platform`, and `reason` is the refusal's text); dialects;
+    `simulator_capabilities: {families: {<family>: {<capability>: {kind,
+    status, reason?}}}, evidence}`
     (what each detected family can do here: every capability the server
     offers, `baseline` or `refinement`, as `supported`, a declared `gap`,
     `unverified`, or `unavailable_here` when this host rules it out, with

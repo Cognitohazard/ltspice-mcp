@@ -36,15 +36,27 @@ _REPLY_BYTES = 4096
 """The longest reply line a worker or guardian writes to the supervisor."""
 
 
-def require_containment_platform() -> None:
-    """Refuse hosts without an established memory and process ownership contract."""
+def containment_refusal() -> str | None:
+    """Why this host cannot read results in a contained parser, or None when it can.
+
+    The one answer behind both the refusal of every parse and what a caller is
+    told up front (the capabilities report, the server's instructions).
+    """
     if sys.platform == "darwin":
-        raise RuntimeError(
+        return (
             "macOS parser containment is unavailable: hard memory limits, "
             "owner-death cleanup and escaped-child ownership have not been validated"
         )
     if sys.platform not in {"linux", "win32"}:
-        raise RuntimeError("Parser containment is unavailable on this platform")
+        return "Parser containment is unavailable on this platform"
+    return None
+
+
+def require_containment_platform() -> None:
+    """Refuse hosts without an established memory and process ownership contract."""
+    refusal = containment_refusal()
+    if refusal is not None:
+        raise RuntimeError(refusal)
 
 
 def _path(directory: Path, name: str) -> Path:

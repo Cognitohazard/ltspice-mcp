@@ -26,7 +26,7 @@ from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.observability import configure_stderr_logging, emit_tool_event
-from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.simulator import no_simulator_message, result_reading_note
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -345,6 +345,10 @@ def build_instructions(
                 "and may be unavailable — simulation and analysis run on the "
                 "active engine, unaffected.)"
             )
+    # A host that refuses every result read says so before anything is run.
+    note = result_reading_note()
+    if note is not None:
+        active += f" {note}"
     return f"{active}\n\n{instructions}"
 
 

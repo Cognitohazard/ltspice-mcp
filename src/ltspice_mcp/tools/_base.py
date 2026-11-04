@@ -683,8 +683,8 @@ ALWAYS_PRESENT: dict[str, dict[str, Kept]] = {
         **_OUTCOME,
         **_FINDING_OK,
         "available": Kept(
-            "Whether a simulator, or the LTspice window sync, can be used here: "
-            "false is the news, with its remediation or reason."
+            "Whether a simulator, the LTspice window sync, or result reading can be "
+            "used here: false is the news, with its remediation or reason."
         ),
         "selectable": Kept(
             "Whether run_experiments may name a detected simulator: false comes with "

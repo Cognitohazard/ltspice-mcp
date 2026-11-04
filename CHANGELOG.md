@@ -58,6 +58,16 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- On macOS, where the server refuses every `.raw` and `.log` read because
+  its result parser cannot be contained there yet, a caller now learns this
+  before running anything. `inspect(kind="capabilities")` has a
+  `result_reading` key, `{available, reason}`, whose reason is the refusal's
+  own text, and the server's instructions and its "no simulator detected"
+  error say that this host cannot read simulation results. Before, the
+  instructions only told a macOS user how to install a simulator, and the
+  first sign of the refusal was a failed read after a run. Where results
+  can be read, the report says `available: true` and the instructions are
+  unchanged.
 
 ### Fixed
 

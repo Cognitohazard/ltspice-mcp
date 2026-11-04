@@ -131,6 +131,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "python",
         "python_api",
         "render",
+        "result_reading",
     ):
         assert key in data, f"missing capabilities key {key!r}"
     # The capability table's view for the detected families: each capability's
@@ -264,6 +265,38 @@ async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):
     assert res["data"]["diagnostics"] == [
         "Configured simulator path does not exist: /nope/LTspice.exe"
     ]
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+async def test_capabilities_says_results_can_be_read_where_the_parser_is_contained(
+    cap_state: SessionState, monkeypatch: pytest.MonkeyPatch, platform: str
+):
+    # The report also probes for a rasterizer, whose first answer the process
+    # keeps; settle it on the real platform before the platform is changed.
+    raster.raster_support()
+    monkeypatch.setattr(sys, "platform", platform)
+    (res,) = await _run(cap_state, [{"kind": "capabilities", "fields": ["result_reading"]}])
+    # Nothing is refused, so there is no reason to give.
+    assert res["data"] == {"result_reading": {"available": True}}
+
+
+@pytest.mark.parametrize("platform", ["darwin", "freebsd14"])
+async def test_capabilities_says_no_result_can_be_read_where_parsing_is_refused(
+    cap_state: SessionState, monkeypatch: pytest.MonkeyPatch, platform: str
+):
+    """Every .raw and .log read is refused where the parser cannot be contained,
+    so a run there starts and its results cannot be read. The report says so
+    before anything is run, with the reason the refusal itself gives."""
+    from ltspice_mcp.lib.parser_bootstrap import require_containment_platform
+
+    raster.raster_support()  # settled on the real platform, as above
+    monkeypatch.setattr(sys, "platform", platform)
+    (res,) = await _run(cap_state, [{"kind": "capabilities", "fields": ["result_reading"]}])
+    with pytest.raises(RuntimeError) as refused:
+        require_containment_platform()
+    assert res["data"] == {"result_reading": {"available": False, "reason": str(refused.value)}}
+    if platform == "darwin":
+        assert "macOS" in res["data"]["result_reading"]["reason"]
 
 
 async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: SessionState):
