@@ -771,7 +771,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 40 characters for the capabilities report's
     # simulator_capabilities key (the capability table's view for the detected
     # families) and the sentence in its description. Measured 11,694.
-    "inspect": 11700,
+    # Raised by about 55 characters for the capabilities key 'result_reading'
+    # and the clause in its description: on a host that refuses every result
+    # read (macOS), a caller learns it before a run. Measured 11,747.
+    "inspect": 11750,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
