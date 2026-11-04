@@ -141,6 +141,7 @@
   "varies": [
    "tests/test_edit_open_window.py::test_a_bridge_that_cannot_say_does_not_stop_the_edit",
    "tests/test_edit_open_window.py::test_a_committed_edit_is_shown_in_the_window_that_has_the_sheet_open",
+   "tests/test_edit_open_window.py::test_a_refusal_names_part_of_a_long_difference_and_the_call_that_reads_it_all",
    "tests/test_edit_open_window.py::test_a_request_carried_out_after_all_is_not_taken_for_a_change",
    "tests/test_edit_open_window.py::test_a_sheet_no_window_has_open_is_edited_as_before",
    "tests/test_edit_open_window.py::test_a_window_changed_since_it_was_read_is_left_open_and_reported",
@@ -686,7 +687,7 @@
   "sheet": "02799fe4a330ce21"
  },
  "86f44f293daee10d": {
-  "reply": "16b1ecf17d414100",
+  "reply": "797be211a251328d",
   "sheet": null
  },
  "8806959f545a83af": {
@@ -856,7 +857,7 @@
   "raised": "InvalidCursorError"
  },
  "a93731fe44276741": {
-  "reply": "e611b6aaf36a4ce6",
+  "reply": "32fbe551f2b11ec8",
   "sheet": null
  },
  "a9fa53192b5d6ced": {
