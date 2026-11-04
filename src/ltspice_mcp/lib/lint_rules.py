@@ -18,14 +18,20 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family_for
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    TokenKind,
+    lex,
+    lex_deck,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, MeasCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
     PROBE_REF_RE,
-    drop_title_card,
     meas_functions_refused,
     meas_name_refused,
     validate_netlist_arity,
@@ -79,9 +85,9 @@ class _LintFile(NamedTuple):
 class _LintContext:
     text: str
     path: Path
-    # The deck's cards without its line-1 title. Both simulators skip line 1
-    # of a netlist, so a title that starts with an element letter (``Diode
-    # clamp test``) is prose, not a card, for every rule.
+    # The deck's cards the simulator reads (``spice_lex.lex_deck``): not its
+    # line-1 title, which is prose whatever it says (``Diode clamp test``),
+    # nor a card after ``.END``, so no rule refuses a card no run reads.
     cards: list[SpiceCard]
     # The simulator family the deck is linted for (see ``lint_deck``).
     family: str
@@ -1006,7 +1012,7 @@ def lint_deck(
     context = _LintContext(
         text=deck_text,
         path=path,
-        cards=drop_title_card(lex(deck_text).cards),
+        cards=lex_deck(deck_text).cards,
         # A deck nothing names is linted as the default family's.
         family=family_for(dialect, simulator) or DEFAULT_FAMILY,
         includes=tuple(includes),

@@ -40,7 +40,7 @@ from ltspice_mcp.lib.spice_lex import (
     Token,
     TokenKind,
     find_matching_ends,
-    lex,
+    lex_deck,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
@@ -266,16 +266,10 @@ def _assignments(card: SpiceCard, *, only: bool = False) -> dict[str, str]:
 
 
 def parse_hierarchy_cards(content: bytes, *, root: bool) -> list[SpiceCard]:
-    text = decode_spice_bytes(content)
-    if root:
-        # Root decks begin with a title; included fragments begin with a card.
-        # Replace before lexing so a title cannot change scope or terminate input.
-        lines = text.splitlines(keepends=True)
-        text = "* hierarchy root title\n" + "".join(lines[1:])
-    parsed = lex(text)
+    # Root decks begin with a title; included fragments begin with a card.
     # Explicit validation below handles active boundaries, including definitions
     # whose body includes another file. Inactive sections cannot poison a read.
-    return [card for card in parsed.cards if not card.trailing]
+    return lex_deck(decode_spice_bytes(content), title=root).cards
 
 
 def walk_active(

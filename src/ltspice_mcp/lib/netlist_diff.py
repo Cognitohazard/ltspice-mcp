@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from itertools import takewhile
 from pathlib import Path
 
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import fold_micro_sign
 from ltspice_mcp.lib.netlist_graph import canon_ref, rekey_across_added_x
 from ltspice_mcp.lib.spice_lex import (
@@ -40,8 +41,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     Token,
     TokenKind,
-    cards_from_path,
-    lex,
+    lex_deck,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
@@ -185,12 +185,15 @@ class Deck:
 
 
 def read_deck(source: str | Path) -> Deck:
-    """Read a netlist (a path, or its text) for a structural diff.
+    """Read a netlist (a path, or its text) for a structural diff: the cards a
+    simulator reads (``spice_lex.lex_deck``), so not its title line, nor a
+    card after ``.END``.
 
     Raises what reading the file raises; a caller decides what an unreadable
     deck means for its comparison.
     """
-    cards = (cards_from_path(source) if isinstance(source, Path) else lex(source)).cards
+    text = read_spice_text(source) if isinstance(source, Path) else source
+    cards = lex_deck(text).cards
     deck = Deck()
     for card in cards:
         if card.kind == "instance" and card.name:

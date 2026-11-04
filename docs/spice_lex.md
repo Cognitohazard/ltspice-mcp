@@ -87,12 +87,25 @@ The parser has three layers.
 ### Layer 1: line-level lexer
 
 ```python
-def lex(netlist_text: str) -> LexResult: ...
+def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
+def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...
 ```
 
 `lex` walks the lines once, classifies each line by its first
 non-whitespace character, merges `+` continuation chains and tracks
-`.SUBCKT`/`.ENDS` scope. Each `SpiceCard` has these fields:
+`.SUBCKT`/`.ENDS` scope. With `title`, line 1 is a comment card of its own
+whatever it says, so it cannot open a scope, end the deck or take a `+` line.
+
+`lex_deck` is the reading of a deck: the cards a simulator reads, with
+`lex`'s warnings. Line 1 is the title and is left out (both LTspice builds
+ran `deck/title_card`, whose title is an `I1` card, with one `I1`, and
+failed `deck/title_directive`, whose title is the `.param` it needs), and so
+is every card after a top-level `.END` (`deck/after_end`). `title=False`
+reads an included file, which begins with a card. Every reader of what a
+deck holds (the linter, `verify_circuit`'s checks and both compare modes,
+the `inspect` net query, the hierarchy, the run's requirements and the
+result observations) goes through it; an edit uses `lex`, which keeps every
+line for `emit`. Each `SpiceCard` has these fields:
 
 ```python
 class SpiceCard:
@@ -391,7 +404,7 @@ recovery rules:
   byte-faithful.
 - Cards after a top-level `.END`: they keep their position and scope but
   have `trailing=True`. LTspice ignores them, but the parser keeps them
-  rather than dropping them.
+  rather than dropping them; `lex_deck` leaves them out.
 - `.control` without a matching `.endc`: the region runs to EOF, plus a
   warning. Every remaining line stays an opaque `kind="control"` card.
 
@@ -419,7 +432,8 @@ next edit re-renders too.
 
 ```python
 # lib/spice_lex.py
-def lex(netlist_text: str) -> LexResult: ...
+def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
+def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...  # the cards a simulator reads
 def emit(cards: Sequence[SpiceCard]) -> str: ...
 def tokenize_body(body: str) -> list[Token]: ...
 def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | None: ...

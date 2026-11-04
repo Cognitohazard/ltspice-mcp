@@ -190,7 +190,7 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
     ltspice_before_24,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -1471,11 +1471,12 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
     """Card-membership for a node in a netlist — no geometry keys (by contract).
 
     The members are the deck's own cards: a card in a ``.subckt`` body is on
-    the subcircuit's nodes, not the deck's. Node names are compared as
-    ``connectivity.name_key`` has them, as on a sheet: without case (the
-    ``node-name-case`` recording) and with ``gnd`` as node 0.
+    the subcircuit's nodes, not the deck's, and the title line and a card after
+    ``.END`` are not cards the simulator reads (``spice_lex.lex_deck``). Node
+    names are compared as ``connectivity.name_key`` has them, as on a sheet:
+    without case (the ``node-name-case`` recording) and with ``gnd`` as node 0.
     """
-    lexed = lex(text)
+    lexed = lex_deck(text)
     by_ref = instances_by_ref(card for card in lexed.cards if not card.scope)
     parsed: dict[str, InstanceLine] = {}
     nodes_of: dict[str, list[str]] = {}

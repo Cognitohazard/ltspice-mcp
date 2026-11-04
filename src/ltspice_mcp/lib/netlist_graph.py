@@ -85,6 +85,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from ltspice_mcp.lib.deck_staging import resolve_reference
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import fold_micro_sign, parse_plain_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
@@ -93,7 +94,7 @@ from ltspice_mcp.lib.spice_lex import (
     cards_from_path,
     copies_by_name,
     iter_by_kind,
-    lex,
+    lex_deck,
 )
 from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
@@ -572,7 +573,9 @@ def _pin_role(type_letter: str, index: int) -> int:
 
 
 def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
-    """Lex a netlist given as a filesystem path or as raw text.
+    """The cards a simulator reads from a netlist given as a filesystem path or
+    as raw text (``spice_lex.lex_deck``: not its title line, nor a card after
+    ``.END``).
 
     A :class:`~pathlib.Path` is always read as a file. A ``str`` is treated as
     raw netlist text when it spans multiple lines or is long; otherwise, if it
@@ -593,7 +596,7 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
                 return _cards_from_netlist_path(candidate), candidate.parent
         except OSError:
             pass
-    return lex(text), None
+    return lex_deck(text), None
 
 
 def _cards_from_netlist_path(path: Path) -> LexResult:
@@ -601,7 +604,7 @@ def _cards_from_netlist_path(path: Path) -> LexResult:
         raise NetlistGraphError(
             f"{path.name} is an .asc schematic, not a netlist; compare its LTspice export"
         )
-    return cards_from_path(path)
+    return lex_deck(read_spice_text(path))
 
 
 # Lex warnings that indicate the netlist structure itself is broken (as opposed

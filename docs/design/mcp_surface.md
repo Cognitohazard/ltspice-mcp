@@ -1471,7 +1471,9 @@ reference copy and a candidate copy that differ.
 Both modes compare netlists. An `.asc` under test is compared as its LTspice
 export, and an `.asc` reference is exported the same way, on a staged copy,
 never beside the caller's file; without LTspice the compare fails rather than
-diffing a schematic's attributes against a netlist's cards. `structural_diff`
+diffing a schematic's attributes against a netlist's cards. Both modes read
+the cards the simulator reads: line 1 of a deck is its title and is not read,
+nor is a card after `.end`. `structural_diff`
 lexes both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores
@@ -1812,9 +1814,11 @@ Suppression is per call, and `linter_version` is reported in provenance.
 
 `element-arity`, `bsource-value-prefix`, `value-keyword-ltspice` and
 `value-expression-remnant` come from one check of each element line, and each
-is a separate rule so that suppressing one never silences another. Rules
-that read elements or values skip line 1 of the deck, the title line both
-simulators skip.
+is a separate rule so that suppressing one never silences another. Every rule
+reads the cards the simulator reads: a card continued on `+` lines is one
+card, and neither line 1 of the deck, the title line both simulators skip, nor
+a card after `.end` is read. `verify_circuit`'s `syntax` and `quality` checks
+read the deck the same way.
 
 ---
 

@@ -33,7 +33,7 @@ from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executa
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
 from ltspice_mcp.lib.simulator_build import ltspice_before_24, reported_build
-from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
+from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, lex_deck, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
@@ -131,7 +131,12 @@ class DeckRequirements:
 
 
 def deck_requirements(netlist: Path | None) -> DeckRequirements:
-    """Snapshot requested analyses, ``.save`` and ``.control`` in one walk."""
+    """Snapshot requested analyses, ``.save`` and ``.control`` in one walk.
+
+    It reads the cards the simulator reads (``spice_lex.lex_deck``): a
+    directive continued on a ``+`` line is one card, and neither the deck's
+    title nor a card after an ``.END`` counts.
+    """
     if netlist is None:
         return DeckRequirements()
     analyses: list[str] = []
@@ -154,17 +159,15 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             text = read_spice_text(path)
         except OSError:
             return
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("."):
-                continue
-            parts = stripped.split(None, 1)
-            head = parts[0].lower()
-            if head == ".end":
-                break
-            if head == ".control":
+        for card in lex_deck(text, title=depth == 0).cards:
+            if card.kind == "control":
                 has_control = True
-            elif head in _REQUESTED_ANALYSES:
+                continue
+            parts = card.body.split(None, 1)
+            if card.kind != "directive" or not parts:
+                continue
+            head = parts[0].lower()
+            if head in _REQUESTED_ANALYSES:
                 if head not in analyses:
                     analyses.append(head)
             elif head == ".save":

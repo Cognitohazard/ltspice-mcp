@@ -64,7 +64,8 @@ from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_types import measurement_named
-from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
+from ltspice_mcp.lib.spice_lex import lex_deck
+from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 
 if TYPE_CHECKING:
@@ -141,24 +142,24 @@ def parse_requested_outputs(netlist_text: str) -> dict[str, list[str]]:
     """Extract requested ``.meas``/``.four`` names from a netlist deck.
 
     Returns ``{"meas": [name, ...], "four": [signal, ...]}`` preserving the
-    original-case tokens. The ``.meas`` name is pulled via the canonical
-    ``spice_lex.extract_meas_name`` (the same extractor the lexer/validator use)
-    so reconciliation matches how produced names are derived elsewhere, instead
-    of re-implementing the analysis-keyword skip. Best-effort — reconciliation is
-    advisory.
+    original-case tokens. The deck is read as the simulator reads it
+    (``spice_lex.lex_deck``): a card continued on ``+`` lines is one card, a
+    comment is no part of it, and neither the title nor a card after ``.END``
+    is read. A ``.meas`` name is the lexer's (``SpiceCard.name``), so
+    reconciliation matches how produced names are derived elsewhere.
+    Best-effort — reconciliation is advisory.
     """
     meas: list[str] = []
     four: list[str] = []
-    for line in netlist_text.splitlines():
-        tokens = line.split()
+    for card in lex_deck(netlist_text).cards:
+        if card.kind == "meas":
+            if card.name:
+                meas.append(card.name)
+            continue
+        tokens = card.body.split() if card.kind == "directive" else []
         if len(tokens) < 2:
             continue
-        head = tokens[0].lower()
-        if head.startswith(".meas"):
-            name = extract_meas_name(line)
-            if name:
-                meas.append(name)
-        elif head in (".four", ".fourier"):
+        if tokens[0].lower() in (".four", ".fourier"):
             rest = tokens[2:]
             counts = 0
             while counts < min(2, len(rest)) and _FOUR_COUNT_RE.fullmatch(rest[counts]):
@@ -247,7 +248,6 @@ def _v_card_amplitude(spec: list[str]) -> float | None:
 
 _PARAM_ASSIGN_RE = re.compile(r"(\w+)\s*=\s*([^\s{}(),]+)")
 _PARAM_REF_RE = re.compile(r"\{(\w+)\}\Z")
-_EQUALS_WS_RE = re.compile(r"\s*=\s*")
 
 
 def _resolve_param_ref(tok: str, params: dict[str, float]) -> str:
@@ -265,68 +265,60 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
     Supply rails are V-cards too, so ``max()`` over the result is the deck's
     excitation scale — the reference the source-relative ``extreme_value``
     trigger compares node voltages against. Handles DC, SIN/SINE, PULSE, EXP,
-    PWL, SFFM and AM specs, ``+`` continuation lines, bare ``5V`` unit tails,
-    and simple ``{name}`` references to literal ``.param`` constants.
+    PWL, SFFM and AM specs, bare ``5V`` unit tails, and simple ``{name}``
+    references to literal ``.param`` constants. The deck is read as the
+    simulator reads it (``spice_lex.lex_deck``): a card continued on ``+``
+    lines is one card, a comment is no part of it, and neither the title nor
+    a card after ``.END`` is read.
 
     All-or-nothing: if ANY V-card cannot be bounded (behavioral, unresolvable
-    ``{expr}``, a spec cut short), the whole result is ``{}`` and the trigger
-    stays disarmed — the dropped card might have been the deck's largest
-    source, and a max() over the remainder would state a false "largest
-    independent voltage source" fact. Quieter, never wrong.
+    ``{expr}``, a spec cut short, a card that cannot be read), the whole
+    result is ``{}`` and the trigger stays disarmed — the dropped card might
+    have been the deck's largest source, and a max() over the remainder would
+    state a false "largest independent voltage source" fact. Quieter, never
+    wrong.
     """
-    cards: list[str] = []
-    for line in netlist_text.splitlines():
-        # Drop inline ``; comment`` trails — a commented V-card would otherwise
-        # read as unparseable and falsely disarm the whole deck.
-        stripped = line.split(";", 1)[0].strip()
-        if stripped.startswith("+") and cards:
-            cards[-1] += " " + stripped[1:]
-        else:
-            cards.append(stripped)
+    cards = lex_deck(netlist_text).cards
 
     # Literal .param constants, for resolving {name} source values — the
     # common parameterized-rail idiom (.param vdd=12 / V1 vdd 0 {vdd}).
     # Non-numeric params (expressions) are simply absent from the map.
     params: dict[str, float] = {}
-    for card in cards[1:]:
-        if card.lower().startswith(".param"):
-            for name, value in _PARAM_ASSIGN_RE.findall(card):
-                try:
-                    params[name.lower()] = parse_spice_value(value)
-                except ValueError:
-                    continue
+    for card in cards:
+        if card.kind == "instance" or not card.body.lstrip().lower().startswith(".param"):
+            continue
+        for name, value in _PARAM_ASSIGN_RE.findall(card.body):
+            try:
+                params[name.lower()] = parse_spice_value(value)
+            except ValueError:
+                continue
 
     out: dict[str, float] = {}
-    # cards[0] is the deck title line, never an element card.
-    for card in cards[1:]:
-        if not card or card[0] not in "Vv":
+    for card in cards:
+        if card.kind != "instance" or not card.name or card.name[0] not in "Vv":
             continue
-        # Collapse spaces around '=' so ``Rser = 1`` tokenizes as one
-        # key=value token instead of a bare word that reads as unparseable.
-        card = _EQUALS_WS_RE.sub("=", card)
-        # Hand tokenizer, deliberately minimal. Two real-deck gaps have been
-        # patched at this seam already (inline ';' comments above, spaced
-        # key=values here). If you are patching a THIRD, stop: port this card
-        # walk to the spice_lex lexer (lex() + tokenize_body() — cards arrive
-        # comment-stripped and continuation-joined, key=value and {braced}
-        # atoms come typed) instead of growing a parallel tokenizer patch by
-        # patch. No import cycle; montecarlo.parse_param_nominal is the
-        # lex-based precedent.
-        tokens = card.replace("(", " ").replace(")", " ").replace(",", " ").split()
-        if len(tokens) < 4:
+        line = read_instance(card)
+        if line is None or len(line.nodes) < 2:
+            # Unreadable, or no positional value (``V1 a 0 value={x}``): it
+            # might be the largest source.
+            return {}
+        # The value is the positional source spec (``DC 5``, ``SIN(0 1 1k)``);
+        # a ``Rser=1`` after it is a parameter, never a drive level.
+        tokens = (line.value or "").replace("(", " ").replace(")", " ").replace(",", " ").split()
+        if not tokens:
             continue
-        amp = _v_card_amplitude([_resolve_param_ref(tok, params) for tok in tokens[3:]])
+        amp = _v_card_amplitude([_resolve_param_ref(tok, params) for tok in tokens])
         if amp is None or not math.isfinite(amp):
             return {}  # an unbounded V-card poisons the max — disarm entirely
         if amp > 0:
-            out[tokens[0]] = amp
+            out[line.ref] = amp
     return out
 
 
 def _first_directive(netlist_text: str, head: str) -> list[str] | None:
-    """The tokens of a deck's first ``head`` directive (``.tran``, ``.ac``);
-    None when it has none."""
-    for card in lex(netlist_text).cards:
+    """The tokens of a deck's first ``head`` directive (``.tran``, ``.ac``)
+    that the simulator reads; None when it has none."""
+    for card in lex_deck(netlist_text).cards:
         tokens = card.body.split() if card.kind == "directive" else []
         if tokens and tokens[0].casefold() == head:
             return tokens

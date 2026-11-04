@@ -356,10 +356,24 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     meas_cards = [c for c in cards if c.kind == "meas"]
     if not meas_cards:
         return None
-    if (error := meas_name_refused(meas_cards[0], simulator)) is not None:
-        return error
-    refused = meas_functions_refused(meas_cards[0], simulator)
-    return refused[0][1] if refused else None
+    return validate_directive_card(meas_cards[0], simulator)
+
+
+def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> ValidationError | None:
+    """``validate_directive`` for one lexed card of a deck.
+
+    The card is read as the simulator reads it: its ``+`` lines joined and
+    its comments left out, so a ``.meas`` whose function sits on a
+    continuation line is checked whole. A card that is no directive passes.
+    """
+    if card.kind == "meas":
+        if (error := meas_name_refused(card, simulator)) is not None:
+            return error
+        refused = meas_functions_refused(card, simulator)
+        return refused[0][1] if refused else None
+    if card.kind != "directive":
+        return None
+    return validate_directive(card.body, simulator)
 
 
 def meas_functions_refused(
@@ -650,18 +664,6 @@ class _NodeUse:
     count: int = 1
 
 
-def drop_title_card(cards: list[SpiceCard]) -> list[SpiceCard]:
-    """Drop the card a SPICE deck's title line was lexed as.
-
-    Line 1 of a netlist is a free-text title, whatever it says. The lexer has
-    no title concept, so a title that starts with an element letter parses as
-    an instance card, and one that starts with a dot as a directive. LTspice
-    reads neither: ``.param r=2k`` on line 1 defines nothing. A title that is
-    a comment or blank is no card and stays as it is.
-    """
-    return [card for card in cards if card.line_start != 1 or card.kind in {"comment", "blank"}]
-
-
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
     """Collect lowercased node names declared via ``.GLOBAL`` directives.
 
@@ -870,9 +872,9 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
     ``V(vref)`` and silently resolves to nothing. Matching is
     case-insensitive; hierarchical refs (``V(X1:out)``) and expression
     fragments (``V(a*2)``) are left alone. Each genuinely-missing name is
-    reported once. The caller attaches severity.
+    reported once. The caller attaches severity. ``cards`` are the cards the
+    simulator reads (``spice_lex.lex_deck``).
     """
-    cards = drop_title_card(cards)
     known = _known_names(cards)
 
     issues: list[dict[str, object]] = []

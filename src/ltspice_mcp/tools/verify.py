@@ -111,15 +111,14 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
     value_suffix_sites,
 )
 from ltspice_mcp.lib.spice_validator import (
-    drop_title_card,
-    validate_directive,
+    validate_directive_card,
     validate_netlist_arity,
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
@@ -1045,10 +1044,9 @@ async def _export_reference(
 class _LexedDeck:
     """One lex of a netlist, shared by the syntax and quality checks.
 
-    ``cards`` already has the title card dropped: line 1 is free text by SPICE
-    convention and the lexer has no title concept, so a title beginning with an
-    element letter parses as an element whose words the instance-level rules
-    would otherwise count as circuit nodes.
+    ``cards`` are the cards the simulator reads (``spice_lex.lex_deck``): not
+    the title on line 1, which is free text whatever it says, nor a card after
+    ``.END``, so no rule reports a card the simulator never sees.
 
     ``notes`` are the lexer's own remarks about what it had to guess — an
     unclosed ``.SUBCKT``, an ``.ENDS`` that matches nothing, a continuation with
@@ -1067,11 +1065,11 @@ class _LexedDeck:
 def _lex_deck(text: str) -> _LexedDeck:
     """Lex a netlist once for every check that reads its cards."""
     try:
-        result = lex(text)
+        result = lex_deck(text)
     except SpiceLexError as exc:
         return _LexedDeck(cards=[], notes=[], error=str(exc))
     return _LexedDeck(
-        cards=drop_title_card(result.cards),
+        cards=result.cards,
         notes=[f"netlist lexer: {note}" for note in result.warnings],
     )
 
@@ -1234,19 +1232,20 @@ def _syntax_findings(
     quality check.
     """
     findings: list[dict[str, Any]] = []
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line.startswith("."):
-            continue
-        err = validate_directive(line, simulator)
+    # The deck's cards, as the linter reads them: a directive continued on a
+    # ``+`` line is checked whole, and the title and the cards after ``.END``
+    # are not checked at all.
+    for card in deck.cards:
+        err = validate_directive_card(card, simulator)
         if err is None:
             continue
+        line = " ".join(card.body.split())
         detail = err.message + (f" {err.suggestion}" if err.suggestion else "")
         findings.append(
             _finding(
                 rule_id="directive_syntax",
                 severity="error",
-                at={"file": str(path), "line": lineno},
+                at={"file": str(path), "line": card.line_start},
                 subject=line,
                 evidence={"detail": detail, "card": line},
             )

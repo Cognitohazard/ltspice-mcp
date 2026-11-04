@@ -98,8 +98,8 @@ def test_shorted_nets_report_names_both_reference_nets() -> None:
     # Reference keeps `a` and `b` as distinct nets; candidate merges both onto
     # `m` (a short). The mismatch must name BOTH reference nets and the shared
     # candidate net, so the caller sees which two nets were shorted together.
-    ref = "Vin p 0 5\nR1 p a 1k\nR2 p b 1k\n.end\n"
-    cand = "Vin p 0 5\nR1 p m 1k\nR2 p m 1k\n.end\n"
+    ref = "* t\nVin p 0 5\nR1 p a 1k\nR2 p b 1k\n.end\n"
+    cand = "* t\nVin p 0 5\nR1 p m 1k\nR2 p m 1k\n.end\n"
     result = compare_graphs(ref, cand, anchors=["p"])
     mismatches = result.node_partition_mismatches
     assert mismatches, "expected a short to be reported"
@@ -121,6 +121,7 @@ def test_swapped_resistors_are_not_structurally_equivalent() -> None:
 # Two isomorphic three-resistor strings. Reference labels the middle tap `out`;
 # candidate puts the `out` label one node over (on the wrong net).
 STRING_REF = """\
+* t
 Vin in 0 5
 R1 in a 1k
 R2 a out 1k
@@ -128,6 +129,7 @@ R3 out 0 1k
 .end
 """
 STRING_MISANCHORED = """\
+* t
 Vin in 0 5
 R1 in out 1k
 R2 out b 1k
@@ -169,8 +171,8 @@ def test_anchor_absent_on_one_side_is_a_violation() -> None:
     ],
 )
 def test_value_tolerance(ref_val: str, cand_val: str, equal: bool) -> None:
-    ref = f"Vin in 0 5\nR1 in 0 {ref_val}\n.end\n"
-    cand = f"Vin in 0 5\nR1 in 0 {cand_val}\n.end\n"
+    ref = f"* t\nVin in 0 5\nR1 in 0 {ref_val}\n.end\n"
+    cand = f"* t\nVin in 0 5\nR1 in 0 {cand_val}\n.end\n"
     result = compare_graphs(ref, cand, anchors=["in"])
     if equal:
         assert result.value_mismatches == []
@@ -185,9 +187,9 @@ def test_value_tolerance(ref_val: str, cand_val: str, equal: bool) -> None:
 
 
 def test_retype_and_param_mismatch_are_distinct_channels() -> None:
-    ref = "Vin in 0 5\nM1 d g 0 0 nmos W=1u L=1u\n.end\n"
+    ref = "* t\nVin in 0 5\nM1 d g 0 0 nmos W=1u L=1u\n.end\n"
     # Same ref M1: model nmos -> pmos (retype) AND W widened (param mismatch).
-    cand = "Vin in 0 5\nM1 d g 0 0 pmos W=2u L=1u\n.end\n"
+    cand = "* t\nVin in 0 5\nM1 d g 0 0 pmos W=2u L=1u\n.end\n"
     result = compare_graphs(ref, cand, anchors=["in", "d", "g"])
     assert [r.ref for r in result.retyped] == ["M1"]
     assert result.retyped[0].reference_type == "M:nmos"
@@ -197,14 +199,14 @@ def test_retype_and_param_mismatch_are_distinct_channels() -> None:
     assert param.candidate_value == "2u"
 
 
-SCHMITT_ONCE = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2\n.end\n"
+SCHMITT_ONCE = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2\n.end\n"
 
 
 def test_a_parameter_given_twice_alike_is_equivalent_and_reported() -> None:
     """The two copies an edit left on a Schmitt trigger read the same value,
     so the circuit compares equal; that the card names the threshold twice is
     reported, where before nothing showed it."""
-    cand = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 vt=4.150\n.end\n"
+    cand = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 vt=4.150\n.end\n"
     result = compare_graphs(SCHMITT_ONCE, cand)
     assert result.equivalent
     assert [(d.ref, d.side, d.key, d.values) for d in result.duplicate_params] == [
@@ -225,7 +227,7 @@ def test_a_parameter_given_twice_differently_is_a_mismatch() -> None:
     """Which copy a simulator reads is not modelled, so two copies that differ
     compare equal to neither: the first copy matches the reference, the second
     does not."""
-    cand = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=3\n.end\n"
+    cand = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=3\n.end\n"
     result = compare_graphs(SCHMITT_ONCE, cand)
     assert not result.equivalent
     (param,) = result.param_mismatches
@@ -237,7 +239,7 @@ def test_a_card_inside_a_subcircuit_is_reported_once_however_often_it_is_used() 
     """The copies are on one card, so one row names it, by the subcircuit it is
     in and its own reference, not one row for each instance of the subcircuit."""
     deck = (
-        "V1 in 0 5\nX1 in a stage\nX2 a 0 stage\n"
+        "* t\nV1 in 0 5\nX1 in a stage\nX2 a 0 stage\n"
         ".subckt stage p n\nM1 p p n n nmos W=1u w=2u\n.ends\n.end\n"
     )
     result = compare_graphs(deck, deck)
@@ -252,7 +254,7 @@ def test_a_card_inside_a_subcircuit_is_reported_once_however_often_it_is_used() 
 
 
 def test_the_same_copies_in_the_same_order_are_equivalent() -> None:
-    deck = "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=1 Vt=2\n.end\n"
+    deck = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=1 Vt=2\n.end\n"
     result = compare_graphs(deck, deck)
     assert result.equivalent
     assert [d.side for d in result.duplicate_params] == ["reference", "candidate"]
@@ -261,10 +263,13 @@ def test_the_same_copies_in_the_same_order_are_equivalent() -> None:
 @pytest.mark.parametrize(
     ("once", "twice"),
     [
-        (SCHMITT_ONCE, "V1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=4.15\n.end\n"),
+        (
+            SCHMITT_ONCE,
+            "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=4.15\n.end\n",
+        ),
         # The keyed value is the signature's head; its second copy still signs.
-        ("R1 a 0 R=1k\n.end\n", "R1 a 0 R=1k R=1k\n.end\n"),
-        (".model NM NMOS(VTO=0.7)\n.end\n", ".model NM NMOS(VTO=0.7 VTO=0.7)\n.end\n"),
+        ("* t\nR1 a 0 R=1k\n.end\n", "* t\nR1 a 0 R=1k R=1k\n.end\n"),
+        ("* t\n.model NM NMOS(VTO=0.7)\n.end\n", "* t\n.model NM NMOS(VTO=0.7 VTO=0.7)\n.end\n"),
     ],
     ids=["a_parameter", "a_keyed_value", "a_model_parameter"],
 )
@@ -279,8 +284,8 @@ def test_a_structural_diff_shows_a_second_copy_as_a_change(once: str, twice: str
 def test_type_letter_change_is_add_remove_not_retype() -> None:
     # A resistor replaced by a capacitor changes the reference (R1 -> C1): the
     # component identity changed, so it reads as removed + added, not a retype.
-    ref = "Vin in 0 5\nR1 in 0 1k\n.end\n"
-    cand = "Vin in 0 5\nC1 in 0 1k\n.end\n"
+    ref = "* t\nVin in 0 5\nR1 in 0 1k\n.end\n"
+    cand = "* t\nVin in 0 5\nC1 in 0 1k\n.end\n"
     result = compare_graphs(ref, cand, anchors=["in"])
     assert [d.ref for d in result.removed] == ["R1"]
     assert [d.ref for d in result.added] == ["C1"]
@@ -288,8 +293,8 @@ def test_type_letter_change_is_add_remove_not_retype() -> None:
 
 
 def test_added_and_removed_components() -> None:
-    ref = "Vin in 0 5\nR1 in 0 1k\n.end\n"
-    cand = "Vin in 0 5\nR1 in 0 1k\nC1 in 0 1p\n.end\n"
+    ref = "* t\nVin in 0 5\nR1 in 0 1k\n.end\n"
+    cand = "* t\nVin in 0 5\nR1 in 0 1k\nC1 in 0 1p\n.end\n"
     result = compare_graphs(ref, cand, anchors=["in"])
     assert [d.ref for d in result.added] == ["C1"]
     assert result.removed == []
@@ -302,8 +307,8 @@ def test_added_and_removed_components() -> None:
 
 
 def test_ground_alias_gnd_equals_zero() -> None:
-    ref = "Vin in 0 5\nR1 in 0 1k\n.end\n"
-    cand = "Vin in GND 5\nR1 in GND 1k\n.end\n"
+    ref = "* t\nVin in 0 5\nR1 in 0 1k\n.end\n"
+    cand = "* t\nVin in GND 5\nR1 in GND 1k\n.end\n"
     result = compare_graphs(ref, cand, anchors=["in"])
     assert result.equivalent is True
     assert result.structurally_equivalent is True
@@ -315,6 +320,7 @@ def test_ground_alias_gnd_equals_zero() -> None:
 
 # A nested subcircuit: OUTER instantiates INNER; INNER wraps a single resistor.
 NESTED = """\
+* nested
 Vin in 0 5
 XU1 in out OUTER
 .subckt OUTER a b
@@ -349,6 +355,7 @@ def test_flatten_nested_subckt_hierarchical_refs_and_unique_nets() -> None:
 
 def test_two_instances_of_a_subckt_do_not_share_internal_nets() -> None:
     text = """\
+* t
 Vin in 0 5
 XA in a HALF
 XB a 0 HALF
@@ -408,6 +415,7 @@ def test_pdk_fet_widening_is_a_param_mismatch() -> None:
 # ---------------------------------------------------------------------------
 
 ARITY_BAD = """\
+* t
 Vin in 0 5
 XU1 in out extra THREEPORT
 .subckt THREEPORT a b
@@ -427,6 +435,7 @@ def test_flatten_raises_on_port_arity_mismatch() -> None:
 
 def test_compare_surfaces_arity_error_without_aborting() -> None:
     good = """\
+* t
 Vin in 0 5
 XU1 in out TWOPORT
 .subckt TWOPORT a b
@@ -441,14 +450,14 @@ R1 a b 1k
 
 
 def test_unbalanced_brace_is_a_parse_failure_naming_the_line() -> None:
-    bad = "Vin in 0 5\nBad n1 0 V={1+\n.end\n"
+    bad = "* t\nVin in 0 5\nBad n1 0 V={1+\n.end\n"
     with pytest.raises(NetlistGraphError) as exc:
         parse_netlist_graph(bad)
-    assert exc.value.line == 2
+    assert exc.value.line == 3
 
 
 def test_unclosed_subckt_is_a_parse_failure() -> None:
-    bad = "Vin in 0 5\n.subckt LEAK a b\nR1 a b 1k\n.end\n"
+    bad = "* t\nVin in 0 5\n.subckt LEAK a b\nR1 a b 1k\n.end\n"
     with pytest.raises(NetlistGraphError):
         parse_netlist_graph(bad)
 
@@ -459,9 +468,9 @@ def test_unclosed_subckt_is_a_parse_failure() -> None:
 
 
 def test_symmetric_resistor_authored_backwards_still_matches() -> None:
-    ref = "Vin in 0 5\nR1 in mid 1k\nR2 mid 0 2k\n.end\n"
+    ref = "* t\nVin in 0 5\nR1 in mid 1k\nR2 mid 0 2k\n.end\n"
     # R2 written 0->mid instead of mid->0: same connection, terminals swapped.
-    cand = "Vin in 0 5\nR1 in mid 1k\nR2 0 mid 2k\n.end\n"
+    cand = "* t\nVin in 0 5\nR1 in mid 1k\nR2 0 mid 2k\n.end\n"
     result = compare_graphs(ref, cand, anchors=["in"])
     assert result.equivalent is True
 
@@ -483,6 +492,7 @@ def test_result_as_dict_is_json_shaped() -> None:
 # The reference states the block inline; the compiled candidate externalizes the
 # same block to a project-local .lib, which is what a block-based compiler emits.
 INLINE_BLOCK = """\
+* inline block
 Vin in 0 5
 XSTAGE in out DIVBLOCK
 .subckt DIVBLOCK a b
@@ -501,6 +511,7 @@ R2 mid b 2k
 """
 
 EXTERNAL_BLOCK = """\
+* external block
 Vin in 0 5
 XSTAGE in out DIVBLOCK
 .include divblock.lib
@@ -593,7 +604,7 @@ def test_include_resolver_allows_by_returning_path(tmp_path: Path) -> None:
 def test_pdk_black_box_reports_no_missing_include() -> None:
     # No include directive at all: the model is simply not supplied, which must
     # read differently from "the definition file is missing".
-    deck = "Vin in 0 5\nX1 in out nmos_6p0\n.end\n"
+    deck = "* t\nVin in 0 5\nX1 in out nmos_6p0\n.end\n"
     result = compare_graphs(deck, deck, anchors=["in"])
     unresolved = result.unresolved_subckts[0]
     assert unresolved.name == "nmos_6p0"
@@ -616,7 +627,7 @@ def test_duplicate_definition_first_in_textual_order_wins(
     include_line = ".include dup.lib\n"
     body = (inline_def + include_line) if inline_first else (include_line + inline_def)
     deck = tmp_path / "dup.cir"
-    deck.write_text(f"Vin in 0 5\nXD in out DUP\n{body}.end\n")
+    deck.write_text(f"* t\nVin in 0 5\nXD in out DUP\n{body}.end\n")
 
     graph = parse_netlist_graph(deck)
     winner = graph.subckts["dup"]
@@ -634,7 +645,7 @@ def test_include_cycle_terminates(tmp_path: Path) -> None:
     (tmp_path / "a.lib").write_text(".include b.lib\n.subckt DIVBLOCK a b\nR1 a b 1k\n.ends\n")
     (tmp_path / "b.lib").write_text(".include a.lib\n.subckt OTHER p q\nR9 p q 5k\n.ends\n")
     deck = tmp_path / "cyc.cir"
-    deck.write_text("Vin in 0 5\nXSTAGE in out DIVBLOCK\n.include a.lib\n.end\n")
+    deck.write_text("* t\nVin in 0 5\nXSTAGE in out DIVBLOCK\n.include a.lib\n.end\n")
 
     graph = parse_netlist_graph(deck)  # terminates rather than recursing forever
     assert "divblock" in graph.subckts
@@ -650,7 +661,7 @@ def test_include_depth_is_bounded(tmp_path: Path) -> None:
         (tmp_path / f"L{level}.lib").write_text(f".include L{level + 1}.lib\n")
     (tmp_path / "L5.lib").write_text(".subckt DEEP a b\nR1 a b 1k\n.ends DEEP\n")
     deck = tmp_path / "deep.cir"
-    deck.write_text("Vin in 0 5\nXD in out DEEP\n.include L1.lib\n.end\n")
+    deck.write_text("* t\nVin in 0 5\nXD in out DEEP\n.include L1.lib\n.end\n")
 
     graph = parse_netlist_graph(deck)
     assert "deep" not in graph.subckts
@@ -695,7 +706,7 @@ def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(
     """
     monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: True)
     deck = tmp_path / "winref.cir"
-    deck.write_text(".lib C:\\Users\\dev\\LTspice\\lib\\cmp\\standard.mos\nR1 a 0 1k\n.end\n")
+    deck.write_text("* t\n.lib C:\\Users\\dev\\LTspice\\lib\\cmp\\standard.mos\nR1 a 0 1k\n.end\n")
     seen: list[Path] = []
 
     def recording_resolver(candidate: Path) -> Path | None:
@@ -738,8 +749,8 @@ def test_an_instance_ltspice_exported_with_an_added_x_is_a_rename() -> None:
     """``Xe`` written by hand and ``X§Xe`` as LTspice 24 and later export it
     are one instance: its leaves pair, and the rename is named once, without
     the marker, as every comparison reference is."""
-    written = f"Vin in 0 5\nXe in 0 HALF\n{_HALVES}.end\n"
-    exported = f"Vin in 0 5\nX§Xe in 0 HALF\n{_HALVES}.end\n"
+    written = f"* t\nVin in 0 5\nXe in 0 HALF\n{_HALVES}.end\n"
+    exported = f"* t\nVin in 0 5\nX§Xe in 0 HALF\n{_HALVES}.end\n"
     result = compare_graphs(written, exported)
     assert (result.added, result.removed) == ([], [])
     assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [("Xe", "XXe")]
@@ -750,8 +761,8 @@ def test_an_instance_ltspice_exported_with_an_added_x_is_a_rename() -> None:
 def test_a_netlist_holding_both_spellings_is_compared_by_name() -> None:
     """With ``Xe`` and ``XXe`` both present on one side, nothing pairs across
     the added X: the names are taken as written."""
-    reference = f"Xe in 0 HALF\nXXe 0 in HALF\n{_HALVES}.end\n"
-    candidate = f"XXe in 0 HALF\nXXXe 0 in HALF\n{_HALVES}.end\n"
+    reference = f"* t\nXe in 0 HALF\nXXe 0 in HALF\n{_HALVES}.end\n"
+    candidate = f"* t\nXXe in 0 HALF\nXXXe 0 in HALF\n{_HALVES}.end\n"
     result = compare_graphs(reference, candidate)
     assert result.renamed == []
     assert result.added and result.removed
@@ -763,7 +774,7 @@ def test_a_card_naming_its_subcircuit_twice_says_so() -> None:
     subcircuit's ports. The arity error names the side, the nodes, the ports
     and the repeated name."""
     body = ".subckt LP6 in out\nR1 in out 1k\n.ends LP6\n.end\n"
-    result = compare_graphs(f"XU1 a b LP6\n{body}", f"XU1 a b LP6 LP6\n{body}")
+    result = compare_graphs(f"* t\nXU1 a b LP6\n{body}", f"* t\nXU1 a b LP6 LP6\n{body}")
     (error,) = result.arity_errors
     assert (error.side, error.reference_arity, error.candidate_arity) == ("candidate", 3, 2)
     assert error.detail.startswith(

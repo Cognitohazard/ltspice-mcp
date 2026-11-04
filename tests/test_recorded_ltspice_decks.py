@@ -24,16 +24,16 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
+from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import compare_graphs
+from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
+from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import lex
+from ltspice_mcp.lib.spice_lex import lex, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
-from ltspice_mcp.lib.spice_validator import (
-    drop_title_card,
-    validate_directive,
-    validate_netlist_arity,
-)
+from ltspice_mcp.lib.spice_validator import validate_directive, validate_netlist_arity
+from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
@@ -56,7 +56,7 @@ def lint_input(case_id: str, **options) -> list[dict]:
 def resistances(case_id: str) -> dict[str, str]:
     """Each probe node of a suffix deck and the value written on its resistor."""
     values: dict[str, str] = {}
-    for card in drop_title_card(lex(deck_text(case_id)).cards):
+    for card in lex_deck(deck_text(case_id)).cards:
         line = read_instance(card) if card.kind == "instance" else None
         if line is not None and line.ref[:1].upper() == "R":
             values[line.nodes[0].lower()] = line.value or ""
@@ -287,7 +287,7 @@ def test_a_byte_cp1252_leaves_undefined_is_read_as_each_build_reads_it(build: st
     bytes cp1252 lacks the server reads the same one."""
     case_id = "deck/bytes_in_node_names"
     nodes: set[str] = set()
-    for card in drop_title_card(lex(deck_text(case_id)).cards):
+    for card in lex_deck(deck_text(case_id)).cards:
         line = read_instance(card) if card.kind == "instance" else None
         if line is not None:
             nodes.update(line.nodes)
@@ -346,7 +346,7 @@ def test_byte_85_in_a_comment_ends_the_line_for_ltspice_26_alone(build: str, tmp
     case_id = "deck/byte_85_in_comment"
     traces = set(rec.operating_point(build, case_id, tmp_path))
     assert ("i(r3)" in traces) == (rec.generation(build) != "xvii")
-    cards = drop_title_card(lex(deck_text(case_id)).cards)
+    cards = lex_deck(deck_text(case_id)).cards
     assert {card.name for card in cards if card.kind == "instance"} == {"V1", "R1", "R2"}
     xvii = rec.generation(build) == "xvii"
     findings = lint_input(
@@ -423,7 +423,7 @@ class TestDeckStructure:
     ):
         # Line 1 is "I1 0 a 5"; read as a card it would duplicate I1.
         assert self.voltage(build, "deck/title_card", tmp_path) == pytest.approx(1000.0)
-        kept = drop_title_card(self.cards("deck/title_card"))
+        kept = lex_deck(deck_text("deck/title_card")).cards
         assert [card.body for card in kept if card.name == "I1"] == ["I1 0 a 1"]
 
     def test_the_first_line_is_a_title_even_when_it_reads_as_a_directive(self, build: str):
@@ -431,7 +431,7 @@ class TestDeckStructure:
         the resistor that uses ``{r}`` fails the run; the server's checks must
         not count the line as a directive either."""
         assert not ran(build, "deck/title_directive")
-        kept = drop_title_card(self.cards("deck/title_directive"))
+        kept = lex_deck(deck_text("deck/title_directive")).cards
         assert not [card for card in kept if card.kind == "param"]
 
     def test_cards_after_end_are_not_read(self, build: str, tmp_path: Path):
@@ -439,6 +439,10 @@ class TestDeckStructure:
         assert self.voltage(build, "deck/after_end", tmp_path) == pytest.approx(1000.0)
         (after,) = [c for c in self.cards("deck/after_end") if c.name == "R2"]
         assert after.trailing
+        assert [c.name for c in lex_deck(deck_text("deck/after_end")).cards if c.name] == [
+            "I1",
+            "R1",
+        ]
 
     def test_a_continuation_joins_across_a_comment_and_a_blank_line(
         self, build: str, tmp_path: Path
@@ -508,6 +512,48 @@ class TestDeckStructure:
         assert any("kiltpsa" in warning for warning in data["warnings"]), data
 
 
+#: Recorded decks whose lines each build reads in a way a line-by-line reader
+#: would not: a ``+`` line continuing a card past a comment and past a blank
+#: line, and a lone ``$`` starting a comment after a value.
+LINE_FORM_DECKS = ["deck/continuation", "deck/comment_dollar", "deck/comment_semicolon"]
+
+
+def as_voltage_sources(text: str) -> str:
+    """``text`` with every source and resistor written as a voltage source
+    (``I1`` is ``VI1``), so the reader of a deck's voltage sources meets each
+    line form the recording holds."""
+    return re.sub(r"(?m)^([IR])", r"V\1", text)
+
+
+@pytest.mark.parametrize("case_id", LINE_FORM_DECKS)
+def test_the_source_amplitudes_are_the_values_the_lexer_reads(case_id: str):
+    """The result observations' largest-source reading takes each voltage
+    source's value from the card LTspice reads (``TestDeckStructure`` holds
+    the lexer to the recordings)."""
+    text = as_voltage_sources(deck_text(case_id))
+    lines = [line for line in map(read_instance, lex_deck(text).cards) if line is not None]
+    assert parse_source_amplitudes(text) == {
+        line.ref: parse_spice_value(line.value or "") for line in lines
+    }
+    assert {line.ref for line in lines} >= {"VI1", "VR1"}
+
+
+def test_the_requested_outputs_are_the_cards_the_lexer_reads():
+    """A ``.four`` and a ``.meas`` continued past a comment line, as the
+    recorded ``deck/continuation`` continues a card, and a ``;`` comment."""
+    text = as_voltage_sources(deck_text("deck/continuation")).replace(
+        ".op\n",
+        ".tran 1m\n"
+        ".four 1k V(a) ; the input\n"
+        "* and the output\n"
+        "+ V(b)\n"
+        ".meas tran\n"
+        "* the peak\n"
+        "+ vmax MAX V(a)\n",
+    )
+    assert parse_requested_outputs(text) == {"meas": ["vmax"], "four": ["V(a)", "V(b)"]}
+
+
 async def hierarchy_rows(state, work_dir: Path, case_id: str) -> dict[tuple[str, ...], dict]:
     """The server's resolved view of a recorded deck, by instance path."""
     path = work_dir / Path(rec.CASES.case(case_id).source).name
@@ -517,6 +563,136 @@ async def hierarchy_rows(state, work_dir: Path, case_id: str) -> dict[tuple[str,
     )
     assert result["ok"], result
     return {tuple(row["instance"]): row for row in result["data"]["instances"]}
+
+
+# --------------------------------------------------------------------------
+# Cards a deck's readers read
+# --------------------------------------------------------------------------
+
+#: Decks with a card LTspice does not read: a title that reads as a card or as
+#: a directive, and a card after ``.end`` (``TestDeckStructure`` holds what
+#: each build did with them).
+UNREAD_CARD_DECKS = ["deck/title_card", "deck/title_directive", "deck/after_end"]
+
+
+def as_ltspice_reads(text: str) -> str:
+    """``text`` holding only the cards LTspice reads: a comment for its title
+    line, and nothing after ``.end``."""
+    lines = ["* title\n", *text.splitlines(keepends=True)[1:]]
+    end = next(i for i, line in enumerate(lines) if line.strip().casefold() == ".end")
+    return "".join(lines[: end + 1])
+
+
+def no_structural_change(delta: dict[str, list]) -> bool:
+    return not any(changes for key, changes in delta.items() if key != "components_renamed")
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+def test_the_comparisons_read_only_the_cards_ltspice_reads(case_id: str):
+    """Both compare modes call a deck the same circuit as the one LTspice
+    reads from it: neither counts the title as a second ``I1`` or a
+    ``.param``, nor the resistor after ``.end``."""
+    text = deck_text(case_id)
+    read = as_ltspice_reads(text)
+    graphs = compare_graphs(text, read)
+    assert graphs.equivalent, graphs.as_dict()
+    assert no_structural_change(structural_delta(read_deck(text), read_deck(read)))
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+async def test_the_net_query_lists_only_cards_ltspice_reads(
+    case_id: str, state_no_sim, work_dir: Path
+):
+    answers = []
+    text = deck_text(case_id)
+    for name, deck in (("deck.cir", text), ("read.cir", as_ltspice_reads(text))):
+        path = work_dir / name
+        path.write_text(deck, encoding="utf-8")
+        (result,) = await _run(state_no_sim, [{"kind": "net", "path": str(path), "at": "a"}])
+        assert result["ok"], result
+        answers.append(result["data"]["members"])
+    assert answers[0] == answers[1]
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+async def test_the_checks_read_only_the_cards_ltspice_reads(
+    case_id: str, state_no_sim, work_dir: Path
+):
+    """The linter, verify_circuit's syntax and quality checks and the run's
+    requirements see the deck LTspice reads."""
+
+    async def readings(name: str, text: str) -> tuple:
+        path = work_dir / name
+        path.write_text(text, encoding="utf-8")
+        verified = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(path)}), state_no_sim
+        )
+        assert verified.structured_content is not None
+        linted = lint_deck(text, path, "ltspice", "LTspice")
+        return (
+            sorted((f["rule_id"], f["at"]["line"]) for f in linted),
+            sorted(
+                (f["rule_id"], f["at"].get("line"))
+                for f in verified.structured_content["findings"]
+            ),
+            deck_requirements(path),
+            parse_requested_outputs(text),
+            parse_source_amplitudes(text),
+        )
+
+    text = deck_text(case_id)
+    assert await readings("deck.cir", text) == await readings("read.cir", as_ltspice_reads(text))
+
+
+#: The cards ``deck/after_end`` and ``deck/title_directive`` show LTspice does
+#: not read, written as cards each reader would otherwise act on: a second
+#: analysis and a one-node resistor after ``.end``, a ``.tran``, a refused
+#: ``.meas`` and a voltage source as the title.
+UNREAD_CARDS = [
+    pytest.param(
+        ".tran 1m\n"
+        "V1 a 0 1\n"
+        "R1 a 0 1k\n"
+        ".meas tran top MAX V(a)\n"
+        ".op\n"
+        ".end\n"
+        ".ac dec 10 1 1k\n"
+        "R9 lonely\n"
+        "V9 b 0 50\n"
+        ".meas ac g FIND vdb(a) AT 1k\n"
+        ".four 1k V(a)\n",
+        id="analysis-title-and-cards-after-end",
+    ),
+    pytest.param(
+        "V7 c 0 70\nV1 a 0 1\nR1 a 0 1k\n.meas tran top MAX V(a)\n.op\n.end\n",
+        id="source-title",
+    ),
+    pytest.param(
+        ".meas ac g FIND vdb(a) AT 1k\nV1 a 0 1\nR1 a 0 1k\n.op\n.end\n",
+        id="refused-measurement-title",
+    ),
+]
+
+
+@pytest.mark.parametrize("text", UNREAD_CARDS)
+async def test_a_card_ltspice_does_not_read_changes_no_reading(
+    text: str, state_no_sim, work_dir: Path
+):
+    """Each reader gives the same answer for the deck as for the deck LTspice
+    reads from it, and so refuses nothing on a card it does not read."""
+    path = work_dir / "deck.cir"
+    path.write_text(text, encoding="utf-8")
+    read = work_dir / "read.cir"
+    read.write_text(as_ltspice_reads(text), encoding="utf-8")
+    assert lint_deck(text, path, "ltspice", "LTspice") == []
+    verified = await handle_verify_circuit(
+        VerifyCircuitInput.model_validate({"path": str(path)}), state_no_sim
+    )
+    assert verified.structured_content is not None
+    assert [f for f in verified.structured_content["findings"] if f["severity"] == "error"] == []
+    assert deck_requirements(path) == deck_requirements(read)
+    assert parse_requested_outputs(text) == parse_requested_outputs(as_ltspice_reads(text))
+    assert parse_source_amplitudes(text) == parse_source_amplitudes(as_ltspice_reads(text))
 
 
 # --------------------------------------------------------------------------
@@ -548,7 +724,7 @@ def refusals(case_id: str) -> set[str]:
     lint = {f["rule_id"] for f in lint_input(case_id) if f["severity"] == "error"}
     arity = {
         str(issue["check"])
-        for issue in validate_netlist_arity(drop_title_card(lex(text).cards), simulator="LTspice")
+        for issue in validate_netlist_arity(lex_deck(text).cards, simulator="LTspice")
         if issue["severity"] == "error"
     }
     return lint | arity
