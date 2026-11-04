@@ -7819,6 +7819,38 @@
         ".raw"
       ]
     },
+    "raw/mos_multiplier": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_multiplier.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/mos_multiplier.cir": "9aaa42a15bb1728b0b31b010f05dd0ba22bf7069788a67ef04020c6433ddc08e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/mos_multiplier.log": {
+          "bytes": 620,
+          "sha256": "aea264783f8bba798e01a43e1d34628dd5a60402d2e83c32b73009617d339086"
+        },
+        "raw/mos_multiplier.raw": {
+          "bytes": 1312,
+          "sha256": "ade3560388b9d4691e11bbfa2b37509ae24649b694a3c618be88d79d8e69c290"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "raw/noise": {
       "behaviour": "raw-noise",
       "command": [
@@ -8534,6 +8566,38 @@
         ".log",
         ".log.raw",
         ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/subckt_multiplier": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_multiplier.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/subckt_multiplier.cir": "7a739b38e130e35bce548da4cd0c7fbf276d9e4764f4eb9b72696c23405b3ee0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/subckt_multiplier.log": {
+          "bytes": 782,
+          "sha256": "a24dc221c667d5869f77877cd698392895f3f9db99b6dc003a7f2e1ec8c691c2"
+        },
+        "raw/subckt_multiplier.raw": {
+          "bytes": 1654,
+          "sha256": "28c038a847343c60310263bdf09bae13dc4f57f7534d58653f30df954e24d17c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
         ".raw"
       ]
     },

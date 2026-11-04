@@ -6,7 +6,7 @@ import ast
 import math
 import operator
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 
 from ltspice_mcp.lib.format import parse_spice_value
@@ -192,3 +192,21 @@ def scaled_geometry(fact: NumericFact, scale: NumericFact) -> NumericFact:
             fact.expression, unit="m", reason="geometry must be finite and positive"
         )
     return NumericFact(fact.expression, value, "m", "resolved")
+
+
+def multiplier_product(facts: Iterable[tuple[str, NumericFact | None]]) -> NumericFact:
+    """How many parallel copies a device's ``m`` values build: their product.
+
+    Each item names where an ``m`` is written and gives its fact, or None where
+    no ``m`` is written, which counts as 1. The first ``m`` that is not a
+    positive number leaves the product unresolved, with a reason naming it.
+    """
+    product = 1.0
+    for where, fact in facts:
+        if fact is None:
+            continue
+        if fact.value is None or not fact.value > 0.0:
+            why = fact.reason or "not a positive number"
+            return NumericFact(fact.expression, reason=f"m={fact.expression} on {where}: {why}")
+        product *= fact.value
+    return NumericFact(None, product, None, "resolved")
