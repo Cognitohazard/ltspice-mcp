@@ -1386,9 +1386,13 @@ is refused, as a named label or a pin there is. Where at most one of the two
 wires has a name, the label is placed and the sheet reports the join
 (`joined_at_crossing`), as it does for a pin. Grounding a named net is not
 such a join, because it is what the flag requests, and a second named net may
-be grounded after the first. `inspect(kind: "net")` at a point on a wire's
-interior traces that wire's net and names the wire under `snapped_to_wire`; a
-point where two nets' wires cross is refused as ambiguous.
+be grounded after the first. `inspect(kind: "net")` follows the nets as
+LTspice netlists them: a wire straight between two pins of one part joins
+nothing, and a trace from one of a part's pins stacked on one point answers
+that pin's own net. At a point on a wire's interior it traces that wire's net
+and names the wire under `snapped_to_wire`. A point on two nets is refused,
+saying why: two nets' wires cross there, it is inside a wire LTspice drops, or
+it holds a part's stacked pins.
 
 **Waveform panes.** `set_plot_panes{analysis, panes}` writes the plot
 settings file that LTspice's waveform window reads when the sheet runs, which

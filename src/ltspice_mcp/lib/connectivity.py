@@ -552,8 +552,8 @@ def nets_by_ltspice(
     and ``wires``, by every rule of this module.
 
     Wires are merged into runs as LTspice merges them, cut at every pin, label
-    and junction, and the runs it drops join nothing; a point on one touches
-    the nets of both its pins, because anything put there keeps the run. Of
+    and junction, and the runs it drops join nothing, though anything put
+    inside one would keep it (``Nets.dropped_at``). Of
     one part's pins on a point with no wire or label there, only the last in
     SpiceOrder joins what else is on the point. Names compare as
     :func:`name_key` has them.

@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Generic, TypeVar
 
 Point = tuple[int, int]
@@ -115,6 +116,11 @@ class PinAt:
     reference: str
     name: str
 
+    @property
+    def qualified_name(self) -> str:
+        """``REF.PIN``, or the reference alone for a pin with no name."""
+        return f"{self.reference}.{self.name}" if self.name else self.reference
+
 
 @dataclass(frozen=True)
 class LabelAt:
@@ -139,10 +145,9 @@ class Nets:
 
     A net is an ``int``. A pin may be on a net of its own where others share
     its point. ``runs`` are the runs of wire the netlister keeps, each on its
-    net. A run it drops (``dropped``) joins nothing, and a point on one touches
-    the nets of the pins at both its ends. Labels of one name are one net only
-    through ``folded``, and ``name_key`` is the form the netlister compares
-    names in.
+    net. A run it drops (``dropped``) joins nothing, and ``dropped_at`` tells
+    which a point lies inside. Labels of one name are one net only through
+    ``folded``, and ``name_key`` is the form the netlister compares names in.
     """
 
     def __init__(
@@ -166,9 +171,7 @@ class Nets:
         #: How many pins, labels and kept runs each net holds.
         self._held = Counter([*pins.values(), *labels.values(), *(net for _run, net in runs)])
         self._runs = SegmentIndex(runs)
-        self._dropped = SegmentIndex(
-            (run.segment, tuple(pins[end] for end in run.ends)) for run in self.dropped
-        )
+        self._dropped = SegmentIndex((run.segment, run) for run in self.dropped)
         self._folded = fold_by_name(((net, label.text) for label, net in labels.items()), name_key)
 
     def of_pin(self, pin: PinAt) -> int:
@@ -183,17 +186,48 @@ class Nets:
         """``net`` with every net that carries a label of one of its names as one."""
         return self._folded(net)
 
+    def pins_on(self, net: int) -> tuple[PinAt, ...]:
+        """Every pin on ``net`` once folded: on any net that folds with it."""
+        return self._pins_by_root.get(self._folded(net), ())
+
+    def labels_on(self, net: int) -> tuple[LabelAt, ...]:
+        """Every label on ``net`` once folded: on any net that folds with it."""
+        return self._labels_by_root.get(self._folded(net), ())
+
+    @cached_property
+    def _pins_by_root(self) -> dict[int, tuple[PinAt, ...]]:
+        return _grouped(self._pin_net, self._folded)
+
+    @cached_property
+    def _labels_by_root(self) -> dict[int, tuple[LabelAt, ...]]:
+        return _grouped(self._label_net, self._folded)
+
     def unconnected(self, pin: PinAt) -> bool:
         """Whether nothing but ``pin`` is on its net: no other pin, no label and
         no run of wire the netlister keeps."""
         return self._held[self._pin_net[pin]] == 1
 
+    def pins_at(self, point: Point) -> tuple[PinAt, ...]:
+        """Every pin on ``point``."""
+        return tuple(self._pins_at.get(point, ()))
+
     def nets_at(self, point: Point) -> tuple[int, ...]:
-        """Every net with a pin or label on ``point`` or a run of wire through it."""
+        """Every net with a pin or label on ``point`` or a run of wire the
+        netlister keeps through it."""
         found = {self._pin_net[pin] for pin in self._pins_at.get(point, ())}
         if point in self._label_points:
             found.add(self._label_points[point])
         found.update(self._runs.at(point))
-        for nets in self._dropped.at(point):
-            found.update(nets)
         return tuple(sorted(found))
+
+    def dropped_at(self, point: Point) -> tuple[DroppedRun, ...]:
+        """Every dropped run ``point`` lies inside, its two ends left out."""
+        return tuple(run for run in self._dropped.at(point) if point not in run.segment)
+
+
+def _grouped(members: dict[_T, int], root: Callable[[int], int]) -> dict[int, tuple[_T, ...]]:
+    """``members`` by the representative ``root`` gives each one's net."""
+    grouped: dict[int, list[_T]] = {}
+    for member, net in members.items():
+        grouped.setdefault(root(net), []).append(member)
+    return {net: tuple(group) for net, group in grouped.items()}

@@ -91,6 +91,13 @@ tool-surface changes.
   with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
   time limit also counted the wait for LTspice to close the pane or answer its
   question. That wait is now added to the limit.
+- `inspect(kind="net")` put two pins of one part on one net where LTspice
+  leaves them apart. One case is a wire running straight between the two
+  pins, which LTspice drops (recorded: `connectivity/same_instance_wire`). The
+  other is the part's pins stacked on one point with nothing else there
+  (`connectivity/pins_of_one_part_on_one_point`). A trace now follows the nets
+  as LTspice netlists them. A trace from inside such a wire, or from a point
+  holding stacked pins, is refused and names the pins to trace instead.
 - `net_with_two_names` reported one net carrying two labels where a wire
   running straight between two labelled pins of one part joined them on the
   sheet. LTspice drops that wire and keeps the labels on separate nodes
