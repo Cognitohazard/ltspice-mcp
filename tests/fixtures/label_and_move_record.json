@@ -303,11 +303,11 @@
    },
    "moves": {
     "proposals": 168,
-    "sha256": "9d0d40e96ef0d04d0da6d4cba6565737083dd6eb25b5c1156e6989a5e7b794ed",
+    "sha256": "2080747eeaa04f9195421b55f3f94fe057379e4300959769ce49ef8eaf1dd67b",
     "shapes": {
      "moved": 136,
-     "moved | sheet: joined_at_crossing": 24,
-     "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 8
+     "moved | sheet: joined_at_crossing": 28,
+     "refused: Refused to move R#: PIN would land at (#,#), where wires of nets that each carry a name cross (['\u2026']; ['\u2026']). A pin on a crossing joins the wires, shorting those nets together. Put the part where the pin is on the one wire it is meant for.": 4
     }
    }
   },
