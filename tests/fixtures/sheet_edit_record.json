@@ -1,208 +1,139 @@
 {
- "01d3cc066656eecc": {
-  "reply": "ebe2b35d41c1527d",
-  "sheet": "159ab54529afe730"
- },
- "0232cad05007d433": {
-  "reply": "fb70b7fc003e60ac",
-  "sheet": "2f66633286ed1ad2"
- },
- "057d4dc7f2f6c5c5": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "05d790be93178209": {
+ "00fdfdc50d0869be": {
   "varies": [
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-False]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-False]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-False]"
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-True]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-True]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-True]"
   ]
  },
- "062f7f2ef84939d0": {
-  "reply": "9b30e2e6e28c38d2",
-  "sheet": "d083b44e671b9297"
+ "034881f1487bb02f": {
+  "reply": "b4b83cf5e9432d91",
+  "sheet": "168171de437364ed"
  },
- "06fe546663ed6657": {
-  "reply": "006045f415d4598d",
-  "sheet": "087779c62714d69a"
+ "0357ab15e820ef8f": {
+  "reply": "630ba84aafd584cf",
+  "sheet": null
  },
- "090579c048b13a5e": {
-  "reply": "82efd8e45a4de33a",
-  "sheet": "31b13aab2a2a8ebe"
+ "0371480bd6150243": {
+  "reply": "f0bd5e3d24840349",
+  "sheet": null
  },
- "0946e6f2a9003c6f": {
-  "reply": "d10702c23c5abcf9",
-  "sheet": "b3a2468022b86f34"
- },
- "09ac435b7b1b1b7b": {
+ "041068d3617335b9": {
   "reply": "74842d93c439307d",
   "sheet": "b3a2468022b86f34"
  },
- "09d9f807d36e315f": {
-  "reply": "f809ee58593c1c87",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "0b00372af836bd92": {
-  "reply": "9e6ddd44a41f10b1",
-  "sheet": null
- },
- "0b74f685e8edae26": {
-  "reply": "061081a5b1e4ace3",
-  "sheet": "2f66633286ed1ad2"
- },
- "0be59ec84ac7f177": {
-  "reply": "210e7648de8f0fab",
-  "sheet": "1f7cd86c8e0a12c6"
- },
- "0c0eacd506812ee1": {
-  "reply": "fb2f8b2ae9d1ce7b",
-  "sheet": "392e3cdd6b5d23fc"
- },
- "0c2c617d626cbf24": {
-  "reply": "2bd6f141542151e5",
-  "sheet": "2f66633286ed1ad2"
- },
- "0e6b95ea4de207e4": {
-  "reply": "0478f5c59d88d5b5",
-  "sheet": null
- },
- "0f13852acaac521c": {
-  "reply": "8520e9afdc56457e",
-  "sheet": "5fcd33e31cbd8c08"
- },
- "0f49e2824bc9538b": {
-  "reply": "0cb8d12f804933a1",
-  "sheet": "4464b9a7038d05c9"
- },
- "0f57d430ef12823d": {
-  "reply": "8e4ec8ca0cb6d0b0",
-  "sheet": "4f700298c191ce88"
- },
- "111fdf2246c08cc9": {
-  "reply": "b784a21374bcfdf1",
-  "sheet": "bc9c9f192388fafc"
- },
- "114886b9541c78c8": {
-  "reply": "52205c892feb1c1a",
-  "sheet": "5270a760fe5167ba"
- },
- "122d7fc470db141c": {
-  "reply": "3d250f1d8ceeb20d",
-  "sheet": "4464b9a7038d05c9"
- },
- "1263271b14b82025": {
-  "reply": "fdfb1aef2d4d8199",
-  "sheet": "14058ceaeffcba38"
- },
- "12abaa6478793de3": {
-  "reply": "9c3101911c762156",
-  "sheet": "9a63168c465b5051"
- },
- "130eca15ed207772": {
-  "reply": "2699bf2b1e53a5d4",
-  "sheet": "af20c6214833a1e7"
- },
- "13ea3b554ea734f6": {
-  "reply": "846afcd949dec5e9",
-  "sheet": "c116e78a4d734899"
- },
- "1496cbd0cec6741e": {
-  "reply": "b379fe56404daf68",
-  "sheet": "2f66633286ed1ad2"
- },
- "14c00ea5056459df": {
-  "reply": "f8ae29750e78f2c5",
-  "sheet": "a4f8c1030672b090"
- },
- "15a9c1f3ae86f114": {
-  "reply": "6dc4b6159287e765",
-  "sheet": "2f66633286ed1ad2"
- },
- "16c351b352cf1d47": {
-  "reply": "9379a14eb42e9781",
-  "sheet": "37b3406b8a47981e"
- },
- "1766b8c2da087dd6": {
-  "reply": "e5cbb24af78a4dc3",
-  "sheet": "4919ae4e9092bfa8"
- },
- "1b12cfc635d0ccba": {
-  "reply": "dfd391ae6b84b852",
-  "sheet": null
- },
- "212571335066f3b4": {
-  "reply": "19283a1e912a2561",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "2139b8123c675620": {
-  "reply": "4c5f4c3d7af81eef",
-  "sheet": "c13e97e9196a2fd7"
- },
- "233f1ffe5d4485bf": {
-  "reply": "876363644042fe04",
-  "sheet": "afc8aa383e2e8640"
- },
- "2376cd67a6b1e64f": {
-  "reply": "8370eef36cb18be5",
-  "sheet": null
- },
- "239bac30a20a891c": {
-  "reply": "0a0615ea78da1416",
-  "sheet": "e74de70382e0ec77"
- },
- "239f98f4f9a7f49e": {
-  "reply": "1105c3df44576f08",
-  "sheet": "2f66633286ed1ad2"
- },
- "264b61d769f1ecf6": {
-  "reply": "c3218044650ffa40",
-  "sheet": "88c9ff221b645b1b"
- },
- "2851ac55047ac5e0": {
-  "reply": "3a235a018ea79cb6",
-  "sheet": null
- },
- "287c6b3e3a375d32": {
-  "reply": "c957ae5ab6c9d801",
-  "sheet": "1f1cd547b8f9866c"
- },
- "2887e592afca3e32": {
+ "05f80e0f03816bb6": {
   "reply": "80de6882358070bf",
   "sheet": null
  },
- "293f96a8214f65b8": {
-  "reply": "2244be4733f811f8",
+ "060041fcf6bb0748": {
+  "reply": "0b2fe5040c88b539",
+  "sheet": "6706b0fcfb66049c"
+ },
+ "061d2d632aea269e": {
+  "reply": "fcbf8793a35117ad",
+  "sheet": "32351080a0d7479e"
+ },
+ "07094125073590fd": {
+  "varies": [
+   "tests/test_concurrent_same_target.py::test_simultaneous_edits_on_one_sha_commit_exactly_one",
+   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_a_plot_panes_edit_locks_the_plot_settings_file",
+   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_contended_lock_times_out_with_clear_error",
+   "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_a_session_in_another_working_directory_holds_the_same_lock",
+   "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_an_edit_leaves_nothing_beside_the_circuit"
+  ]
+ },
+ "0792fa49f3c7c76a": {
+  "reply": "50e1e2816c583d83",
+  "sheet": null
+ },
+ "081b86fe22b80c98": {
+  "reply": "27f4d7a28e871cf1",
+  "sheet": "1128ba216dbad4a1"
+ },
+ "090e046ee3b3a344": {
+  "reply": "6a4377491c70e0e6",
+  "sheet": "eac2755b33662a82"
+ },
+ "09a67c9de58c8fa4": {
+  "reply": "c3218044650ffa40",
+  "sheet": "88c9ff221b645b1b"
+ },
+ "09c909175ec14d07": {
+  "reply": "25f0b16e86050179",
+  "sheet": "ffba5e1e9d340bbf"
+ },
+ "0a37c6fa0e5077b7": {
+  "reply": "74842d93c439307d",
+  "sheet": "b3a2468022b86f34"
+ },
+ "0b2c06b5b900dbb6": {
+  "reply": "3e00f451f800deb1",
   "sheet": "d70da2388e3f4613"
  },
- "2bc73eab7dea8ecd": {
-  "reply": "4237a41dbecda0c2",
-  "sheet": "935c282522aab58f"
+ "0b587cf5d33593ac": {
+  "reply": "22e6e8a60b0e880e",
+  "sheet": "4f700298c191ce88"
  },
- "2df4aa6795f3845a": {
-  "reply": "86053d7c7dfa7ae5",
-  "sheet": "2f66633286ed1ad2"
+ "0b59ac217c0300a6": {
+  "reply": "fe06fdba64e6b34e",
+  "sheet": "21b15924f8cb8e38"
  },
- "2e4f5e34b4186076": {
-  "reply": "bff86fa1f94a6f6a",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "2f25da957e6855a9": {
+ "0cb914a48cb5f076": {
   "reply": "d9fb9c2b460b678f",
-  "sheet": "44202d5c22063149"
+  "sheet": "c064b176635b7503"
  },
- "30dd0543ad8d87dc": {
-  "reply": "28f2c95e7f07766a",
-  "sheet": null
+ "0de46396544567b7": {
+  "varies": [
+   "tests/test_edit_open_window.py::test_a_window_that_does_not_save_is_reported",
+   "tests/test_edit_open_window.py::test_nothing_is_done_where_no_window_holds_a_different_sheet[save-saved-commands]",
+   "tests/test_edit_open_window.py::test_other_windows_with_the_sheet_open_are_handed_the_saved_one",
+   "tests/test_edit_open_window.py::test_the_box_ltspice_shows_instead_of_saving_is_quoted_and_cancelled",
+   "tests/test_edit_open_window.py::test_two_windows_with_different_copies_save_nothing_until_one_is_chosen",
+   "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on"
+  ]
  },
- "3255178c5346a7e8": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+ "0e16916abb027b68": {
+  "reply": "6f834af4600f423d",
+  "sheet": "133c1190f24ed080"
+ },
+ "0ea1778c254499ad": {
+  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
   "raised": "NetlistError"
  },
- "34dcceaf263d9a09": {
-  "reply": "3bcd8275b9cf3b4e",
+ "0f1c0c5dff7006dc": {
+  "reply": "63492304e33c75d9",
+  "sheet": "832fb497a634385d"
+ },
+ "0f5dd2be26921c12": {
+  "reply": "4cd7e01ab4df85d9",
+  "sheet": "99098b43e1a2502f"
+ },
+ "10bd873e527e7279": {
+  "reply": "fde28fa5d0f01df7",
+  "sheet": "d70da2388e3f4613"
+ },
+ "110c07e0b19a501a": {
+  "reply": "6c53201b42d9e9a9",
+  "sheet": "1ae5073d11532c6c"
+ },
+ "1128620d3284e61d": {
+  "reply": "bd32dbf4836a1f78",
   "sheet": null
  },
- "3618e5595b9aa37a": {
+ "116f04f039bba51d": {
+  "reply": "a0b7cddb28916f46",
+  "sheet": null
+ },
+ "12623d816af95b05": {
+  "reply": "6121d2d7256b5661",
+  "sheet": "d70da2388e3f4613"
+ },
+ "12f0054dc66bfa30": {
+  "reply": "7015c0830e0b0647",
+  "sheet": "1986dcae4e2adb90"
+ },
+ "139bcc0e7b16b56b": {
   "varies": [
    "tests/test_edit_open_window.py::test_a_bridge_that_cannot_say_does_not_stop_the_edit",
    "tests/test_edit_open_window.py::test_a_committed_edit_is_shown_in_the_window_that_has_the_sheet_open",
@@ -213,1053 +144,802 @@
    "tests/test_edit_open_window.py::test_a_window_that_does_not_close_either_is_reported",
    "tests/test_edit_open_window.py::test_a_window_that_does_not_take_the_edit_is_closed_and_opened_again",
    "tests/test_edit_open_window.py::test_an_edit_is_refused_while_the_window_holds_a_different_sheet",
+   "tests/test_edit_open_window.py::test_an_edit_under_two_different_windows_names_both_and_asks_which_to_keep",
    "tests/test_edit_open_window.py::test_with_the_setting_off_no_window_is_asked",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file",
    "tests/test_inspect_open_in_ltspice.py::test_the_digest_it_reports_is_the_one_an_edit_takes"
   ]
  },
- "363cc3ae9670c1c7": {
-  "reply": "dfd391ae6b84b852",
-  "sheet": null
- },
- "370148b4136d1ac8": {
-  "reply": "148ec6116e4dc5b5",
-  "sheet": "bbd6b0cfdd8cd329"
- },
- "381b211ae56e9fbd": {
-  "reply": "9f22cfaea3f5e6e4",
-  "sheet": "168171de437364ed"
- },
- "38985cefc3caac2d": {
-  "message": "Cannot open WORK/bus.asc: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
- },
- "38cbeb364e861adf": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "3a33c884a7ef8fa5": {
-  "reply": "88ee824307c1910d",
-  "sheet": null
- },
- "3b9bcec4786005d8": {
-  "reply": "fde28fa5d0f01df7",
-  "sheet": "d70da2388e3f4613"
- },
- "3ce251816e20c69d": {
-  "reply": "8c1c59d1e503ee44",
-  "sheet": null
- },
- "3d4114d7610c5375": {
-  "reply": "b4b83cf5e9432d91",
-  "sheet": "168171de437364ed"
- },
- "3d965930cb22cdb9": {
-  "reply": "b372773112aab9a6",
-  "sheet": "047439922969956b"
- },
- "3dbeca6b888726dd": {
-  "reply": "a98c0d82b994d71f",
-  "sheet": "7e46f18271775e61"
- },
- "3e72ccea2bd98ef7": {
-  "reply": "5475f0dc34081b3e",
-  "sheet": "b274158233309af4"
- },
- "3fa75437a54f82a3": {
-  "reply": "a0b7cddb28916f46",
-  "sheet": null
- },
- "3fbb70e12a6762a6": {
-  "varies": [
-   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
-   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes"
-  ]
- },
- "3fc517eb00be5342": {
-  "reply": "57c3d348966fd38c",
-  "sheet": "cce88fb6b2b0cacb"
- },
- "3fdbd28fcaed5ed9": {
-  "reply": "63492304e33c75d9",
-  "sheet": "832fb497a634385d"
- },
- "3fe63e0adb233238": {
-  "reply": "3c0ceeaa84a0764b",
-  "sheet": "15598c6f7ef7c69d"
- },
- "4177af1267eb8c4e": {
-  "reply": "714ec85e678352b7",
-  "sheet": "6fc11c0de7f0f741"
- },
- "433b012e55096b10": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
-  "raised": "NetlistError"
- },
- "4584b041cd4e4ec9": {
-  "reply": "2ed4bd8e66a33e7a",
-  "sheet": "2f66633286ed1ad2"
- },
- "467840aff48660f2": {
-  "reply": "5ac1f63988296d70",
-  "sheet": null
- },
- "46c40d1fe0456941": {
-  "reply": "be0a940a87dd33ca",
-  "sheet": "e51a879c905062d9"
- },
- "470f388112e13a18": {
-  "reply": "44a06fb2b6c5f2f7",
-  "sheet": "e51a879c905062d9"
- },
- "472e639e01609995": {
-  "reply": "8df8edcbe1ee5b95",
-  "sheet": null
- },
- "4771517b7b82f5f2": {
-  "reply": "344cd135dc8fe7e4",
-  "sheet": null
- },
- "4788d95a77036edc": {
-  "reply": "bd32dbf4836a1f78",
-  "sheet": null
- },
- "478df9acb7bee89e": {
-  "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "47a7142f0cfa9d6c": {
-  "reply": "4646b3d8ad088789",
-  "sheet": "4464b9a7038d05c9"
- },
- "47cf5265ae8a1c06": {
-  "reply": "98ea889562f8f47b",
-  "sheet": "189e647fb79514c1"
- },
- "47db7cb6884f019f": {
-  "reply": "d64db581800aeb66",
-  "sheet": "aaa53083dca6c6e2"
- },
- "4a2c276c3b5cabf1": {
-  "reply": "4842e46da2498fe6",
-  "sheet": null
- },
- "4a42b8e3d632a135": {
-  "reply": "08105bd5e78e120c",
-  "sheet": "189e647fb79514c1"
- },
- "4a4a5c65db609334": {
-  "reply": "ea72a720ca7a61ec",
-  "sheet": "168171de437364ed"
- },
- "4cae442000d379e7": {
-  "reply": "8ee47bb8b51dc13d",
-  "sheet": null
- },
- "4d79b6e2d749a14e": {
-  "reply": "2126b04815c7d54c",
-  "sheet": "30e2f036e5f18bc4"
- },
- "4d80e4c3576a93b7": {
-  "reply": "5de33a81aaa3d1e6",
-  "sheet": null
- },
- "4d8ad81ad52fa107": {
-  "reply": "4cb93aa34c74604b",
-  "sheet": "2f66633286ed1ad2"
- },
- "4dfeda30376b6084": {
-  "reply": "929f528e132111ef",
-  "sheet": "65f07c55b9c1a9d6"
- },
- "4f1b246678cf6d46": {
-  "message": "invalid view_cursors.touched: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "4f6bcd1a47b79b40": {
-  "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
-  "raised": "InvalidCursorError"
- },
- "4f6c90afea6c498f": {
-  "reply": "599571c0d1d7cb3c",
-  "sheet": "6c6f80b9f8fca180"
- },
- "5070f0afe1a2ed0d": {
-  "reply": "9d332a55dd5bafb1",
-  "sheet": "dfa35865c0e752f9"
- },
- "50ad16906c3ba5cf": {
-  "reply": "73050a1fa17c6db9",
-  "sheet": "02799fe4a330ce21"
- },
- "5167ba4762eafd1b": {
-  "reply": "7c2f61725e4532ed",
-  "sheet": "168171de437364ed"
- },
- "51c9fb687724c0a4": {
-  "reply": "5bf86e4ad62a5f90",
-  "sheet": "d70da2388e3f4613"
- },
- "532410a5219ff97c": {
-  "reply": "1f01da5273f08b36",
-  "sheet": null
- },
- "53f270008ed50858": {
-  "reply": "5cf330c497df377b",
-  "sheet": "2f66633286ed1ad2"
- },
- "54689b6d45439608": {
-  "reply": "25f27843a7b0e4fd",
-  "sheet": null
- },
- "56f5859fea18427f": {
-  "reply": "dae56db224b190fd",
-  "sheet": "f13722c501757260"
- },
- "5728d5efd970210f": {
-  "reply": "0b72618f638e4600",
-  "sheet": "eb9a6ac0e8188eef"
- },
- "5829d2df950fab4a": {
-  "reply": "b6d5c194111a1ac1",
-  "sheet": null
- },
- "589b8fcfee0d1d73": {
-  "reply": "0bc18e864308e180",
-  "sheet": "2fd4f6977eb9f79a"
- },
- "5b05877eef7ed3f5": {
-  "reply": "02c30648410b5bb9",
-  "sheet": "5fc5da36b17f4a93"
- },
- "5b6a307cb4b93174": {
-  "reply": "7615987a30a9981d",
-  "sheet": "be2910d5a44c2ad2"
- },
- "5c3259e34fd7bc3d": {
-  "reply": "25f0b16e86050179",
-  "sheet": "ffba5e1e9d340bbf"
- },
- "5cf39cbe2f45d661": {
-  "reply": "80de6882358070bf",
-  "sheet": null
- },
- "5d147c4f54908e6e": {
-  "reply": "e7542f4f0e4c24e7",
-  "sheet": "f4955e6af62cdb33"
- },
- "5dc720833c8de4da": {
-  "message": "invalid view_cursors.label_only_pins: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "5e1cc37bb87b260b": {
-  "reply": "6c53201b42d9e9a9",
-  "sheet": "1ae5073d11532c6c"
- },
- "5e59d25fc35d933c": {
-  "reply": "6c730117c77816f8",
-  "sheet": null
- },
- "5e70addb2497e207": {
-  "reply": "ff2bb32d8e460939",
-  "sheet": "5950d261f0733a5f"
- },
- "5f4e79f691df6dc7": {
-  "reply": "51ff8337f1cb4ba6",
-  "sheet": "6e9880d2e1a04bf2"
- },
- "60ea6b5f6a1dc757": {
-  "reply": "40d5db00dd101acb",
-  "sheet": "509ddb679e8bfe03"
- },
- "610024c0381066e5": {
-  "reply": "21154f45f7068bab",
-  "sheet": "d70da2388e3f4613"
- },
- "6105a08dd998af5b": {
-  "reply": "bdb5b14ad174a37f",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "6119627d2b40eead": {
-  "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
-  "raised": "InvalidCursorError"
- },
- "62e8b5ebc48f76a5": {
-  "reply": "0a5850f9f270c33d",
-  "sheet": null
- },
- "634b6a3493300788": {
-  "reply": "f2ff9571f1d0236d",
-  "sheet": null
- },
- "63ecc1c12fd8fcb5": {
-  "reply": "22a8f2a3ac789f39",
-  "sheet": "2f66633286ed1ad2"
- },
- "6473266f6f22b646": {
-  "reply": "78e7326917ba3022",
-  "sheet": "2f66633286ed1ad2"
- },
- "694165e0117b843e": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
-  ]
- },
- "6aa04b82f7b301f1": {
-  "reply": "ac689a3bc06d1958",
-  "sheet": "4a8d150aa88702d6"
- },
- "6aa1368158a93765": {
-  "reply": "3e00f451f800deb1",
-  "sheet": "d70da2388e3f4613"
- },
- "6ab2abc2a10483ea": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "6b4b33b5f4ac3996": {
-  "reply": "b1f0fa1ecfd1941d",
-  "sheet": "a5bda05d7e572abc"
- },
- "6c928241176e493c": {
-  "reply": "d4fa0e3daf32f514",
-  "sheet": "c071ac08a8bd3d19"
- },
- "6cb11bcc7d29802f": {
-  "reply": "fbdbe1b7c3ccf175",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "6d4be9d992ffed92": {
-  "reply": "cfe616e4238337de",
-  "sheet": "2f66633286ed1ad2"
- },
- "6eedf64aaa339df8": {
-  "reply": "c2398dc8d30236ef",
-  "sheet": "189e647fb79514c1"
- },
- "7162bbbcecaaaa4e": {
-  "reply": "ddf3e4197c80cb76",
-  "sheet": "ffb9eba3962b6fc3"
- },
- "73c7577bad3e1e96": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "7412806c739cd83a": {
-  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT\\t16 16 Left 2 !.tran 2m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "749cabea0ca412b9": {
-  "reply": "d10702c23c5abcf9",
-  "sheet": "b3a2468022b86f34"
- },
- "74c556e4ab2796e3": {
-  "reply": "f0f35a26b5610e86",
-  "sheet": "4f700298c191ce88"
- },
- "7561ebe53e45e55e": {
-  "varies": [
-   "tests/test_edit_open_window.py::test_a_window_that_does_not_save_is_reported",
-   "tests/test_edit_open_window.py::test_nothing_is_done_where_no_window_holds_a_different_sheet[save-saved-commands]",
-   "tests/test_edit_open_window.py::test_other_windows_with_the_sheet_open_are_handed_the_saved_one",
-   "tests/test_edit_open_window.py::test_the_box_ltspice_shows_instead_of_saving_is_quoted_and_cancelled",
-   "tests/test_edit_open_window.py::test_two_windows_with_different_copies_save_nothing",
-   "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on"
-  ]
- },
- "7606d20f72d13ecb": {
-  "reply": "64a7983e09e7b68c",
-  "sheet": null
- },
- "76365aca20ea51b9": {
-  "reply": "07f93cb713ebe8aa",
-  "sheet": "4464b9a7038d05c9"
- },
- "763a3bb280742aae": {
-  "reply": "f340d4329a2aba0c",
-  "sheet": null
- },
- "76a2e859f0d9903f": {
-  "reply": "ff7f914f1d9f833d",
-  "sheet": "2f66633286ed1ad2"
- },
- "76f7ad4306feb125": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "775beb43d0ba2af9": {
-  "reply": "1dab39ddf46db897",
-  "sheet": null
- },
- "77f252ffdf66c34a": {
-  "reply": "730df546e0c878f9",
-  "sheet": "2f66633286ed1ad2"
- },
- "792163149c4948b0": {
-  "reply": "3c0d4427fa6a6c79",
-  "sheet": null
- },
- "796bed7fe3245afc": {
-  "reply": "016bb7fbf6f26e0e",
-  "sheet": null
- },
- "79e9ba0f7e5ce2bd": {
-  "reply": "edad5faa7c07502d",
-  "sheet": "5fcd33e31cbd8c08"
- },
- "79f48928e1eab97f": {
-  "reply": "3ac27ac6f988da8b",
-  "sheet": "d70da2388e3f4613"
- },
- "7ba3b83511702526": {
-  "reply": "bbefa71f37315cbd",
-  "sheet": null
- },
- "7c9bfde37d19255c": {
-  "reply": "1962194299a71fae",
-  "sheet": "ca4f09dc17968e9c"
- },
- "7f08ce2a3d80e7db": {
-  "reply": "86c7030a46059a07",
-  "sheet": "2f66633286ed1ad2"
- },
- "7fd168cebe36227b": {
-  "reply": "302f9905f0f8f0b1",
-  "sheet": null
- },
- "804b1c79cdd9e953": {
-  "reply": "df4debe26e2970c4",
-  "sheet": "7e8b75862034a676"
- },
- "807d2a9e80b4260e": {
-  "reply": "9179fbd11fd6fade",
-  "sheet": "2f66633286ed1ad2"
- },
- "81bd9ed528f5b5be": {
-  "reply": "c1a060f6ae9555b0",
-  "sheet": null
- },
- "827bb649fb955e31": {
-  "message": "invalid view_cursors.preexisting: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "828963ebf324a065": {
-  "reply": "3ef784adad94cb04",
-  "sheet": null
- },
- "82eab0c71b2c51e7": {
-  "reply": "bb286ae35035402a",
-  "sheet": "4f614343a2c6e7aa"
- },
- "835c4c69829baba5": {
-  "reply": "2b22d3eefd5a23c7",
-  "sheet": null
- },
- "841a34f0a9b48728": {
-  "reply": "acf5384c67db6cfe",
-  "sheet": "ccc0ccf65a13b089"
- },
- "84db376c2cfcb227": {
-  "reply": "27f4d7a28e871cf1",
-  "sheet": "1128ba216dbad4a1"
- },
- "88b0fc1b83b34e92": {
-  "reply": "630ba84aafd584cf",
-  "sheet": null
- },
- "89ad4d320bd165b2": {
-  "reply": "48abe9a254fc0609",
-  "sheet": null
- },
- "89f25aa569a11b97": {
-  "reply": "c6959b2f48801107",
-  "sheet": "ebabd77bdc824e39"
- },
- "8a9a334e15bc3df1": {
-  "reply": "b27f9e00aca9bc1a",
-  "sheet": null
- },
- "8b37ef94fae8b06b": {
-  "reply": "5f6288ea1e0f0e03",
-  "sheet": null
- },
- "8bee7300426de9c4": {
-  "reply": "9b30155b61be7073",
-  "sheet": null
- },
- "8c4ab5d09ffc4873": {
-  "reply": "20ddddf279dfd774",
-  "sheet": "6de60ebbdd4c2559"
- },
- "8c587c6d5c63170f": {
-  "reply": "7fbdcfce6d30531f",
-  "sheet": "e51a879c905062d9"
- },
- "8cd19956574191c6": {
-  "reply": "3e16d147120eea9b",
-  "sheet": null
- },
- "8cdc3a263b7eb07b": {
-  "reply": "e90fae2ce2284cf2",
-  "sheet": "5dbf7601bad3bc6f"
- },
- "8d7599a5c4484467": {
-  "reply": "eedbf62e73c9cfe6",
-  "sheet": null
- },
- "8e5ef80cf9f4d417": {
-  "reply": "8a8eaffc40417e7d",
-  "sheet": null
- },
- "8ed5473970e9aefe": {
-  "reply": "3e66c7f7dc1a2526",
-  "sheet": "9130df515986b529"
- },
- "9009c3ca4479aa86": {
-  "reply": "6be6f93517abd27e",
-  "sheet": "2f66633286ed1ad2"
- },
- "90320506d502d844": {
-  "reply": "b2f60afddb9cadc4",
-  "sheet": null
- },
- "9250902ccd3cd443": {
-  "reply": "fe06fdba64e6b34e",
-  "sheet": "21b15924f8cb8e38"
- },
- "925508bd5e6caa36": {
-  "reply": "c45d803891be45ff",
-  "sheet": null
- },
- "929b7c8a9f95cabf": {
-  "reply": "1a18dde2e9efec16",
-  "sheet": null
- },
- "92fab8b80111f3bb": {
-  "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
-  "raised": "NetlistError"
- },
- "95517c008c009bd6": {
-  "reply": "d8796706234ab2e7",
-  "sheet": null
- },
- "962d2b4d0bd29592": {
-  "reply": "df8dbb97fb8c95a2",
-  "sheet": null
- },
- "96f99a5c93a45881": {
-  "message": "disk full",
-  "raised": "OSError"
- },
- "9786390399c647cd": {
-  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT 16 16 Left  2 !.tran 3m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "98416f4134384a94": {
-  "reply": "5c47600043d64b71",
-  "sheet": "2f66633286ed1ad2"
- },
- "98d7f73fddcd5c34": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "9906eb74bf46f871": {
-  "reply": "f805e0fc4d825a00",
-  "sheet": null
- },
- "996682ee4ea65e7a": {
-  "reply": "4cd7e01ab4df85d9",
-  "sheet": "99098b43e1a2502f"
- },
- "9acf458bc34511f6": {
-  "reply": "0b2fe5040c88b539",
-  "sheet": "6706b0fcfb66049c"
- },
- "9b353b54217f11df": {
-  "reply": "70a8f75e976ce660",
-  "sheet": "88c9ff221b645b1b"
- },
- "9c94c0993c6e7d81": {
-  "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
-  "raised": "PathSecurityError"
- },
- "9d28114c2db6ce6a": {
-  "reply": "e721351f65e08d14",
-  "sheet": "d54e46e32c2352ac"
- },
- "9e6c38c9ec8f22bb": {
-  "reply": "74842d93c439307d",
-  "sheet": "b3a2468022b86f34"
- },
- "9ed15d08728e32a2": {
-  "reply": "b472d27194746e5e",
-  "sheet": "2f66633286ed1ad2"
- },
- "a2432173738e36de": {
-  "reply": "3a1b4ea704295a87",
-  "sheet": null
- },
- "a305ca653f41e150": {
-  "reply": "c967c2d0cf5ffc9d",
-  "sheet": "dd784a9aa9452591"
- },
- "a3065e4425722e8e": {
-  "reply": "f0cda61c31d32f09",
-  "sheet": null
- },
- "a32c02854e000b30": {
-  "reply": "fb02b1f344cc4f71",
-  "sheet": "562a9043164cff64"
- },
- "a3d859e7c768e660": {
-  "reply": "314faa0d12ad0227",
-  "sheet": "d70da2388e3f4613"
- },
- "a50be046b7cb126e": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "a670f3ab60a05e34": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "a8361b052859e014": {
-  "reply": "7cc64cb9df5bd58d",
-  "sheet": "2f66633286ed1ad2"
- },
- "a9787ac15740f485": {
-  "reply": "80de6882358070bf",
-  "sheet": null
- },
- "a98baa178c736b80": {
-  "reply": "4b03952f441a1e89",
-  "sheet": "2f66633286ed1ad2"
- },
- "a9fff5193712c33e": {
-  "reply": "29718b5b37003982",
-  "sheet": "d70da2388e3f4613"
- },
- "ab34ff55ec343eae": {
-  "reply": "ad7fc8ee2ea3119d",
-  "sheet": null
- },
- "abc3d3e1d4a6138f": {
-  "reply": "3d2926552f0862df",
-  "sheet": null
- },
- "acb66f3af767d053": {
-  "reply": "e2cdf3145c02a986",
-  "sheet": null
- },
- "ad583907a39b1714": {
-  "reply": "5635fc35414f0729",
-  "sheet": "2f66633286ed1ad2"
- },
- "add7182e39e4c0c0": {
-  "reply": "977763d92f225b11",
-  "sheet": "b53e523c278c7a15"
- },
- "b07d9a6e03e663fa": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "b2ce35e0631d564f": {
-  "reply": "74506fd5057e8fb2",
-  "sheet": null
- },
- "b3cc5ed9c7087034": {
-  "reply": "31d8fc89377e98d0",
-  "sheet": "2f66633286ed1ad2"
- },
- "b4aad0231535794c": {
-  "reply": "7f0f8dbe612e3795",
-  "sheet": "2385a94d791ae910"
- },
- "b4e375e71ad9a6a3": {
-  "reply": "29850ee7554fe2e6",
-  "sheet": "fd0b62d3879aefde"
- },
- "b77132014b576c35": {
-  "reply": "5c74b88f3f2188ff",
-  "sheet": null
- },
- "badff9445bd80938": {
-  "reply": "89a000af7d087a6f",
-  "sheet": null
- },
- "baf43b4e42b2411e": {
-  "reply": "6f834af4600f423d",
-  "sheet": "133c1190f24ed080"
- },
- "bbcff85ea22b2da4": {
-  "reply": "f64a1f31837b7c72",
-  "sheet": "003b5c758daab3c8"
- },
- "bc57a2f55bc9b45f": {
-  "varies": [
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-True]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-True]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-True]"
-  ]
- },
- "bce10cf2f6e686a7": {
-  "reply": "1bbde98b60eb2d6e",
-  "sheet": null
- },
- "be126c6ed5416627": {
-  "reply": "5f1bff5dfb20ca8c",
-  "sheet": null
- },
- "be4f240ff2c1e11e": {
-  "reply": "354fc00bb8ac25d0",
-  "sheet": "2f66633286ed1ad2"
- },
- "be59b35180ab479c": {
-  "reply": "5dbfbd1cdb138e47",
-  "sheet": "2f66633286ed1ad2"
- },
- "be74f0b02db430aa": {
-  "reply": "06c7d9202e57585e",
-  "sheet": null
- },
- "becd93b46454156b": {
-  "reply": "5d45c885e2c06e35",
-  "sheet": null
- },
- "bed67e93df7865ba": {
-  "reply": "0d6f63caa045df74",
-  "sheet": null
- },
- "bf998b77bd56a84a": {
-  "reply": "0eac4fe90e6387dd",
-  "sheet": "f18b41994230550d"
- },
- "c001cb4a5cc609de": {
-  "message": "Each hierarchical port must belong to exactly one unique label.",
-  "raised": "NetlistError"
- },
- "c050a228742aa81a": {
-  "reply": "c7b6d288c7bd00ed",
-  "sheet": null
- },
- "c06b14ebd742b378": {
-  "reply": "16b1ecf17d414100",
-  "sheet": null
- },
- "c08437fa576199dd": {
-  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "c0c9fb998c164602": {
-  "reply": "4aae7ee35826deb0",
-  "sheet": "2f66633286ed1ad2"
- },
- "c3729ff54237f7c2": {
-  "reply": "5c2d49a8c4ee7357",
-  "sheet": "0c9cf7c74f9326ad"
- },
- "c44c335aa9e572d3": {
-  "reply": "a22802dcdde05e03",
-  "sheet": null
- },
- "c5545aed3afcc591": {
-  "reply": "6fcee7e7f62ebea1",
-  "sheet": "2f66633286ed1ad2"
- },
- "c5c6c10b2dfc429f": {
-  "reply": "b9671e6bee73f8b8",
-  "sheet": "858573307ac29a7b"
- },
- "c5cc1907588fdb1d": {
-  "reply": "fc73f137ccd0a96a",
-  "sheet": null
- },
- "c612d72c4124b545": {
-  "message": "ops list is empty \u2014 pass at least one op, or name return_views to read the sheet's pin table without changing it.",
-  "raised": "NetlistError"
- },
- "c69a85aa1b43dc7b": {
-  "reply": "af7e668dfdeed3e6",
-  "sheet": "b3a2468022b86f34"
- },
- "c6a5023270645817": {
-  "reply": "6121d2d7256b5661",
-  "sheet": "d70da2388e3f4613"
- },
- "c6bef65512c911df": {
-  "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
- },
- "c71607d4c9d21bb6": {
-  "reply": "61a4e5e7cf3dd205",
-  "sheet": null
- },
- "c7889237010f1d85": {
-  "reply": "c940976e622001c4",
-  "sheet": "4464b9a7038d05c9"
- },
- "c87e7740975e3587": {
-  "reply": "1f01da5273f08b36",
-  "sheet": null
- },
- "c907af93d4171e9f": {
-  "reply": "12e724f5f88aa823",
-  "sheet": "acac928179f1ea70"
- },
- "c96e19be20f605e3": {
-  "reply": "f24ef55c8868904f",
-  "sheet": "018d0b7888b32527"
- },
- "ce286b28cae3d151": {
-  "reply": "339568fdc7453048",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "ceeecf7fa32befcc": {
-  "reply": "eaa4b8e3d296bfc6",
-  "sheet": null
- },
- "cf1114f085503b83": {
-  "reply": "90806e8425713577",
-  "sheet": null
- },
- "cfd8ae6092796658": {
-  "reply": "bc14fd2895235293",
-  "sheet": "43a2822eb408c09d"
- },
- "cffc901654dcaa84": {
-  "reply": "6117555ba9d202d5",
-  "sheet": "0f7d0950a33ecae5"
- },
- "d006231eb901b6e2": {
-  "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
-  "raised": "InvalidCursorError"
- },
- "d0d05392205b5315": {
-  "reply": "54b8cc8f5e0a8a34",
-  "sheet": "4919ae4e9092bfa8"
- },
- "d22a4e5fc5923038": {
-  "reply": "d28239d4a14164b7",
-  "sheet": "2f66633286ed1ad2"
- },
- "d24b6be496cc1fe8": {
-  "reply": "a7d4a4c79e2f8a40",
-  "sheet": null
- },
- "d377d83b0e359b57": {
-  "reply": "7015c0830e0b0647",
-  "sheet": "1986dcae4e2adb90"
- },
- "d411ba1bc5c67c2b": {
-  "reply": "2b6c00d370324c3a",
-  "sheet": "89c7502b2db3c9e2"
- },
- "d4594735e47fe09f": {
-  "reply": "548241e4d9829d6f",
-  "sheet": "a0e138e3ce059bf4"
- },
- "d477bb74067144c8": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
-  ]
- },
- "d61b91d65fcef253": {
-  "reply": "e98d833a962c76a0",
-  "sheet": null
- },
- "d6a71c3fa36368a6": {
-  "reply": "3c4eabebac8bcd42",
-  "sheet": "7537888aa9b73a27"
- },
- "d70581f144031c55": {
-  "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "d7a091c2d4328ab4": {
-  "reply": "d9fb9c2b460b678f",
-  "sheet": "c064b176635b7503"
- },
- "d7be9e38ca8005e5": {
-  "reply": "ae474fbe23413690",
-  "sheet": "b3a2468022b86f34"
- },
- "d844b70a82187db6": {
-  "reply": "17ca42675da225d2",
-  "sheet": "879e5d6f510a331b"
- },
- "d900208979eb64a9": {
-  "reply": "e110932617f104ff",
-  "sheet": null
- },
- "d91b13bedbe66cee": {
-  "varies": [
-   "tests/test_concurrent_same_target.py::test_simultaneous_edits_on_one_sha_commit_exactly_one",
-   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_a_plot_panes_edit_locks_the_plot_settings_file",
-   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_contended_lock_times_out_with_clear_error",
-   "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_a_session_in_another_working_directory_holds_the_same_lock",
-   "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_an_edit_leaves_nothing_beside_the_circuit"
-  ]
- },
- "d92db0be006f6ca8": {
-  "reply": "c58b6b61d9a955a2",
-  "sheet": null
- },
- "dbffc90d5470cc76": {
-  "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
-  "raised": "PathSecurityError"
- },
- "dcd3095068a69280": {
-  "reply": "74842d93c439307d",
-  "sheet": "b3a2468022b86f34"
- },
- "ddfa9e5a01d72a60": {
-  "reply": "b188610dd156f29a",
-  "sheet": "53960f64fa788151"
- },
- "df2cefc584e46cd0": {
-  "reply": "49c179684dc1dda4",
-  "sheet": null
- },
- "e0a1b7ba38258ecf": {
-  "reply": "29b1bbb3f617ca50",
-  "sheet": "29c596fe49dd2953"
- },
- "e1110385124fd36e": {
-  "reply": "6a4377491c70e0e6",
-  "sheet": "eac2755b33662a82"
- },
- "e119b69101e52402": {
-  "reply": "470a5b329672e300",
-  "sheet": "842d0f37c2e53812"
- },
- "e212e1a538791411": {
+ "1440753e230fe002": {
   "reply": "3c20a5b6dcbcd85b",
   "sheet": "59345d9e34feffe2"
  },
- "e2b255a00a09805b": {
-  "reply": "838782eb13cd9ce0",
-  "sheet": "ccc0ccf65a13b089"
+ "1489627a8d3d182a": {
+  "reply": "ebe2b35d41c1527d",
+  "sheet": "159ab54529afe730"
  },
- "e53c6a8717546a51": {
-  "reply": "cd4fe542a7714631",
+ "160c4beeb8c77f0b": {
+  "reply": "b2f60afddb9cadc4",
   "sheet": null
  },
- "e6461e28622b02f9": {
-  "reply": "7a243a8c8c277cea",
+ "16341cefe54ee6e8": {
+  "reply": "ff7f914f1d9f833d",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "166406d081d2b823": {
+  "reply": "548241e4d9829d6f",
+  "sheet": "a0e138e3ce059bf4"
+ },
+ "176326403b5cb890": {
+  "reply": "2126b04815c7d54c",
+  "sheet": "30e2f036e5f18bc4"
+ },
+ "17d822716539757f": {
+  "reply": "3d250f1d8ceeb20d",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "187e659bf701c2fb": {
+  "reply": "1f01da5273f08b36",
+  "sheet": null
+ },
+ "1ace7d88a7d6b20e": {
+  "reply": "291d8cbb9e272775",
   "sheet": "b3a2468022b86f34"
  },
- "e801be9d9cf7f0dd": {
-  "reply": "468172e03c6195a5",
+ "1cad21ce77d1b47b": {
+  "reply": "98ea889562f8f47b",
+  "sheet": "189e647fb79514c1"
+ },
+ "1eb4998aca74d1b7": {
+  "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
+  "raised": "PathSecurityError"
+ },
+ "1ff9e184b3d81ad1": {
+  "reply": "df8dbb97fb8c95a2",
   "sheet": null
  },
- "e8eb8d0294a34a85": {
-  "reply": "27797bf14a73778e",
+ "2268422da856d769": {
+  "reply": "c940976e622001c4",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "2286928bd6707408": {
+  "reply": "5dbfbd1cdb138e47",
   "sheet": "2f66633286ed1ad2"
  },
- "e8fcd16863a44c1a": {
-  "reply": "8d4f48218ddff18f",
-  "sheet": "672bc0a563ba2f34"
- },
- "e8fe5679adfb7bca": {
-  "reply": "d011597671d3badd",
-  "sheet": "2f66633286ed1ad2"
- },
- "e9b7c8694130bb83": {
-  "reply": "56eb3bf5a508a7ad",
-  "sheet": "ccc0ccf65a13b089"
- },
- "ea1f7ba3c2743ded": {
-  "reply": "22e6e8a60b0e880e",
-  "sheet": "4f700298c191ce88"
- },
- "ea734c306436dcf0": {
-  "reply": "f04cf063d3539da9",
-  "sheet": "cd333cd95ee819e3"
- },
- "eb2ba5eb099820d4": {
-  "reply": "5d903ea1a0d777dc",
-  "sheet": "2f66633286ed1ad2"
- },
- "eb83dbc408acd7be": {
-  "reply": "8f654ab83ad7d4e5",
-  "sheet": "5309d926a1d3da61"
- },
- "ed9403e0f1069f7c": {
-  "reply": "af75451582818525",
+ "23d99882886bfb10": {
+  "reply": "ad7fc8ee2ea3119d",
   "sheet": null
  },
- "edcc90c27fb6949d": {
-  "reply": "fcbf8793a35117ad",
-  "sheet": "32351080a0d7479e"
+ "2636b7b6487484f7": {
+  "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
+  "raised": "NetlistError"
  },
- "ee2f31e0a618cde0": {
-  "reply": "407e96db6577a92b",
-  "sheet": "49b1144b74853f95"
+ "26c9848e50f99037": {
+  "reply": "0a0615ea78da1416",
+  "sheet": "e74de70382e0ec77"
  },
- "eeb967a0eac00a2e": {
-  "reply": "f0bd5e3d24840349",
+ "2735506accba230b": {
+  "reply": "29b1bbb3f617ca50",
+  "sheet": "29c596fe49dd2953"
+ },
+ "27610ca50e451d7c": {
+  "reply": "b784a21374bcfdf1",
+  "sheet": "bc9c9f192388fafc"
+ },
+ "286a44c2f9b13345": {
+  "reply": "0d6f63caa045df74",
   "sheet": null
  },
- "f0b275d8dd127192": {
-  "reply": "f98ee3238e2ae318",
+ "293580a19686e648": {
+  "reply": "1962194299a71fae",
+  "sheet": "ca4f09dc17968e9c"
+ },
+ "2c74b78b64eec3f6": {
+  "reply": "48abe9a254fc0609",
   "sheet": null
  },
- "f173baa9e461f814": {
-  "reply": "1506f38d0ed1a6f9",
-  "sheet": "52ecf6f819eba445"
- },
- "f1e3c76fbc41b25b": {
-  "reply": "fb838ba53c93acdd",
-  "sheet": "2f66633286ed1ad2"
- },
- "f3396ca9f958fd7e": {
-  "message": "injected mid-batch failure",
-  "raised": "RuntimeError"
- },
- "f346bc0c9e83a5cb": {
-  "reply": "afddf992370eb669",
-  "sheet": "bab9cd389e43e638"
- },
- "f450c500213d8720": {
-  "reply": "80de6882358070bf",
-  "sheet": null
- },
- "f467bd5efd82f7a8": {
-  "reply": "04644776a735c21c",
-  "sheet": "e25eabc5d902e620"
- },
- "f468ca8ccc84fb72": {
+ "2cdb1e482fec7faa": {
   "reply": "021f74118e2ff102",
   "sheet": "d70da2388e3f4613"
  },
- "f50e43675ad0905f": {
-  "reply": "56298b67026ad2b0",
+ "2df51bb938300043": {
+  "reply": "90806e8425713577",
   "sheet": null
  },
- "f59cc9c82678dd99": {
-  "reply": "275be6f7003de360",
+ "2fc807dafa38e4fc": {
+  "reply": "bdb5b14ad174a37f",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "30e9d1b26037dead": {
+  "reply": "3bcd8275b9cf3b4e",
   "sheet": null
  },
- "f5a0a2533bca86e3": {
-  "reply": "50e1e2816c583d83",
+ "317d09aa76576a1d": {
+  "reply": "8370eef36cb18be5",
   "sheet": null
  },
- "f844b9e4cede8074": {
-  "reply": "5475f0dc34081b3e",
-  "sheet": "b274158233309af4"
+ "326a7a2e0640cf3d": {
+  "reply": "3ac27ac6f988da8b",
+  "sheet": "d70da2388e3f4613"
  },
- "f9f22f6bb9d5fde8": {
+ "34ab359c6f59c793": {
+  "reply": "8c1c59d1e503ee44",
+  "sheet": null
+ },
+ "366962d2f325170f": {
+  "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
+ },
+ "382909c46e3d12b0": {
+  "reply": "3a235a018ea79cb6",
+  "sheet": null
+ },
+ "39c06ec752eeba01": {
+  "reply": "1dab39ddf46db897",
+  "sheet": null
+ },
+ "3e103525888f761a": {
+  "reply": "9379a14eb42e9781",
+  "sheet": "37b3406b8a47981e"
+ },
+ "3f8af47d68cc901e": {
+  "reply": "7cc64cb9df5bd58d",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "3f8b148349f9baae": {
   "reply": "6133d7b61e9ebb18",
   "sheet": "1cd64b7050cdd9bd"
  },
- "fb0a611246efe3e0": {
-  "reply": "f04e321d233a1f38",
-  "sheet": "733d1ab2e59d6d40"
+ "411f044d777a142e": {
+  "reply": "e5cbb24af78a4dc3",
+  "sheet": "4919ae4e9092bfa8"
  },
- "fde5e32f532be936": {
+ "4140ae16107e3b62": {
+  "reply": "04644776a735c21c",
+  "sheet": "e25eabc5d902e620"
+ },
+ "4186c7ad7f48e2cb": {
+  "reply": "dfd391ae6b84b852",
+  "sheet": null
+ },
+ "4252ed27c3cdda91": {
+  "reply": "3a1b4ea704295a87",
+  "sheet": null
+ },
+ "42ce5a3342dce5ee": {
+  "reply": "730df546e0c878f9",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "439f5821d667e80d": {
+  "reply": "ea72a720ca7a61ec",
+  "sheet": "168171de437364ed"
+ },
+ "43b447db23caac25": {
+  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+  "raised": "NetlistError"
+ },
+ "4536bfd8d0673254": {
+  "reply": "fb838ba53c93acdd",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "4740532d1b009356": {
+  "reply": "07f93cb713ebe8aa",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "4864c3593bd64830": {
+  "reply": "2bd6f141542151e5",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "48a8c1665ba47183": {
+  "reply": "f0f35a26b5610e86",
+  "sheet": "4f700298c191ce88"
+ },
+ "492f18a117bed201": {
+  "varies": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ]
+ },
+ "4a3dcc451f918366": {
+  "message": "invalid view_cursors.touched: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
+ },
+ "4a8afd1b715e33b9": {
+  "reply": "5475f0dc34081b3e",
+  "sheet": "b274158233309af4"
+ },
+ "4c6e6f00a0506559": {
+  "reply": "3c4eabebac8bcd42",
+  "sheet": "7537888aa9b73a27"
+ },
+ "4da77b67904d1869": {
+  "reply": "5d903ea1a0d777dc",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "4e9e1eadfa34c37d": {
+  "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
+  "raised": "InvalidCursorError"
+ },
+ "5024a95f3aca3db9": {
+  "reply": "714ec85e678352b7",
+  "sheet": "6fc11c0de7f0f741"
+ },
+ "519edef110e81203": {
+  "reply": "1bbde98b60eb2d6e",
+  "sheet": null
+ },
+ "5298ff51152a44aa": {
+  "reply": "57c3d348966fd38c",
+  "sheet": "cce88fb6b2b0cacb"
+ },
+ "52c3f056469ad41a": {
+  "reply": "8d4f48218ddff18f",
+  "sheet": "672bc0a563ba2f34"
+ },
+ "52e60f3fa3787ac0": {
+  "reply": "9b30155b61be7073",
+  "sheet": null
+ },
+ "536e20a256dc216f": {
+  "reply": "31d8fc89377e98d0",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "537d3c57742e7066": {
+  "reply": "61a4e5e7cf3dd205",
+  "sheet": null
+ },
+ "546dfb2d453cc257": {
+  "reply": "4aae7ee35826deb0",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "54bd8053ab89de84": {
+  "reply": "3e66c7f7dc1a2526",
+  "sheet": "9130df515986b529"
+ },
+ "551a291faed34ce1": {
+  "reply": "e7542f4f0e4c24e7",
+  "sheet": "f4955e6af62cdb33"
+ },
+ "5579fe640206f6db": {
+  "reply": "5d45c885e2c06e35",
+  "sheet": null
+ },
+ "55da351422c96c65": {
+  "reply": "210e7648de8f0fab",
+  "sheet": "1f7cd86c8e0a12c6"
+ },
+ "55f93b1321e1e3f8": {
+  "reply": "86053d7c7dfa7ae5",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "56dbec15b1954e05": {
+  "reply": "d10702c23c5abcf9",
+  "sheet": "b3a2468022b86f34"
+ },
+ "570bdc7e2143f4d7": {
+  "reply": "4a77d1e13c010d61",
+  "sheet": "b3a2468022b86f34"
+ },
+ "5782aab96df56585": {
+  "reply": "9d332a55dd5bafb1",
+  "sheet": "dfa35865c0e752f9"
+ },
+ "578e960424c31dba": {
+  "reply": "64a7983e09e7b68c",
+  "sheet": null
+ },
+ "57e73a2dcb8bd079": {
+  "reply": "88ee824307c1910d",
+  "sheet": null
+ },
+ "583bb5093004ea69": {
+  "reply": "0a5850f9f270c33d",
+  "sheet": null
+ },
+ "5908e7fdb2cf7bf8": {
+  "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
+  "raised": "InvalidCursorError"
+ },
+ "5930afc3d0bddc9e": {
+  "reply": "8ee47bb8b51dc13d",
+  "sheet": null
+ },
+ "59d9a01c292c433b": {
+  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+  "raised": "NetlistError"
+ },
+ "59e106123001c4f2": {
+  "reply": "c6959b2f48801107",
+  "sheet": "ebabd77bdc824e39"
+ },
+ "5a6671a9040ef6e8": {
+  "reply": "86c7030a46059a07",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "5b4416edab1bb5ff": {
+  "reply": "344cd135dc8fe7e4",
+  "sheet": null
+ },
+ "5cba3bbc066e60f2": {
+  "reply": "0bc18e864308e180",
+  "sheet": "2fd4f6977eb9f79a"
+ },
+ "5dc921a9e1d12e3d": {
+  "message": "injected mid-batch failure",
+  "raised": "RuntimeError"
+ },
+ "6084eea7fe3fcb2a": {
+  "reply": "b372773112aab9a6",
+  "sheet": "047439922969956b"
+ },
+ "61180a027869ee0e": {
+  "reply": "8f654ab83ad7d4e5",
+  "sheet": "5309d926a1d3da61"
+ },
+ "627081fd0d07513f": {
+  "reply": "80de6882358070bf",
+  "sheet": null
+ },
+ "637dd33b10007517": {
+  "reply": "4646b3d8ad088789",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "663c0065bb512949": {
+  "reply": "89a000af7d087a6f",
+  "sheet": null
+ },
+ "689c23cac20f6f91": {
+  "reply": "1506f38d0ed1a6f9",
+  "sheet": "52ecf6f819eba445"
+ },
+ "6a3177a760b99139": {
+  "reply": "fbdbe1b7c3ccf175",
+  "sheet": "0fe4a46d4fb4e6e1"
+ },
+ "6aba3f9c1627f621": {
+  "message": "Each hierarchical port must belong to exactly one unique label.",
+  "raised": "NetlistError"
+ },
+ "6af4d377a3f3d4c3": {
+  "reply": "f2ff9571f1d0236d",
+  "sheet": null
+ },
+ "6b2447a2a321398e": {
+  "reply": "54b8cc8f5e0a8a34",
+  "sheet": "4919ae4e9092bfa8"
+ },
+ "6bbef99eb1621a2b": {
+  "reply": "af75451582818525",
+  "sheet": null
+ },
+ "6c19bd35117bcc4e": {
+  "reply": "bb286ae35035402a",
+  "sheet": "4f614343a2c6e7aa"
+ },
+ "6cb820476008c6aa": {
+  "reply": "8e4ec8ca0cb6d0b0",
+  "sheet": "4f700298c191ce88"
+ },
+ "6d3510dee8edb82f": {
+  "reply": "08105bd5e78e120c",
+  "sheet": "189e647fb79514c1"
+ },
+ "6e01e602749180a5": {
+  "reply": "0eac4fe90e6387dd",
+  "sheet": "f18b41994230550d"
+ },
+ "6e734264060a7db0": {
+  "reply": "c45d803891be45ff",
+  "sheet": null
+ },
+ "6f0600c4ae709cc1": {
+  "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
+  "raised": "NetlistError"
+ },
+ "70f11f692056dee7": {
+  "reply": "cd4fe542a7714631",
+  "sheet": null
+ },
+ "7120aba3663b57f7": {
+  "reply": "82efd8e45a4de33a",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "715de86ed6ab7552": {
+  "reply": "061081a5b1e4ace3",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "7171944cb34587d0": {
+  "reply": "edad5faa7c07502d",
+  "sheet": "5fcd33e31cbd8c08"
+ },
+ "7191ee5a5fad387d": {
+  "reply": "468172e03c6195a5",
+  "sheet": null
+ },
+ "720b81d979817099": {
+  "reply": "5475f0dc34081b3e",
+  "sheet": "b274158233309af4"
+ },
+ "728d54792138bea2": {
+  "reply": "52205c892feb1c1a",
+  "sheet": "5270a760fe5167ba"
+ },
+ "7420ac63d0e8ca99": {
+  "reply": "0b72618f638e4600",
+  "sheet": "eb9a6ac0e8188eef"
+ },
+ "7441e9d08c5ac630": {
+  "reply": "19283a1e912a2561",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "746bf3801f903133": {
+  "reply": "80de6882358070bf",
+  "sheet": null
+ },
+ "7497ba51d2cd5462": {
+  "reply": "470a5b329672e300",
+  "sheet": "842d0f37c2e53812"
+ },
+ "75a9991b44e53f0c": {
+  "reply": "f805e0fc4d825a00",
+  "sheet": null
+ },
+ "76c2a959f7674705": {
+  "reply": "291d8cbb9e272775",
+  "sheet": "b3a2468022b86f34"
+ },
+ "77ba075c20675d3d": {
+  "reply": "f0cda61c31d32f09",
+  "sheet": null
+ },
+ "792e94aa9a61a96b": {
+  "reply": "d8796706234ab2e7",
+  "sheet": null
+ },
+ "796225092f29bd56": {
+  "reply": "016bb7fbf6f26e0e",
+  "sheet": null
+ },
+ "79d008d703bf8616": {
+  "reply": "b379fe56404daf68",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "7aaab0480e81cb38": {
+  "reply": "d011597671d3badd",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "7b69c70f1c088c9a": {
+  "reply": "dae56db224b190fd",
+  "sheet": "f13722c501757260"
+ },
+ "7e305399ea50932a": {
+  "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
+  "raised": "PathSecurityError"
+ },
+ "7e3e7879522bbafc": {
+  "reply": "4b03952f441a1e89",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "7e4ebadbf7531feb": {
+  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+  "raised": "NetlistError"
+ },
+ "7e6f2cb1bc4a5512": {
+  "reply": "d4fa0e3daf32f514",
+  "sheet": "c071ac08a8bd3d19"
+ },
+ "7ea2d03dd3bbf023": {
+  "reply": "f8ae29750e78f2c5",
+  "sheet": "a4f8c1030672b090"
+ },
+ "7f670f7a08530ef6": {
+  "reply": "eaa4b8e3d296bfc6",
+  "sheet": null
+ },
+ "7fd27b5a59cffca0": {
+  "reply": "5c47600043d64b71",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "8254e3e89013c1cb": {
+  "reply": "5de33a81aaa3d1e6",
+  "sheet": null
+ },
+ "826cc8f36d760539": {
+  "reply": "44a06fb2b6c5f2f7",
+  "sheet": "e51a879c905062d9"
+ },
+ "82ddf01f9e9074a4": {
+  "reply": "c7b6d288c7bd00ed",
+  "sheet": null
+ },
+ "83a5d6e2b65c7bf6": {
+  "reply": "1f01da5273f08b36",
+  "sheet": null
+ },
+ "843ad1fcd2a6c7b4": {
+  "reply": "6c730117c77816f8",
+  "sheet": null
+ },
+ "848789703c343213": {
+  "reply": "8df8edcbe1ee5b95",
+  "sheet": null
+ },
+ "84c416814ed48d01": {
+  "reply": "a98c0d82b994d71f",
+  "sheet": "7e46f18271775e61"
+ },
+ "8553c8b7f8a72c09": {
+  "reply": "eedbf62e73c9cfe6",
+  "sheet": null
+ },
+ "8574a19c2c5a93e2": {
+  "reply": "73050a1fa17c6db9",
+  "sheet": "02799fe4a330ce21"
+ },
+ "86f44f293daee10d": {
+  "reply": "16b1ecf17d414100",
+  "sheet": null
+ },
+ "8806959f545a83af": {
+  "reply": "06c7d9202e57585e",
+  "sheet": null
+ },
+ "8847ac6497a9d8f7": {
+  "varies": [
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-False]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-False]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-False]"
+  ]
+ },
+ "88eee14ab2a8115a": {
+  "reply": "d64db581800aeb66",
+  "sheet": "aaa53083dca6c6e2"
+ },
+ "89de98fcd4f0a4af": {
+  "reply": "9e6ddd44a41f10b1",
+  "sheet": null
+ },
+ "8b002a09cf02a965": {
+  "reply": "5ac1f63988296d70",
+  "sheet": null
+ },
+ "8b0172ed16106447": {
+  "reply": "006045f415d4598d",
+  "sheet": "087779c62714d69a"
+ },
+ "8b5933f2f4183c01": {
+  "reply": "be0a940a87dd33ca",
+  "sheet": "e51a879c905062d9"
+ },
+ "8be2de70ad1c064a": {
+  "reply": "20ddddf279dfd774",
+  "sheet": "6de60ebbdd4c2559"
+ },
+ "8beb0ee0cc59f685": {
+  "varies": [
+   "tests/test_edit_open_window.py::test_a_window_pid_without_a_different_copy_saves_nothing[4243-holds the file's copy]",
+   "tests/test_edit_open_window.py::test_a_window_that_does_not_take_the_chosen_copy_is_opened_again_from_the_file",
+   "tests/test_edit_open_window.py::test_the_copy_the_user_chose_is_saved_and_the_other_window_is_handed_it"
+  ]
+ },
+ "8d65ae4f9da99133": {
+  "reply": "4cb93aa34c74604b",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "8d7eec35ae8dd6a7": {
+  "reply": "8520e9afdc56457e",
+  "sheet": "5fcd33e31cbd8c08"
+ },
+ "8e353f68572285ee": {
+  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
+ "8ec8270d51061d0b": {
+  "reply": "40d5db00dd101acb",
+  "sheet": "509ddb679e8bfe03"
+ },
+ "8f261d6e969c6a56": {
+  "reply": "80de6882358070bf",
+  "sheet": null
+ },
+ "934f9db5354450d6": {
+  "reply": "e90fae2ce2284cf2",
+  "sheet": "5dbf7601bad3bc6f"
+ },
+ "935411bf2b2ed530": {
+  "reply": "291d8cbb9e272775",
+  "sheet": "b3a2468022b86f34"
+ },
+ "93d9fd4c44972640": {
+  "reply": "ddf3e4197c80cb76",
+  "sheet": "ffb9eba3962b6fc3"
+ },
+ "941f37f8af041b74": {
+  "reply": "977763d92f225b11",
+  "sheet": "b53e523c278c7a15"
+ },
+ "94b4552367bc8bcf": {
+  "reply": "f98ee3238e2ae318",
+  "sheet": null
+ },
+ "98da35edd03d3370": {
+  "reply": "f64a1f31837b7c72",
+  "sheet": "003b5c758daab3c8"
+ },
+ "9928d663ef4297c7": {
+  "reply": "6dc4b6159287e765",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "9bde7cad603492ca": {
+  "reply": "7fbdcfce6d30531f",
+  "sheet": "e51a879c905062d9"
+ },
+ "9d1c815ddc221517": {
+  "reply": "ff2bb32d8e460939",
+  "sheet": "5950d261f0733a5f"
+ },
+ "9d7fe8c75b9b5189": {
+  "reply": "a22802dcdde05e03",
+  "sheet": null
+ },
+ "9de19837c12498f3": {
+  "reply": "fdfb1aef2d4d8199",
+  "sheet": "14058ceaeffcba38"
+ },
+ "9e160d3eb433a9c1": {
+  "reply": "fb02b1f344cc4f71",
+  "sheet": "562a9043164cff64"
+ },
+ "9e446be4be364e2d": {
+  "reply": "5bf86e4ad62a5f90",
+  "sheet": "d70da2388e3f4613"
+ },
+ "9ee4a153a3eb5727": {
+  "reply": "fc73f137ccd0a96a",
+  "sheet": null
+ },
+ "9ff8a92f38d74678": {
+  "message": "Cannot open WORK/bus.asc: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+  "raised": "NetlistError"
+ },
+ "a01b0d8c5fe70952": {
+  "reply": "9179fbd11fd6fade",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "a181e00a3ddc1bd5": {
+  "reply": "d9fb9c2b460b678f",
+  "sheet": "44202d5c22063149"
+ },
+ "a2354cfe752b84b6": {
+  "reply": "9b30e2e6e28c38d2",
+  "sheet": "d083b44e671b9297"
+ },
+ "a2459303c3925076": {
+  "reply": "1105c3df44576f08",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "a42119384497b99a": {
+  "reply": "acf5384c67db6cfe",
+  "sheet": "ccc0ccf65a13b089"
+ },
+ "a47b36a65af571ad": {
+  "reply": "9c3101911c762156",
+  "sheet": "9a63168c465b5051"
+ },
+ "a5040e28a9fbcb04": {
+  "reply": "275be6f7003de360",
+  "sheet": null
+ },
+ "a6b46695c389945f": {
+  "reply": "c1a060f6ae9555b0",
+  "sheet": null
+ },
+ "a78926eaae91c6b7": {
+  "reply": "d10702c23c5abcf9",
+  "sheet": "b3a2468022b86f34"
+ },
+ "a846c5a73e8900d9": {
+  "reply": "f24ef55c8868904f",
+  "sheet": "018d0b7888b32527"
+ },
+ "a8886ac6ad6d1cf4": {
+  "message": "invalid view_cursors.label_only_pins: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
+ },
+ "a93731fe44276741": {
+  "reply": "e611b6aaf36a4ce6",
+  "sheet": null
+ },
+ "a9fa53192b5d6ced": {
+  "reply": "8a8eaffc40417e7d",
+  "sheet": null
+ },
+ "aa1cf51fac07afea": {
+  "reply": "3d2926552f0862df",
+  "sheet": null
+ },
+ "aa27fe2c0c7adf2e": {
+  "reply": "b9671e6bee73f8b8",
+  "sheet": "858573307ac29a7b"
+ },
+ "ab145d045816d49e": {
+  "reply": "27797bf14a73778e",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "abb27bd04d91f529": {
+  "reply": "291d8cbb9e272775",
+  "sheet": "b3a2468022b86f34"
+ },
+ "ad838360c6390f09": {
+  "reply": "b1f0fa1ecfd1941d",
+  "sheet": "a5bda05d7e572abc"
+ },
+ "ae36cc9277f4f158": {
+  "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
+  "raised": "InvalidCursorError"
+ },
+ "aed89e0f2f566e95": {
+  "reply": "bc14fd2895235293",
+  "sheet": "43a2822eb408c09d"
+ },
+ "afb198b586fbb207": {
+  "reply": "4c5f4c3d7af81eef",
+  "sheet": "c13e97e9196a2fd7"
+ },
+ "b263e5bf106e1da3": {
+  "reply": "5f1bff5dfb20ca8c",
+  "sheet": null
+ },
+ "b312ec3ed6d641e4": {
+  "reply": "a7d4a4c79e2f8a40",
+  "sheet": null
+ },
+ "b42687d28bd3edb4": {
+  "reply": "4a77d1e13c010d61",
+  "sheet": "b3a2468022b86f34"
+ },
+ "b5510bbfbb8281b5": {
+  "reply": "7f0f8dbe612e3795",
+  "sheet": "2385a94d791ae910"
+ },
+ "b7f0351b9a4b9161": {
+  "reply": "1a18dde2e9efec16",
+  "sheet": null
+ },
+ "b7f5e842c9821485": {
+  "reply": "d28239d4a14164b7",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "b90034560deefd99": {
+  "reply": "876363644042fe04",
+  "sheet": "afc8aa383e2e8640"
+ },
+ "b97751dfa72aa3c1": {
+  "reply": "5f6288ea1e0f0e03",
+  "sheet": null
+ },
+ "bba8398ac5416ab3": {
+  "reply": "74842d93c439307d",
+  "sheet": "b3a2468022b86f34"
+ },
+ "bc19ef43053b471b": {
+  "reply": "afddf992370eb669",
+  "sheet": "bab9cd389e43e638"
+ },
+ "bca9feb3106672cc": {
+  "reply": "7a243a8c8c277cea",
+  "sheet": "b3a2468022b86f34"
+ },
+ "bce1cf9732163e00": {
+  "reply": "28f2c95e7f07766a",
+  "sheet": null
+ },
+ "bce331a87c22947a": {
+  "reply": "2b22d3eefd5a23c7",
+  "sheet": null
+ },
+ "be0872f87edcd913": {
   "varies": [
    "tests/test_edit_open_window.py::test_a_window_changed_while_ltspice_asks_is_left_open",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[closes the sheet]",
@@ -1269,16 +949,356 @@
    "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file"
   ]
  },
- "ff6bfc179a7ba85b": {
-  "reply": "4a77d1e13c010d61",
+ "c0a05398a291b833": {
+  "reply": "51ff8337f1cb4ba6",
+  "sheet": "6e9880d2e1a04bf2"
+ },
+ "c1355c0f349b4d1f": {
+  "message": "invalid view_cursors.preexisting: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
+ },
+ "c1aff7a6d6eab7d1": {
+  "reply": "4842e46da2498fe6",
+  "sheet": null
+ },
+ "c3b57f52e69a9f7c": {
+  "reply": "70a8f75e976ce660",
+  "sheet": "88c9ff221b645b1b"
+ },
+ "c4135200c1492dcc": {
+  "reply": "148ec6116e4dc5b5",
+  "sheet": "bbd6b0cfdd8cd329"
+ },
+ "c48650eaa5fbd43a": {
+  "reply": "c58b6b61d9a955a2",
+  "sheet": null
+ },
+ "c510a13ee79f464d": {
+  "reply": "3c0ceeaa84a0764b",
+  "sheet": "15598c6f7ef7c69d"
+ },
+ "c5775eda26237383": {
+  "reply": "b6d5c194111a1ac1",
+  "sheet": null
+ },
+ "c63903f94ed9c311": {
+  "reply": "ae474fbe23413690",
   "sheet": "b3a2468022b86f34"
  },
- "ff85d560aab57794": {
-  "reply": "4a77d1e13c010d61",
-  "sheet": "b3a2468022b86f34"
+ "c65b8a3b14c9405b": {
+  "reply": "cfe616e4238337de",
+  "sheet": "2f66633286ed1ad2"
  },
- "ffb99aa46619b21c": {
+ "c6c63560ac0bc8a8": {
+  "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
+  "raised": "NetlistError"
+ },
+ "c6c8d61ee64e61b4": {
+  "reply": "56298b67026ad2b0",
+  "sheet": null
+ },
+ "c6edc425387e4c96": {
+  "reply": "c967c2d0cf5ffc9d",
+  "sheet": "dd784a9aa9452591"
+ },
+ "c7f3e3980ce0fd30": {
+  "reply": "49c179684dc1dda4",
+  "sheet": null
+ },
+ "caa9b6f86a48cd62": {
+  "reply": "929f528e132111ef",
+  "sheet": "65f07c55b9c1a9d6"
+ },
+ "cb9aa964fc173221": {
   "reply": "94252cb3a45a4ece",
   "sheet": "62ecac96c2c111e7"
+ },
+ "ccb1be304466999f": {
+  "reply": "78e7326917ba3022",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "cd390abe452dcc65": {
+  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT\\t16 16 Left 2 !.tran 2m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
+ "cdf7c8e05d6cacca": {
+  "reply": "0478f5c59d88d5b5",
+  "sheet": null
+ },
+ "ce04c709bbd2080b": {
+  "reply": "314faa0d12ad0227",
+  "sheet": "d70da2388e3f4613"
+ },
+ "ce1a5c0b094bab7b": {
+  "reply": "7615987a30a9981d",
+  "sheet": "be2910d5a44c2ad2"
+ },
+ "ce3825c7525ef515": {
+  "reply": "2244be4733f811f8",
+  "sheet": "d70da2388e3f4613"
+ },
+ "cf4313af64832a21": {
+  "reply": "df4debe26e2970c4",
+  "sheet": "7e8b75862034a676"
+ },
+ "cf62c175ffbac29d": {
+  "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+  "raised": "NetlistError"
+ },
+ "d060d4dba50d0c68": {
+  "reply": "354fc00bb8ac25d0",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "d1455dd9397469a9": {
+  "reply": "6117555ba9d202d5",
+  "sheet": "0f7d0950a33ecae5"
+ },
+ "d18f225ef5af2f45": {
+  "reply": "25f27843a7b0e4fd",
+  "sheet": null
+ },
+ "d2db7bfd583a560a": {
+  "varies": [
+   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
+   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes"
+  ]
+ },
+ "d52f69d924ba3a4c": {
+  "reply": "12e724f5f88aa823",
+  "sheet": "acac928179f1ea70"
+ },
+ "d5b9dda10d36ed6a": {
+  "reply": "3c0d4427fa6a6c79",
+  "sheet": null
+ },
+ "d5d56796e99b356e": {
+  "varies": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ]
+ },
+ "d5fef64da8a1e42a": {
+  "reply": "0cb8d12f804933a1",
+  "sheet": "4464b9a7038d05c9"
+ },
+ "d898bd0b0fb5afff": {
+  "reply": "56eb3bf5a508a7ad",
+  "sheet": "ccc0ccf65a13b089"
+ },
+ "d99f306b4b7e3e17": {
+  "reply": "291d8cbb9e272775",
+  "sheet": "b3a2468022b86f34"
+ },
+ "d9b580853bc67663": {
+  "reply": "3e16d147120eea9b",
+  "sheet": null
+ },
+ "da102e5b993eb32d": {
+  "reply": "c957ae5ab6c9d801",
+  "sheet": "1f1cd547b8f9866c"
+ },
+ "da3ed41b1dc2f873": {
+  "reply": "ac689a3bc06d1958",
+  "sheet": "4a8d150aa88702d6"
+ },
+ "db26d45639151902": {
+  "reply": "02c30648410b5bb9",
+  "sheet": "5fc5da36b17f4a93"
+ },
+ "db558c17d9ca68e5": {
+  "reply": "f04e321d233a1f38",
+  "sheet": "733d1ab2e59d6d40"
+ },
+ "dcaf8ada41beba37": {
+  "reply": "bbefa71f37315cbd",
+  "sheet": null
+ },
+ "de6fd8119948878f": {
+  "reply": "2b6c00d370324c3a",
+  "sheet": "89c7502b2db3c9e2"
+ },
+ "df5d4d23813eecb8": {
+  "reply": "f809ee58593c1c87",
+  "sheet": "0fe4a46d4fb4e6e1"
+ },
+ "df9ee58fc9ad7e71": {
+  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT 16 16 Left  2 !.tran 3m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
+ "dfe9292a1da9471a": {
+  "reply": "599571c0d1d7cb3c",
+  "sheet": "6c6f80b9f8fca180"
+ },
+ "e02aa01b870c3fe3": {
+  "reply": "dfd391ae6b84b852",
+  "sheet": null
+ },
+ "e0a410b9672dd758": {
+  "reply": "2ed4bd8e66a33e7a",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "e0b593209a0e101b": {
+  "reply": "7c2f61725e4532ed",
+  "sheet": "168171de437364ed"
+ },
+ "e0da8ad38f08709a": {
+  "message": "disk full",
+  "raised": "OSError"
+ },
+ "e1c0564b12ebf31b": {
+  "reply": "f04cf063d3539da9",
+  "sheet": "cd333cd95ee819e3"
+ },
+ "e23c53802a9e96b7": {
+  "reply": "22a8f2a3ac789f39",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "e314e97d4b37e192": {
+  "reply": "4237a41dbecda0c2",
+  "sheet": "935c282522aab58f"
+ },
+ "e4cc811c68d4a63b": {
+  "reply": "5c2d49a8c4ee7357",
+  "sheet": "0c9cf7c74f9326ad"
+ },
+ "e4e446f7b6451ed3": {
+  "message": "ops list is empty \u2014 pass at least one op, or name return_views to read the sheet's pin table without changing it.",
+  "raised": "NetlistError"
+ },
+ "e56ceca789f0276a": {
+  "reply": "29718b5b37003982",
+  "sheet": "d70da2388e3f4613"
+ },
+ "e5a447839ef93b01": {
+  "reply": "21154f45f7068bab",
+  "sheet": "d70da2388e3f4613"
+ },
+ "e6212c9468fafdea": {
+  "reply": "b188610dd156f29a",
+  "sheet": "53960f64fa788151"
+ },
+ "e63f0e5f273af220": {
+  "reply": "af7e668dfdeed3e6",
+  "sheet": "b3a2468022b86f34"
+ },
+ "e662b6d81605ebc6": {
+  "reply": "b472d27194746e5e",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "e7149e4e8d37179d": {
+  "reply": "74506fd5057e8fb2",
+  "sheet": null
+ },
+ "eaf7c73fc75b056d": {
+  "reply": "b27f9e00aca9bc1a",
+  "sheet": null
+ },
+ "ebc923f8c79bf3be": {
+  "reply": "5c74b88f3f2188ff",
+  "sheet": null
+ },
+ "ec4bb6148e62be47": {
+  "reply": "5cf330c497df377b",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "ecd85af3af313b8a": {
+  "reply": "9f22cfaea3f5e6e4",
+  "sheet": "168171de437364ed"
+ },
+ "ed78d3feca616554": {
+  "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
+ "ed7c53eaf8c3896b": {
+  "reply": "c2398dc8d30236ef",
+  "sheet": "189e647fb79514c1"
+ },
+ "eff3c0a0775667ea": {
+  "reply": "838782eb13cd9ce0",
+  "sheet": "ccc0ccf65a13b089"
+ },
+ "f01c3214dc49a432": {
+  "reply": "e2cdf3145c02a986",
+  "sheet": null
+ },
+ "f086f9ac40730a3a": {
+  "reply": "6be6f93517abd27e",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "f2fb798e4fd21b8e": {
+  "reply": "3ef784adad94cb04",
+  "sheet": null
+ },
+ "f40a96f031a9ee9a": {
+  "reply": "17ca42675da225d2",
+  "sheet": "879e5d6f510a331b"
+ },
+ "f60be6bdf232dd61": {
+  "reply": "fb70b7fc003e60ac",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "f84f2fc062268bde": {
+  "reply": "2699bf2b1e53a5d4",
+  "sheet": "af20c6214833a1e7"
+ },
+ "f94bb2072f02b1a8": {
+  "reply": "407e96db6577a92b",
+  "sheet": "49b1144b74853f95"
+ },
+ "f960ad3caed0cf67": {
+  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+  "raised": "NetlistError"
+ },
+ "f99daa7bf287e275": {
+  "reply": "846afcd949dec5e9",
+  "sheet": "c116e78a4d734899"
+ },
+ "f9d36f5e08b7dfc1": {
+  "reply": "302f9905f0f8f0b1",
+  "sheet": null
+ },
+ "fa4d39b850df29b1": {
+  "reply": "e98d833a962c76a0",
+  "sheet": null
+ },
+ "fbef2d50c16adcad": {
+  "reply": "bff86fa1f94a6f6a",
+  "sheet": "31b13aab2a2a8ebe"
+ },
+ "fc7e038d98c6ecbf": {
+  "reply": "6fcee7e7f62ebea1",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "fd0f0aef61382da3": {
+  "reply": "f340d4329a2aba0c",
+  "sheet": null
+ },
+ "fd4f5dfbc5e034fb": {
+  "reply": "339568fdc7453048",
+  "sheet": "0fe4a46d4fb4e6e1"
+ },
+ "fdfdc655e709e9d8": {
+  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+  "raised": "NetlistError"
+ },
+ "fe03669ea11cd6dd": {
+  "reply": "e110932617f104ff",
+  "sheet": null
+ },
+ "fe494e3c61d4dfed": {
+  "reply": "29850ee7554fe2e6",
+  "sheet": "fd0b62d3879aefde"
+ },
+ "ff0e9375337c45ec": {
+  "reply": "e721351f65e08d14",
+  "sheet": "d54e46e32c2352ac"
+ },
+ "ffe947b724adfaec": {
+  "reply": "5635fc35414f0729",
+  "sheet": "2f66633286ed1ad2"
+ },
+ "fff84b8dac68310b": {
+  "reply": "fb2f8b2ae9d1ce7b",
+  "sheet": "392e3cdd6b5d23fc"
  }
 }
