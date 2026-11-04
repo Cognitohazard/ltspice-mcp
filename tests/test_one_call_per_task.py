@@ -13,25 +13,24 @@ replayed job, the reduced number. A count may only go down.
 
 from __future__ import annotations
 
-import shutil
+import ast
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib.deck_staging import sha256_file
-from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
+from tests._asc_ops import DIVIDER_DECK, DIVIDER_DECK_REWIRED, DIVIDER_OPS
 from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
-    call_tool_params,
-    fake_request_context,
+    copied_sheet,
+    dispatched,
     fake_simulator,
-    make_experiment_job,
+    job_that_ran,
+    rc_transient_deck,
     recorded_fixture_simulator,
-    stage_recorded_fixture,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -46,12 +45,7 @@ class Client:
 
     async def call(self, tool: str, **arguments: Any) -> dict[str, Any]:
         self.calls.append(tool)
-        result = await call_tool(
-            fake_request_context(self.state), call_tool_params(tool, arguments)
-        )
-        data = result.structured_content
-        assert data is not None, result.content
-        return data
+        return await dispatched(self.state, tool, **arguments)
 
 
 # ---------------------------------------------------------------------------
@@ -62,15 +56,8 @@ class Client:
 async def test_a_cases_results_go_beside_its_sheet_in_one_call(
     state_no_sim: SessionState, work_dir: Path
 ):
-    sheet = work_dir / "amp.asc"
-    shutil.copyfile(FIXTURES_DIR / "Draft1.asc", sheet)
-    kept = work_dir / "runs" / "placed"
-    kept.mkdir(parents=True)
-    raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
-    job = make_experiment_job(state_no_sim, job_id="placed", raw=raw)
-    job.cases[0].circuit_path = sheet
-    job.sources[0].path = sheet
-    job.sources[0].sha256 = sha256_file(sheet)
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
     client = Client(state_no_sim)
 
     placed = await client.call("jobs", action="place_beside_sheet", job_id="placed")
@@ -85,20 +72,6 @@ async def test_a_cases_results_go_beside_its_sheet_in_one_call(
 # An edit checked against a reference
 # ---------------------------------------------------------------------------
 
-_DIVIDER_OPS: list[dict[str, Any]] = [
-    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
-    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
-    {
-        "op": "wire_pins",
-        "from_pin": "R1.1",
-        "to_pin": "R2.1",
-        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
-    },
-    {"op": "add_net_label", "net": "vout", "pin": "R1.2"},
-]
-_DIVIDER_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
-_OTHER_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
-
 
 @pytest.fixture
 def ltspice_exports_the_divider(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
@@ -112,7 +85,7 @@ def ltspice_exports_the_divider(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     async def export(sheet: Path, _state: SessionState) -> str:
         exported.append(sheet)
         assert "SYMBOL res" in sheet.read_text(encoding="utf-8", errors="replace")  # noqa: ASYNC240
-        return _DIVIDER_DECK
+        return DIVIDER_DECK
 
     monkeypatch.setattr(se, "_export_asc_to_netlist", export)
     return exported
@@ -127,8 +100,8 @@ async def test_an_edit_is_compared_with_its_reference_in_the_same_call(
         "edit_schematic",
         path="divider.asc",
         base="blank",
-        ops=_DIVIDER_OPS,
-        compare={"reference": _DIVIDER_DECK},
+        ops=DIVIDER_OPS,
+        compare={"reference": DIVIDER_DECK},
     )
 
     assert client.calls == ["edit_schematic"]
@@ -147,8 +120,8 @@ async def test_a_mismatch_is_reported_in_the_same_call_without_undoing_the_edit(
         "edit_schematic",
         path="divider.asc",
         base="blank",
-        ops=_DIVIDER_OPS,
-        compare={"reference": _OTHER_DECK},
+        ops=DIVIDER_OPS,
+        compare={"reference": DIVIDER_DECK_REWIRED},
     )
 
     assert client.calls == ["edit_schematic"]
@@ -163,16 +136,6 @@ async def test_a_mismatch_is_reported_in_the_same_call_without_undoing_the_edit(
 # ---------------------------------------------------------------------------
 
 
-def _deck(work_dir: Path) -> Path:
-    deck = work_dir / "rc.cir"
-    deck.write_text(
-        "V1 in 0 PULSE(0 1 0 1n 1n 1m 2m)\nR1 in out 1k\nC1 out 0 100n\n.tran 1m\n.end\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    return deck
-
-
 async def test_two_settings_are_run_and_measured_in_one_call(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -182,7 +145,7 @@ async def test_two_settings_are_run_and_measured_in_one_call(
     receipt = await client.call(
         "run_experiments",
         request_id="two-settings",
-        circuits=[{"path": str(_deck(work_dir)), "id": "rc"}],
+        circuits=[{"path": str(rc_transient_deck(work_dir)), "id": "rc"}],
         variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
         analyze={
             "recipes": [
@@ -207,7 +170,7 @@ async def test_two_settings_are_run_and_measured_in_one_call(
     # what this pins is that each setting is measured in the same reply.
     assert sorted(group["by"]["R1"] for group in groups) == ["1k", "2k"], groups
     for group in groups:
-        ((reduced,),) = [group["reduced"]]
+        (reduced,) = group["reduced"]
         assert reduced["stat"] == "mean" and isinstance(reduced["value"], float), group
 
 
@@ -217,7 +180,7 @@ async def test_repeating_a_request_id_answers_from_the_job_in_one_call(
     launches = fake_simulator(monkeypatch)
     arguments: dict[str, Any] = {
         "request_id": "asked-again",
-        "circuits": [{"path": str(_deck(work_dir)), "id": "rc"}],
+        "circuits": [{"path": str(rc_transient_deck(work_dir)), "id": "rc"}],
         "variations": [{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
         "execution": {"wait_s": LIVENESS_S},
     }
@@ -249,7 +212,7 @@ async def test_a_jobs_results_are_reduced_in_python_in_one_call(
     receipt = await Client(state_with_sim).call(
         "run_experiments",
         request_id="to-reduce",
-        circuits=[{"path": str(_deck(work_dir)), "id": "rc"}],
+        circuits=[{"path": str(rc_transient_deck(work_dir)), "id": "rc"}],
         execution={"wait_s": LIVENESS_S},
     )
     assert receipt["status"] == "completed", receipt
@@ -271,7 +234,7 @@ async def test_a_jobs_results_are_reduced_in_python_in_one_call(
 
     assert client.calls == ["run_code"]
     assert reduced["status"] == "ok", reduced
-    size, peak, sampled = eval(reduced["result"], {})
+    size, peak, sampled = ast.literal_eval(reduced["result"])
     assert size == expected
     assert sampled is True
     assert 0.0 < peak <= 1.0 + 1e-9, reduced

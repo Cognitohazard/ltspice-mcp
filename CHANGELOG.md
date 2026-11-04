@@ -67,8 +67,9 @@ tool-surface changes.
   it said only that the field was not permitted. A missing field that chooses
   a branch is answered with the values it takes (`jobs` without `action`,
   an `edit_schematic` op without `op`), where pydantic's "Unable to extract
-  tag using discriminator" named neither; a `jobs` call without `action` also
-  names the fields no action takes, such as a misspelled `action`.
+  tag using discriminator" named neither. The item's fields that no branch
+  takes are refused beside it, so a misspelled `action` or `op` is named
+  (validation stopped at the missing field and never reached them).
 - `verify_circuit` places a refused include at the line of the `.include` or
   `.lib` that names it, in the deck or in the included file that holds it,
   where it gave the deck alone. A refused `compare.reference` is filed under

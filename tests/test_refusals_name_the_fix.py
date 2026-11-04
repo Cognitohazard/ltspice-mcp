@@ -28,15 +28,9 @@ from typing import Any
 import pytest
 
 import ltspice_mcp.tools  # noqa: F401  (registers every tool)
-from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import registry
 from ltspice_mcp.tools.reference_index import build_index
-from tests.conftest import call_tool_params, fake_request_context
-
-
-def _input_schemas() -> dict[str, dict[str, Any]]:
-    return {rt.definition.name: rt.definition.input_schema for rt in registry._registered}
+from tests.conftest import advertised_input_schemas, dispatch
 
 
 def _branch_fields() -> dict[str, dict[str, dict[str, tuple[str, ...]]]]:
@@ -47,24 +41,25 @@ def _branch_fields() -> dict[str, dict[str, dict[str, tuple[str, ...]]]]:
     A field chooses a branch when its advertised values are exactly the names
     of one family of the tool's branches in the reference table.
     """
-    families: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {}
+    families: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {}
     for entry in build_index():
-        if entry.family == "argument":
-            continue
-        families.setdefault((entry.tool, entry.family), {})[entry.name] = tuple(
-            field.name for field in entry.fields if "." not in field.name
-        )
+        if entry.family != "argument":
+            families.setdefault(entry.tool, {}).setdefault(entry.family, {})[entry.name] = tuple(
+                field.name for field in entry.fields if "." not in field.name
+            )
     chosen: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {}
-    for tool, schema in _input_schemas().items():
+    for tool, schema in advertised_input_schemas().items():
         for field, spec in schema.get("properties", {}).items():
             values = set(spec.get("enum", ()))
-            for (family_tool, _), branches in families.items():
-                if family_tool == tool and values and values == set(branches):
+            if not values:
+                continue
+            for branches in families.get(tool, {}).values():
+                if values == set(branches):
                     chosen.setdefault(tool, {})[field] = branches
     return chosen
 
 
-_SCHEMAS = _input_schemas()
+_SCHEMAS = advertised_input_schemas()
 _BRANCHES = _branch_fields()
 
 
@@ -139,7 +134,7 @@ def _mismatch_cases() -> list[Any]:
 
 async def _refusal(state: SessionState, tool: str, arguments: dict[str, Any]) -> str:
     """The message of the refusal, as a structured-aware client reads it."""
-    result = await call_tool(fake_request_context(state), call_tool_params(tool, arguments))
+    result = await dispatch(state, tool, arguments)
     assert result.is_error, f"{tool} accepted {arguments}"
     data = result.structured_content
     assert data is not None
@@ -149,11 +144,6 @@ async def _refusal(state: SessionState, tool: str, arguments: dict[str, Any]) ->
 
 def _names(message: str, name: str) -> bool:
     return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", message) is not None
-
-
-@pytest.fixture
-def state(config) -> SessionState:
-    return SessionState.create(config, available={})
 
 
 def test_the_cases_cover_every_tool_and_the_action_tools():
@@ -167,18 +157,12 @@ def test_the_cases_cover_every_tool_and_the_action_tools():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "field", "arguments"), _misspelling_cases())
 async def test_a_misspelled_field_is_refused_with_the_field_it_meant(
-    state: SessionState, tool: str, field: str, arguments: dict[str, Any]
+    state_no_sim: SessionState, tool: str, field: str, arguments: dict[str, Any]
 ):
-    message = await _refusal(state, tool, arguments)
+    message = await _refusal(state_no_sim, tool, arguments)
 
     typo = _misspelled(field)
     assert _names(message, typo), f"{tool}: the refusal does not name {typo!r}: {message}"
-    for chooser in _BRANCHES.get(tool, {}):
-        if field == chooser:
-            # A call with no valid branch field is refused for that field, with
-            # the values it takes: the way round, though not the typo.
-            assert _names(message, chooser), message
-            return
     assert _names(message, field), (
         f"{tool}: the refusal of {typo!r} does not name {field!r}, the field it meant: {message}"
     )
@@ -187,9 +171,9 @@ async def test_a_misspelled_field_is_refused_with_the_field_it_meant(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "field", "arguments", "where"), _missing_cases())
 async def test_a_missing_required_field_is_named_where_it_is_missing(
-    state: SessionState, tool: str, field: str, arguments: dict[str, Any], where: str
+    state_no_sim: SessionState, tool: str, field: str, arguments: dict[str, Any], where: str
 ):
-    message = await _refusal(state, tool, arguments)
+    message = await _refusal(state_no_sim, tool, arguments)
 
     assert re.search(rf"(?<![\w.]){re.escape(where)}: Field required", message), (
         f"{tool}: the refusal does not say {where!r} is required: {message}"
@@ -204,13 +188,13 @@ async def test_a_missing_required_field_is_named_where_it_is_missing(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "arguments", "field", "accepted"), _mismatch_cases())
 async def test_a_field_sent_with_an_action_that_does_not_take_it_names_what_it_takes(
-    state: SessionState,
+    state_no_sim: SessionState,
     tool: str,
     arguments: dict[str, Any],
     field: str,
     accepted: tuple[str, ...],
 ):
-    message = await _refusal(state, tool, arguments)
+    message = await _refusal(state_no_sim, tool, arguments)
 
     assert _names(message, field), f"{tool}: the refusal does not name {field!r}: {message}"
     missing = [name for name in accepted if not _names(message, name)]

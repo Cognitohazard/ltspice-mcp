@@ -2311,13 +2311,12 @@ async def evaluate_verify_circuit(
     # The finding is filed under the file that was refused: the circuit, or the
     # comparison's reference.
     refused = args.path
+    reference = None
     try:
         path = safe_path(args.path, state)
         if compare:
             refused = compare.reference
             reference = resolve_reference(compare.reference, state)
-        else:
-            reference = None
     except PathSecurityError as exc:
         data["findings"] = [
             _finding(

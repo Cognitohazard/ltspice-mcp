@@ -48,7 +48,13 @@ from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 # pays their schema) but not the envelope contract matrix. Shared in conftest
 # so every file naming the surface reads one constant.
 from tests._text import flat, has_heading, names
-from tests.conftest import ENVELOPE_TOOLS, REGISTERED_TOOLS, schema_descriptions
+from tests.conftest import (
+    ENVELOPE_TOOLS,
+    REGISTERED_TOOLS,
+    advertised_input_schemas,
+    property_names,
+    schema_descriptions,
+)
 
 # The single ratified outcome vocabulary (design section 2). No per-tool dialect
 # is allowed: every outcome enum any of the six declares must be a subset.
@@ -78,10 +84,6 @@ def _output_schemas() -> dict[str, dict[str, Any]]:
         assert schema is not None, f"{name}: consolidated tool must declare an outputSchema"
         schemas[name] = schema
     return schemas
-
-
-def _input_schemas() -> dict[str, dict[str, Any]]:
-    return {name: tool_def.input_schema for name, tool_def in _registered().items()}
 
 
 # The routes a description points a caller at, matched without depending on
@@ -227,13 +229,6 @@ def _property_objects(node: Any) -> Iterator[dict[str, Any]]:
             yield from _property_objects(item)
 
 
-def _property_names(schema: dict[str, Any]) -> set[str]:
-    names: set[str] = set()
-    for obj in _property_objects(schema):
-        names.update(obj["properties"].keys())
-    return names
-
-
 def _as_type_set(node: dict[str, Any]) -> set[str]:
     declared = node.get("type")
     if isinstance(declared, str):
@@ -244,7 +239,7 @@ def _as_type_set(node: dict[str, Any]) -> set[str]:
 
 
 def test_budget_owner_matrix_pins_the_complete_consolidated_surface():
-    schemas = _input_schemas()
+    schemas = advertised_input_schemas()
     assert set(schemas) == set(REGISTERED_TOOLS)
     owners = {name for name, schema in schemas.items() if "budget" in schema.get("properties", {})}
     assert owners == {"run_experiments", "jobs", "analyze_results", "inspect"}
@@ -582,9 +577,9 @@ class TestCallablePagination:
 
     @pytest.mark.parametrize("name", ["jobs", "analyze_results", "inspect", "edit_schematic"])
     def test_paginated_tools_accept_a_cursor_input(self, name: str):
-        out_props = _property_names(_output_schemas()[name])
+        out_props = property_names(_output_schemas()[name])
         assert "next_cursor" in out_props, f"{name}: expected a paginated output"
-        in_props = _property_names(_input_schemas()[name])
+        in_props = property_names(advertised_input_schemas()[name])
         assert _CURSOR_INPUT_FIELDS & in_props, (
             f"{name}: returns a next_cursor but declares no cursor input — "
             "pagination must be callable, not declarative"

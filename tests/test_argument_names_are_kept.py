@@ -34,48 +34,18 @@ from typing import Any
 import pytest
 
 import ltspice_mcp.tools  # noqa: F401  (registers every tool)
-from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import registry
 from ltspice_mcp.tools.reference_index import RENAMED_ARGUMENTS
-from tests.conftest import call_tool_params, fake_request_context
+from tests.conftest import advertised_input_schemas, dispatch, property_names
 
 RECORD = Path(__file__).parent / "fixtures" / "tool_arguments.json"
 CHANGELOG = Path(__file__).parent.parent / "CHANGELOG.md"
 RECORDING = os.environ.get("LTSPICE_MCP_RECORD_TOOL_ARGUMENTS") == "1"
 
 
-def _names_in(schema: dict[str, Any]) -> set[str]:
-    """Every property name anywhere in an input schema, through its definitions."""
-    names: set[str] = set()
-    seen: set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-            return
-        if not isinstance(node, dict):
-            return
-        ref = node.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/") and ref not in seen:
-            seen.add(ref)
-            walk(schema["$defs"][ref.split("/")[-1]])
-        properties = node.get("properties")
-        if isinstance(properties, dict):
-            names.update(properties)
-            walk(list(properties.values()))
-        for key in ("items", "additionalProperties", "anyOf", "oneOf", "allOf"):
-            walk(node.get(key))
-
-    walk(schema)
-    return names
-
-
 def _current() -> dict[str, list[str]]:
     return {
-        rt.definition.name: sorted(_names_in(rt.definition.input_schema))
-        for rt in registry._registered
+        tool: sorted(property_names(schema)) for tool, schema in advertised_input_schemas().items()
     }
 
 
@@ -90,38 +60,32 @@ def _unreleased() -> str:
     return text[start : end if end != -1 else len(text)]
 
 
-def _disappeared(recorded: dict[str, Any]) -> dict[str, list[str]]:
-    current = _current()
+def _beyond(names: dict[str, list[str]], others: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Per tool, the names in ``names`` that ``others`` lacks, where there are any."""
     return {
-        tool: sorted(set(names) - set(current.get(tool, ())))
-        for tool, names in recorded["arguments"].items()
-        if set(names) - set(current.get(tool, ()))
+        tool: sorted(extra)
+        for tool, listed in names.items()
+        if (extra := set(listed) - set(others.get(tool, ())))
     }
 
 
 def _record() -> None:
     previous = _recorded() if RECORD.exists() else {"arguments": {}, "retired": {}}
     current = _current()
-    retired: dict[str, dict[str, str]] = {
-        tool: dict(names) for tool, names in previous.get("retired", {}).items()
-    }
-    for tool, names in _disappeared(previous).items():
-        for name in names:
-            new = RENAMED_ARGUMENTS.get(tool, {}).get(name)
-            assert new is not None, (
-                f"{tool} no longer takes {name!r} and RENAMED_ARGUMENTS names nothing "
-                "that replaced it: add the rename before recording"
-            )
-            retired.setdefault(tool, {})[name] = new
-    # A rename declared in the map is a retirement too, recorded or not.
-    for tool, renames in RENAMED_ARGUMENTS.items():
+    for tool, names in _beyond(previous["arguments"], current).items():
+        unnamed = [name for name in names if name not in RENAMED_ARGUMENTS.get(tool, {})]
+        assert not unnamed, (
+            f"{tool} no longer takes {unnamed} and RENAMED_ARGUMENTS names nothing that "
+            "replaced them: add the renames before recording"
+        )
+    # Every rename the map declares, and every one recorded before, whose old
+    # name no argument of the tool takes again.
+    retired: dict[str, dict[str, str]] = {}
+    for tool, renames in [*previous["retired"].items(), *RENAMED_ARGUMENTS.items()]:
         for name, new in renames.items():
             if name not in current.get(tool, ()):
                 retired.setdefault(tool, {})[name] = new
-    for tool, names in retired.items():
-        for name in [name for name in names if name in current.get(tool, ())]:
-            del names[name]  # taken again: no longer retired
-    record = {"arguments": current, "retired": {t: n for t, n in retired.items() if n}}
+    record = {"arguments": current, "retired": retired}
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     RECORD.write_text(text, encoding="utf-8", newline="\n")
 
@@ -135,7 +99,7 @@ def _retirements() -> list[Any]:
     with whether it is new since the record (and so still Unreleased)."""
     recorded = _recorded()
     cases = []
-    for tool, names in _disappeared(recorded).items():
+    for tool, names in _beyond(recorded["arguments"], _current()).items():
         for name in names:
             cases.append(pytest.param(tool, name, True, id=f"{tool}-{name}-unrecorded"))
     for tool, names in recorded["retired"].items():
@@ -145,13 +109,7 @@ def _retirements() -> list[Any]:
 
 
 def test_every_argument_name_is_recorded():
-    recorded = _recorded()["arguments"]
-    current = _current()
-    added = {
-        tool: sorted(set(names) - set(recorded.get(tool, ())))
-        for tool, names in current.items()
-        if set(names) - set(recorded.get(tool, ()))
-    }
+    added = _beyond(_current(), _recorded()["arguments"])
     assert not added, (
         f"New argument names {added}: record them with "
         "LTSPICE_MCP_RECORD_TOOL_ARGUMENTS=1, so a later rename of one is caught."
@@ -165,15 +123,10 @@ def test_the_record_holds_the_renames_already_made():
     assert retired["plot_waveform"]["raw_file"] == "path"
 
 
-@pytest.fixture
-def state(config) -> SessionState:
-    return SessionState.create(config, available={})
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "old", "unrecorded"), _retirements())
 async def test_an_old_name_is_refused_with_the_new_one_and_announced(
-    state: SessionState, tool: str, old: str, unrecorded: bool
+    state_no_sim: SessionState, tool: str, old: str, unrecorded: bool
 ):
     new = RENAMED_ARGUMENTS.get(tool, {}).get(old)
     assert new is not None, (
@@ -184,7 +137,7 @@ async def test_an_old_name_is_refused_with_the_new_one_and_announced(
         f"{tool}: {old!r} is renamed to {new!r}, which it does not take"
     )
 
-    result = await call_tool(fake_request_context(state), call_tool_params(tool, {old: 1}))
+    result = await dispatch(state_no_sim, tool, {old: 1})
 
     assert result.is_error
     assert result.structured_content is not None

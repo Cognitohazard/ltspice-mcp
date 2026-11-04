@@ -205,9 +205,10 @@ async def test_a_jobs_call_without_an_action_names_the_actions_and_the_misspelli
 
 
 @pytest.mark.asyncio
-async def test_a_missing_op_is_answered_with_the_ops(config):
+async def test_a_missing_op_is_answered_with_the_ops_and_its_misspelling(config):
+    # Validation stops at the missing op, so the misspelled field was never named.
     state = _consolidated_state(config)
-    arguments = {"path": "amp.asc", "ops": [{"ref": "R1"}]}
+    arguments = {"path": "amp.asc", "ops": [{"opp": "move", "references": ["R1"]}]}
 
     result = await call_tool(
         fake_request_context(state), call_tool_params("edit_schematic", arguments)
@@ -216,3 +217,6 @@ async def test_a_missing_op_is_answered_with_the_ops(config):
     assert result.is_error
     message = tool_text(result)
     assert "ops.0.op: Field required, one of 'add_component', 'set_component_value'," in message
+    assert "ops.0.opp: Extra inputs are not permitted" in message
+    assert "Did you mean 'op' for 'opp'?" in message
+    assert "ops.0.references" not in message

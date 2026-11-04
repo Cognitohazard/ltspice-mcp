@@ -18,6 +18,7 @@ import time
 import typing
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from pathlib import Path
+from types import ModuleType
 
 import psutil
 import pytest
@@ -40,6 +41,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
 from tests import schedule_jitter, sheet_edit_record
 from tests._schematic_fixtures import SUITE_LIBRARY_DIR
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
@@ -551,6 +553,18 @@ def fake_simulator(
     return recorded
 
 
+def rc_transient_deck(directory: Path) -> Path:
+    """An RC step-response deck, the circuit ``recorded_fixture_simulator``'s
+    default recording (``ltspice_tran_rc``) stands for: V(out) charges to 1."""
+    deck = directory / "rc.cir"
+    deck.write_text(
+        "V1 in 0 PULSE(0 1 0 1n 1n 1m 2m)\nR1 in out 1k\nC1 out 0 100n\n.tran 1m\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return deck
+
+
 def recorded_fixture_simulator(
     monkeypatch: pytest.MonkeyPatch, fixture: str = "ltspice_tran_rc"
 ) -> list[str]:
@@ -1048,6 +1062,30 @@ def make_experiment_job(
     return job
 
 
+def copied_sheet(directory: Path, name: str = "amp") -> Path:
+    """A sheet of the suite's (``Draft1.asc``) copied to ``directory`` as ``name``."""
+    sheet = directory / f"{name}.asc"
+    shutil.copyfile(FIXTURES_DIR / "Draft1.asc", sheet)
+    return sheet
+
+
+def job_that_ran(state: SessionState, sheet: Path, work_dir: Path, **job: typing.Any) -> Path:
+    """A finished job ``placed`` that ran ``sheet`` as it is now, its results (a
+    recorded LTspice run) in a folder of the job's own under another name.
+    Returns the results file."""
+    from ltspice_mcp.lib.deck_staging import sha256_file
+
+    kept = work_dir / "runs" / "placed"
+    kept.mkdir(parents=True)
+    raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
+    made = make_experiment_job(state, job_id="placed", raw=raw, **job)
+    for case in made.cases:
+        case.circuit_path = sheet
+    made.sources[0].path = sheet
+    made.sources[0].sha256 = sha256_file(sheet)
+    return raw
+
+
 class _FakeSession:
     """Stub MCP session — progress calls are no-ops."""
 
@@ -1082,6 +1120,43 @@ def call_tool_params(name: str, arguments: dict | None = None):
     from mcp import types
 
     return types.CallToolRequestParams(name=name, arguments=arguments)
+
+
+async def dispatch(state: SessionState, tool: str, arguments: dict | None = None):
+    """One ``tools/call`` through the server's own dispatch (``server.call_tool``),
+    as a client reaches the server."""
+    from ltspice_mcp.server import call_tool
+
+    return await call_tool(fake_request_context(state), call_tool_params(tool, arguments))
+
+
+async def dispatched(state: SessionState, tool: str, **arguments: typing.Any) -> dict:
+    """The ``structuredContent`` of one ``tools/call`` through the server's dispatch."""
+    result = await dispatch(state, tool, arguments)
+    data = result.structured_content
+    assert data is not None, result.content
+    return data
+
+
+def advertised_input_schemas() -> dict[str, dict[str, typing.Any]]:
+    """Every registered tool's input schema, as ``tools/list`` advertises it."""
+    from ltspice_mcp.tools._base import registry
+
+    return {rt.definition.name: rt.definition.input_schema for rt in registry._registered}
+
+
+def property_names(schema: typing.Any) -> set[str]:
+    """Every property name anywhere in a JSON schema, its definitions included."""
+    names: set[str] = set()
+    if isinstance(schema, dict):
+        if isinstance(schema.get("properties"), dict):
+            names.update(schema["properties"])
+        for value in schema.values():
+            names |= property_names(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            names |= property_names(item)
+    return names
 
 
 def tool_text(result) -> str:
@@ -1586,18 +1661,18 @@ def _isolated_state_home(tmp_path_factory: pytest.TempPathFactory) -> Iterator[N
 _FRAME_WINDOW = 25
 
 
+_CHECK_FINDING_KEYS = frozenset({"rule_id", "severity", "at", "subject"})
+_SHEET_FINDING_KINDS = frozenset(VALIDATION_WARNING_KINDS)
+
+
 def _is_check_finding(value: dict) -> bool:
     """A lint or check finding in the shared shape (``FINDING_SCHEMA``)."""
-    return {"rule_id", "severity", "at", "subject"} <= value.keys() and isinstance(
-        value["at"], dict
-    )
+    return value.keys() >= _CHECK_FINDING_KEYS and isinstance(value["at"], dict)
 
 
 def _is_sheet_finding(value: dict) -> bool:
     """A sheet finding as ``edit_schematic`` reports it (``VALIDATION_WARNINGS_SCHEMA``)."""
-    from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
-
-    return "message" in value and value.get("kind") in VALIDATION_WARNING_KINDS
+    return "message" in value and value.get("kind") in _SHEET_FINDING_KINDS
 
 
 #: Check findings about a file as a whole, which the file alone places, with
@@ -1607,7 +1682,7 @@ FILE_LEVEL_RULES: dict[str, str] = {
         "The file named by an argument was refused, so it was never read. A refused "
         "include is placed at its directive's line instead."
     ),
-    "lex_error": "The deck did not lex, so it has no cards to point into.",
+    "lex_error": "The lexer's error names no line, though the card it stopped in has one.",
 }
 
 
@@ -1645,11 +1720,36 @@ def unplaced_findings(value: typing.Any, path: tuple = ()) -> Iterator[tuple[tup
     if isinstance(value, dict):
         if (_is_check_finding(value) or _is_sheet_finding(value)) and not _placed(value):
             yield path, value
-        for key, item in value.items():
-            yield from unplaced_findings(item, (*path, key))
+        items: typing.Iterable = value.items()
     elif isinstance(value, list):
-        for index, item in enumerate(value):
-            yield from unplaced_findings(item, (*path, index))
+        items = enumerate(value)
+    else:
+        return
+    for key, item in items:
+        if isinstance(item, (dict, list)):
+            yield from unplaced_findings(item, (*path, key))
+
+
+def tool_modules() -> set[ModuleType]:
+    """Every module of the ``ltspice_mcp.tools`` package."""
+    import ltspice_mcp.tools as tools_pkg
+
+    return {
+        module
+        for module in vars(tools_pkg).values()
+        if isinstance(module, ModuleType) and module.__name__.startswith("ltspice_mcp.tools.")
+    }
+
+
+def declared_output_schemas() -> Iterator[tuple[ModuleType, Callable, dict]]:
+    """Every handler in the tool modules that declares a ``structuredContent``
+    contract (``@registry.tool`` or ``@declare_output_schema``), with its module
+    and that schema. The one scan the reply checker and the schema walks use."""
+    for module in tool_modules():
+        for obj in vars(module).values():
+            schema = getattr(obj, "__output_schema__", None)
+            if schema is not None and callable(obj):
+                yield module, obj, schema
 
 
 #: Fields that continue a cut list from where it stopped.
@@ -1685,11 +1785,13 @@ def cut_without_continuation(
             ):
                 yield path
         for key, item in value.items():
-            yield from cut_without_continuation(item, (*path, key), (*around, value))
+            if isinstance(item, (dict, list)):
+                yield from cut_without_continuation(item, (*path, key), (*around, value))
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            # A list's item is a reply item of its own.
-            yield from cut_without_continuation(item, (*path, index), ())
+            if isinstance(item, (dict, list)):
+                # A list's item is a reply item of its own.
+                yield from cut_without_continuation(item, (*path, index), ())
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -1732,27 +1834,16 @@ def _enforce_output_schema_conformance():
     # (the frame that emits; __wrapped__ unwraps the registry's validation
     # wrapper), so two same-named handlers in different modules cannot share
     # a validator.
-    from types import ModuleType
-
     import jsonschema
 
     import ltspice_mcp.tools as tools_pkg
     from ltspice_mcp.tools import _base as base_mod
 
-    tool_modules = {
-        mod
-        for mod in vars(tools_pkg).values()
-        if isinstance(mod, ModuleType) and mod.__name__.startswith("ltspice_mcp.tools.")
-    }
     contracts: dict = {}  # code object -> (handler name, compiled validator)
-    for mod in tool_modules:
-        for obj in vars(mod).values():
-            schema = getattr(obj, "__output_schema__", None)
-            if schema is None or not callable(obj):
-                continue
-            code = getattr(obj, "__wrapped__", obj).__code__
-            if code not in contracts:
-                contracts[code] = (obj.__name__, jsonschema.Draft202012Validator(schema))
+    for _, handler, schema in declared_output_schemas():
+        code = getattr(handler, "__wrapped__", handler).__code__
+        if code not in contracts:
+            contracts[code] = (handler.__name__, jsonschema.Draft202012Validator(schema))
 
     from ltspice_mcp.lib.reply_fields import silent_fields
     from ltspice_mcp.tools._base import ALL_KEPT, ALWAYS_PRESENT, registry
@@ -1798,22 +1889,23 @@ def _enforce_output_schema_conformance():
                 "keep one on the tool's ALWAYS_PRESENT list with the reason."
             )
 
+    def _dotted(path: tuple) -> str:
+        return ".".join(str(part) for part in path) or "<root>"
+
     def _hold_findings_to_a_place(sc, frame) -> None:
-        unplaced = list(unplaced_findings(sc))
-        if unplaced:
-            path, finding = unplaced[0]
-            named = ".".join(str(part) for part in path) or "<root>"
+        unplaced = next(unplaced_findings(sc), None)
+        if unplaced is not None:
+            path, finding = unplaced
             raise AssertionError(
-                f"{_replying_tool(frame) or 'a reply'}: the finding at {named} says nowhere "
+                f"{_replying_tool(frame) or 'a reply'}: the finding at {_dotted(path)} says nowhere "
                 f"where it is ({finding}). Give it a line, coordinates or a part reference."
             )
 
     def _hold_cut_lists_to_a_way_on(sc, frame) -> None:
-        stranded = list(cut_without_continuation(sc))
-        if stranded:
-            named = ".".join(str(part) for part in stranded[0]) or "<root>"
+        stranded = next(cut_without_continuation(sc), None)
+        if stranded is not None:
             raise AssertionError(
-                f"{_replying_tool(frame) or 'a reply'}: the list at {named} was cut short "
+                f"{_replying_tool(frame) or 'a reply'}: the list at {_dotted(stranded)} was cut short "
                 "and the reply gives no way to read the rest: a next_cursor, a hint "
                 "beside the flag, or a hint or warning around it that names the list."
             )
@@ -1874,7 +1966,7 @@ def _enforce_output_schema_conformance():
     # live for the canonical binding; it cannot prove no alias exists. Keep
     # the canonical names when adding tool modules.
     saved = []
-    for mod in tool_modules | {base_mod, tools_pkg}:
+    for mod in tool_modules() | {base_mod, tools_pkg}:
         for attr, checked, orig in (
             ("format_response", checked_format_response, original_format),
             ("json_response", checked_json_response, original_json),

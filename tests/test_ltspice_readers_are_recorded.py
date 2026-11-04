@@ -20,58 +20,76 @@ held to the rule by that module.
 from __future__ import annotations
 
 import ast
-import tomllib
+import functools
+import re
 from pathlib import Path
 
+from tests import _ltspice_recorded as rec
+
 PACKAGE = Path(__file__).resolve().parent.parent / "src" / "ltspice_mcp"
-CASES = Path(__file__).resolve().parent / "fixtures" / "ltspice_recorded" / "inputs" / "cases.toml"
 
 #: The words that start a string literal only where code reads or writes the
-#: LTspice format they belong to.
+#: LTspice format they belong to: a record keyword is followed by a space or a
+#: line end, and a word ending in ":" by anything.
 FORMAT_WORDS: dict[str, tuple[str, ...]] = {
     "sheet and symbol records (.asc, .asy)": (
         "SYMATTR",
         "PINATTR",
-        "PIN ",
-        "WIRE ",
-        "FLAG ",
-        "SYMBOL ",
-        "WINDOW ",
-        "IOPIN ",
-        "SHEET ",
+        "PIN",
+        "WIRE",
+        "FLAG",
+        "SYMBOL",
+        "WINDOW",
+        "IOPIN",
+        "SHEET",
     ),
     "raw file header (.raw)": ("No. Variables", "No. Points", "Plotname", "Binary:", "Values:"),
-    "log (.log)": ("Circuit:", "Semiconductor Device Operating Points:", "Fourier components of"),
+    "log (.log)": (
+        "Circuit:",
+        "Semiconductor Device Operating Points:",
+        "Fourier components of",
+        "Fatal Error:",
+        "Direct Newton iteration",
+    ),
 }
 
+#: Each word, and the starts of a literal that spell it.
+_STARTS: dict[str, tuple[str, ...]] = {
+    word: (word,) if word.endswith(":") else (f"{word} ", f"{word}\n", f"{word}:")
+    for group in FORMAT_WORDS.values()
+    for word in group
+}
+#: What a regular expression puts before the text it matches at a line start.
+_ANCHOR = re.compile(r"^(?:\(\?\w+\)|\^|\\s[*+])*")
 
-def _words_in(path: Path) -> set[str]:
-    words = {word.strip() for group in FORMAT_WORDS.values() for word in group}
+
+def _words_in(text: str) -> set[str]:
     found: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for node in ast.walk(ast.parse(text)):
         if isinstance(node, ast.Constant) and isinstance(node.value, str | bytes):
-            text = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
-            for word in words:
-                if (
-                    text == word
-                    or text.startswith((f"{word} ", f"{word}\n", f"{word}:"))
-                    or (word.endswith(":") and text.startswith(word))
-                ):
-                    found.add(word)
+            literal = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
+            literal = _ANCHOR.sub("", literal)
+            found.update(
+                word
+                for word, starts in _STARTS.items()
+                if literal == word or literal.startswith(starts)
+            )
     return found
 
 
-def _readers() -> dict[str, set[str]]:
-    return {
-        path.relative_to(PACKAGE).as_posix(): words
-        for path in sorted(PACKAGE.rglob("*.py"))
-        if (words := _words_in(path))
-    }
+@functools.cache
+def _readers() -> dict[str, frozenset[str]]:
+    readers: dict[str, frozenset[str]] = {}
+    for path in sorted(PACKAGE.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        # Parsing is the cost; most modules spell none of the words at all.
+        if any(word in text for word in _STARTS) and (words := _words_in(text)):
+            readers[path.relative_to(PACKAGE).as_posix()] = frozenset(words)
+    return readers
 
 
 def _modelled() -> set[str]:
-    cases = tomllib.loads(CASES.read_text(encoding="utf-8"))
-    return {name for behaviour in cases["behaviour"].values() for name in behaviour["model"]}
+    return {name for behaviour in rec.CASES.behaviours.values() for name in behaviour.model}
 
 
 def test_the_definition_finds_the_readers_of_each_format():

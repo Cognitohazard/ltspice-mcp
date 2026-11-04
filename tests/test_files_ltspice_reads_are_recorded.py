@@ -15,7 +15,7 @@ beside a sheet for LTspice to open.
 
 from __future__ import annotations
 
-import importlib
+import pkgutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,22 +61,10 @@ WRITTEN_FOR_LTSPICE: dict[str, WrittenForLTspice] = {
 }
 
 
-def _resolve(writer: str) -> object:
-    module, _, qualified = writer.partition(":")
-    found: object = importlib.import_module(module)
-    for part in qualified.split("."):
-        found = getattr(found, part)
-    return found
-
-
 def _recordings(key: str) -> list[str]:
     """Where a behaviour is recorded: the builds whose manifests hold a case of
     it, and the recording its ``evidence`` names, when that is a file here."""
-    found = [
-        build
-        for build in rec.BUILDS
-        if any(entry["behaviour"] == key for entry in rec.manifest(build)["cases"].values())
-    ]
+    found = sorted({build for build, _ in rec.per_build(rec.cases_of(key))})
     evidence = rec.CASES.behaviours[key].evidence
     named = evidence.split(":", 1)[0].strip()
     if named.startswith("tests/") and (REPO / named).exists():
@@ -87,7 +75,7 @@ def _recordings(key: str) -> list[str]:
 @pytest.mark.parametrize("written", list(WRITTEN_FOR_LTSPICE))
 def test_a_file_for_ltspice_is_one_ltspice_was_recorded_reading(written: str):
     row = WRITTEN_FOR_LTSPICE[written]
-    assert callable(_resolve(row.writer)), row.writer
+    assert callable(pkgutil.resolve_name(row.writer)), row.writer
     assert row.behaviours, f"{written}: no behaviour records LTspice reading it"
     for key in row.behaviours:
         assert key in rec.CASES.behaviours, f"{written}: {key!r} is not in cases.toml"

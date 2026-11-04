@@ -211,9 +211,9 @@ class MissingInclude:
     ``target`` is the file token exactly as the deck wrote it; ``reason`` says
     why it yielded nothing (not found, unreadable, past the depth bound, or no
     base directory because the netlist was parsed from bare text). ``line`` is
-    the line of the directive that names it, and ``source`` the included file
-    that holds that directive, None when the deck itself does. A record that no
-    directive locates has neither.
+    the line of the directive that names it, or of the malformed ``.SUBCKT`` an
+    included file holds, and ``source`` the included file that holds that line,
+    None when the deck itself does.
     """
 
     target: str
@@ -776,7 +776,12 @@ def _collect_subckts(
                         card="".join(card.raw_lines).strip(),
                     ) from exc
                 registry.missing.append(
-                    MissingInclude(target=source, reason=f"malformed .SUBCKT: {exc}")
+                    MissingInclude(
+                        target=source,
+                        reason=f"malformed .SUBCKT: {exc}",
+                        line=card.line_start,
+                        source=source,
+                    )
                 )
             continue
         if card.kind != "directive":
@@ -794,8 +799,9 @@ def _collect_subckts(
             registry=registry,
             seen=seen,
             include_resolver=include_resolver,
+            line=card.line_start,
             # The deck's own directives are at depth 0; an included file names itself.
-            written_at=(card.line_start, None if depth == 0 else source),
+            source=None if depth == 0 else source,
         )
 
 
@@ -807,15 +813,15 @@ def _follow_include(
     registry: _SubcktRegistry,
     seen: set[Path],
     include_resolver: IncludeResolver | None = None,
-    written_at: tuple[int, str | None] | None = None,
+    line: int,
+    source: str | None,
 ) -> None:
     """Load one include target's definitions, or record why it contributed none.
 
-    ``written_at`` is the line of the directive that names it and the included
-    file holding that directive (None for the deck itself), which a record of
-    why it contributed nothing carries.
+    ``line`` is the line of the directive that names it, and ``source`` the
+    included file holding that directive (None for the deck itself), which a
+    record of why it contributed nothing carries.
     """
-    line, source = written_at if written_at is not None else (None, None)
 
     def missing(reason: str) -> None:
         registry.missing.append(MissingInclude(target, reason, line=line, source=source))

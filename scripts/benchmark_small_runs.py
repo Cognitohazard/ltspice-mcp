@@ -36,27 +36,17 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from tests._asc_ops import DIVIDER_OPS  # noqa: E402
+from tests._schematic_fixtures import SUITE_LIBRARY_DIR  # noqa: E402
+
 DEFAULT_BASELINE = REPO / ".benchmark_small_runs.json"
-SYMBOLS = REPO / "tests" / "fixtures" / "symbols"
 RECORDED_RAWS = REPO / "tests" / "fixtures" / "ltspice_recorded" / "ltspice26" / "raw"
 
 _SWEEP_DECK = "* divider\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n.op\n.end\n"
-_DIVIDER_OPS: list[dict[str, Any]] = [
-    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
-    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
-    {
-        "op": "wire_pins",
-        "from_pin": "R1.1",
-        "to_pin": "R2.1",
-        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
-    },
-    {"op": "add_net_label", "net": "vout", "pin": "R1.2"},
-]
+#: LTspice's export of the sheet DIVIDER_OPS draws: R1 and R2 joined at N001.
 _DIVIDER_REFERENCE = "R1 N001 vout R\nR2 N001 N002 R\n.end\n"
-
-
-class Skipped(Exception):
-    """A timing this machine cannot take, with the reason."""
 
 
 def _best_of(repeat: int, run: Callable[[int], None]) -> float:
@@ -80,7 +70,7 @@ def measure(repeat: int) -> dict[str, float | str]:
     timings: dict[str, float | str] = {}
     with tempfile.TemporaryDirectory(prefix="benchmark-small-runs-") as scratch:
         work = Path(scratch)
-        symbols = [str(SYMBOLS)]
+        symbols = [str(SUITE_LIBRARY_DIR)]
 
         def boot(attempt: int) -> None:
             Api(work / f"boot{attempt}", symbol_paths=symbols).close()
@@ -112,29 +102,29 @@ def measure(repeat: int) -> dict[str, float | str]:
                 else "skipped: ngspice is not installed"
             )
 
+            # Fresh copies for each try, made before timing, so the result cache
+            # does not answer and only the reads are timed.
             raws = sorted(RECORDED_RAWS.glob("*.raw"))[:10]
-
-            def read(attempt: int) -> None:
-                # Fresh copies each try, so the result cache does not answer.
+            for attempt in range(repeat):
                 folder = work / f"raws{attempt}"
                 folder.mkdir()
                 for path in raws:
-                    copy = folder / path.name
-                    shutil.copyfile(path, copy)
-                    if path.with_suffix(".log").exists():
-                        shutil.copyfile(path.with_suffix(".log"), copy.with_suffix(".log"))
-                    raw = api.load_raw(copy)
+                    for source in (path, path.with_suffix(".log")):
+                        if source.exists():
+                            shutil.copyfile(source, folder / source.name)
+
+            def read(attempt: int) -> None:
+                for path in raws:
+                    raw = api.load_raw(work / f"raws{attempt}" / path.name)
                     raw.trace(raw.signals[-1])
 
             timings[f"read {len(raws)} recorded raws"] = _best_of(repeat, read)
 
-            compare = "ltspice" in available
-
-            def edit(attempt: int) -> None:
+            def edit(attempt: int, compare: bool) -> None:
                 arguments: dict[str, Any] = {
-                    "path": str(work / f"divider{attempt}.asc"),
+                    "path": str(work / f"divider{attempt}{'-compared' if compare else ''}.asc"),
                     "base": "blank",
-                    "ops": _DIVIDER_OPS,
+                    "ops": DIVIDER_OPS,
                 }
                 if compare:
                     arguments["compare"] = {"reference": _DIVIDER_REFERENCE}
@@ -142,12 +132,12 @@ def measure(repeat: int) -> dict[str, float | str]:
                 if reply.get("commit_state") != "committed":
                     raise RuntimeError(f"the batch did not commit: {reply}")
 
-            name = "edit_schematic batch with compare"
-            timings[name] = (
-                _best_of(repeat, edit) if compare else "skipped: LTspice is not installed"
+            timings["edit_schematic batch"] = _best_of(repeat, lambda a: edit(a, False))
+            timings["edit_schematic batch with compare"] = (
+                _best_of(repeat, lambda a: edit(a, True))
+                if "ltspice" in available
+                else "skipped: LTspice is not installed"
             )
-            if not compare:
-                timings["edit_schematic batch"] = _best_of(repeat, edit)
     return timings
 
 
@@ -187,7 +177,6 @@ def main(argv: list[str] | None = None) -> int:
         "--tolerance", type=float, default=0.25, help="slowdown reported above this fraction"
     )
     args = parser.parse_args(argv)
-    sys.path.insert(0, str(REPO / "src"))
 
     timings = measure(max(1, args.repeat))
     if args.record:

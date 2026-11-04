@@ -19,62 +19,51 @@ rest yet.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from types import ModuleType
 from typing import Any
 
-import ltspice_mcp.tools as tools_pkg
 from ltspice_mcp.tools._base import page_schema
-
-#: Fields that continue a cut list from where it stopped.
-CURSORS = frozenset({"next_cursor", "cursor", "continue", "next"})
+from tests.conftest import CONTINUATIONS, declared_output_schemas
 
 
 def _declared_schemas() -> dict[str, dict[str, Any]]:
-    """Every handler's declared output schema, registered or delegated, by name."""
-    schemas: dict[str, dict[str, Any]] = {}
-    for module in vars(tools_pkg).values():
-        if not isinstance(module, ModuleType) or not module.__name__.startswith(
-            "ltspice_mcp.tools."
-        ):
-            continue
-        for obj in vars(module).values():
-            schema = getattr(obj, "__output_schema__", None)
-            if schema is not None and callable(obj):
-                schemas[f"{module.__name__.rsplit('.', 1)[-1]}.{obj.__name__}"] = schema
-    return schemas
+    """Every handler's declared output schema, registered or delegated, by
+    ``module.handler``."""
+    return {
+        f"{module.__name__.rsplit('.', 1)[-1]}.{handler.__name__}": schema
+        for module, handler, schema in declared_output_schemas()
+    }
 
 
-def _cut_lists(
-    root: dict[str, Any], node: Any, path: str, around: tuple[frozenset[str], ...]
-) -> Iterator[tuple[str, frozenset[str], tuple[frozenset[str], ...]]]:
-    """Each object with a ``truncated`` flag: its path, its fields, and the
-    fields of the objects around it up to the reply item that holds it."""
-    if not isinstance(node, dict):
-        return
-    if "$ref" in node and node["$ref"].startswith("#/$defs/"):
-        node = root["$defs"][node["$ref"].split("/")[-1]]
-    properties = node.get("properties")
-    inside = around
-    if isinstance(properties, dict):
-        fields = frozenset(properties)
-        if "truncated" in fields:
-            yield path or "<root>", fields, around
-        inside = (*around, fields)
-        for name, child in properties.items():
-            yield from _cut_lists(root, child, f"{path}.{name}" if path else name, inside)
-    if isinstance(node.get("items"), dict):
-        # A list's item is a reply item of its own: the cursors around the
-        # list do not page what is inside one item.
-        yield from _cut_lists(root, node["items"], f"{path}[]", ())
-    if isinstance(node.get("additionalProperties"), dict):
-        yield from _cut_lists(root, node["additionalProperties"], f"{path}.*", inside)
-    for key in ("anyOf", "oneOf", "allOf"):
-        for index, branch in enumerate(node.get(key, ())):
-            yield from _cut_lists(root, branch, f"{path}<{key}{index}>", around)
+def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
+    """Each object in an output schema with a ``truncated`` flag: its path, and
+    whether it declares a way to read the rest (a cursor in it or around it
+    within its reply item, or a hint beside the flag)."""
 
+    def walk(node: Any, path: str, cursor_around: bool) -> Iterator[tuple[str, bool]]:
+        if not isinstance(node, dict):
+            return
+        ref = node.get("$ref", "")
+        if ref.startswith("#/$defs/"):
+            node = schema["$defs"][ref.split("/")[-1]]
+        properties = node.get("properties")
+        inside = cursor_around
+        if isinstance(properties, dict):
+            inside = cursor_around or bool(CONTINUATIONS & properties.keys())
+            if "truncated" in properties:
+                yield path or "<root>", inside or "hint" in properties
+            for name, child in properties.items():
+                yield from walk(child, f"{path}.{name}" if path else name, inside)
+        if isinstance(node.get("items"), dict):
+            # A list's item is a reply item of its own: the cursors around the
+            # list do not page what is inside one item.
+            yield from walk(node["items"], f"{path}[]", False)
+        if isinstance(node.get("additionalProperties"), dict):
+            yield from walk(node["additionalProperties"], f"{path}.*", inside)
+        for key in ("anyOf", "oneOf", "allOf"):
+            for index, branch in enumerate(node.get(key, ())):
+                yield from walk(branch, f"{path}<{key}{index}>", cursor_around)
 
-def _continued(fields: frozenset[str], around: tuple[frozenset[str], ...]) -> bool:
-    return bool(CURSORS & fields) or "hint" in fields or any(CURSORS & outer for outer in around)
+    yield from walk(schema, "", False)
 
 
 def test_the_walk_finds_the_cut_lists():
@@ -82,7 +71,7 @@ def test_the_walk_finds_the_cut_lists():
     found = {
         (name, path)
         for name, schema in _declared_schemas().items()
-        for path, _, _ in _cut_lists(schema, schema, "", ())
+        for path, _ in _cut_lists(schema)
     }
     for expected in (
         ("jobs.handle_jobs", "<oneOf0>.runs"),
@@ -99,8 +88,8 @@ def test_every_list_cut_short_says_how_to_read_the_rest():
     stranded = [
         f"{name}: {path}"
         for name, schema in _declared_schemas().items()
-        for path, fields, around in _cut_lists(schema, schema, "", ())
-        if not _continued(fields, around)
+        for path, continued in _cut_lists(schema)
+        if not continued
     ]
     assert not stranded, (
         "These lists can be cut short and declare no way to read the rest: a "
@@ -112,6 +101,4 @@ def test_a_page_without_its_cursor_is_caught():
     # The shared page shape, without its cursor, fails the check above.
     page = page_schema()
     del page["properties"]["next_cursor"]
-    schema = {"type": "object", "properties": {"rows": page}}
-    (found,) = list(_cut_lists(schema, schema, "", ()))
-    assert not _continued(found[1], found[2])
+    assert list(_cut_lists({"type": "object", "properties": {"rows": page}})) == [("rows", False)]

@@ -921,7 +921,7 @@ def validation_error_detail(
         nested=None if field_owners is None else _nested_fields(tool),
         renamed=RENAMED_ARGUMENTS.get(tool),
         accepted=None if field_owners is None else _accepted_fields(tool),
-        tags=_branch_names(tool),
+        branches=_branches(tool),
     )
     if not isinstance(exc, ValidationError):
         return detail
@@ -950,37 +950,51 @@ def _nested_fields(tool: str) -> dict[str, tuple[str, ...]]:
     """Each nested argument of ``tool`` by its last name: ``path`` to
     ``("circuits[].path",)`` for run_experiments."""
     nested: dict[str, list[str]] = {}
-    for entry in build_index():
-        if entry.tool == tool and entry.family == "argument":
-            for field in entry.fields:
-                if "." in field.name:
-                    nested.setdefault(field.name.rsplit(".", 1)[-1], []).append(field.name)
+    for place, names in _accepted_fields(tool).items():
+        for name in names if place else ():
+            nested.setdefault(name, []).append(f"{place}.{name}")
     return {name: tuple(paths) for name, paths in nested.items()}
 
 
 @functools.cache
 def _accepted_fields(tool: str) -> dict[str, tuple[str, ...]]:
     """The names each place in ``tool``'s own arguments takes, by place:
-    ``""`` for the top level, ``circuits[]`` inside each circuit."""
-    accepted: dict[str, list[str]] = {}
+    ``""`` for the top level, as ``tools/list`` advertises it (every jobs
+    action's fields), and ``circuits[]`` inside each circuit."""
+    # The registry rather than the package's get_tools, as _argument_sources.
+    from ltspice_mcp.tools._base import registry
+
+    _, dispatch = registry.get_tools()
+    accepted: dict[str, list[str]] = {
+        "": list(dispatch[tool].definition.input_schema.get("properties", {}))
+    }
     for entry in build_index():
         if entry.tool == tool and entry.family == "argument":
             for field in entry.fields:
                 place, _, name = field.name.rpartition(".")
-                accepted.setdefault(place, []).append(name)
+                if place:
+                    accepted.setdefault(place, []).append(name)
     return {place: tuple(names) for place, names in accepted.items()}
 
 
 @functools.cache
-def _branch_names(tool: str) -> dict[str, tuple[str, ...]]:
-    """The branches of each of ``tool``'s discriminated arguments, by the name
-    of the field that chooses one (``action``, ``op``)."""
-    names: dict[str, list[str]] = {}
+def _branches(tool: str) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Each of ``tool``'s discriminated arguments, by the name of the field that
+    chooses a branch (``action``, ``op``): each branch's own top-level fields."""
+    fields = {
+        (entry.tool, entry.family, entry.name): tuple(
+            field.name for field in entry.fields if "." not in field.name
+        )
+        for entry in build_index()
+        if entry.tool == tool
+    }
+    branches: dict[str, dict[str, tuple[str, ...]]] = {}
     for source in _sources():
         if source.tool == tool and source.discriminator is not None:
-            values = names.setdefault(source.discriminator, [])
-            values.extend(name for name, _, _ in source.branches if name not in values)
-    return {discriminator: tuple(values) for discriminator, values in names.items()}
+            chosen = branches.setdefault(source.discriminator, {})
+            for name, _, _ in source.branches:
+                chosen.setdefault(name, fields.get((tool, source.family, name), ()))
+    return branches
 
 
 def _field_line(field: FieldEntry) -> str:

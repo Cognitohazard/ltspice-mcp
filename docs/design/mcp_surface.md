@@ -81,7 +81,8 @@ error names each field it refuses and the way round: an unknown field with
 where the tool takes it, the tool that takes it, its new name, or else the
 names its place takes, the closest first; a field sent to a branch (a `jobs`
 action, an `edit_schematic` op) that does not take it with that branch's
-fields; and a missing field that chooses a branch with the values it takes.
+fields; and a missing field that chooses a branch with the values it takes,
+beside the item's fields that no branch takes.
 `tests/test_refusals_name_the_fix.py` holds every tool to this. A
 failure a tool raises instead of reporting in its envelope is `{error, code,
 hint?, suggestions?}` with the failure's own code, or `internal_error` for an

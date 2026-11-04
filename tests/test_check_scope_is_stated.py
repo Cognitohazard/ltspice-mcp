@@ -22,37 +22,19 @@ from typing import Any
 import pytest
 
 import ltspice_mcp.tools  # noqa: F401  (registers every tool)
-from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import registry
-from tests.conftest import call_tool_params, fake_request_context
-
-_NETLIST = "* divider\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n.op\n.end\n"
-
-
-def _enum_in(node: Any) -> list[str]:
-    """The first enumeration anywhere under a schema node."""
-    if isinstance(node, dict):
-        if "enum" in node:
-            return list(node["enum"])
-        for value in node.values():
-            found = _enum_in(value)
-            if found:
-                return found
-    elif isinstance(node, list):
-        for value in node:
-            found = _enum_in(value)
-            if found:
-                return found
-    return []
+from tests.conftest import advertised_input_schemas, dispatched
 
 
 def _tools_with_checks() -> dict[str, list[str]]:
+    """Each tool with a ``checks`` argument that is a list of named checks,
+    and the checks it names."""
     tools: dict[str, list[str]] = {}
-    for registered in registry._registered:
-        spec = registered.definition.input_schema.get("properties", {}).get("checks")
-        if spec is not None and "array" in str(spec):
-            tools[registered.definition.name] = _enum_in(spec)
+    for tool, schema in advertised_input_schemas().items():
+        spec = schema.get("properties", {}).get("checks", {})
+        kinds = spec.get("type")
+        if "array" in (kinds if isinstance(kinds, list) else [kinds]):
+            tools[tool] = list(spec.get("items", {}).get("enum", ()))
     return tools
 
 
@@ -80,25 +62,19 @@ def test_the_tools_that_take_checks_are_found():
 @pytest.mark.parametrize(("tool", "kind", "checks"), _cases())
 async def test_every_check_is_run_or_said_not_to_have_run(
     asc_state: SessionState,
-    work_dir: Path,
+    asc_file: Path,
+    sample_netlist: Path,
     tool: str,
     kind: str,
     checks: list[str] | None,
 ):
     assert "ltspice" not in asc_state.available_simulators
-    if kind == "asc":
-        path = work_dir / "Draft1.asc"
-    else:
-        path = work_dir / "divider.cir"
-        path.write_text(_NETLIST, encoding="utf-8", newline="\n")
+    path = asc_file if kind == "asc" else sample_netlist
     arguments: dict[str, Any] = {"path": str(path)}
     if checks is not None:
         arguments["checks"] = checks
 
-    result = await call_tool(fake_request_context(asc_state), call_tool_params(tool, arguments))
-
-    data = result.structured_content
-    assert data is not None
+    data = await dispatched(asc_state, tool, **arguments)
     ran = set(data.get("checks_run", ()))
     skipped = {row["check"]: row["reason"] for row in data.get("checks_skipped", ())}
     failed = {row["stage"] for row in data.get("failures", ())}
