@@ -75,6 +75,7 @@ REFUSED = [subject for subject in SUBJECTS if "refused" in reader_reply(*subject
 #: noise analysis at one frequency). A stepped run's ``.op.raw`` is one such:
 #: it holds one point, however many steps the run took.
 ONE_POINT = {
+    "mos_multiplier",
     "noise_one_freq",
     "op",
     "op_one_subckt",
@@ -82,6 +83,7 @@ ONE_POINT = {
     "op_subckt",
     "step_ac_op_raw.op",
     "step_tran_op_raw.op",
+    "subckt_multiplier",
     "tf",
     "tran_op_raw.op",
 }

@@ -419,7 +419,6 @@ model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
 # second deck one copy in a body against m=4 on the X line (VX) and against a
 # body whose device takes m={mult} from mult=4 on the X line (VP).
 inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir"]
-pending = "Written on Linux, where no LTspice runs. Record it on Windows with `uv run python scripts/record_ltspice_fixtures.py --only 'raw/*multiplier'`, then delete this key; the recorder test fails while a pending behaviour is recorded."
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, and a stepped .ac at one frequency, which stores no frequency and one point a step."
