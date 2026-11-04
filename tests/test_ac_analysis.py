@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.lib.ac_analysis import (
+    HALF_POWER_DB,
     _find_passband_range,
     classify_filter,
     compute_filter_metrics,
@@ -718,12 +719,13 @@ class TestResonance:
 
     def test_sub_hertz_bandwidth_still_has_q(self):
         # Bandpass biquad at 10 Hz with Q = 50: |H|^2 = 1/(1 + Q^2 (x - 1/x)^2)
-        # with x = f/f0, so the flanks 3 dB below the unity peak are
-        # f0 * sqrt(10^0.3 - 1)/Q apart, 0.2 Hz here.
+        # with x = f/f0, so the flanks at half the peak's power are f0/Q
+        # apart, 0.2 Hz here.
         f0, q = 10.0, 50.0
         f = np.linspace(9.0, 11.0, 20001)  # 1e-4 Hz steps, f0 on the grid
         peak = compute_resonances(f, 1 - _notch(f, f0, q))["peaks"][0]
-        bw = f0 * math.sqrt(10**0.3 - 1) / q
+        bw = f0 * math.sqrt(10 ** (-HALF_POWER_DB / 10) - 1) / q
+        assert bw == pytest.approx(f0 / q, rel=1e-12)
         assert peak["frequency_hz"] == pytest.approx(f0, rel=1e-9)
         assert peak["bandwidth_3db_hz"] == pytest.approx(bw, rel=1e-4)
         assert peak["q_factor"] == pytest.approx(f0 / bw, rel=1e-4)

@@ -1935,13 +1935,13 @@ it, and reported when the caller names it.
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
-| `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type |
+| `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
 | `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
 | `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
 | `ac_structure` | ac | `signal` | structural poles and zeros |
-| `resonance` | ac | `signal` | resonant frequency, Q, peak |
+| `resonance` | ac | `signal` | resonant frequency, Q, peak; the bandwidth Q is taken from is read at the half-power level below the peak |
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
 | `noise_integral` | noise | — | `signal?`, `from_hz?`, `to_hz?` |
 | `operating_point` | op | — | `device?` scopes the reply to one device, named by its path (`x1.m1`) on either LTspice build; `device_names` maps each device inside a subcircuit to its name in the log's table and in the raw |

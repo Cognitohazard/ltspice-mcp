@@ -49,11 +49,11 @@ _UNWRAP_WARN_STEP_DEG = 90.0
 # the magnitude well past a few tenths of a dB within one sample.
 _UNITY_GAIN_DEADBAND_DB = 0.3
 
-# True half-power point: 20·log10(1/√2) = -3.0103 dB. Use this (not a rounded
-# -3.0) for "−3 dB" cutoff/bandwidth so bode_metrics(mode='filter') and the AC
-# summary agree with bode_metrics(mode='crossing'/'point'), which already use the
-# exact half-power level. The 0.0103 dB difference shifts a 1 kHz RC
-# corner by ~0.24%.
+# True half-power point: 20·log10(1/√2) = -3.0103 dB. Every "-3 dB" cutoff,
+# bandwidth and resonance flank is read at this level (not a rounded -3.0), so
+# the bode_filter recipe, the AC summary's bandwidth and a resonance's Q agree
+# with a bode_crossing at the same level and with LTspice's own .meas at
+# 1/sqrt(2). The 0.0103 dB difference shifts a 1 kHz RC corner by ~0.24%.
 HALF_POWER_DB = -3.010299956639812
 
 # Shared type aliases — used by both lib function signatures and the
@@ -1466,7 +1466,7 @@ def compute_resonances(
     for idx in selected[:max_peaks]:
         f_peak = float(freqs[idx])
         peak_db = float(mag_db[idx])
-        level = peak_db - 3.0
+        level = peak_db + HALF_POWER_DB
         crossings = detect_crossings(freqs, mag_db, level, direction="any")
         below = [c for c in crossings if c["frequency_hz"] < f_peak]
         above = [c for c in crossings if c["frequency_hz"] > f_peak]

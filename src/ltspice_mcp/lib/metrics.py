@@ -36,6 +36,7 @@ import numpy as np
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import (
+    HALF_POWER_DB,
     Quantity,
     SearchDirection,
     compute_filter_metrics,
@@ -1842,7 +1843,7 @@ async def filter_metrics(
     step: int,
     state: SessionState,
     *,
-    ref_db: float = -3.0,
+    ref_db: float = HALF_POWER_DB,
     flatness_db: float = 1.0,
     passband_range: list[str] | None = None,
     stopband_range: list[str] | None = None,
