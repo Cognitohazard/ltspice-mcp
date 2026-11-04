@@ -66,9 +66,6 @@ _RUN_PAGE_LIMIT = 50
 
 JOBS_PAGE_LIMIT = 50
 
-#: The job statuses a receipt reads as finished: the record's own terminal set.
-TERMINAL_EXPERIMENT_STATUSES = TERMINAL_STATUSES
-
 _MANIFEST_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -695,13 +692,13 @@ def render_receipt_snapshot(
         "hint": (
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
             "job_id to continue waiting."
-            if snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
+            if snapshot.status not in TERMINAL_STATUSES
             else _terminal_hint(snapshot, runs)
         ),
     }
     emitted_control_token = control_token if control_token is not None else snapshot.control_token
     if emitted_control_token is not None and (
-        snapshot.lineage is not None or snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
+        snapshot.lineage is not None or snapshot.status not in TERMINAL_STATUSES
     ):
         data["control_token"] = emitted_control_token
     if snapshot.lineage is not None:
@@ -959,7 +956,7 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     return outcome_of(
         snapshot.status == "failed",
         partial=snapshot.status == "cancelled" or snapshot.completeness.fell_short,
-        in_progress=snapshot.status not in TERMINAL_EXPERIMENT_STATUSES,
+        in_progress=snapshot.status not in TERMINAL_STATUSES,
         delivered=False,
     )
 

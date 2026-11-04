@@ -14,7 +14,6 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import log_interp_at, log_interp_complex_at
-from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     TraceKey,
@@ -24,6 +23,7 @@ from ltspice_mcp.lib.device_names import (
     trace_key,
     writes_xvii_names,
 )
+from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.state import SessionState
 

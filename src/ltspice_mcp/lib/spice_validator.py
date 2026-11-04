@@ -19,7 +19,6 @@ mismatches, etc.
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -158,107 +157,6 @@ def leading_numeric_tokens(tokens: list[str]) -> list[float]:
         except (ValueError, TypeError):
             break
     return nums
-
-
-def _finite_point_count(span: float) -> int | None:
-    """``int(span) + 1`` sample points for a swept span, or None if non-finite.
-
-    Guards ``int(...)`` against a pathological directive whose span overflows to
-    inf/nan (e.g. ``.tran 1e-200 1e200``) — those are unestimable, not a crash.
-    """
-    return int(span) + 1 if math.isfinite(span) else None
-
-
-def _estimate_tran_points(line: str) -> int | None:
-    # .tran <Tstep> <Tstop> [<Tstart> [<Tmax>]] — points ≈ (Tstop-Tstart)/Tstep.
-    # A bare Tstop or Tstep=0 is auto-timestep: unknowable up front → None.
-    nums = leading_numeric_tokens(line.split()[1:])
-    if len(nums) < 2:
-        return None
-    tstep, tstop = nums[0], nums[1]
-    tstart = nums[2] if len(nums) >= 3 else 0.0
-    if tstep <= 0 or tstop <= tstart:
-        return None
-    return _finite_point_count((tstop - tstart) / tstep)
-
-
-def _estimate_ac_points(line: str) -> int | None:
-    # .ac <dec|oct|lin> <N> <fstart> <fstop>
-    tokens = line.split()
-    if len(tokens) < 5:
-        return None
-    kind = tokens[1].lower()
-    nums = leading_numeric_tokens(tokens[2:5])
-    if len(nums) < 3:
-        return None
-    n, fstart, fstop = nums
-    if n <= 0 or fstart <= 0 or fstop <= fstart:
-        return None
-    if kind == "dec":
-        return _finite_point_count(n * math.log10(fstop / fstart))
-    if kind == "oct":
-        return _finite_point_count(n * math.log2(fstop / fstart))
-    if kind == "lin":
-        return _finite_point_count(n)
-    return None
-
-
-def _estimate_dc_points(line: str) -> int | None:
-    # .dc <src> <start> <stop> <incr> [<src2> <start2> <stop2> <incr2> ...]
-    # Nested sweeps multiply. Each group is name + 3 numbers.
-    tokens = line.split()[1:]
-    total = 1
-    found = False
-    i = 0
-    while i + 4 <= len(tokens):
-        nums = leading_numeric_tokens(tokens[i + 1 : i + 4])
-        if len(nums) < 3:
-            break
-        start, stop, incr = nums
-        if incr == 0:
-            break
-        count = _finite_point_count(abs((stop - start) / incr))
-        if count is None:
-            return None
-        total *= max(count, 1)
-        found = True
-        i += 4
-    return total if found else None
-
-
-def estimate_analysis_points(netlist_text: str, *, deterministic_only: bool = False) -> int | None:
-    """Rough saved-point-count estimate for the deck's analysis directive.
-
-    Parses ``.tran`` / ``.ac`` / ``.dc`` to size the raw a run will produce, for
-    the preflight size guard. An ESTIMATE only, and an auto-timestep or
-    parameterised directive returns ``None`` (unknowable up front). When several
-    analyses are present the largest estimate wins; ``None`` when nothing is
-    estimable.
-
-    ``.ac`` (lin/dec/oct) and ``.dc`` have a deterministic saved-point count.
-    ``.tran`` does NOT: LTspice's Tstep is a plotting increment / initial-step
-    guess, and adaptive stepping plus waveform compression move the real count
-    far off Tstop/Tstep in either direction — so it can't be a bound. Pass
-    ``deterministic_only=True`` to consider only ``.ac``/``.dc`` (the count the
-    hard size refusal may safely act on); the default includes ``.tran`` for the
-    soft warning path.
-    """
-    best: int | None = None
-    for raw_line in netlist_text.splitlines():
-        line = raw_line.strip()
-        low = line.lower()
-        est: int | None = None
-        if low.startswith(".tran"):
-            if deterministic_only:
-                continue
-            est = _estimate_tran_points(line)
-        elif low.startswith(".ac"):
-            est = _estimate_ac_points(line)
-        elif low.startswith(".dc"):
-            est = _estimate_dc_points(line)
-        if est is not None:
-            best = est if best is None else max(best, est)
-    return best
 
 
 def _validate_tran_tstep(directive: str, simulator: str) -> ValidationError | None:

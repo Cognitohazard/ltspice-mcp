@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from typing import Any
 
 import annotated_types
 import pytest
 from pydantic import BaseModel
 
-from ltspice_mcp.lib.model_fields import model_of, strip_annotated, union_members
+from ltspice_mcp.lib.model_fields import models_in
 from ltspice_mcp.lib.recipes import WAVEFORM_MAX_POINTS_CAP
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools, run_code
@@ -30,19 +30,6 @@ _CAPPED_NAMES = frozenset({"limit", "max_points", "timeout_s", "wait_s"})
 
 #: Fields of those names that may refuse a value above their bound, with why.
 _REFUSING_ALLOWED: dict[tuple[str, str], str] = {}
-
-
-def _models_in(annotation: Any) -> list[type[BaseModel]]:
-    annotation = strip_annotated(annotation)
-    nested = model_of(annotation)
-    if nested is not None:
-        return [nested]
-
-    found: list[type[BaseModel]] = []
-    if union_members(annotation) is not None or get_origin(annotation) in (list, tuple):
-        for member in get_args(annotation):
-            found += _models_in(member)
-    return found
 
 
 def _every_input_model() -> set[type[BaseModel]]:
@@ -61,7 +48,7 @@ def _every_input_model() -> set[type[BaseModel]]:
         seen.add(model)
         pending += list(model.__dict__.get("VARIANTS", ()))
         for field in model.model_fields.values():
-            pending += _models_in(field.annotation)
+            pending += models_in(field.annotation)
     return seen
 
 
@@ -178,14 +165,14 @@ class TestPlotWaveform:
         self, state_no_sim: SessionState, work_dir: Path
     ) -> None:
         raw = _raw(work_dir)
-        asked = analysis.PLOT_MAX_POINTS_CEILING + 1_000_000
+        asked = WAVEFORM_MAX_POINTS_CAP + 1_000_000
         args = analysis.PlotWaveformInput.model_validate(
             {"path": str(raw), "signals": ["V(out)"], "max_points": asked, "open": False}
         )
         data = (await analysis.handle_plot_waveform(args, state_no_sim)).structured_content
         assert data is not None
-        assert data["max_points"] == analysis.PLOT_MAX_POINTS_CEILING
-        assert data["warnings"] == [_note("max_points", asked, analysis.PLOT_MAX_POINTS_CEILING)]
+        assert data["max_points"] == WAVEFORM_MAX_POINTS_CAP
+        assert data["warnings"] == [_note("max_points", asked, WAVEFORM_MAX_POINTS_CAP)]
 
 
 class TestWaveformRecipe:

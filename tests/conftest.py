@@ -1450,6 +1450,13 @@ def sample_netlist(work_dir: Path) -> Path:
     return p
 
 
+def exited_pid() -> int:
+    """The pid of a process that has exited: what a dead owner's record holds."""
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    return process.pid
+
+
 @pytest.fixture(scope="module")
 def live_peer_pid() -> Iterator[int]:
     """A real, live process that is not this one (a parallel session stand-in)."""

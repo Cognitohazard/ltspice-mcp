@@ -183,14 +183,6 @@ def missing_part(reference: str, references: Iterable[str]) -> NetlistError:
     return NetlistError(f"Component '{reference}' not found. Available: {', '.join(available)}")
 
 
-def find_pin(
-    pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
-) -> Point:
-    """Where pin ``pin_name`` of part ``reference`` is (:func:`placed_pin`)."""
-    pin = placed_pin(pins, reference, symbol, pin_name, problem)
-    return pin.x, pin.y
-
-
 def placed_pin(
     pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
 ) -> PlacedPin:
@@ -299,7 +291,9 @@ class Sheet:
             )
         reference, pin_name = spec.rsplit(".", 1)
         chosen = references_named(reference, (part.reference for part in self.parts))
-        named = [(index, part) for index, part in enumerate(self.parts) if part.reference in chosen]
+        named = [
+            (index, part) for index, part in enumerate(self.parts) if part.reference in chosen
+        ]
         if not named:
             raise missing_part(reference, (part.reference for part in self.parts))
         if len(named) > 1:

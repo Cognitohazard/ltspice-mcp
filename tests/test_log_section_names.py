@@ -10,13 +10,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
+from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.log_decode import decode_logs
-from ltspice_mcp.lib.log_types import LOG_SECTIONS
+from ltspice_mcp.lib.log_types import LOG_SECTIONS, LogSectionName
 from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES
+from tests._source_scan import PACKAGE, parsed
 from tests.test_log_decode import LIMITS, capture
 
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -37,10 +37,10 @@ def test_the_decoder_writes_the_sections_the_view_reads(tmp_path: Path):
 
 def _modules_with(predicate) -> list[str]:
     found = []
-    for path in sorted(SOURCE.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path in sorted(PACKAGE.rglob("*.py")):
+        tree = parsed(path)
         if any(predicate(node) for node in ast.walk(tree)):
-            found.append(path.relative_to(SOURCE).as_posix())
+            found.append(path.relative_to(PACKAGE).as_posix())
     return found
 
 

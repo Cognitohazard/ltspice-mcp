@@ -135,6 +135,8 @@ KIND_DETACHED_RECEIPT = "detached-receipt"
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+#: A SHA-256 digest as a schema's ``pattern`` spells it (``is_sha256``).
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
 def is_store_name(name: object) -> bool:
@@ -485,6 +487,9 @@ def owner_liveness(pid: int | None, *, start_marker: str | None = None) -> Owner
     """
     if not pid:
         return OwnerLiveness.DEAD
+    if start_marker and pid == os.getpid() and (own := this_process_start_marker()) is not None:
+        # This process's own record, or a predecessor's that had its pid.
+        return OwnerLiveness.ALIVE if start_marker == own else OwnerLiveness.DEAD
     if start_marker:
         from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
 

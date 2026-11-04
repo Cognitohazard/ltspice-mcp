@@ -300,7 +300,7 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
                 found.append(Path(folder, name))
                 if suffix == ".asy":
                     blocks.add((folder, stem.casefold()))
-            elif suffix == ".asc" and Path(folder, name) != asc_path:
+            elif is_asc(Path(name)) and Path(folder, name) != asc_path:
                 sheets.append((folder, stem.casefold(), name))
     found += (Path(folder, name) for folder, stem, name in sheets if (folder, stem) in blocks)
     found = sorted(path for path in found if path.is_file())

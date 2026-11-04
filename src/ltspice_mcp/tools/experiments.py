@@ -35,6 +35,7 @@ from ltspice_mcp.lib import (
     now,
     response_budget,
 )
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -64,6 +65,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.native_inputs import NativeCaseValidator
 from ltspice_mcp.lib.native_records import NativeCaseRecord
@@ -85,7 +87,7 @@ from ltspice_mcp.lib.recipes import (
     validate_recipe,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
-from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
     current_ngbehavior,
@@ -139,7 +141,6 @@ from ltspice_mcp.tools.analyze import (
 )
 from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
-    TERMINAL_EXPERIMENT_STATUSES,
     ReceiptBuilt,
     finalize_receipt,
     render_receipt_snapshot,
@@ -1384,17 +1385,14 @@ async def _load_matching_replay(
     if index is None:
         return None
     refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
-    # Resolved as every job id is (``services.resolve_job``): the registry adopts
-    # the record, writes back what the store reconciled when its owner died,
-    # and re-reads a job another process runs. An id the index names but no
-    # record answers is the request gate's to handle.
+    # Resolved as every job id is: the registry adopts the record, writes back
+    # what the store reconciled when its owner died, and re-reads a job another
+    # process runs. An id the index names but no record answers is the request
+    # gate's to handle.
     try:
-        job = await state.job_registry.get_or_load_async(str(index.get("job_id", "")))
-    except ValueError:
+        job = await resolve_job_async(str(index.get("job_id", "")), state)
+    except ResultError:  # an unknown job (JobNotFoundError) among them
         return None
-    if job is None:
-        return None
-    job = await state.job_registry.refresh_foreign_job_async(job)
     refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
@@ -1437,7 +1435,7 @@ async def _dwell_and_respond(
     """Wait up to ``wait_s`` for the job, then return its receipt. A job still
     running when the dwell ends is said to be by the receipt's ``hint``."""
     job = receipt.job
-    if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
+    if job.status not in TERMINAL_STATUSES and wait_s > 0:
         job, _ = await state.job_registry.wait(job, wait_s)
     snapshot = await snapshot_receipt_live(
         job,
@@ -1521,7 +1519,7 @@ def _append_terminal_cases(
 def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
     if isinstance(exc, (VariationError, DeckStagingError)):
         return exc.code, str(exc)
-    if source_path.suffix.casefold() == ".asc" and isinstance(exc, SimulationError):
+    if is_asc(source_path) and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)
     if isinstance(exc, FileNotFoundError):
         return "source_not_found", str(exc)

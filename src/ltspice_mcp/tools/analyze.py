@@ -1951,7 +1951,7 @@ async def _plot(
         raw,
         run.source.raw,
         plan,
-        min(100_000, an.PLOT_MAX_POINTS_CEILING),
+        min(100_000, WAVEFORM_MAX_POINTS_CAP),
         pending,
         recipe.title or f"{run.source.raw.stem} — {analysis_type}",
     )

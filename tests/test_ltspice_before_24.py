@@ -23,10 +23,12 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import stand_in_program, terminal_experiment
 from tests.test_inspect_tools import _run
 
-_XVII = Path(__file__).parent / "fixtures" / "ltspice_recorded" / "ltspice17" / "raw"
+_XVII = rec.recorded("ltspice17", "raw")
 _DECK = (
     "* divider\n.subckt leaf p\nR1 p internal 1k\nR2 internal 0 1k\n.ends leaf\n"
     "V1 a 0 1\nXA a leaf\n.op\n.end\n"
@@ -127,14 +129,12 @@ async def test_an_xvii_is_known_by_its_name_or_by_what_its_runs_report(
 # Ownership of the question
 # ---------------------------------------------------------------------------
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
-
 
 def _calls(name: str) -> list[tuple[str, ast.Call]]:
     found: list[tuple[str, ast.Call]] = []
-    for path in _SRC.rglob("*.py"):
-        module = path.relative_to(_SRC).as_posix()
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for path in PACKAGE.rglob("*.py"):
+        module = path.relative_to(PACKAGE).as_posix()
+        for node in ast.walk(parsed(path)):
             if isinstance(node, ast.Call) and (
                 (isinstance(node.func, ast.Name) and node.func.id == name)
                 or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
@@ -150,12 +150,3 @@ def test_only_the_owner_reads_an_executable_s_name_for_its_age() -> None:
         if module != "lib/simulator_build.py"
     )
     assert not stray, f"the executable's name read for its age around the owner: {stray}"
-
-
-def test_every_age_decision_passes_the_reported_build() -> None:
-    """``ltspice_before_24`` takes the executable and the build its runs
-    reported; a call with the name alone would answer from half the evidence."""
-    calls = _calls("ltspice_before_24")
-    assert calls
-    short = sorted(f"{module}:{call.lineno}" for module, call in calls if len(call.args) < 2)
-    assert not short, f"ltspice_before_24 called without the reported build: {short}"

@@ -38,6 +38,7 @@ from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
     ExperimentJob,
+    OwnerStopped,
     SourceRecord,
     failure_row,
 )
@@ -115,9 +116,9 @@ RunTimeoutSource = Literal["request", "server_default"]
 #: Why the coordinator stopped a job's cases: an explicit cancel, the job
 #: deadline, the run timeout, or the shutdown of the process running the job
 #: (``OWNER_STOPPED``, the code a crash leaves too).
-StopReason = Literal["cancelled", "job_deadline", "run_timeout", "server_restarted"]
+StopReason = Literal["cancelled", "job_deadline", "run_timeout"] | OwnerStopped
 #: The reasons a whole job is stopped for; the run timeout stops one case.
-JobStopReason = Literal["cancelled", "job_deadline", "server_restarted"]
+JobStopReason = Literal["cancelled", "job_deadline"] | OwnerStopped
 
 AnalysisCallback = Callable[[ExperimentJob], Awaitable[dict[str, Any]]]
 
@@ -2056,7 +2057,7 @@ class ExperimentRunner(RunnerBase):
         job: ExperimentJob,
         *,
         control_token: str | None = None,
-        reason: Literal["cancelled", "server_restarted"] = "cancelled",
+        reason: Literal["cancelled"] | OwnerStopped = "cancelled",
     ) -> list[dict[str, Any]]:
         """Stop further submissions and kill active cases when authorized.
 

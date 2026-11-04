@@ -125,8 +125,8 @@ from ltspice_mcp.lib.sheet import (
     PARAMETER_ATTRIBUTES,
     PlacedPin,
     element_letter,
-    find_pin,
     missing_part,
+    placed_pin,
     references_named,
 )
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
@@ -1618,7 +1618,7 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     case-insensitively. Only when no pin carries that name, and it is all
     digits, is it read as the pin's 1-based SpiceOrder — the terminal number a
     netlist uses. Names win because some symbols name their pins '1', '2' in an
-    order that need not be their SpiceOrder. The match is ``sheet.find_pin``,
+    order that need not be their SpiceOrder. The match is ``sheet.placed_pin``,
     which ``inspect``'s net trace uses too.
 
     Raises NetlistError if the reference cannot be resolved.
@@ -1664,7 +1664,8 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         PlacedPin(pin["name"], pin["order"], pin["x"], pin["y"], pin["dir"])
         for pin in (geometry["pins"] if geometry is not None else ())
     ]
-    return find_pin(pins, ref, symbol or "", pin_name, "not found" if geometry is None else "")
+    pin = placed_pin(pins, ref, symbol or "", pin_name, "not found" if geometry is None else "")
+    return pin.x, pin.y
 
 
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> None:

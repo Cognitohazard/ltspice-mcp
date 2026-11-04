@@ -38,15 +38,19 @@ from mcp.types import TextResourceContents
 from pydantic import BaseModel
 
 from ltspice_mcp.api import Api
-from ltspice_mcp.lib.model_fields import field_name, model_of, strip_annotated, union_members
+from ltspice_mcp.lib.model_fields import (
+    field_name,
+    models_in,
+    strip_annotated,
+    union_members,
+)
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import registry
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import make_experiment_job, stage_recorded_fixture
 
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "src" / "ltspice_mcp"
 GUIDE = PACKAGE / "assets" / "guide"
 
 #: What a format field or f-string interpolation becomes: a value nothing checks.
@@ -97,7 +101,7 @@ def _texts() -> tuple[tuple[str, str], ...]:
     """Every string the package can show a caller: ``(where, text)``."""
     found: list[tuple[str, str]] = []
     for path in sorted(PACKAGE.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parsed(path)
         inside_fstrings = {
             id(child)
             for node in ast.walk(tree)
@@ -138,18 +142,6 @@ def _tool_models() -> dict[str, type[BaseModel]]:
 def _variants(model: type[BaseModel]) -> tuple[type[BaseModel], ...]:
     """A routing model's branches (the jobs actions), or the model itself."""
     return tuple(model.__dict__.get("VARIANTS", ())) or (model,)
-
-
-def _models_in(annotation: Any) -> list[type[BaseModel]]:
-    annotation = strip_annotated(annotation)
-    nested = model_of(annotation)
-    if nested is not None:
-        return [nested]
-    found: list[type[BaseModel]] = []
-    if union_members(annotation) is not None or get_origin(annotation) in (list, tuple):
-        for member in get_args(annotation):
-            found += _models_in(member)
-    return found
 
 
 def _literals(annotation: Any) -> set[str] | None:
@@ -199,7 +191,7 @@ def _vocabulary(model: type[BaseModel]) -> set[str]:
         for name, annotation in _fields(current).items():
             words.add(name)
             words |= _literals(annotation) or set()
-            pending += _models_in(annotation)
+            pending += models_in(annotation)
     return words
 
 
@@ -218,7 +210,7 @@ def _named_values(name: str) -> frozenset[str]:
         for field, annotation in _fields(current).items():
             if field == name:
                 values |= _literals(annotation) or set()
-            pending += _models_in(annotation)
+            pending += models_in(annotation)
     return frozenset(values)
 
 
@@ -289,7 +281,7 @@ def _check_value(annotations: list[Any], node: ast.AST, where: str) -> list[str]
         bad = [v for v in strings if _checked(v) and v not in allowed]
         return [f"{where}: {v!r} is not one of {sorted(allowed)}" for v in bad]
     if isinstance(node, ast.Dict):
-        models = [m for annotation in annotations for m in _models_in(annotation)]
+        models = [m for annotation in annotations for m in models_in(annotation)]
         if not models:
             return []
         keys: dict[str, ast.AST] = {}
@@ -357,7 +349,7 @@ def _check_tool_call(call: _Call, where: str) -> list[str]:
     if call.tool == "inspect" and "queries" not in keywords:
         # inspect(kind=..., ...) names one query, with the call's own fields.
         queries_annotation = _fields(model)["queries"]
-        query_models = _models_in(get_args(strip_annotated(queries_annotation))[0])
+        query_models = models_in(get_args(strip_annotated(queries_annotation))[0])
         own = {k: v for k, v in keywords.items() if k in _fields(model)}
         rest = {k: v for k, v in keywords.items() if k not in own}
         return _check_keys([model], own, where) + _check_keys(query_models, rest, where)

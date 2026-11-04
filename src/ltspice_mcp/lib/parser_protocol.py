@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -20,7 +19,7 @@ from ltspice_mcp.lib.raw_header import (
     leading_parameters,
     step_parameter_name,
 )
-from ltspice_mcp.lib.store import parser_file_in
+from ltspice_mcp.lib.store import SHA256_PATTERN, is_sha256, parser_file_in
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
@@ -40,7 +39,7 @@ class _Array(_Record):
     dtype: Literal["<f4", "<f8", "<c16"]
     count: int = Field(gt=0)
     byte_size: int = Field(gt=0)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sha256: str = Field(pattern=SHA256_PATTERN)
 
 
 class _Range(_Record):
@@ -93,13 +92,13 @@ class _RawPayload(_Record):
 class _Reply(_RawPayload):
     version: Literal[1]
     status: Literal["ok"]
-    cache_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cache_key: str = Field(pattern=SHA256_PATTERN)
 
 
 class _ArtifactsReply(_Record):
     version: Literal[1]
     status: Literal["ok"]
-    cache_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cache_key: str = Field(pattern=SHA256_PATTERN)
     raw: _RawPayload | None
     logs: dict
 
@@ -175,7 +174,7 @@ def _validate_step_log(log: _StepLog) -> None:
         or log.size_bytes is None
         or not log.encoding
         or log.sha256 is None
-        or re.fullmatch(r"[0-9a-f]{64}", log.sha256) is None
+        or not is_sha256(log.sha256)
     ):
         raise ValueError("Present step logs require size, digest and encoding")
     if log.status == "unsupported" and log.rows:

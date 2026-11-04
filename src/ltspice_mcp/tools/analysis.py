@@ -79,7 +79,7 @@ from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     safe_magnitude_db,
 )
-from ltspice_mcp.lib.recipes import StepSelector
+from ltspice_mcp.lib.recipes import WAVEFORM_MAX_POINTS_CAP, StepSelector
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
 from ltspice_mcp.lib.sheet_results import place_beside_sheet
 from ltspice_mcp.lib.signal_analysis import (
@@ -405,7 +405,6 @@ _WIDGET_SPEC_MAX_POINTS = 4_000
 # payload. Not a model-context limit (the spec is hidden from the model).
 _WIDGET_MAX_BYTES = 4_000_000
 _DEFAULT_PLOT_MAX_POINTS = 100_000
-PLOT_MAX_POINTS_CEILING = 2_000_000
 # Global backstop on a rendered panel. ``max_points`` caps each series, but the
 # chart aligns a panel's series onto one x (uPlot.join), and a .step run whose
 # steps have distinct axes multiplies series-count by the union length — so a
@@ -1041,7 +1040,7 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, N
         ge=1,
         description=(
             "Per-series point budget before a min/max-preserving downsample engages "
-            f"(default {_DEFAULT_PLOT_MAX_POINTS}, held to {PLOT_MAX_POINTS_CEILING}). "
+            f"(default {_DEFAULT_PLOT_MAX_POINTS}, held to {WAVEFORM_MAX_POINTS_CAP}). "
             "Full fidelity below it; spikes survive."
         ),
     )
@@ -1090,7 +1089,7 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, N
 
     @model_validator(mode="after")
     def _hold_max_points(self) -> "PlotWaveformInput":
-        self.hold_to_cap("max_points", PLOT_MAX_POINTS_CEILING)
+        self.hold_to_cap("max_points", WAVEFORM_MAX_POINTS_CAP)
         return self
 
 
@@ -1636,7 +1635,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     ts = parse_time(args.t_start, "t_start")
     te = parse_time(args.t_end, "t_end")
 
-    # Held to PLOT_MAX_POINTS_CEILING by the input model, which notes it.
+    # Held to WAVEFORM_MAX_POINTS_CAP by the input model, which notes it.
     max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
     # Asked for in LTspice, the chart is not also opened in a browser unless
     # that was asked for too.

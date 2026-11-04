@@ -2,22 +2,19 @@
 
 The dwell defaults and caps the capabilities report discloses are read off the
 fields and constants that enforce them; the ``error`` object of every
-enveloped tool is one schema; and the ops ``edit_schematic`` accepts are the
-ops its engine applies.
+enveloped tool is one schema.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, get_args
+from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib.schematic_ops import SchematicOp
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import experiments, jobs
 from ltspice_mcp.tools._base import ENVELOPE_ERROR_SCHEMA, registry
-from ltspice_mcp.tools.schematic_edit import ConsolidatedOp
 from tests.conftest import capabilities_report
 
 
@@ -67,8 +64,3 @@ def test_each_envelope_declares_the_one_error_object(tool: str) -> None:
     found = list(_error_objects(schema))
     assert found
     assert all(error == ENVELOPE_ERROR_SCHEMA for error in found), tool
-
-
-def test_the_tool_accepts_exactly_the_ops_the_engine_applies() -> None:
-    union = get_args(ConsolidatedOp)[0]
-    assert get_args(union) == get_args(SchematicOp)

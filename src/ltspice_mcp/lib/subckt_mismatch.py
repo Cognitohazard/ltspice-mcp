@@ -469,13 +469,6 @@ def _closer_index(cards: list[SpiceCard], opener_index: int) -> int:
     return len(cards) if closer is None else closer
 
 
-def _direct_children(index: _FileIndex, opener_index: int) -> list[tuple[int, SpiceCard]]:
-    """Cards one level inside a subcircuit body, nested bodies excluded, read
-    by span (``spice_lex.subckt_children``): a library entered under two
-    corner sections defines one name twice, with one scope tuple."""
-    return list(subckt_children(index.cards, opener_index))
-
-
 def _instances(children: Iterable[tuple[int, SpiceCard]], prefix: str) -> list[SpiceCard]:
     return [
         card
@@ -645,7 +638,7 @@ def build_plan(
             )
         def_file, opener_index = sites[0]
         def_index = indexes[def_file]
-        children = _direct_children(def_index, opener_index)
+        children = list(subckt_children(def_index.cards, opener_index))
         inner_cards = _instances(children, "M")
         if not inner_cards:
             _refuse_or_skip_without_mos(x_ref, subckt, children, indexes, definitions, skips)
@@ -864,7 +857,7 @@ def _refuse_or_skip_without_mos(
         if not sites:
             continue
         def_file, opener_index = sites[0]
-        nested = _direct_children(indexes[def_file], opener_index)
+        nested = list(subckt_children(indexes[def_file].cards, opener_index))
         if _instances(nested, "M"):
             raise MismatchPlanError(
                 "nested_fet_unsupported",

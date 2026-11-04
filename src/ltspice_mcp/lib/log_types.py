@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, fields
 from typing import Any, Literal, get_args
 
@@ -228,7 +228,7 @@ def measurement_named(name: str, names: Iterable[str]) -> str | None:
     case the deck gave it, so a name is matched ignoring case; one held
     exactly as spelled is preferred.
     """
-    held = list(names)
+    held = names if isinstance(names, Collection) else list(names)
     if name in held:
         return name
     folded = name.casefold()

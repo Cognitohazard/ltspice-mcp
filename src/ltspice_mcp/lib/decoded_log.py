@@ -17,11 +17,15 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.log_types import LOG_SECTIONS as _SECTIONS
-from ltspice_mcp.lib.log_types import LogDiagnostics, MeasurementsOutput, NativeTableBlock
-from ltspice_mcp.lib.log_types import LogSectionName as LogSectionName
-from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES as _NAMES
-from ltspice_mcp.lib.parser_capture import CapturedInputs
+from ltspice_mcp.lib.log_types import (
+    LOG_SECTIONS,
+    LogDiagnostics,
+    LogSectionName,
+    MeasurementsOutput,
+    NativeTableBlock,
+)
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES, CapturedInputs
+from ltspice_mcp.lib.store import is_sha256
 
 _Value = TypeVar("_Value")
 
@@ -214,7 +218,7 @@ def _check_native_blocks(blocks: list[dict[str, Any]], log_bytes: int) -> None:
 
 def _check_sections(facts: dict[str, Any], captured: CapturedInputs) -> None:
     present = {item.role for item in captured.files}
-    for name in _SECTIONS:
+    for name in LOG_SECTIONS:
         section = facts[name]
         status, value, error, count = (
             section["status"],
@@ -316,13 +320,13 @@ class DecodedLog:
         )
         captured = validated.capture_facts
         roles = [item.role for item in captured.files] + list(captured.absent)
-        if len(roles) != 3 or set(roles) != set(_NAMES):
+        if len(roles) != 3 or set(roles) != set(CAPTURED_NAMES):
             raise ValueError("Each captured role must occur exactly once, present or absent")
         for item in captured.files:
             if (
-                item.name != _NAMES[item.role]
+                item.name != CAPTURED_NAMES[item.role]
                 or item.size_bytes < 0
-                or not re.fullmatch(r"[0-9a-f]{64}", item.sha256)
+                or not is_sha256(item.sha256)
             ):
                 raise ValueError("Invalid captured filename, size or digest")
         if not validated.scan.complete or validated.scan.capturedbytes != sum(
@@ -357,7 +361,7 @@ class DecodedLog:
         return copy.deepcopy(self._facts["scan"])
 
     def section(self, name: LogSectionName) -> dict[str, Any]:
-        if name not in _SECTIONS:
+        if name not in LOG_SECTIONS:
             raise ValueError(f"Unknown log section: {name}")
         return copy.deepcopy(self._facts[name])
 

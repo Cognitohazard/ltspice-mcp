@@ -63,7 +63,6 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
@@ -365,9 +364,13 @@ def deck_one_ac_frequency(netlist: Path) -> float | None:
     return _ONE_AC_FREQUENCIES.get(netlist, lambda path: _read_deck(path, one_ac_frequency))
 
 
+#: Each deck's ``tran_max_step``, kept while the deck is unchanged.
+_TRAN_MAX_STEPS: FileCache[float | None] = FileCache(maxsize=64)
+
+
 def deck_tran_max_step(netlist: Path) -> float | None:
     """``tran_max_step`` of the deck at ``netlist``; None when it cannot be read."""
-    return _read_deck(netlist, tran_max_step)
+    return _TRAN_MAX_STEPS.get(netlist, lambda path: _read_deck(path, tran_max_step))
 
 
 def coarse_compressed_waveform(
@@ -453,13 +456,30 @@ def deck_observation_inputs(
 
     The one call every summary path shares, so run-completion and later
     re-inspection feed the surfacer identically. ``(None, None)`` when the
-    deck can't be read.
+    deck can't be read. Kept while the deck is unchanged, since a summary of
+    each run, and of each step, asks again; each caller gets its own copy.
     """
+    requested, amplitudes = _OBSERVATION_INPUTS.get(netlist, _observation_inputs)
+    return (
+        None if requested is None else {kind: list(names) for kind, names in requested.items()},
+        None if amplitudes is None else dict(amplitudes),
+    )
+
+
+def _observation_inputs(
+    netlist: Path,
+) -> tuple[dict[str, list[str]] | None, dict[str, float] | None]:
     try:
         text = read_spice_text(netlist)
     except OSError:
         return None, None
     return parse_requested_outputs(text), parse_source_amplitudes(text)
+
+
+#: Each deck's ``deck_observation_inputs``, kept while the deck is unchanged.
+_OBSERVATION_INPUTS: FileCache[tuple[dict[str, list[str]] | None, dict[str, float] | None]] = (
+    FileCache(maxsize=64)
+)
 
 
 def relay_observations(summary: dict) -> list[Observation]:
@@ -513,24 +533,22 @@ def reconciliation_observations(
     """
     obs: list[Observation] = []
 
-    failed = list(summary.get("failed_measurements") or [])
+    # Names compared as ``log_types.measurement_named`` compares them, in any
+    # case; a membership test needs no preference for the exact spelling.
+    failed = {name.casefold() for name in summary.get("failed_measurements") or []}
     # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
     # in ``failed_measurements``). Without removing it here, the produced-check
     # below would treat it as produced and skip it — shadowing the "failed"
     # classification, so a failed measurement never surfaced as an observation.
-    produced_meas = [
-        name
-        for name in (summary.get("measurements") or {})
-        if measurement_named(name, failed) is None
-    ]
+    produced_meas = {name.casefold() for name in summary.get("measurements") or {}} - failed
     warns = " ".join(summary.get("warnings") or []).lower()
     meas_batch_skipped = "batch mode" in warns and "meas" in warns
     four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
 
     for name in requested.get("meas", []):
-        if measurement_named(name, produced_meas) is not None:
+        if name.casefold() in produced_meas:
             continue
-        if measurement_named(name, failed) is not None:
+        if name.casefold() in failed:
             reason = "failed"
         elif meas_batch_skipped:
             reason = "skipped_in_batch_mode"

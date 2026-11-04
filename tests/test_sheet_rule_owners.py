@@ -10,26 +10,16 @@ from __future__ import annotations
 
 import ast
 import functools
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "src" / "ltspice_mcp"
+from tests._source_scan import modules
 
 
 @functools.cache
-def _modules() -> dict[str, ast.Module]:
-    """Every module of the package, parsed, by its path under the package."""
-    return {
-        path.relative_to(PACKAGE).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
-        for path in sorted(PACKAGE.rglob("*.py"))
-    }
-
-
 def _called(name: str) -> list[str]:
     """Where a function or method of that name is called, as ``module:line``."""
     return [
         f"{module}:{node.lineno}"
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (
@@ -55,7 +45,7 @@ def test_which_points_are_one_net_is_answered_by_the_nets_ltspice_makes():
     ``lib/connectivity.py`` imports another grouping, and it defines none."""
     imported = [
         f"{module}:{node.lineno} {alias.name}"
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         if module != "lib/connectivity.py"
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
@@ -65,7 +55,7 @@ def test_which_points_are_one_net_is_answered_by_the_nets_ltspice_makes():
     assert imported == []
     defined = [
         node.name
-        for node in ast.walk(_modules()["lib/connectivity.py"])
+        for node in ast.walk(modules()["lib/connectivity.py"])
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in _WIRING_ONLY_NETS
     ]
     assert defined == []
@@ -92,7 +82,7 @@ def test_a_reference_is_looked_up_among_a_sheets_parts_in_one_place():
     a part ``R1`` that ``add_component`` said it names."""
     found = [
         f"{module}:{node.lineno}"
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         for node in ast.walk(tree)
         if isinstance(node, ast.Compare)
         and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops)
@@ -103,23 +93,19 @@ def test_a_reference_is_looked_up_among_a_sheets_parts_in_one_place():
 
 def test_whether_a_path_is_a_sheet_is_answered_by_is_asc():
     """``asc_document.is_asc`` says whether a path names a sheet; a comparison
-    of a path's ``suffix.lower()`` with ``.asc`` written anywhere else is a
-    second answer."""
+    with ``.asc`` written anywhere else, however the suffix was folded first,
+    is a second answer."""
     found = [
         f"{module}:{node.lineno}"
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         for function in ast.walk(tree)
         if isinstance(function, ast.FunctionDef) and function.name != "is_asc"
         for node in ast.walk(function)
         if isinstance(node, ast.Compare)
         and any(
-            isinstance(side, ast.Constant) and side.value == ".asc" for side in node.comparators
+            isinstance(side, ast.Constant) and side.value == ".asc"
+            for side in (node.left, *node.comparators)
         )
-        and isinstance(node.left, ast.Call)
-        and isinstance(node.left.func, ast.Attribute)
-        and node.left.func.attr == "lower"
-        and isinstance(node.left.func.value, ast.Attribute)
-        and node.left.func.value.attr == "suffix"
     ]
     assert found == []
 

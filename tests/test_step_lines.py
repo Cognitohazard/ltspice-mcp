@@ -16,9 +16,7 @@ import pytest
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import StepParameter, parse_step_iterations, read_step_line
 from tests import _ltspice_recorded as rec
-from tests.ltspice_recorder import FIXTURES
-
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
+from tests._source_scan import PACKAGE, parsed
 
 
 @pytest.mark.parametrize(
@@ -53,8 +51,8 @@ def _stepped_sweeps() -> list[tuple[str, str]]:
     runs = []
     for build in rec.BUILDS:
         for case_id, entry in sorted(rec.manifest(build)["cases"].items()):
-            log = FIXTURES / build / f"{case_id}.log"
-            if f"{case_id}.raw" not in entry["outputs"] or entry["stopped"] or not log.is_file():
+            log = rec.recorded(build, f"{case_id}.log")
+            if not rec.has(build, f"{case_id}.raw") or entry["stopped"] or not log.is_file():
                 continue
             if any(read_step_line(line) for line in read_spice_text(log).splitlines()):
                 runs.append((build, case_id))
@@ -77,14 +75,14 @@ def test_the_corpus_has_stepped_sweeps_on_both_builds():
 def _step_patterns() -> dict[str, list[str]]:
     """Every string constant of the package that is a regex reading ``.step``."""
     found: dict[str, list[str]] = {}
-    for path in SOURCE.rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for path in PACKAGE.rglob("*.py"):
+        for node in ast.walk(parsed(path)):
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and re.search(r"\\\.step", node.value, re.I)
             ):
-                found.setdefault(path.relative_to(SOURCE).as_posix(), []).append(node.value)
+                found.setdefault(path.relative_to(PACKAGE).as_posix(), []).append(node.value)
     return found
 
 

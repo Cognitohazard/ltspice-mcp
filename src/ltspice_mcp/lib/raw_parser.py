@@ -29,18 +29,18 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError
 from ltspice_mcp.lib import atomic_write
-from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
+from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import (
     DecodedPlot,
     DecodedRaw,
     RawData,
     deck_time,
-    declared_unit,
     time_offset,
 )
 from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
+from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
@@ -386,15 +386,6 @@ def nearest_index(axis: np.ndarray, target: float) -> int:
     if n > 1 and axis[0] > axis[-1]:
         return n - 1 - _nearest_ascending(axis[::-1], target)
     return _nearest_ascending(axis, target)
-
-
-def whattype_unit(whattype: str | None) -> str | None:
-    """SI unit for a trace's declared type (spicelib's ``whattype``, the raw
-    header's own word), or None if it is not a known SPICE type: the
-    decoder's own table (``decoded_raw.declared_unit``). Pure string lookup —
-    no raw access; it only adds a unit where the simulator stated the type,
-    never one guessed from a name."""
-    return declared_unit(whattype)
 
 
 def declared_type(raw: RawData, name: str) -> str | None:

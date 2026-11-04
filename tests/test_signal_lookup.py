@@ -16,9 +16,8 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import SyncApi
-
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 
 #: Spellings of signals of the recorded ``raw/tran`` (V1 drives ``in``, R1
 #: joins ``in`` to ``out``), and the trace or pair each reads.
@@ -85,15 +84,15 @@ def test_a_name_neither_result_has_is_refused_with_why(state_no_sim: SessionStat
 
 def _callers(name: str) -> set[str]:
     found = set()
-    for path in SOURCE.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path in PACKAGE.rglob("*.py"):
+        tree = parsed(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 called = node.func
                 if (isinstance(called, ast.Attribute) and called.attr == name) or (
                     isinstance(called, ast.Name) and called.id == name
                 ):
-                    found.add(path.relative_to(SOURCE).as_posix())
+                    found.add(path.relative_to(PACKAGE).as_posix())
     return found
 
 

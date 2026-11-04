@@ -95,22 +95,11 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     state.background.spawn(state.note_recent_circuit(resolved))
 
 
-# Error type → hint appended to error messages, shared with every surface that
-# reports a failure in its own envelope (``errors.error_hint``).
-_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = _err.ERROR_HINTS
-
-
 #: The recovery for an argument error: the tool's own argument table.
 _ARGUMENT_HINT = (
     'Correct the call and send it again; inspect(queries=[{{"kind": "reference", '
     '"query": "{tool}"}}]) lists every argument {tool} takes.'
 )
-
-
-def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
-    """Get the error hint appended to a failed call's message, if any: the
-    same lookup every envelope surface uses (:func:`errors.hint_for_type`)."""
-    return _err.hint_for_type(err_type)
 
 
 def _configure_server_logging(config: ServerConfig) -> None:
@@ -531,9 +520,9 @@ async def _invoke(
             hint=state.sandbox_guidance(),
         )
     except LTSpiceMCPError as e:
-        # Errors that already carry precise guidance opt out of the generic
-        # per-type hint (show_hint=False) so it doesn't misdirect.
-        hint = _get_error_hint(type(e)) if e.show_hint else None
+        # The lookup every envelope surface uses; an error that carries
+        # precise guidance of its own (show_hint=False) takes none.
+        hint = _err.error_hint(e)
         message = _err.caller_message(e, state.tool_dispatch)
         text = f"{message}\n\n{hint}" if hint else message
         # The hint is mirrored into structuredContent (self-sufficiency

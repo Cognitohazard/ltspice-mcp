@@ -27,6 +27,7 @@ from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools.analyze import AnalyzeSourceInput
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import handle_jobs
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import LIVENESS_S, await_until, recorded_fixture_simulator
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 
@@ -192,7 +193,6 @@ async def test_a_recoverable_job_s_runs_read_as_soon_as_the_wait_returns(
 # Ownership of the rule
 # ---------------------------------------------------------------------------
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 #: The predicates readiness is made of, and the modules that own the rule.
 _PREDICATES = frozenset({"runs_terminal", "has_readable_raw"})
 _OWNERS = frozenset({"lib/services.py", "lib/job_lifecycle.py"})
@@ -202,10 +202,10 @@ def test_readiness_is_decided_only_by_its_owners() -> None:
     """Every other module asks ``services.runs_unready``/``case_unreadable`` or
     ``job_lifecycle.runs_done``, so a second copy of the rule cannot drift."""
     found = sorted(
-        f"{path.relative_to(_SRC).as_posix()}:{node.lineno}"
-        for path in _SRC.rglob("*.py")
-        if path.relative_to(_SRC).as_posix() not in _OWNERS
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        f"{path.relative_to(PACKAGE).as_posix()}:{node.lineno}"
+        for path in PACKAGE.rglob("*.py")
+        if path.relative_to(PACKAGE).as_posix() not in _OWNERS
+        for node in ast.walk(parsed(path))
         if isinstance(node, ast.Call)
         and (
             (isinstance(node.func, ast.Name) and node.func.id in _PREDICATES)

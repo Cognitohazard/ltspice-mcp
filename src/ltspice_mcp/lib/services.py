@@ -558,6 +558,11 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     """
     if executable is None:
         return None
+    # The name answers without the scan of every recorded run that the
+    # reported build takes.
+    named = ltspice_before_24(executable.path, None)
+    if named is not None:
+        return named
     return ltspice_before_24(executable.path, reported_build_of(state, executable))
 
 

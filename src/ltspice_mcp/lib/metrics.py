@@ -51,7 +51,7 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, declared_unit
 from ltspice_mcp.lib.device_names import (
     current_device,
     device_names,
@@ -82,7 +82,6 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
     sample_to_dict,
     trace_unit,
-    whattype_unit,
 )
 from ltspice_mcp.lib.recipes import (
     RECIPE_MODELS,
@@ -632,7 +631,7 @@ def operating_point_units(raw, op_data: dict) -> dict[str, str]:
             else:
                 # Derived results can use voltage/current columns for gain,
                 # impedance or poles. Only a specific type establishes a unit.
-                unit = whattype_unit(declared_type(raw, name))
+                unit = declared_unit(declared_type(raw, name))
                 if unit in ("V", "A"):
                     continue
             if unit:

@@ -279,6 +279,15 @@ class JobRegistry:
 
         return experiment_store.load_job_from_path(job.store_path, self.working_dir)
 
+    def _needs_refresh(self, job: ExperimentJob) -> bool:
+        """Whether ``job`` is a live job another process runs, whose record
+        only that process updates: never with persistence off."""
+        return (
+            self.persist_enabled
+            and not self.owns(job)
+            and job.status in NON_TERMINAL_LIVE_STATUSES
+        )
+
     def refresh_foreign_job(self, job: ExperimentJob) -> ExperimentJob:
         """Re-read a parallel session's live job from its sidecar.
 
@@ -290,11 +299,7 @@ class JobRegistry:
         Own jobs (``owns``), terminal jobs, and persistence-off sessions return
         unchanged.
         """
-        if (
-            not self.persist_enabled
-            or self.owns(job)
-            or job.status not in NON_TERMINAL_LIVE_STATUSES
-        ):
+        if not self._needs_refresh(job):
             return job
         try:
             fresh = self._load_foreign_job_sync(job)
@@ -313,11 +318,7 @@ class JobRegistry:
         loop. The guard (no IO for own/terminal jobs) and the registry swap
         both stay on the loop; only the foreign non-terminal case does IO.
         """
-        if (
-            not self.persist_enabled
-            or self.owns(job)
-            or job.status not in NON_TERMINAL_LIVE_STATUSES
-        ):
+        if not self._needs_refresh(job):
             return job
         try:
             fresh = await asyncio.to_thread(self._load_foreign_job_sync, job)

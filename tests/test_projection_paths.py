@@ -26,9 +26,8 @@ from ltspice_mcp.tools.analyze import (
     handle_analyze_results,
     render_attached_analysis,
 )
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import make_experiment_job, stage_recorded_fixture
-
-PACKAGE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 
 # ---------------------------------------------------------------------------
 # Every dotted-path argument goes through the one resolver
@@ -58,7 +57,7 @@ def _calls(node: ast.AST) -> set[str]:
 
 
 def _module(path: str) -> ast.Module:
-    return ast.parse((PACKAGE / path).read_text(encoding="utf-8"))
+    return parsed(PACKAGE / path)
 
 
 def test_each_reader_reads_through_the_shared_resolver() -> None:

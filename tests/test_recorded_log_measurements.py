@@ -35,8 +35,8 @@ def test_both_builds_recorded_logs():
 
 @pytest.mark.parametrize("name", LOGS)
 def test_every_recorded_logs_measurements_decode(name: str, tmp_path: Path):
-    logs = rec._decode_paths(None, FIXTURES / name, tmp_path / "decode").logs
-    section = logs.section("measurements")
+    build, _, log = name.partition("/")
+    section = rec.decode_log(build, log.removesuffix(".log"), tmp_path).section("measurements")
     assert section["status"] in ("parsed", "absent"), section["error"]
 
 
@@ -49,7 +49,7 @@ def test_a_stepped_fra_runs_margins_read_as_the_numbers_printed(tmp_path: Path):
     assert "     1\t90.6295°\t15900.4" in text.splitlines()
     assert "     1\tinfdB\tinf" in text.splitlines()
 
-    section = rec._decode_paths(None, path, tmp_path / "decode").logs.section("measurements")
+    section = rec.decode_log("ltspice26", "raw/fra_step", tmp_path).section("measurements")
 
     assert section["status"] == "parsed"
     table = section["value"]

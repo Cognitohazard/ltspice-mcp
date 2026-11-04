@@ -19,9 +19,10 @@ from ltspice_mcp.lib.ac_analysis import HALF_POWER_DB, compute_resonances
 from ltspice_mcp.lib.raw_parser import compute_ac_bandwidth_metrics
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import SyncApi
 
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp" / "lib"
+SOURCE = PACKAGE / "lib"
 #: The modules that read an AC response's -3 dB points.
 READERS = ("ac_analysis.py", "metrics.py", "raw_parser.py")
 
@@ -111,7 +112,7 @@ def test_a_resonance_flank_is_read_at_the_half_power_level():
 def _three_db_literals(path: Path) -> list[int]:
     """Lines where 3.0 is used as a level in dB: added to or subtracted from
     something, or given as a default, outside the definition of HALF_POWER_DB."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parsed(path)
     found: list[int] = []
 
     def is_three(node: ast.AST) -> bool:

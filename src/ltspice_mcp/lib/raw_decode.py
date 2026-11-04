@@ -14,7 +14,6 @@ import hashlib
 import io
 import math
 import os
-import re
 import stat
 from dataclasses import asdict
 from pathlib import Path
@@ -35,7 +34,7 @@ from ltspice_mcp.lib.raw_header import (
     preflight_raw,
 )
 from ltspice_mcp.lib.result_kinds import STEPPED_SWEEP, Analysis, header_analysis, stepped_kind
-from ltspice_mcp.lib.store import parser_file_in
+from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 _CHUNK_BYTES = 64 * 1024
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
@@ -128,7 +127,7 @@ def _verified_inputs(
             raise RawDecodeError("Invalid captured input filename")
         if type(item.size_bytes) is not int or item.size_bytes < 0:
             raise RawDecodeError("Invalid captured input size")
-        if not re.fullmatch(r"[0-9a-f]{64}", item.sha256):
+        if not is_sha256(item.sha256):
             raise RawDecodeError("Invalid captured input digest")
     if records["raw"].size_bytes > limits.input_bytes:
         raise RawLimitError("input_bytes limit exceeded")

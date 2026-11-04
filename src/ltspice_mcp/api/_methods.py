@@ -14,7 +14,7 @@ from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from importlib import import_module
 from pathlib import Path
 from types import MethodType
-from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -35,8 +35,12 @@ from ltspice_mcp.api._primitives import (
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
-from ltspice_mcp.lib.decoded_log import LogSectionName
-from ltspice_mcp.lib.model_fields import field_name, model_of, strip_annotated, union_members
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
+from ltspice_mcp.lib.log_types import LogSectionName
+from ltspice_mcp.lib.model_fields import (
+    field_name,
+    models_in,
+)
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, OtherRawKind
 from ltspice_mcp.state import SessionState
@@ -164,20 +168,6 @@ def _control_class(path: tuple[str, ...]) -> str | None:
     return None
 
 
-def _models_in(annotation: Any) -> Iterator[type[BaseModel]]:
-    """The models an argument of this type can hold, through optionals, unions
-    and lists. A mapping's keys are the caller's data, not fields, so the walk
-    stops there."""
-    annotation = strip_annotated(annotation)
-    nested = model_of(annotation)
-    if nested is not None:
-        yield nested
-        return
-    if union_members(annotation) is not None or get_origin(annotation) in (list, Sequence):
-        for member in get_args(annotation):
-            yield from _models_in(member)
-
-
 @functools.cache
 def _control_paths(model: type[BaseModel]) -> dict[tuple[str, ...], str]:
     """Every argument path of ``model`` that is a wire-only control, and its class.
@@ -197,7 +187,7 @@ def _control_paths(model: type[BaseModel]) -> dict[tuple[str, ...], str]:
                 kind = _control_class(path)
                 if kind is not None:
                     found[path] = kind
-                for nested in _models_in(field.annotation):
+                for nested in models_in(field.annotation):
                     if nested not in seen:
                         walk(nested, path, seen | {nested})
 
@@ -373,7 +363,7 @@ def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     later status read reports a cancellation nobody asked for. The contract
     states the rule; this is the same rule at the point of use.
     """
-    if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
+    if receipt.get("status") in TERMINAL_STATUSES:
         return receipt
     observations = receipt.setdefault("observations", [])
     if isinstance(observations, list):
@@ -416,7 +406,7 @@ def _note_detached_owner(
     if not isinstance(observations, list):
         observations = []
         receipt["observations"] = observations
-    if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
+    if receipt.get("status") in TERMINAL_STATUSES:
         detail = (
             f"This job is already terminal. Pid {owner_pid} is the process its "
             "record names as having run it; nothing is supervising it now and "

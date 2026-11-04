@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
+from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import (
     closure_depth,
     resolve_reference,
@@ -122,6 +123,48 @@ class DeckRequirements:
         return () if self.has_control else self.analyses
 
 
+#: What one file of a deck asks for, card by card: an analysis directive's head,
+#: ``.save``, a ``.control`` block, or another file it pulls in (resolved).
+_DeckItem = tuple[str, str | Path]
+
+
+def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
+    """What the file at ``path`` asks for, in card order: the deck itself when
+    ``root`` (its first line its title), else a file it pulls in. Raises
+    ``OSError`` when the file cannot be read."""
+    cards = lex_deck(read_spice_text(path), title=root).cards
+    try:
+        references = {
+            id(reference.card): reference
+            for reference in scan_include_references(
+                cards, path, depth=closure_depth(0 if root else 1)
+            )
+        }
+    except SpiceLexError:
+        references = {}  # a malformed directive: the simulator's to report
+    items: list[_DeckItem] = []
+    for card in cards:
+        if card.kind == "control":
+            items.append(("control", ""))
+            continue
+        parts = card.body.split(None, 1)
+        if card.kind != "directive" or not parts:
+            continue
+        head = parts[0].lower()
+        if head in _REQUESTED_ANALYSES:
+            items.append(("analysis", head))
+        elif head == ".save":
+            items.append(("save", ""))
+        elif (reference := references.get(id(card))) is not None:
+            items.append(("include", resolve_reference(path.parent, reference.raw_path)))
+    return tuple(items)
+
+
+#: An included file's items, kept while the file is unchanged: every case of a
+#: job pulls in the same libraries, which can run to tens of thousands of lines.
+_INCLUDED_ITEMS: FileCache[tuple[_DeckItem, ...]] = FileCache(maxsize=256)
+
+
 def deck_requirements(netlist: Path | None) -> DeckRequirements:
     """Snapshot requested analyses, ``.save`` and ``.control`` in one walk.
 
@@ -150,32 +193,23 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             return
         seen.add(key)
         try:
-            text = read_spice_text(path)
+            items = (
+                _deck_items(path, root=True)
+                if depth == 0
+                else _INCLUDED_ITEMS.get(key, lambda _key: _deck_items(path, root=False))
+            )
         except OSError:
             return
-        cards = lex_deck(text, title=depth == 0).cards
-        try:
-            references = {
-                id(reference.card): reference
-                for reference in scan_include_references(cards, path, depth=closure_depth(depth))
-            }
-        except SpiceLexError:
-            references = {}  # a malformed directive: the simulator's to report
-        for card in cards:
-            if card.kind == "control":
+        for kind, value in items:
+            if kind == "control":
                 has_control = True
-                continue
-            parts = card.body.split(None, 1)
-            if card.kind != "directive" or not parts:
-                continue
-            head = parts[0].lower()
-            if head in _REQUESTED_ANALYSES:
-                if head not in analyses:
-                    analyses.append(head)
-            elif head == ".save":
+            elif kind == "save":
                 has_save = True
-            elif (reference := references.get(id(card))) is not None:
-                scan(resolve_reference(path.parent, reference.raw_path), depth + 1)
+            elif kind == "analysis":
+                if value not in analyses:
+                    analyses.append(str(value))
+            else:
+                scan(Path(value), depth + 1)
 
     scan(netlist, 0)
     return DeckRequirements(tuple(analyses), has_save, has_control)

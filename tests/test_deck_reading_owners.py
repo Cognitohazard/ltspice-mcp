@@ -13,20 +13,11 @@ import ast
 import functools
 import re
 from collections.abc import Iterator
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "src" / "ltspice_mcp"
+from tests._source_scan import modules
 
 
 @functools.cache
-def _modules() -> dict[str, ast.Module]:
-    return {
-        path.relative_to(PACKAGE).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
-        for path in sorted(PACKAGE.rglob("*.py"))
-    }
-
-
 def _functions(tree: ast.AST, prefix: str = "") -> Iterator[tuple[str, ast.AST]]:
     """Every function in ``tree`` with its qualified name."""
     for node in ast.iter_child_nodes(tree):
@@ -64,11 +55,7 @@ def _strings(node: ast.AST) -> list[str]:
 #: continuation's plus. Such a walk reads a deck's physical lines, so it reads
 #: the title, the cards after ``.end`` and half of a continued card;
 #: ``spice_lex.lex_deck`` is the reading of a deck.
-_LINE_WALKS: dict[str, str] = {
-    "lib/spice_validator.py:estimate_analysis_points": (
-        "no caller outside the tests; port it to lex_deck before giving it one"
-    ),
-}
+_LINE_WALKS: dict[str, str] = {}
 
 
 def _line_walks_in(tree: ast.AST) -> set[str]:
@@ -94,7 +81,7 @@ def _line_walks_in(tree: ast.AST) -> set[str]:
 def test_no_deck_is_read_line_by_line_outside_the_lexer():
     walks = {
         f"{module}:{name}"
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         if module != "lib/spice_lex.py"
         for name in _line_walks_in(tree)
     }
@@ -139,7 +126,7 @@ _PLAIN_VALUE_READERS: dict[str, str] = {
 def _importers_of(name: str) -> set[str]:
     return {
         module
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and any(alias.name == name for alias in node.names)
     }
@@ -161,14 +148,14 @@ def test_an_include_target_is_read_only_by_the_staging_scanner():
     a file to include, and reads every section of a library."""
     cutters = {
         module
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         for name, _ in _functions(tree)
         if name.rsplit(".", 1)[-1] == "_include_target"
     }
     assert cutters <= {"lib/deck_staging.py"}
     head_sets = {
         module
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         for node in ast.walk(tree)
         if isinstance(node, ast.Set)
         and ".include" in [text for element in node.elts for text in _strings(element)]
@@ -215,7 +202,7 @@ def test_a_probe_in_a_card_is_read_only_by_the_lexer_views():
     ``V(a,b)`` one way here and another there."""
     readers = {
         module
-        for module, tree in _modules().items()
+        for module, tree in modules().items()
         if module != "lib/spice_lex_views.py" and _probe_patterns_in(tree)
     }
     assert readers == set(_PROBE_PATTERN_READERS)

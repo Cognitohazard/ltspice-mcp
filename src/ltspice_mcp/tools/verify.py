@@ -1072,7 +1072,7 @@ class _LexedDeck:
     error: str | None = None
 
 
-def _lex_deck(text: str) -> _LexedDeck:
+def _lexed_deck(text: str) -> _LexedDeck:
     """Lex a netlist once for every check that reads its cards."""
     try:
         result = lex_deck(text)
@@ -1527,7 +1527,7 @@ def _exported_value_suffix_findings(
     except OSError:
         return []
     return _value_suffix_findings(
-        _lex_deck(text).cards,
+        _lexed_deck(text).cards,
         net_path,
         text,
         encoding,
@@ -2384,7 +2384,7 @@ async def evaluate_verify_circuit(
     # whichever of the two asked for it.
     deck: _LexedDeck | None = None
     if text is not None and (wanted.get("syntax") or wanted.get("quality")):
-        deck = await asyncio.to_thread(_lex_deck, text)
+        deck = await asyncio.to_thread(_lexed_deck, text)
         observation_events.extend(deck.notes)
 
     # The LTspice this session drives, when it decodes decks as cp1252: the one

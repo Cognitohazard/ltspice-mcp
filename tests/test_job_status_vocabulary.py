@@ -17,11 +17,10 @@ from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_types import ExperimentStatus
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import receipts
 from ltspice_mcp.tools.jobs import handle_jobs
+from tests._source_scan import PACKAGE, parsed
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 #: The modules that own the vocabulary and the transitions between its words.
 _OWNERS = frozenset({"lib/experiment_types.py", "lib/job_types.py", "lib/job_lifecycle.py"})
 #: Words only a set of job statuses holds: no case or analysis status is
@@ -33,8 +32,6 @@ def test_live_and_terminal_statuses_split_the_vocabulary() -> None:
     vocabulary = set(get_args(ExperimentStatus))
     assert vocabulary == TERMINAL_STATUSES | NON_TERMINAL_LIVE_STATUSES
     assert not TERMINAL_STATUSES & NON_TERMINAL_LIVE_STATUSES
-    # What a receipt calls finished is the record's own terminal set.
-    assert receipts.TERMINAL_EXPERIMENT_STATUSES == TERMINAL_STATUSES
 
 
 def _set_literal_strings(node: ast.AST) -> set[str] | None:
@@ -62,10 +59,10 @@ def test_no_other_module_spells_a_set_of_job_statuses() -> None:
     """Every other module reads ``TERMINAL_STATUSES`` and
     ``NON_TERMINAL_LIVE_STATUSES`` rather than writing its own."""
     found = sorted(
-        f"{path.relative_to(_SRC).as_posix()}:{getattr(node, 'lineno', 0)}"
-        for path in _SRC.rglob("*.py")
-        if path.relative_to(_SRC).as_posix() not in _OWNERS
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        f"{path.relative_to(PACKAGE).as_posix()}:{getattr(node, 'lineno', 0)}"
+        for path in PACKAGE.rglob("*.py")
+        if path.relative_to(PACKAGE).as_posix() not in _OWNERS
+        for node in ast.walk(parsed(path))
         if (strings := _set_literal_strings(node)) and strings & _JOB_STATUS_WORDS
     )
     assert not found, f"job status sets spelled outside {sorted(_OWNERS)}: {found}"

@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
-import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -25,18 +23,14 @@ from ltspice_mcp.lib.recovery_records import ProcessIdentity, RecoveryError
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import handle_jobs
+from tests._source_scan import PACKAGE, parsed
+from tests.conftest import exited_pid
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 from tests.test_recovery_records import recovery_job
 
 #: A start marker no process running now has: the process that held a pid
 #: before it was reused.
 _EARLIER_PROCESS = "linux:00000000-0000-0000-0000-000000000000:1"
-
-
-def _exited_pid() -> int:
-    process = subprocess.Popen([sys.executable, "-c", "pass"])
-    process.wait()
-    return process.pid
 
 
 def _owners(live_peer_pid: int) -> dict[str, tuple[int, str | None, bool]]:
@@ -50,7 +44,7 @@ def _owners(live_peer_pid: int) -> dict[str, tuple[int, str | None, bool]]:
         "this_pid_earlier_process": (this, _EARLIER_PROCESS, False),
         "this_pid_unmarked": (this, None, False),
         "this_process_another_session": (this, process_start_marker(this), True),
-        "exited_pid": (_exited_pid(), None, False),
+        "exited_pid": (exited_pid(), None, False),
         "live_peer": (live_peer_pid, None, True),
         "live_peer_marked": (live_peer_pid, process_start_marker(live_peer_pid), True),
         "live_peer_pid_reused": (live_peer_pid, _EARLIER_PROCESS, False),
@@ -119,7 +113,7 @@ async def test_the_job_this_process_runs_is_its_own_whatever_its_record_says(
     """Ownership is the registry's: a live job here is cancelled without a
     token even when its record names another pid, and is never re-read."""
     job = _experiment(work_dir, _circuit(work_dir), status="running")
-    job.owner_pid = _exited_pid()
+    job.owner_pid = exited_pid()
     state_no_sim.job_registry.reserve(job)
     state_no_sim.add_experiment_job(job, already_persisted=True)
 
@@ -178,7 +172,6 @@ def test_a_record_this_process_writes_names_it_by_pid_and_start_marker(work_dir:
 # Ownership of the question
 # ---------------------------------------------------------------------------
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 #: The module that owns process identity.
 _OWNER = "lib/store.py"
 
@@ -217,10 +210,10 @@ def test_no_module_but_the_owner_compares_a_job_s_owner_pid_with_its_own() -> No
     store's identity checks (``owner_liveness``, ``is_this_process``) answer
     instead."""
     found = sorted(
-        f"{path.relative_to(_SRC).as_posix()}:{node.lineno}"
-        for path in _SRC.rglob("*.py")
-        if path.relative_to(_SRC).as_posix() != _OWNER
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        f"{path.relative_to(PACKAGE).as_posix()}:{node.lineno}"
+        for path in PACKAGE.rglob("*.py")
+        if path.relative_to(PACKAGE).as_posix() != _OWNER
+        for node in ast.walk(parsed(path))
         if isinstance(node, ast.Compare)
         and any(_names_an_owner_pid(side) for side in (node.left, *node.comparators))
         and any(_calls_getpid(side) for side in (node.left, *node.comparators))

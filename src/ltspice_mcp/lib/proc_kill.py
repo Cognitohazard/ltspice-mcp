@@ -22,6 +22,7 @@ attempted by the runners; on any given platform at most one finds a match.
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
@@ -180,22 +181,33 @@ class ProcessPresence(Enum):
     UNKNOWN = "unknown"
 
 
-def process_start_marker(pid: int) -> str:
+@functools.cache
+def _boot_id() -> str:
+    """This boot's id, which no process outlives: read once."""
+    return (
+        (Path(psutil.PROCFS_PATH) / "sys/kernel/random/boot_id")
+        .read_text(encoding="ascii")
+        .strip()
+    )
+
+
+def process_start_marker(pid: int, process: psutil.Process | None = None) -> str:
     """Return process-start identity independent of Linux wall-clock corrections.
 
     Linux's epoch creation time adds the current boot-time estimate to a
     stable kernel tick count. Persist the tick count and boot ID directly.
-    Windows records a fixed creation FILETIME, exposed by psutil.
+    Windows records a fixed creation FILETIME, exposed by psutil, read from
+    ``process`` when the caller already holds it.
     """
     if sys.platform == "linux":
-        proc = Path(psutil.PROCFS_PATH)
-        boot = (proc / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-        stat = (proc / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        stat = (Path(psutil.PROCFS_PATH) / str(pid) / "stat").read_text(
+            encoding="utf-8", errors="replace"
+        )
         # The parenthesized command may contain spaces and closing parens.
         # The fields after its final ')' start at field 3; starttime is 22.
         ticks = int(stat.rpartition(")")[2].split()[19])
-        return f"linux:{boot}:{ticks}"
-    return "birth:" + psutil.Process(pid).create_time().hex()
+        return f"linux:{_boot_id()}:{ticks}"
+    return "birth:" + (process or psutil.Process(pid)).create_time().hex()
 
 
 def process_identity_presence(pid: int, start_marker: str | None) -> ProcessPresence:
@@ -204,7 +216,10 @@ def process_identity_presence(pid: int, start_marker: str | None) -> ProcessPres
         return ProcessPresence.UNKNOWN
     try:
         process = psutil.Process(pid)
-        if process_start_marker(pid) != start_marker or process.status() == psutil.STATUS_ZOMBIE:
+        if (
+            process_start_marker(pid, process) != start_marker
+            or process.status() == psutil.STATUS_ZOMBIE
+        ):
             return ProcessPresence.ABSENT
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return ProcessPresence.ABSENT

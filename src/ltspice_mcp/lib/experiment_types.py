@@ -58,7 +58,8 @@ AnalysisStatus = Literal[
 #: server's or the Python API's, while the case ran. One code for both, as
 #: distinct from an explicit cancel (``cancelled``), so a resume retries either
 #: by default.
-OWNER_STOPPED: Final = "server_restarted"
+OwnerStopped = Literal["server_restarted"]
+OWNER_STOPPED: Final[OwnerStopped] = "server_restarted"
 
 TERMINAL_CASE_STATUSES: frozenset[str] = frozenset({"produced", "failed", "cancelled", "skipped"})
 #: Launched and not yet terminal: a simulator may be running for the case now.

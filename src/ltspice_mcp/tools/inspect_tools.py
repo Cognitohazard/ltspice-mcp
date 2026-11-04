@@ -2055,10 +2055,10 @@ _DIFFERENCE_ENTRIES_LIMIT = 25
 
 
 def _design_kind(spelled: str) -> str:
-    suffix = Path(spelled).suffix.lower()
-    if suffix == ".asc":
+    path = Path(spelled)
+    if is_asc(path):
         return "schematic"
-    return "netlist" if suffix in NETLIST_SUFFIXES else "other"
+    return "netlist" if path.suffix.lower() in NETLIST_SUFFIXES else "other"
 
 
 def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:

@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 from typing import get_args
 
@@ -26,7 +24,7 @@ from ltspice_mcp.tools.receipts import (
     render_runs_envelope,
     snapshot_receipt,
 )
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, exited_pid
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 
 _STATUSES: tuple[str, ...] = get_args(ExperimentStatus)
@@ -72,13 +70,6 @@ def test_every_renderer_reports_one_outcome(
     assert len(set(outcomes.values())) == 1, outcomes
 
 
-def _exited_pid() -> int:
-    """The pid of a process that has exited."""
-    process = subprocess.Popen([sys.executable, "-c", "pass"])
-    process.wait()
-    return process.pid
-
-
 @pytest.mark.asyncio
 async def test_an_interrupted_job_whose_runs_were_written_reads_complete(
     state_no_sim: SessionState, work_dir: Path
@@ -104,7 +95,7 @@ async def test_an_interrupted_job_whose_runs_were_written_reads_complete(
     shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.raw", output / f"{unrecorded.run_token}.raw")
     shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.log", output / f"{unrecorded.run_token}.log")
     job.completeness.recount(job.cases)
-    job.owner_pid = _exited_pid()
+    job.owner_pid = exited_pid()
     experiment_store.save_job(job)
 
     status = _assert_jobs_schema(

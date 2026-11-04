@@ -17,30 +17,29 @@ from typing import Any
 
 from ltspice_mcp.lib import log_parser
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
-from ltspice_mcp.lib.log_types import LOG_SECTIONS as _SECTIONS
+from ltspice_mcp.lib.log_types import LOG_SECTIONS
 from ltspice_mcp.lib.log_types import LogDecodeError as LogDecodeError
 from ltspice_mcp.lib.log_types import LogLimitError as LogLimitError
 from ltspice_mcp.lib.log_types import LogLimits as LogLimits
 from ltspice_mcp.lib.log_types import log_section as _section
 from ltspice_mcp.lib.native_log_tables import decode_native_tables
-from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES as _NAMES
-from ltspice_mcp.lib.parser_capture import CapturedInputs
-from ltspice_mcp.lib.store import parser_file_in
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES, CapturedInputs
+from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 
 def _read_captures(captured: CapturedInputs, directory: Path, limits: LogLimits) -> dict[str, str]:
     roles = [item.role for item in captured.files] + list(captured.absent)
-    if len(roles) != 3 or set(roles) != set(_NAMES):
+    if len(roles) != 3 or set(roles) != set(CAPTURED_NAMES):
         raise LogDecodeError("Each captured role must occur exactly once, present or absent")
     records = {item.role: item for item in captured.files}
     for item in captured.files:
         if (
-            item.name != _NAMES[item.role]
+            item.name != CAPTURED_NAMES[item.role]
             or type(item.size_bytes) is not int
             or item.size_bytes < 0
         ):
             raise LogDecodeError("Invalid captured log filename or size")
-        if not re.fullmatch(r"[0-9a-f]{64}", item.sha256):
+        if not is_sha256(item.sha256):
             raise LogDecodeError("Invalid captured log digest")
     logs = [item for item in captured.files if item.role != "raw"]
     if sum(item.size_bytes for item in logs) > limits.log_bytes:
@@ -51,7 +50,7 @@ def _read_captures(captured: CapturedInputs, directory: Path, limits: LogLimits)
         raise LogLimitError("Shared log reader byte cap exceeded")
     result = {}
     line_count = 0
-    for role, name in _NAMES.items():
+    for role, name in CAPTURED_NAMES.items():
         if role == "raw":
             continue
         path = parser_file_in(directory, name)
@@ -197,7 +196,7 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
     must run this synchronous operation in its killable parser worker.
     """
     text = _read_captures(captured, directory, limits)
-    log_path = parser_file_in(directory, _NAMES["log"])
+    log_path = parser_file_in(directory, CAPTURED_NAMES["log"])
     body = text.get("log", "")
     sections = {}
     sections["error_context"] = (
@@ -217,7 +216,9 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
     sections["steps"] = _section(
         lambda: _steps(body),
         limits,
-        present=any(log_parser.read_step_line(line) for line in io.StringIO(body)),
+        # A log with no '.step' anywhere has no step line to read.
+        present=".step" in body.lower()
+        and any(log_parser.read_step_line(line) for line in io.StringIO(body)),
     )
     sections["op_iterations"] = _section(
         lambda: {"attempts": attempts, "succeeded": log_parser.count_op_iterations(text=body)},
@@ -293,7 +294,7 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
             "complete": True,
             "capturedbytes": sum(item.size_bytes for item in captured.files if item.role != "raw"),
         },
-        **{name: sections[name] for name in _SECTIONS},
+        **{name: sections[name] for name in LOG_SECTIONS},
     }
     # Streaming byte accounting prevents a second oversized result allocation.
     size = 0

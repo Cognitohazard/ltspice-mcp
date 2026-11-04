@@ -9,7 +9,6 @@ placed by linear interpolation. Transient edges and timing, AC crossings
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,8 +16,7 @@ import pytest
 from ltspice_mcp.lib.ac_analysis import detect_crossings
 from ltspice_mcp.lib.ac_structure import _f0_at_half_swing
 from ltspice_mcp.lib.signal_analysis import _interp_crossings, level_crossings
-
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
+from tests._source_scan import PACKAGE, parsed
 
 
 @pytest.mark.parametrize(
@@ -71,8 +69,8 @@ def _sign_change_tests() -> list[tuple[str, str]]:
     """Comparisons that test consecutive samples for a change of sign:
     ``d[:-1] * d[1:]`` or ``np.diff(np.sign(...))``."""
     found = []
-    for path in sorted((SOURCE / "lib").glob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for path in sorted((PACKAGE / "lib").glob("*.py")):
+        for node in ast.walk(parsed(path)):
             if isinstance(node, ast.Compare):
                 text = ast.unparse(node.left)
                 if ("[:-1] * " in text and "[1:]" in text) or "np.diff(np.sign(" in text:

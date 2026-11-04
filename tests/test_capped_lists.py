@@ -15,9 +15,8 @@ from ltspice_mcp.errors import python_route_text
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from tests._source_scan import PACKAGE, parsed
 from tests.conftest import stage_recorded_fixture
-
-PACKAGE = Path(__file__).resolve().parents[1] / "src" / "ltspice_mcp"
 
 _NOTE_HELPERS = frozenset({"cap_note", "cap_list"})
 
@@ -47,7 +46,7 @@ def _capping_functions() -> dict[str, set[str]]:
     """Every function that slices or bounds by a ``*_CAP``, with the helpers it calls."""
     found: dict[str, set[str]] = {}
     for path in sorted(PACKAGE.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parsed(path)
         caps = {
             target.id
             for node in tree.body
