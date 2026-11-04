@@ -27,9 +27,11 @@ Definitions are not limited to the file itself: a compiler that externalizes a
 block's implementation to a project-local ``.lib`` must still verify against a
 reference whose ``.subckt`` is inline, so ``.include``/``.inc``/``.lib``
 references are followed (resolved against the including file's own directory,
-depth-bounded and cycle-guarded, with the ``.lib file section`` form taking the
-file token). When one name is defined more than once, the FIRST definition in
-textual order wins and the losers are recorded — measured behavior, not
+depth-bounded and cycle-guarded, as ``deck_staging`` reads them: the
+``.lib file section`` form reads only that section of the file, and a library's
+own ``.lib section`` line declares a section rather than naming a file). When
+one name is defined more than once, the FIRST definition in textual order wins,
+with its own body only, and the losers are recorded — measured behavior, not
 assumption: ngspice 42 warns ``redefinition of .subckt X, ignored`` and keeps
 whichever definition came first, so an inline block only wins when it precedes
 the include (the usual LTspice layout), not because it is inline.
@@ -84,17 +86,22 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
-from ltspice_mcp.lib.deck_staging import resolve_reference
+from ltspice_mcp.lib.deck_staging import (
+    card_sections,
+    closure_depth,
+    resolve_reference,
+    scan_include_references,
+)
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
     SpiceCard,
     SpiceLexError,
-    cards_from_path,
     copies_by_name,
     iter_by_kind,
     lex_deck,
+    subckt_children,
 )
 from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
@@ -118,15 +125,13 @@ _GROUND = "0"
 # order: a MOSFET's D/G/S/B, a source's +/-, a diode's anode/cathode all matter.
 _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 
-# Directives that pull another file into the deck. Semantics mirror
-# ``runner_base.deck_requirements`` / ``_include_target``: the walk is
-# depth-bounded and cycle-guarded, and the ``.lib file section`` form takes the
-# file token (the section name is irrelevant to a subcircuit scan). Resolving a
-# target against the INCLUDING file's directory is NOT restated here — that is
-# ``deck_staging.resolve_reference``, imported rather than mirrored, because a
-# second copy of that rule is how this module comes to disagree with staging
-# about which file a reference names.
-_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
+# How deep the walk follows files that pull in other files. Which file and
+# section a directive names, whether a ``.lib`` inside a library declares a
+# section, and where a target resolves are not restated here: they are
+# ``deck_staging``'s (``scan_include_references``, ``card_sections``,
+# ``resolve_reference``), imported rather than mirrored, because a second copy
+# of those rules is how this module came to read a library's ``.lib tt``
+# section declaration as an include of a file named ``tt``.
 _MAX_INCLUDE_DEPTH = 3
 
 
@@ -582,20 +587,20 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
     A :class:`~pathlib.Path` is always read as a file. A ``str`` is treated as
     raw netlist text when it spans multiple lines or is long; otherwise, if it
     names an existing file, it is read — else it is lexed as text. The second
-    element is the directory includes resolve against (``None`` for bare text).
+    element is the file read (``None`` for bare text).
 
     An ``.asc`` schematic is refused: lexed as SPICE, its ``SYMBOL``/``WIRE``
     lines read as element cards and the graph describes nothing. Its LTspice
     export is the netlist to compare.
     """
     if isinstance(path_or_text, Path):
-        return _cards_from_netlist_path(path_or_text), path_or_text.parent
+        return _cards_from_netlist_path(path_or_text), path_or_text
     text = path_or_text
     if "\n" not in text and len(text) <= 400:
         try:
             candidate = Path(text)
             if candidate.is_file():
-                return _cards_from_netlist_path(candidate), candidate.parent
+                return _cards_from_netlist_path(candidate), candidate
         except OSError:
             pass
     return lex_deck(text), None
@@ -631,7 +636,8 @@ def parse_netlist_graph(
 
     Subcircuit definitions are collected in textual order from this file and
     from every ``.include``/``.inc``/``.lib`` it pulls in (resolved against the
-    including file's own directory, depth-bounded and cycle-guarded). When a name
+    including file's own directory, depth-bounded and cycle-guarded); a
+    ``.lib <file> <section>`` reads only that section of the file. When a name
     is defined more than once the FIRST definition wins and the rest are recorded
     in ``duplicate_subckts`` — matching the simulator, which ignores
     redefinitions (measured on ngspice 42). Includes that yield nothing are
@@ -649,7 +655,7 @@ def parse_netlist_graph(
     An ``X`` instance still lacking a definition is kept as a top-level
     component and treated as a black box by :func:`flatten_graph`.
     """
-    result, source_dir = _load_cards(path_or_text)
+    result, source = _load_cards(path_or_text)
     cards = result.cards
 
     structural = [
@@ -661,9 +667,11 @@ def parse_netlist_graph(
         raise NetlistGraphError("malformed netlist: " + "; ".join(structural))
 
     registry = _SubcktRegistry()
+    directory = base_dir if base_dir is not None else source.parent if source else None
     _collect_subckts(
         cards,
-        base_dir=base_dir if base_dir is not None else source_dir,
+        origin=source or (directory or Path()) / "<netlist>",
+        base_dir=directory,
         depth=0,
         registry=registry,
         seen=set(),
@@ -680,23 +688,6 @@ def parse_netlist_graph(
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
     )
-
-
-def _include_target(rest: str) -> str | None:
-    """The filename an ``.include``/``.inc``/``.lib`` argument points at.
-
-    ``rest`` is the directive body past its head. A quoted path is taken whole
-    (SPICE allows spaces inside quotes); an unquoted argument is its first
-    whitespace-delimited token, which for the ``.lib file section`` form is the
-    file (the section name is dropped). Returns None when no target is present.
-    """
-    rest = rest.strip()
-    if not rest:
-        return None
-    if rest[0] in "\"'":
-        end = rest.find(rest[0], 1)
-        return rest[1:end] if end != -1 else None
-    return rest.split(None, 1)[0]
 
 
 @dataclass
@@ -727,12 +718,18 @@ class _SubcktRegistry:
         )
 
 
-def _subckt_def_from(cards: list[SpiceCard], opener: SpiceCard) -> SubcktDef:
-    """Project one ``.SUBCKT`` opener (and its body cards) into a definition."""
-    view = SubcktCard.from_card(opener)
-    body_scope = (*opener.scope, view.name)
+def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
+    """Project one ``.SUBCKT`` opener and the body it opens into a definition.
+
+    The body is read by span (``spice_lex.subckt_children``): a second
+    definition of the name has the same scope tuple, and its cards are no part
+    of this one.
+    """
+    view = SubcktCard.from_card(cards[opener_index])
     body = [
-        _component_from_card(card) for card in iter_by_kind(cards, "instance", scope=body_scope)
+        _component_from_card(card)
+        for _, card in subckt_children(cards, opener_index)
+        if card.kind == "instance"
     ]
     return SubcktDef(
         name=view.name,
@@ -745,29 +742,50 @@ def _subckt_def_from(cards: list[SpiceCard], opener: SpiceCard) -> SubcktDef:
 def _collect_subckts(
     cards: list[SpiceCard],
     *,
+    origin: Path,
     base_dir: Path | None,
     depth: int,
     registry: _SubcktRegistry,
-    seen: set[Path],
+    seen: set[tuple[Path, str | None]],
     source: str,
     strict: bool,
     include_resolver: IncludeResolver | None = None,
+    section: str | None = None,
 ) -> None:
     """Walk ``cards`` in textual order, registering definitions and following includes.
 
     Order is what makes first-wins precedence correct: an include contributes its
     definitions at the position its directive appears, exactly as textual
-    substitution would. Cards past a top-level ``.END`` are inert and skipped.
-    With ``strict`` the caller's own malformed card raises; for an included file
+    substitution would. ``cards`` are the ones a simulator reads, read from
+    ``origin``; ``section`` names the library section a ``.lib <file>
+    <section>`` selected, and a card in any other section is skipped. With
+    ``strict`` the caller's own malformed card raises; for an included file
     it is downgraded to a :class:`MissingInclude` record so a third-party library
     cannot break the comparison.
     """
-    for card in cards:
-        if card.trailing:
+    try:
+        sections = card_sections(cards, origin, closure_depth(depth))
+        references = {
+            id(reference.card): reference
+            for reference in scan_include_references(cards, origin, depth=closure_depth(depth))
+        }
+    except SpiceLexError as exc:
+        if strict:
+            bad = next((card for card in cards if card.body and card.body == exc.body), None)
+            raise NetlistGraphError(
+                f"malformed directive: {exc}", line=bad.line_start if bad else None
+            ) from exc
+        registry.missing.append(
+            MissingInclude(target=source, reason=f"malformed directive: {exc}")
+        )
+        return
+    wanted = section.casefold() if section is not None else None
+    for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
+        if wanted is not None and card_section is not None and card_section.casefold() != wanted:
             continue
         if card.kind == "subckt":
             try:
-                registry.register(_subckt_def_from(cards, card), source)
+                registry.register(_subckt_def_from(cards, index), source)
             except (SpiceLexError, NetlistGraphError) as exc:
                 if strict:
                     raise NetlistGraphError(
@@ -779,16 +797,12 @@ def _collect_subckts(
                     MissingInclude(target=source, reason=f"malformed .SUBCKT: {exc}")
                 )
             continue
-        if card.kind != "directive":
-            continue
-        parts = card.body.split(None, 1)
-        if len(parts) < 2 or parts[0].lower() not in _INCLUDE_DIRECTIVES:
-            continue
-        target = _include_target(parts[1])
-        if target is None:
+        reference = references.get(id(card))
+        if reference is None:
             continue
         _follow_include(
-            target,
+            reference.raw_path,
+            section=reference.section,
             base_dir=base_dir,
             depth=depth,
             registry=registry,
@@ -800,13 +814,15 @@ def _collect_subckts(
 def _follow_include(
     target: str,
     *,
+    section: str | None,
     base_dir: Path | None,
     depth: int,
     registry: _SubcktRegistry,
-    seen: set[Path],
+    seen: set[tuple[Path, str | None]],
     include_resolver: IncludeResolver | None = None,
 ) -> None:
-    """Load one include target's definitions, or record why it contributed none."""
+    """Load one include target's definitions (only ``section``'s, when the
+    reference selects one), or record why it contributed none."""
     if base_dir is None:
         registry.missing.append(
             MissingInclude(target, "no base directory (netlist parsed from text)")
@@ -837,16 +853,19 @@ def _follow_include(
     except OSError:
         registry.missing.append(MissingInclude(target, "unresolvable path"))
         return
-    if key in seen:
+    selected = (key, section.casefold() if section is not None else None)
+    if selected in seen:
         return  # already contributed; revisiting is how an include cycle stops
-    seen.add(key)
+    seen.add(selected)
     try:
-        included = cards_from_path(path)
+        included = lex_deck(read_spice_text(path), title=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         registry.missing.append(MissingInclude(target, f"unreadable: {exc}"))
         return
     _collect_subckts(
         included.cards,
+        origin=path,
+        section=section,
         base_dir=path.parent,
         depth=depth + 1,
         registry=registry,

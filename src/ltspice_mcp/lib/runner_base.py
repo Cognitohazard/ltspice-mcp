@@ -20,7 +20,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
-from ltspice_mcp.lib.deck_staging import resolve_reference
+from ltspice_mcp.lib.deck_staging import (
+    closure_depth,
+    resolve_reference,
+    scan_include_references,
+)
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import (
@@ -102,19 +106,7 @@ _REQUESTED_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_
     ".sens",
     ".disto",
 }
-_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
 _MAX_INCLUDE_DEPTH = 3
-
-
-def _include_target(rest: str) -> str | None:
-    """Return the file token from an include or library directive."""
-    rest = rest.strip()
-    if not rest:
-        return None
-    if rest[0] in "\"'":
-        end = rest.find(rest[0], 1)
-        return rest[1:end] if end != -1 else None
-    return rest.split(None, 1)[0]
 
 
 @dataclass(frozen=True)
@@ -135,7 +127,9 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
 
     It reads the cards the simulator reads (``spice_lex.lex_deck``): a
     directive continued on a ``+`` line is one card, and neither the deck's
-    title nor a card after an ``.END`` counts.
+    title nor a card after an ``.END`` counts. The files it follows are the
+    ones staging reads the deck to pull in (``scan_include_references``), so
+    a library's own ``.lib section`` line is a section, not a file.
     """
     if netlist is None:
         return DeckRequirements()
@@ -159,7 +153,15 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             text = read_spice_text(path)
         except OSError:
             return
-        for card in lex_deck(text, title=depth == 0).cards:
+        cards = lex_deck(text, title=depth == 0).cards
+        try:
+            references = {
+                id(reference.card): reference
+                for reference in scan_include_references(cards, path, depth=closure_depth(depth))
+            }
+        except SpiceLexError:
+            references = {}  # a malformed directive: the simulator's to report
+        for card in cards:
             if card.kind == "control":
                 has_control = True
                 continue
@@ -172,10 +174,8 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
                     analyses.append(head)
             elif head == ".save":
                 has_save = True
-            elif head in _INCLUDE_DIRECTIVES and len(parts) > 1:
-                target = _include_target(parts[1])
-                if target is not None:
-                    scan(resolve_reference(path.parent, target), depth + 1)
+            elif (reference := references.get(id(card))) is not None:
+                scan(resolve_reference(path.parent, reference.raw_path), depth + 1)
 
     scan(netlist, 0)
     return DeckRequirements(tuple(analyses), has_save, has_control)

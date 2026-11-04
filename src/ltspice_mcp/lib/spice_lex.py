@@ -1271,6 +1271,24 @@ def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | Non
     return None
 
 
+def subckt_children(
+    cards: Sequence[SpiceCard], opener_idx: int
+) -> Iterator[tuple[int, SpiceCard]]:
+    """Each card one level inside the ``.SUBCKT`` opened at ``opener_idx``,
+    with its index; the cards inside a nested definition are left out.
+
+    Read by span, from the opener to its ``.ENDS`` (to the end of the cards
+    for one never closed), not by scope: two definitions of one name in a
+    file, inline or one per library section, give their bodies the same scope
+    tuple, so a scope query returns both bodies for either definition.
+    """
+    depth = len(cards[opener_idx].scope) + 1
+    closer = find_matching_ends(cards, opener_idx)
+    for i in range(opener_idx + 1, len(cards) if closer is None else closer):
+        if len(cards[i].scope) == depth:
+            yield i, cards[i]
+
+
 def iter_by_kind(
     cards: Sequence[SpiceCard],
     kind: CardKind,

@@ -640,6 +640,49 @@ def test_duplicate_definition_first_in_textual_order_wins(
     assert ("<inline>" in dup.used) is inline_first
 
 
+#: One subcircuit defined per corner section of a library, as an ngspice deck
+#: selects one with ``.lib <file> <section>`` (LTspice has no sections and
+#: refuses the form: recorded deck/lib_section).
+_CORNERS = (
+    ".lib tt\n.subckt amp a b\nR1 a b 1k\n.ends amp\n.endl tt\n"
+    ".lib ff\n.subckt amp a b\nR1 a b 2k\n.ends amp\n.endl ff\n"
+)
+_AMP_CALL = "* t\nV1 in 0 1\nX1 in 0 amp\n"
+
+
+@pytest.mark.parametrize(
+    ("deck", "value"),
+    [
+        pytest.param(_AMP_CALL + ".lib corners.lib ff\n.end\n", "2k", id="the-section-selected"),
+        pytest.param(_AMP_CALL + ".lib corners.lib tt\n.end\n", "1k", id="the-other-section"),
+        pytest.param(
+            _AMP_CALL + ".subckt amp a b\nR1 a b 1k\n.ends amp\n"
+            ".subckt amp a b\nR1 a b 2k\n.ends amp\n.end\n",
+            "1k",
+            id="the-first-of-two-inline-definitions",
+        ),
+    ],
+)
+def test_an_instance_runs_the_one_body_its_deck_selects(
+    tmp_path: Path, deck: str, value: str
+) -> None:
+    """The graph flattens ``X1`` to the one definition the deck selects: a
+    library section by name, or the first of two inline definitions. It reads
+    neither section's ``.lib`` as an include of a file named after it."""
+    (tmp_path / "corners.lib").write_text(_CORNERS)
+    path = tmp_path / "deck.cir"
+    path.write_text(deck)
+
+    graph = parse_netlist_graph(path)
+
+    assert graph.missing_includes == ()
+    assert [(c.ref, c.value) for c in flatten_graph(graph).components if c.ref != "V1"] == [
+        ("X1.R1", value)
+    ]
+    inline = f"{_AMP_CALL}.subckt amp a b\nR1 a b {value}\n.ends amp\n.end\n"
+    assert compare_graphs(path, inline).equivalent
+
+
 def test_include_cycle_terminates(tmp_path: Path) -> None:
     # a.lib includes b.lib includes a.lib — must terminate and still register.
     (tmp_path / "a.lib").write_text(".include b.lib\n.subckt DIVBLOCK a b\nR1 a b 1k\n.ends\n")

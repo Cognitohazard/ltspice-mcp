@@ -146,3 +146,30 @@ def _importers_of(name: str) -> set[str]:
 
 def test_only_the_listed_modules_read_a_value_with_the_plain_reader():
     assert _importers_of("parse_plain_value") == set(_PLAIN_VALUE_READERS)
+
+
+# --------------------------------------------------------------------------
+# Which file and section an include names is read by staging's scanner
+# --------------------------------------------------------------------------
+
+
+def test_an_include_target_is_read_only_by_the_staging_scanner():
+    """``deck_staging.scan_include_references`` reads the file and section an
+    ``.include`` or ``.lib`` names. A reader that cuts the target out of the
+    directive itself takes a library's own ``.lib tt`` section declaration for
+    a file to include, and reads every section of a library."""
+    cutters = {
+        module
+        for module, tree in _modules().items()
+        for name, _ in _functions(tree)
+        if name.rsplit(".", 1)[-1] == "_include_target"
+    }
+    assert cutters <= {"lib/deck_staging.py"}
+    head_sets = {
+        module
+        for module, tree in _modules().items()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Set)
+        and ".include" in [text for element in node.elts for text in _strings(element)]
+    }
+    assert head_sets == {"lib/spice_lex.py"}

@@ -1473,7 +1473,10 @@ export, and an `.asc` reference is exported the same way, on a staged copy,
 never beside the caller's file; without LTspice the compare fails rather than
 diffing a schematic's attributes against a netlist's cards. Both modes read
 the cards the simulator reads: line 1 of a deck is its title and is not read,
-nor is a card after `.end`. `structural_diff`
+nor is a card after `.end`. `equivalence` follows includes as staging reads
+them, so `.lib <file> <section>` brings in that section's definitions only,
+and of two definitions of one subcircuit name the first is the body
+compared, the others listed in `duplicate_subckts`. `structural_diff`
 lexes both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores

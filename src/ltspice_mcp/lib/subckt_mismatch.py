@@ -63,6 +63,7 @@ from ltspice_mcp.lib.spice_lex import (
     emit,
     find_matching_ends,
     lex,
+    subckt_children,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end, rename_subckt
@@ -442,20 +443,10 @@ def _closer_index(cards: list[SpiceCard], opener_index: int) -> int:
 
 
 def _direct_children(index: _FileIndex, opener_index: int) -> list[tuple[int, SpiceCard]]:
-    """Cards one level inside a subcircuit body, nested bodies excluded.
-
-    Addressed by span rather than by scope: two definitions of one name in a
-    file — the ordinary shape of a library entered under two corner sections —
-    give their bodies the same scope tuple, so a scope query would return both
-    bodies' cards for whichever definition was resolved.
-    """
-    depth = len(index.cards[opener_index].scope) + 1
-    stop = _closer_index(index.cards, opener_index)
-    return [
-        (i, index.cards[i])
-        for i in range(opener_index + 1, stop)
-        if len(index.cards[i].scope) == depth
-    ]
+    """Cards one level inside a subcircuit body, nested bodies excluded, read
+    by span (``spice_lex.subckt_children``): a library entered under two
+    corner sections defines one name twice, with one scope tuple."""
+    return list(subckt_children(index.cards, opener_index))
 
 
 def _instances(children: Iterable[tuple[int, SpiceCard]], prefix: str) -> list[SpiceCard]:
