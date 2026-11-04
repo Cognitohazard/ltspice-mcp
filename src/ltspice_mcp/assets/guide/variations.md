@@ -69,8 +69,8 @@ a `pdk_native` variation is refused.
 
 ## Pelgrom mismatch
 
-One `random` entry with a `mismatch` rule draws per-instance `delvto`/`mulu0`
-from device area as `σ(ΔVTH) = AVT/√(W·L)` with W·L in µm². `AVT` is therefore
+One `random` entry with a `mismatch` rule draws a per-instance threshold shift
+and current-factor scale from device area as `σ(ΔVTH) = AVT/√(W·L)` with W·L in µm². `AVT` is therefore
 in V·µm (`3.2e-3` = 3.2 mV·µm) and `AK` in fraction·µm; a coefficient written in
 V·m is 10⁶ too small, so the run succeeds but the spread is effectively zero:
 
@@ -85,9 +85,10 @@ To set a target σ instead of a technology coefficient, invert the formula to
 input-referred offset σ is √2 × the per-device figure.
 
 A device the simulator builds as m parallel copies from one card shares that
-card's one draw, so its area is `m·W·L`: m is the product of the device's own
-`m` and the `m` of every subcircuit instance above it, with an inner `m={mult}`
-taking the value its X line gives. A device written as 12 fingers of 1 µm
+card's one draw, so its area is `m·W·L`. On ngspice m is the product of the
+device's own `m` and the `m` of every subcircuit instance above it. LTspice
+ignores `m` on an X line, so there m is the device's own. On both, an inner
+`m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
 (`W=1u m=12`) gets the σ of a 12 µm device. An `m` that does not resolve to a
 positive number refuses the request with `mismatch_geometry_unresolved`.
 
@@ -109,11 +110,14 @@ applies to the model card's `VTO`/`KP`:
 - Other prefixes (`"Q"` for BJTs) are accepted, but the Pelgrom law and those
   parameter defaults are for MOSFETs.
 - When a `prefix` matches subckt instances (such as Sky130's FETs, each wrapped
-  in an `X` subcircuit), the rule draws `delvto`/`mulu0` for the BSIM3/4
-  MOSFET inside each subcircuit. This works on ngspice only and one level deep
-  (`X` → `M`). For nested blocks, list the physical MOS instances with
-  `inspect(kind="hierarchy")` (guide section 'hierarchy'). Sampling uses each
-  device's final W/L, after any `assign` variation has set it.
+  in an `X` subcircuit), the rule draws for every MOSFET inside them. On
+  ngspice the draw is written as `delvto`/`mulu0` on the device, which needs a
+  BSIM3 or BSIM4 model. LTspice takes neither `mulu0` nor `delvto` on BSIM3, so
+  there the device gets its own copy of its model card with `vth_param` and
+  `k_param` changed, which needs a model with one definition (not binned).
+  List the physical MOS instances with `inspect(kind="hierarchy")` (guide
+  section 'hierarchy'). Sampling uses each device's final W/L, after any
+  `assign` variation has set it.
 
 ## Explicit per-instance values
 

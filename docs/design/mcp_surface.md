@@ -1962,14 +1962,18 @@ device its own copy of its `.model`, with the drawn threshold shift and
 current-factor scale applied to the parameters the rule names. A
 `rule: "mismatch"` can also select a MOS inside subcircuits by its exact
 instance list, or every MOS inside a subcircuit instance by that instance's
-list. Such a device gets its draw as `delvto` and `mulu0` instance
-parameters, which needs its model to resolve to an ngspice-compatible BSIM3
-or BSIM4 model, and the draw uses the device's W and L after `assign`
-variations are applied. The area a draw stands for is `m·W·L`, where m is the
-product of the device's own `m` and the `m` of every subcircuit instance
-above it (an inner `m={mult}` resolves in the scope its X line sets), because
-the simulator builds that many parallel copies from one card and they share
-the draw. An `m` that does not resolve to a positive number refuses the
+list. On ngspice such a device gets its draw as `delvto` and `mulu0` instance
+parameters, which needs its model to resolve to a BSIM3 or BSIM4 model.
+LTspice takes neither `mulu0` nor `delvto` on BSIM3, so there the device gets
+its own copy of its `.model` inside a private copy of its subcircuit, as a
+top-level device does, which needs a model with one definition; a binned
+model is refused with `model_missing`. The draw uses the device's W and L
+after `assign` variations are applied. The area a draw stands for is `m·W·L`,
+because the simulator builds m parallel copies from one card and they share
+the draw. On ngspice m is the product of the device's own `m` and the `m` of
+every subcircuit instance above it; LTspice ignores `m` on an X line, so
+there m is the device's own. An inner `m={mult}` resolves in the scope its X
+line sets. An `m` that does not resolve to a positive number refuses the
 request with `mismatch_geometry_unresolved`. Draws across circuits are
 independent; correlated Monte Carlo across decks is not supported.
 

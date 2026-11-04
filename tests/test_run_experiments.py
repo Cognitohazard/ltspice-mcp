@@ -28,7 +28,9 @@ from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.job_registry import JobRegistry
+from ltspice_mcp.lib.montecarlo import parse_model_params
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -2161,16 +2163,20 @@ class TestPerCircuitFailuresAndAccounting:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """An LTspice run whose mismatch rule reaches a device inside a
-        subcircuit is refused before anything is submitted, and the case
+        """An ngspice run whose mismatch rule reaches a level 1 device inside a
+        subcircuit is refused before anything is submitted, since ngspice takes
+        the draw as delvto and mulu0 on BSIM3 and BSIM4 only, and the case
         carries the refusal's own code rather than submission_failed."""
-        state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+        state = SessionState.create(
+            config, available={"ngspice": type("NGspiceSimulator", (FakeSim,), {})}
+        )
         submissions: list[str] = []
         fake_simulator(monkeypatch, submissions)
         deck = _deck(
             work_dir / "wrapped.cir",
-            "* wrapped fet\n" + MINI_FET + "XM1 out g 0 0 minifet W=1 L=0.15\n"
-            "V1 out 0 1\nVg g 0 0.9\n.op\n.end\n",
+            "* wrapped fet\n.subckt cell d g s\nM0 d g s s n W=10u L=1u\n"
+            ".model n NMOS(level=1 VTO=0.7 KP=100u)\n.ends cell\n"
+            "X1 out g 0 cell\nV1 out 0 1\nVg g 0 1.5\n.op\n.end\n",
         )
         mismatch = {
             "kind": "random",
@@ -2187,8 +2193,61 @@ class TestPerCircuitFailuresAndAccounting:
 
         assert submissions == []
         (failure,) = data["failures"]
-        assert failure["code"] == "unsupported_backend"
-        assert "requires ngspice" in failure["message"]
+        assert failure["code"] == "unsupported_model"
+
+    async def test_an_ltspice_mismatch_inside_a_subcircuit_copies_the_devices_model(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """On LTspice a device inside a subcircuit takes its draw as its own copy
+        of its model, with vth0 shifted and u0 scaled, inside a private copy of
+        the subcircuit. The other instance keeps the subcircuit as written."""
+        state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _deck(
+            work_dir / "wrapped.cir",
+            "* wrapped fets\n" + MINI_FET + "XM1 o1 g 0 0 minifet W=1u L=0.15u\n"
+            "XM2 o2 g 0 0 minifet W=1u L=0.15u\nV1 o1 0 1\nV2 o2 0 1\nVg g 0 0.9\n.op\n.end\n",
+        )
+        mismatch = {
+            "kind": "random",
+            "runs": 1,
+            "seed": 1,
+            "rules": [
+                {
+                    "rule": "mismatch",
+                    "instance": ["XM1", "m0"],
+                    "AVT": 5e-3,
+                    "AK": 0.02,
+                    "vth_param": "VTH0",
+                    "k_param": "U0",
+                }
+            ],
+        }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "ltspice-nested", lint="off", variations=[mismatch]), state
+            )
+        )
+
+        assert not data.get("failures")
+        (netlist,) = submitted
+        hierarchy = load_hierarchy(str(netlist), None, SemanticProfile("ltspice", None))
+        rows = {row.instance: row for row in hierarchy.instances}
+        (drawn,) = rows[("XM1", "m0")].model_family
+        (kept,) = rows[("XM2", "m0")].model_family
+        assert rows[("XM2",)].model_name == "minifet"
+        assert kept.name == "minifet_model"
+        assert parse_model_params(kept.raw) == {"LEVEL": 54, "VTH0": 0.7, "U0": 0.06}
+        copy = rows[("XM1",)].model_name or ""
+        assert (drawn.source.definition or "").casefold() == copy.casefold() != "minifet"
+        params = parse_model_params(drawn.raw)
+        assert 1e-6 < abs(params["VTH0"] - 0.7) < 0.1
+        assert 1e-6 < abs(params["U0"] / 0.06 - 1) < 0.5
 
     async def test_ids_from_file_stems_are_made_valid_and_unique(
         self,

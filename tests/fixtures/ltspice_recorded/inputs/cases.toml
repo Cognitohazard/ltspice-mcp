@@ -461,7 +461,7 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.mos-multiplier]
-summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line and of m={mult} set from it, which the server counts only under ngspice."
+summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line, one or two levels up, and of m={mult} set from it: both ignore the X line's m, so an LTspice draw counts only the device's own."
 model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
 # Each device's drain is fed through a 0 V source, so the operating-point raw
 # holds its current: one copy (V1) against m=4 on the card (V4), and in the

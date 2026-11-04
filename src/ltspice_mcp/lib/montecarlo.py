@@ -362,9 +362,8 @@ class MismatchRule:
 class InstanceGeometry:
     """Geometric inputs needed to compute Pelgrom σ for one transistor.
 
-    ``multiplier`` is the product of the device's own ``m`` and the ``m`` of
-    every subcircuit instance above it: the number of parallel copies the
-    simulator builds from one card. All of them share the card's one draw, so
+    ``multiplier`` is the number of parallel copies the simulator builds from
+    the device's one card. All of them share the card's one draw, so
     the gate area the draw stands for is ``multiplier · W · L``. ``None`` means
     a multiplier was written but is not a positive number this module can
     read, which leaves σ undefined.
