@@ -1396,7 +1396,9 @@ async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
 def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -> str:
     """Resolve a netlist ``at`` to a node name. Netlists carry no geometry, so a
     coordinate is rejected; ``REF.<terminal>`` maps to the node at that 1-based
-    terminal; ``net:NAME`` and a bare name are node names directly."""
+    terminal; ``net:NAME`` and a bare name are node names directly. A card has
+    no pin names, so ``REF.NAME`` for one of the deck's cards is refused, unless
+    a node is called that: answered as a node, it would be an empty net."""
     if isinstance(at, list):
         raise _QueryError(
             "invalid_at",
@@ -1418,6 +1420,15 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
                     f"terminal {index} out of range for '{ref}' ({len(nodes)} terminals)",
                 )
             return nodes[index - 1]
+        nodes = nodes_of.get(ref.lower())
+        named = {name_key(node) for card_nodes in nodes_of.values() for node in card_nodes}
+        if nodes is not None and name_key(at) not in named:
+            raise _QueryError(
+                "invalid_at",
+                f"'{ref}' is a card of this netlist, and a netlist addresses its pins by "
+                f"terminal number, not by name: use at='{ref}.<terminal>' (1 to "
+                f"{len(nodes)}), or at='net:NAME' for a node",
+            )
         # A dotted name whose tail is not a terminal index is a hierarchical node.
         return at
     return at

@@ -531,6 +531,41 @@ async def test_net_netlist_coordinates_rejected(netlist: Path, state_no_sim: Ses
     assert res["error"]["code"] == "invalid_at"
 
 
+async def test_net_netlist_refuses_a_pin_named_where_its_number_is_needed(
+    netlist: Path, state_no_sim: SessionState
+):
+    """A netlist card has no pin names: ``R2.B`` is refused, naming the
+    terminal-number form, rather than answered with an empty net called
+    ``R2.B``, which reads as nothing being on that pin."""
+    (named, numbered) = await _run(
+        state_no_sim,
+        [
+            {"kind": "net", "path": str(netlist), "at": "R2.B"},
+            {"kind": "net", "path": str(netlist), "at": "r2.2"},
+        ],
+    )
+    assert named["ok"] is False
+    assert named["error"]["code"] == "invalid_at"
+    assert "R2.<terminal>" in named["error"]["message"]
+    assert numbered["ok"] is True
+    assert numbered["data"]["node"] == "out"
+
+
+async def test_net_netlist_reads_a_dotted_node_name_as_a_node(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """A node whose name holds a dot is named by that name, even where the
+    part before the dot is a card's reference."""
+    deck = work_dir / "dotted.cir"
+    deck.write_text("* t\nV1 R1.mid 0 1\nR1 R1.mid 0 1k\n.op\n.end\n")
+    (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(deck), "at": "R1.mid"}])
+    assert res["ok"] is True
+    assert {(m["reference"], m["terminal"]) for m in res["data"]["members"]} == {
+        ("V1", 1),
+        ("R1", 1),
+    }
+
+
 # ---------------------------------------------------------------------------
 # components
 # ---------------------------------------------------------------------------

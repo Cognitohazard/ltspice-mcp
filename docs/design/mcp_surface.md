@@ -1575,7 +1575,9 @@ cursors where listed:
     names compared without case and `gnd` read as node 0, and a warning
     saying ngspice's kiltpsa mode may not read `gnd` so. On a .asc, PIN is a
     pin name or, failing that,
-    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number.
+    the pin's 1-based SpiceOrder; on a netlist it is a 1-based terminal number,
+    and a name after one of the deck's references (`M1.D`) is refused as
+    `invalid_at` unless a node is called that.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
     name on a netlist
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
