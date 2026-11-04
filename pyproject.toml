@@ -133,6 +133,7 @@ select = [
     "TRY",   # exception handling
     "PERF",  # performance anti-patterns
     "PT",    # pytest style
+    "TID251", # banned names (see banned-api below)
 ]
 ignore = [
     "E501",    # line length (handled by formatter)
@@ -152,6 +153,26 @@ allowed-confusables = ["σ", "×", "·", "−", "∝", "µ", "√", "°"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ltspice_mcp"]
+
+# Names a replacement now answers for, kept only until their callers move. Ruff
+# refuses a new use; the source files below still use one, and
+# tests/test_banned_api.py fails once a listed file no longer does, so the list
+# only shrinks. A move is finished when no source file is listed for it.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"ltspice_mcp.lib.connectivity.partition".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
+"ltspice_mcp.lib.connectivity.NetPartition".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
+"ltspice_mcp.lib.connectivity.label_folded_nets".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
+"ltspice_mcp.lib.connectivity.NamedNets".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
+"ltspice_mcp.lib.connectivity.net_members".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may cover a banned name until it is removed.
+"tests/**" = ["TID251"]
+# Readers of connectivity.partition and its helpers.
+"src/ltspice_mcp/lib/routing.py" = ["TID251"]
+"src/ltspice_mcp/lib/schematic_ops.py" = ["TID251"]
+"src/ltspice_mcp/lib/sheet.py" = ["TID251"]
+"src/ltspice_mcp/tools/inspect_tools.py" = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
