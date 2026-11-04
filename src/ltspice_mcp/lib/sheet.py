@@ -12,14 +12,14 @@ Nothing here writes a file or needs the event loop.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
-from ltspice_mcp.lib.connectivity import nets_by_ltspice
+from ltspice_mcp.lib.connectivity import fold_case, nets_by_ltspice
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.nets import LabelAt, Nets, PinAt
@@ -160,12 +160,27 @@ def _numbered(document: AscDocument) -> Iterator[tuple[int, Record]]:
         line += len(record.source or ())
 
 
-def find_pin(
-    pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
-) -> Point:
-    """Where pin ``pin_name`` of part ``reference`` is (:func:`placed_pin`)."""
-    pin = placed_pin(pins, reference, symbol, pin_name, problem)
-    return pin.x, pin.y
+def references_named(reference: str, references: Iterable[str]) -> list[str]:
+    """The references among ``references`` that ``reference`` names: each spelled
+    as it is, else each that differs from it only in case.
+
+    LTspice compares references without case (recorded as
+    ``connectivity/shared_reference_case``), so ``r1`` names a part ``R1``.
+    Where a sheet holds both spellings, which neither build netlists, each is
+    named by its own.
+    """
+    given = list(references)
+    exact = [name for name in given if name == reference]
+    if exact:
+        return exact
+    key = fold_case(reference)
+    return [name for name in given if fold_case(name) == key]
+
+
+def missing_part(reference: str, references: Iterable[str]) -> NetlistError:
+    """The refusal for a reference that names no part, naming the parts there are."""
+    available = sorted({name for name in references if name})
+    return NetlistError(f"Component '{reference}' not found. Available: {', '.join(available)}")
 
 
 def placed_pin(
@@ -256,8 +271,10 @@ class Sheet:
         return notes
 
     def parts_named(self, reference: str) -> tuple[SheetPart, ...]:
-        """Every part with instance name ``reference``; more than one when the sheet repeats it."""
-        return tuple(part for part in self.parts if part.reference == reference)
+        """Every part ``reference`` names (``references_named``); more than one
+        when the sheet repeats it."""
+        named = references_named(reference, (part.reference for part in self.parts))
+        return tuple(part for part in self.parts if part.reference in named)
 
     def net_pin(self, spec: str) -> PinAt:
         """The pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder), as
@@ -273,14 +290,12 @@ class Sheet:
                 "(e.g., 'net:VDD')."
             )
         reference, pin_name = spec.rsplit(".", 1)
+        chosen = references_named(reference, (part.reference for part in self.parts))
         named = [
-            (index, part) for index, part in enumerate(self.parts) if part.reference == reference
+            (index, part) for index, part in enumerate(self.parts) if part.reference in chosen
         ]
         if not named:
-            available = sorted({part.reference for part in self.parts if part.reference})
-            raise NetlistError(
-                f"Component '{reference}' not found. Available: {', '.join(available)}"
-            )
+            raise missing_part(reference, (part.reference for part in self.parts))
         if len(named) > 1:
             places = ", ".join(f"({part.at[0]},{part.at[1]})" for _index, part in named)
             raise NetlistError(
@@ -289,7 +304,7 @@ class Sheet:
             )
         ((index, part),) = named
         problem = "not found" if part.symbol is None else part.symbol.problem
-        pin = placed_pin(part.pins, reference, part.symbol_name, pin_name, problem)
+        pin = placed_pin(part.pins, part.reference, part.symbol_name, pin_name, problem)
         order = next(order for order, one in enumerate(part.pins) if one is pin)
         return next(one for one in self.net_pins if (one.part, one.order) == (index, order))
 

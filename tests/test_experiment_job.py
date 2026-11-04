@@ -38,6 +38,7 @@ from ltspice_mcp.lib.experiment_runner import (
     canonical_fingerprint,
 )
 from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
     AnalysisStage,
     Completeness,
     ExperimentCase,
@@ -241,7 +242,7 @@ class TestExperimentTypesAndStore:
         job.analysis = AnalysisStage(status="pending", request={"recipes": [{"kind": "summary"}]})
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         assert loaded.control_token == "control-secret"
         assert loaded.cases[0].assignments == {"R1": "1k"}
@@ -283,7 +284,7 @@ class TestExperimentTypesAndStore:
         job.analysis = AnalysisStage(status="completed", result=public_result)
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
 
         assert loaded is not None
         assert loaded.analysis.result == public_result
@@ -303,7 +304,7 @@ class TestExperimentTypesAndStore:
         job.store_path.write_text(json.dumps(data))
 
         with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.experiment_store"):
-            loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+            loaded = experiment_store.load_job(job.job_id, work_dir)
 
         assert loaded is None
         assert "store_version" in caplog.text
@@ -321,7 +322,7 @@ class TestExperimentTypesAndStore:
         job = _job(work_dir, circuit, job_id=stemless_id, status="completed")
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(stemless_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(stemless_id, work_dir)
         assert loaded is not None
         assert loaded.job_id == stemless_id
         assert loaded.cases[0].assignments == {"R1": "1k"}
@@ -413,7 +414,7 @@ class TestLiveJobs:
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, status="running")
         experiment_store.save_job(job)
-        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
 
         waitable = (asyncio.Event, asyncio.Future, asyncio.Condition, asyncio.Semaphore)
@@ -625,7 +626,9 @@ class TestExperimentLifecycle:
         await registry.cancel_running(runners, None)
 
         assert job.status == "cancelled"
-        assert job.completeness.cancelled == 2
+        # Stopped because this process went away, as a crash would leave them.
+        assert job.completeness.failed == 2
+        assert [case.failure_code for case in job.cases] == [OWNER_STOPPED, OWNER_STOPPED]
         assert job.completeness.terminal == job.completeness.expanded
         assert job.analysis.status == "cancelled"
         assert live.runs_done
@@ -668,7 +671,7 @@ class TestExperimentLifecycle:
         entered: list[str] = []
 
         class HungRunner:
-            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+            async def cancel(self, job: Any, **_kwargs: Any) -> list[dict[str, Any]]:
                 # A wedged simulator: the coordinator never finishes the job.
                 entered.append(job.job_id)
                 await asyncio.Event().wait()
@@ -692,7 +695,7 @@ class TestExperimentLifecycle:
             assert job.status == "cancelled", f"{job.job_id} left non-terminal by a hung cancel"
             assert registry.live[job.job_id].runs_done
             assert registry.live[job.job_id].done
-            assert [case.failure_code for case in job.cases] == ["server_shutdown"]
+            assert [case.failure_code for case in job.cases] == [OWNER_STOPPED]
 
     @pytest.mark.asyncio
     async def test_shutdown_persists_a_terminal_status_for_a_wedged_cancel(
@@ -708,7 +711,7 @@ class TestExperimentLifecycle:
         """
 
         class HungRunner:
-            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+            async def cancel(self, job: Any, **_kwargs: Any) -> list[dict[str, Any]]:
                 await asyncio.Event().wait()
                 return []
 
@@ -716,6 +719,7 @@ class TestExperimentLifecycle:
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, job_id="exp_wedged_0001", status="running")
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        registry.reserve(job)
         registry.add_experiment_job(job)
         # Delegated: a runner owns this job, and its cancel is the one that hangs.
         runners = SimpleNamespace(get_experiment_runner_for=lambda _job: HungRunner())
@@ -729,7 +733,7 @@ class TestExperimentLifecycle:
         reloaded = experiment_store.load_job(job.job_id, work_dir)
         assert reloaded is not None
         assert reloaded.status == "cancelled"
-        assert reloaded.failures and reloaded.failures[0]["code"] == "server_shutdown"
+        assert reloaded.failures and reloaded.failures[0]["code"] == OWNER_STOPPED
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_live_experiments_concurrently(self, work_dir: Path):
@@ -744,7 +748,7 @@ class TestExperimentLifecycle:
         in_progress_at_return: list[int] = []
 
         class BlockingRunner:
-            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+            async def cancel(self, job: Any, **_kwargs: Any) -> list[dict[str, Any]]:
                 entered.append(job.job_id)
                 # Only the last job to start releases the first, so a cancel
                 # returns on its own only if all three overlap. Run one at a
@@ -821,7 +825,7 @@ class TestExperimentLifecycle:
     @pytest.mark.asyncio
     async def test_shutdown_survives_a_runner_cancel_that_raises(self, work_dir: Path):
         class RefusingRunner:
-            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+            async def cancel(self, job: Any, **_kwargs: Any) -> list[dict[str, Any]]:
                 raise ExperimentCancellationError(
                     f"Experiment job {job.job_id} is not owned by a live coordinator"
                 )

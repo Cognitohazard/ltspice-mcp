@@ -27,9 +27,11 @@ Definitions are not limited to the file itself: a compiler that externalizes a
 block's implementation to a project-local ``.lib`` must still verify against a
 reference whose ``.subckt`` is inline, so ``.include``/``.inc``/``.lib``
 references are followed (resolved against the including file's own directory,
-depth-bounded and cycle-guarded, with the ``.lib file section`` form taking the
-file token). When one name is defined more than once, the FIRST definition in
-textual order wins and the losers are recorded — measured behavior, not
+depth-bounded and cycle-guarded, as ``deck_staging`` reads them: the
+``.lib file section`` form reads only that section of the file, and a library's
+own ``.lib section`` line declares a section rather than naming a file). When
+one name is defined more than once, the FIRST definition in textual order wins,
+with its own body only, and the losers are recorded — measured behavior, not
 assumption: ngspice 42 warns ``redefinition of .subckt X, ignored`` and keeps
 whichever definition came first, so an inline block only wins when it precedes
 the include (the usual LTspice layout), not because it is inline.
@@ -84,16 +86,23 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
-from ltspice_mcp.lib.deck_staging import resolve_reference
-from ltspice_mcp.lib.format import fold_micro_sign, parse_plain_value
+from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.deck_staging import (
+    card_sections,
+    closure_depth,
+    resolve_reference,
+    scan_include_references,
+)
+from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
     SpiceCard,
     SpiceLexError,
-    cards_from_path,
     copies_by_name,
     iter_by_kind,
-    lex,
+    lex_deck,
+    subckt_children,
 )
 from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
@@ -117,15 +126,13 @@ _GROUND = "0"
 # order: a MOSFET's D/G/S/B, a source's +/-, a diode's anode/cathode all matter.
 _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 
-# Directives that pull another file into the deck. Semantics mirror
-# ``runner_base.deck_requirements`` / ``_include_target``: the walk is
-# depth-bounded and cycle-guarded, and the ``.lib file section`` form takes the
-# file token (the section name is irrelevant to a subcircuit scan). Resolving a
-# target against the INCLUDING file's directory is NOT restated here — that is
-# ``deck_staging.resolve_reference``, imported rather than mirrored, because a
-# second copy of that rule is how this module comes to disagree with staging
-# about which file a reference names.
-_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
+# How deep the walk follows files that pull in other files. Which file and
+# section a directive names, whether a ``.lib`` inside a library declares a
+# section, and where a target resolves are not restated here: they are
+# ``deck_staging``'s (``scan_include_references``, ``card_sections``,
+# ``resolve_reference``), imported rather than mirrored, because a second copy
+# of those rules is how this module came to read a library's ``.lib tt``
+# section declaration as an include of a file named ``tt``.
 _MAX_INCLUDE_DEPTH = 3
 
 
@@ -210,11 +217,16 @@ class MissingInclude:
 
     ``target`` is the file token exactly as the deck wrote it; ``reason`` says
     why it yielded nothing (not found, unreadable, past the depth bound, or no
-    base directory because the netlist was parsed from bare text).
+    base directory because the netlist was parsed from bare text). ``line`` is
+    the line of the directive that names it, or of the malformed ``.SUBCKT`` an
+    included file holds, and ``source`` the included file that holds that line,
+    None when the deck itself does.
     """
 
     target: str
     reason: str
+    line: int | None = None
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -544,15 +556,17 @@ def _normalize_value_text(text: str) -> str:
 def values_equal(a: str | None, b: str | None, rtol: float) -> bool:
     """Compare two value/param strings, numeric within ``rtol`` else textually.
 
-    ``1k`` == ``1000`` == ``1.0k``; ``4.7µ`` == ``4.7u`` == ``4.7e-6``. When
-    either side is not a parseable SPICE number (a model name, a ``PULSE(...)``
-    spec), fall back to a case-insensitive, whitespace-collapsed string compare.
+    A number is read as LTspice runs it (``format.parse_spice_value``, held to
+    the recordings): ``1k`` == ``1000`` == ``1.0k``, ``4.7µ`` == ``4.7u`` ==
+    ``4.7e-6``, ``4R7`` == ``4.7`` and ``1k5`` == ``1.5k``. When either side
+    does not start with a number (a model name, a ``PULSE(...)`` spec), fall
+    back to a case-insensitive, whitespace-collapsed string compare.
     """
     if a is None or b is None:
         return a == b
     na, nb = _normalize_value_text(a), _normalize_value_text(b)
     try:
-        va, vb = parse_plain_value(na), parse_plain_value(nb)
+        va, vb = parse_spice_value(na), parse_spice_value(nb)
     except ValueError:
         return " ".join(na.lower().split()) == " ".join(nb.lower().split())
     if va == vb:
@@ -577,36 +591,38 @@ def _pin_role(type_letter: str, index: int) -> int:
 
 
 def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
-    """Lex a netlist given as a filesystem path or as raw text.
+    """The cards a simulator reads from a netlist given as a filesystem path or
+    as raw text (``spice_lex.lex_deck``: not its title line, nor a card after
+    ``.END``).
 
     A :class:`~pathlib.Path` is always read as a file. A ``str`` is treated as
     raw netlist text when it spans multiple lines or is long; otherwise, if it
     names an existing file, it is read — else it is lexed as text. The second
-    element is the directory includes resolve against (``None`` for bare text).
+    element is the file read (``None`` for bare text).
 
     An ``.asc`` schematic is refused: lexed as SPICE, its ``SYMBOL``/``WIRE``
     lines read as element cards and the graph describes nothing. Its LTspice
     export is the netlist to compare.
     """
     if isinstance(path_or_text, Path):
-        return _cards_from_netlist_path(path_or_text), path_or_text.parent
+        return _cards_from_netlist_path(path_or_text), path_or_text
     text = path_or_text
     if "\n" not in text and len(text) <= 400:
         try:
             candidate = Path(text)
             if candidate.is_file():
-                return _cards_from_netlist_path(candidate), candidate.parent
+                return _cards_from_netlist_path(candidate), candidate
         except OSError:
             pass
-    return lex(text), None
+    return lex_deck(text), None
 
 
 def _cards_from_netlist_path(path: Path) -> LexResult:
-    if path.suffix.lower() == ".asc":
+    if is_asc(path):
         raise NetlistGraphError(
             f"{path.name} is an .asc schematic, not a netlist; compare its LTspice export"
         )
-    return cards_from_path(path)
+    return lex_deck(read_spice_text(path))
 
 
 # Lex warnings that indicate the netlist structure itself is broken (as opposed
@@ -631,7 +647,8 @@ def parse_netlist_graph(
 
     Subcircuit definitions are collected in textual order from this file and
     from every ``.include``/``.inc``/``.lib`` it pulls in (resolved against the
-    including file's own directory, depth-bounded and cycle-guarded). When a name
+    including file's own directory, depth-bounded and cycle-guarded); a
+    ``.lib <file> <section>`` reads only that section of the file. When a name
     is defined more than once the FIRST definition wins and the rest are recorded
     in ``duplicate_subckts`` — matching the simulator, which ignores
     redefinitions (measured on ngspice 42). Includes that yield nothing are
@@ -649,7 +666,7 @@ def parse_netlist_graph(
     An ``X`` instance still lacking a definition is kept as a top-level
     component and treated as a black box by :func:`flatten_graph`.
     """
-    result, source_dir = _load_cards(path_or_text)
+    result, source = _load_cards(path_or_text)
     cards = result.cards
 
     structural = [
@@ -661,9 +678,11 @@ def parse_netlist_graph(
         raise NetlistGraphError("malformed netlist: " + "; ".join(structural))
 
     registry = _SubcktRegistry()
+    directory = base_dir if base_dir is not None else source.parent if source else None
     _collect_subckts(
         cards,
-        base_dir=base_dir if base_dir is not None else source_dir,
+        origin=source or (directory or Path()) / "<netlist>",
+        base_dir=directory,
         depth=0,
         registry=registry,
         seen=set(),
@@ -680,23 +699,6 @@ def parse_netlist_graph(
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
     )
-
-
-def _include_target(rest: str) -> str | None:
-    """The filename an ``.include``/``.inc``/``.lib`` argument points at.
-
-    ``rest`` is the directive body past its head. A quoted path is taken whole
-    (SPICE allows spaces inside quotes); an unquoted argument is its first
-    whitespace-delimited token, which for the ``.lib file section`` form is the
-    file (the section name is dropped). Returns None when no target is present.
-    """
-    rest = rest.strip()
-    if not rest:
-        return None
-    if rest[0] in "\"'":
-        end = rest.find(rest[0], 1)
-        return rest[1:end] if end != -1 else None
-    return rest.split(None, 1)[0]
 
 
 @dataclass
@@ -727,12 +729,18 @@ class _SubcktRegistry:
         )
 
 
-def _subckt_def_from(cards: list[SpiceCard], opener: SpiceCard) -> SubcktDef:
-    """Project one ``.SUBCKT`` opener (and its body cards) into a definition."""
-    view = SubcktCard.from_card(opener)
-    body_scope = (*opener.scope, view.name)
+def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
+    """Project one ``.SUBCKT`` opener and the body it opens into a definition.
+
+    The body is read by span (``spice_lex.subckt_children``): a second
+    definition of the name has the same scope tuple, and its cards are no part
+    of this one.
+    """
+    view = SubcktCard.from_card(cards[opener_index])
     body = [
-        _component_from_card(card) for card in iter_by_kind(cards, "instance", scope=body_scope)
+        _component_from_card(card)
+        for _, card in subckt_children(cards, opener_index)
+        if card.kind == "instance"
     ]
     return SubcktDef(
         name=view.name,
@@ -745,29 +753,50 @@ def _subckt_def_from(cards: list[SpiceCard], opener: SpiceCard) -> SubcktDef:
 def _collect_subckts(
     cards: list[SpiceCard],
     *,
+    origin: Path,
     base_dir: Path | None,
     depth: int,
     registry: _SubcktRegistry,
-    seen: set[Path],
+    seen: set[tuple[Path, str | None]],
     source: str,
     strict: bool,
     include_resolver: IncludeResolver | None = None,
+    section: str | None = None,
 ) -> None:
     """Walk ``cards`` in textual order, registering definitions and following includes.
 
     Order is what makes first-wins precedence correct: an include contributes its
     definitions at the position its directive appears, exactly as textual
-    substitution would. Cards past a top-level ``.END`` are inert and skipped.
-    With ``strict`` the caller's own malformed card raises; for an included file
+    substitution would. ``cards`` are the ones a simulator reads, read from
+    ``origin``; ``section`` names the library section a ``.lib <file>
+    <section>`` selected, and a card in any other section is skipped. With
+    ``strict`` the caller's own malformed card raises; for an included file
     it is downgraded to a :class:`MissingInclude` record so a third-party library
     cannot break the comparison.
     """
-    for card in cards:
-        if card.trailing:
+    try:
+        sections = card_sections(cards, origin, closure_depth(depth))
+        references = {
+            id(reference.card): reference
+            for reference in scan_include_references(cards, origin, depth=closure_depth(depth))
+        }
+    except SpiceLexError as exc:
+        if strict:
+            bad = next((card for card in cards if card.body and card.body == exc.body), None)
+            raise NetlistGraphError(
+                f"malformed directive: {exc}", line=bad.line_start if bad else None
+            ) from exc
+        registry.missing.append(
+            MissingInclude(target=source, reason=f"malformed directive: {exc}")
+        )
+        return
+    wanted = section.casefold() if section is not None else None
+    for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
+        if wanted is not None and card_section is not None and card_section.casefold() != wanted:
             continue
         if card.kind == "subckt":
             try:
-                registry.register(_subckt_def_from(cards, card), source)
+                registry.register(_subckt_def_from(cards, index), source)
             except (SpiceLexError, NetlistGraphError) as exc:
                 if strict:
                     raise NetlistGraphError(
@@ -776,46 +805,59 @@ def _collect_subckts(
                         card="".join(card.raw_lines).strip(),
                     ) from exc
                 registry.missing.append(
-                    MissingInclude(target=source, reason=f"malformed .SUBCKT: {exc}")
+                    MissingInclude(
+                        target=source,
+                        reason=f"malformed .SUBCKT: {exc}",
+                        line=card.line_start,
+                        source=source,
+                    )
                 )
             continue
-        if card.kind != "directive":
-            continue
-        parts = card.body.split(None, 1)
-        if len(parts) < 2 or parts[0].lower() not in _INCLUDE_DIRECTIVES:
-            continue
-        target = _include_target(parts[1])
-        if target is None:
+        reference = references.get(id(card))
+        if reference is None:
             continue
         _follow_include(
-            target,
+            reference.raw_path,
+            section=reference.section,
             base_dir=base_dir,
             depth=depth,
             registry=registry,
             seen=seen,
             include_resolver=include_resolver,
+            line=card.line_start,
+            # The deck's own directives are at depth 0; an included file names itself.
+            source=None if depth == 0 else source,
         )
 
 
 def _follow_include(
     target: str,
     *,
+    section: str | None,
     base_dir: Path | None,
     depth: int,
     registry: _SubcktRegistry,
-    seen: set[Path],
+    seen: set[tuple[Path, str | None]],
     include_resolver: IncludeResolver | None = None,
+    line: int,
+    source: str | None,
 ) -> None:
-    """Load one include target's definitions, or record why it contributed none."""
+    """Load one include target's definitions (only ``section``'s, when the
+    reference selects one), or record why it contributed none.
+
+    ``line`` is the line of the directive that names it, and ``source`` the
+    included file holding that directive (None for the deck itself), which a
+    record of why it contributed nothing carries.
+    """
+
+    def missing(reason: str) -> None:
+        registry.missing.append(MissingInclude(target, reason, line=line, source=source))
+
     if base_dir is None:
-        registry.missing.append(
-            MissingInclude(target, "no base directory (netlist parsed from text)")
-        )
+        missing("no base directory (netlist parsed from text)")
         return
     if depth >= _MAX_INCLUDE_DEPTH:
-        registry.missing.append(
-            MissingInclude(target, f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
-        )
+        missing(f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
         return
     # One resolver for the whole product: staging's answer to "which file does
     # this reference name?" is the answer here too. A local join would read
@@ -829,24 +871,27 @@ def _follow_include(
         # relies on. The resolver may also redirect to a canonical safe path.
         approved = include_resolver(path)
         if approved is None:
-            registry.missing.append(MissingInclude(target, "path denied by include resolver"))
+            missing("path denied by include resolver")
             return
         path = approved
     try:
         key = path.resolve()
     except OSError:
-        registry.missing.append(MissingInclude(target, "unresolvable path"))
+        missing("unresolvable path")
         return
-    if key in seen:
+    selected = (key, section.casefold() if section is not None else None)
+    if selected in seen:
         return  # already contributed; revisiting is how an include cycle stops
-    seen.add(key)
+    seen.add(selected)
     try:
-        included = cards_from_path(path)
+        included = lex_deck(read_spice_text(path), title=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        registry.missing.append(MissingInclude(target, f"unreadable: {exc}"))
+        missing(f"unreadable: {exc}")
         return
     _collect_subckts(
         included.cards,
+        origin=path,
+        section=section,
         base_dir=path.parent,
         depth=depth + 1,
         registry=registry,
@@ -901,6 +946,15 @@ def flatten_graph(graph: NetlistGraph) -> FlatNetlist:
     Raises :class:`NetlistGraphError` on a port-arity mismatch (instance node
     count vs. subcircuit port count) or a recursive subcircuit definition.
     """
+    return _flatten(graph, arity=None)[0]
+
+
+def _flatten(
+    graph: NetlistGraph, *, arity: list[ArityError] | None
+) -> tuple[FlatNetlist, list[ArityError]]:
+    """``flatten_graph``, or with ``arity`` a list, the lenient flattening
+    ``compare_graphs`` falls back to, which records each port-arity mismatch
+    there and keeps that instance as a black box (see ``_expand``)."""
     leaves: list[FlatComponent] = []
     unresolved: set[str] = set()
     for comp in graph.components:
@@ -912,13 +966,15 @@ def flatten_graph(graph: NetlistGraph) -> FlatNetlist:
             out=leaves,
             stack=(),
             unresolved=unresolved,
+            arity=arity,
         )
     nets = frozenset(net for leaf in leaves for net in leaf.nodes)
-    return FlatNetlist(
+    flat = FlatNetlist(
         components=tuple(leaves),
         nets=nets,
         unresolved_subckts=tuple(sorted(unresolved)),
     )
+    return flat, [] if arity is None else arity
 
 
 def _expand(
@@ -930,6 +986,7 @@ def _expand(
     out: list[FlatComponent],
     stack: tuple[str, ...],
     unresolved: set[str],
+    arity: list[ArityError] | None = None,
 ) -> None:
     """Recursively expand ``comp`` (in the namespace described by ``net_map``).
 
@@ -938,20 +995,54 @@ def _expand(
     is the chain of enclosing instance refs (for hierarchical naming and unique
     internal-net keys). ``unresolved`` collects the names of subcircuits an ``X``
     asked for but nothing defined.
+
+    With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`
+    and a recursive definition raises; with a list, the mismatch is recorded
+    there, and the instance, or one that recurses, is kept as a black-box leaf.
     """
 
     def resolve(net: str) -> str:
-        if net_map is None:
-            return net
-        return net_map.get(net, net)
+        return net if net_map is None else net_map.get(net, net)
 
     flat_nodes = tuple(resolve(n) for n in comp.nodes)
     model_key = comp.model.lower() if comp.model else None
-
     is_expandable = comp.type_letter == "X" and model_key is not None and model_key in subckts
+    # Recorded before the arity/recursion guards below can clear the flag: those
+    # black-box an instance whose definition DOES exist, which is not "unresolved".
+    if comp.type_letter == "X" and comp.model and not is_expandable:
+        unresolved.add(comp.model)
+
+    if is_expandable:
+        assert model_key is not None
+        sub = subckts[model_key]
+        if len(comp.nodes) != len(sub.ports):
+            if arity is None:
+                raise PortArityMismatch(
+                    "port-arity mismatch: "
+                    + _instance_port_detail(
+                        comp.ref, tuple(comp.nodes), sub.name, tuple(sub.ports)
+                    ),
+                    line=comp.line,
+                )
+            ref = ".".join((*path, comp.ref))
+            arity.append(
+                ArityError(
+                    ref=ref,
+                    reference_arity=len(comp.nodes),
+                    candidate_arity=len(sub.ports),
+                    detail=_instance_port_detail(
+                        ref, tuple(comp.nodes), comp.model or model_key, tuple(sub.ports)
+                    ),
+                )
+            )
+            is_expandable = False
+        elif model_key in stack:
+            if arity is None:
+                chain = " -> ".join((*stack, model_key))
+                raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
+            is_expandable = False
+
     if not is_expandable:
-        if comp.type_letter == "X" and comp.model:
-            unresolved.add(comp.model)
         out.append(
             FlatComponent(
                 ref=".".join((*path, comp.ref)),
@@ -966,19 +1057,8 @@ def _expand(
 
     assert model_key is not None
     sub = subckts[model_key]
-    if len(comp.nodes) != len(sub.ports):
-        raise PortArityMismatch(
-            "port-arity mismatch: "
-            + _instance_port_detail(comp.ref, tuple(comp.nodes), sub.name, tuple(sub.ports)),
-            line=comp.line,
-        )
-    if model_key in stack:
-        chain = " -> ".join((*stack, model_key))
-        raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
-
     child_path = (*path, comp.ref)
-    child_prefix = ".".join(child_path)
-    child_map = _build_child_net_map(sub, flat_nodes, child_prefix)
+    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path))
     for child in sub.components:
         _expand(
             child,
@@ -988,6 +1068,7 @@ def _expand(
             out=out,
             stack=(*stack, model_key),
             unresolved=unresolved,
+            arity=arity,
         )
 
 
@@ -1231,7 +1312,7 @@ def _coerce_capturing_arity(src: NetlistGraph | str | Path) -> _FlattenOutcome:
         flat, arity = flatten_graph(graph), []
     except PortArityMismatch:
         # Re-flatten skipping the offending instances so the rest still compares.
-        flat, arity = _flatten_lenient(graph)
+        flat, arity = _flatten(graph, arity=[])
     return _FlattenOutcome(flat=_with_bjt_substrate(flat), arity_errors=arity, graph=graph)
 
 
@@ -1250,105 +1331,6 @@ def _with_bjt_substrate(flat: FlatNetlist) -> FlatNetlist:
         for c in flat.components
     )
     return replace(flat, components=components, nets=flat.nets | {_GROUND})
-
-
-def _flatten_lenient(graph: NetlistGraph) -> tuple[FlatNetlist, list[ArityError]]:
-    """Flatten, recording (not raising) port-arity mismatches as black boxes."""
-    leaves: list[FlatComponent] = []
-    arity: list[ArityError] = []
-    unresolved: set[str] = set()
-    for comp in graph.components:
-        _expand_lenient(
-            comp,
-            graph.subckts,
-            path=(),
-            net_map=None,
-            out=leaves,
-            stack=(),
-            arity=arity,
-            unresolved=unresolved,
-        )
-    nets = frozenset(net for leaf in leaves for net in leaf.nodes)
-    flat = FlatNetlist(
-        components=tuple(leaves),
-        nets=nets,
-        unresolved_subckts=tuple(sorted(unresolved)),
-    )
-    return flat, arity
-
-
-def _expand_lenient(
-    comp: Component,
-    subckts: dict[str, SubcktDef],
-    *,
-    path: tuple[str, ...],
-    net_map: dict[str, str] | None,
-    out: list[FlatComponent],
-    stack: tuple[str, ...],
-    arity: list[ArityError],
-    unresolved: set[str],
-) -> None:
-    """Like :func:`_expand` but records arity mismatches and keeps the instance
-    as a black-box leaf instead of raising."""
-
-    def resolve(net: str) -> str:
-        return net if net_map is None else net_map.get(net, net)
-
-    flat_nodes = tuple(resolve(n) for n in comp.nodes)
-    model_key = comp.model.lower() if comp.model else None
-    is_expandable = comp.type_letter == "X" and model_key is not None and model_key in subckts
-    # Recorded before the arity/recursion guards below can clear the flag: those
-    # black-box an instance whose definition DOES exist, which is not "unresolved".
-    if comp.type_letter == "X" and comp.model and not is_expandable:
-        unresolved.add(comp.model)
-
-    if is_expandable:
-        assert model_key is not None
-        sub = subckts[model_key]
-        if len(comp.nodes) != len(sub.ports):
-            ref = ".".join((*path, comp.ref))
-            arity.append(
-                ArityError(
-                    ref=ref,
-                    reference_arity=len(comp.nodes),
-                    candidate_arity=len(sub.ports),
-                    detail=_instance_port_detail(
-                        ref, tuple(comp.nodes), comp.model or model_key, tuple(sub.ports)
-                    ),
-                )
-            )
-            is_expandable = False
-        elif model_key in stack:
-            is_expandable = False
-
-    if not is_expandable:
-        out.append(
-            FlatComponent(
-                ref=".".join((*path, comp.ref)),
-                type_letter=comp.type_letter,
-                nodes=flat_nodes,
-                model=comp.model,
-                value=comp.value,
-                params=comp.params,
-            )
-        )
-        return
-
-    assert model_key is not None
-    sub = subckts[model_key]
-    child_path = (*path, comp.ref)
-    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path))
-    for child in sub.components:
-        _expand_lenient(
-            child,
-            subckts,
-            path=child_path,
-            net_map=child_map,
-            out=out,
-            stack=(*stack, model_key),
-            arity=arity,
-            unresolved=unresolved,
-        )
 
 
 def _describe(comp: FlatComponent) -> str:

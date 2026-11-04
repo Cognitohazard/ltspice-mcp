@@ -687,7 +687,7 @@ with no capture by hand.
 ## Re-recording the suite's records
 
 Several tests check the code against a committed JSON record of its answers on
-every sheet in the suite. A difference is either a regression or an intended
+every sheet in the suite, or of the tools' argument names. A difference is either a regression or an intended
 change; for an intended change, re-record the file in the same commit, so
 `git diff` shows what changed. Each record uses only the suite's own symbols,
 so it is the same on every machine. To re-record one, run its test module with
@@ -704,6 +704,7 @@ LTSPICE_MCP_RECORD_SHEET_FINDINGS=1 uv run pytest tests/test_sheet_findings_snap
 |`LTSPICE_MCP_RECORD_LABELS_AND_MOVES`|`tests/test_label_and_move_record.py`|`tests/fixtures/label_and_move_record.json`: the `add_net_label` and `move_component` results for a fixed set of proposals on every sheet|
 |`LTSPICE_MCP_RECORD_INSPECT_SHEETS`|`tests/test_inspect_sheet_record.py`|`tests/fixtures/inspect_sheet_record.json`: the `inspect(kind="net")` and `inspect(kind="components")` replies for every sheet|
 |`LTSPICE_MCP_RECORD_BUILD_BENCHMARK`|`tests/test_build_benchmark.py`|`tests/fixtures/build_benchmark_record.json` and the built sheets (below)|
+|`LTSPICE_MCP_RECORD_TOOL_ARGUMENTS`|`tests/test_argument_names_are_kept.py`|`tests/fixtures/tool_arguments.json`: every argument name each tool takes, at any depth, and each name a tool retired with the one that replaced it. A name that disappears must be in the tool's `RENAMED_ARGUMENTS` entry and named in the changelog; recording refuses one that is not|
 
 `tests/fixtures/sheet_edit_record.json` holds, for every `edit_schematic` call
 the suite makes, the committed sheet (read as records) and the reply.
@@ -742,6 +743,23 @@ same functions:
 uv run python scripts/build_benchmark.py table
 uv run python scripts/build_benchmark.py score SHEET.asc NETLIST.cir
 ```
+
+## Timing small runs
+
+The suite times nothing, so a slower run path shows only when it is measured.
+`scripts/benchmark_small_runs.py` times, through the Python API, booting the
+engine, a 5-case `.op` sweep on ngspice, reading ten recorded raws and one
+`edit_schematic` batch compared with a reference, and compares each with a
+baseline taken on the same machine. A run that needs a simulator this machine
+lacks is reported as skipped. It reports a slowdown and always exits 0:
+
+```bash
+uv run python scripts/benchmark_small_runs.py --record   # store the baseline
+uv run python scripts/benchmark_small_runs.py            # compare with it
+```
+
+The baseline (`.benchmark_small_runs.json`) belongs to its machine and is not
+committed.
 
 ## Conventions
 

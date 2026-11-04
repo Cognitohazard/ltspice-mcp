@@ -96,7 +96,10 @@ def get_static_resources() -> list[types.Resource]:
         types.Resource(
             name="netlists",
             uri="spice://netlists/",
-            description="List of netlist files in the working directory",
+            description=(
+                "List of netlist files in the folder a relative path is read from: "
+                "the working directory, or the first allowed path under a sandbox"
+            ),
             mime_type="application/json",
         ),
         types.Resource(
@@ -314,15 +317,20 @@ def _read_config(
 def _read_netlists_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List all netlist files in the working directory."""
+    """List the netlist files in the folder a relative name is read from.
+
+    That folder is the one ``spice://netlists/{filename}`` resolves a name
+    in: the working directory, or the first allowed path when a sandbox is
+    set. Listing any other folder would advertise URIs the read refuses.
+    """
     del params
-    working_dir = state.working_dir
+    folder = state.relative_base()
     # quote(): a listed URI must survive whatever normalization a client
     # applies to it and come back through dispatch's unquote — a raw space or
     # 'µ' here would list a resource the read path can never serve.
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
-        for f in working_dir.iterdir()
+        for f in folder.iterdir()
         if f.is_file() and f.suffix.lower() in CIRCUIT_EXTENSIONS
     ]
     netlists.sort(key=lambda x: x["name"])
@@ -410,20 +418,22 @@ def _read_results_list(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-def _per_run_read_pointer(job_id: str, state: SessionState) -> str:
+def _per_run_read_pointer(job_id: str, view: str, state: SessionState) -> str:
     """Why a per-job read has to go somewhere else, for this job.
 
     Both per-job result routes addressed a single run by job id. Every job is
     an experiment, and an experiment's runs are case-addressed, so the read
-    goes to the tool that takes a case.
+    goes to the query that takes a case: ``inspect``'s results query, in the
+    route's own ``view``.
     """
     # Resolved and discarded: it raises JobNotFoundError for an id that names
     # nothing, so an unknown job never gets the authoritative-sounding answer
     # below.
     services.resolve_job(job_id, state)
     return (
-        f"Job {job_id} is an experiment; its runs are case-addressed. Read them "
-        "with analyze_results (job_id plus run_index or case_id)."
+        f"Job {job_id} is an experiment; its runs are case-addressed. Read one "
+        f'with inspect(queries=[{{"kind": "results", "view": "{view}", '
+        f'"job_id": "{job_id}", "case_id": ...}}]), or run_index in place of case_id.'
     )
 
 
@@ -433,7 +443,11 @@ def _read_signals(
 ) -> types.ReadResourceResult:
     """Explain where a job's trace names are read from."""
     job_id = params["job_id"]
-    data = {"job_id": job_id, "signals": [], "note": _per_run_read_pointer(job_id, state)}
+    data = {
+        "job_id": job_id,
+        "signals": [],
+        "note": _per_run_read_pointer(job_id, "signals", state),
+    }
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
@@ -446,7 +460,7 @@ def _read_measurements(
     data: dict[str, Any] = {
         "job_id": job_id,
         "measurements": {},
-        "note": _per_run_read_pointer(job_id, state),
+        "note": _per_run_read_pointer(job_id, "measurements", state),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))
 

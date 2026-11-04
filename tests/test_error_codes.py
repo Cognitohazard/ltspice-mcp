@@ -361,7 +361,12 @@ def _codes_in_sources() -> dict[str, set[str]]:
             values: set[str] = set()
             if isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values, strict=True):
-                    if isinstance(key, ast.Constant) and key.value == "code":
+                    # A key named like a code holds one, as a ``*_code`` name
+                    # does below: a manifest's ``digest_code`` becomes a
+                    # failure row's code.
+                    if isinstance(key, ast.Constant) and (
+                        key.value == "code" or str(key.value).endswith("_code")
+                    ):
                         values |= _string_literals(value)
             elif isinstance(node, ast.keyword) and node.arg == "code":
                 values |= _string_literals(node.value)
@@ -397,7 +402,10 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 
     def descend(cls: type[LTSpiceMCPError]):
         for sub in cls.__subclasses__():
-            yield sub
+            # A subclass a test defines to exercise the hierarchy is not one of
+            # the package's, however long it stays alive in this process.
+            if sub.__module__.startswith("ltspice_mcp."):
+                yield sub
             yield from descend(sub)
 
     return [LTSpiceMCPError, *descend(LTSpiceMCPError)]
@@ -611,7 +619,6 @@ FROZEN_ERROR_CODES = (
     "selector_conflict",
     "semantic_profile_required",
     "server_restarted",
-    "server_shutdown",
     "sheet_changed",
     "sheet_missing",
     "simulation_failed",

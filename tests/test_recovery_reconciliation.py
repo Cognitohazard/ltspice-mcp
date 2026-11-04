@@ -71,7 +71,7 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
         await observer.drain_pending()
         assert "Failed to persist job" not in caplog.text
         assert job.store_path.read_bytes() == before
-        saved = experiment_store.load_job(job.job_id, store.working_dir, own_is_alive=True)
+        saved = experiment_store.load_job(job.job_id, store.working_dir)
         assert saved is not None and saved.owner_pid == os.getpid()
         assert saved.recovery is not None and saved.recovery.owner == job.recovery.owner
         case_recovery = saved.cases[0].recovery

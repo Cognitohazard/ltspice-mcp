@@ -249,7 +249,7 @@ async def test_spawn_observes_durable_intent_launched_journal_and_controlled_env
     outputs = result.cases[0].recovery.attempt.outputs
     assert outputs.raw.sha256 == sha256_file(result.cases[0].raw_file)
     assert outputs.log.sha256 == sha256_file(result.cases[0].log_file)
-    persisted = experiment_store.load_job(job.job_id, store.working_dir, own_is_alive=True)
+    persisted = experiment_store.load_job(job.job_id, store.working_dir)
     assert persisted is not None
     assert persisted.cases[0].recovery is not None
     assert persisted.cases[0].recovery.attempt.outputs == outputs

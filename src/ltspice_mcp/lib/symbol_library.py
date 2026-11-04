@@ -31,7 +31,7 @@ read.
 from __future__ import annotations
 
 import glob
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +72,14 @@ def find_in_library(root: Path, symbol: str) -> Path | None:
     if not bare:
         return None
     return next(root.rglob(f"{glob.escape(bare)}.asy"), None)
+
+
+def symbol_files(folder: Path, beside_sheet: bool) -> Iterator[Path]:
+    """The symbol files a bare name finds in ``folder``: beside a sheet, those
+    directly in it (``find_beside``); in a library, every one under it
+    (``find_in_library``). What a listing of the names to place offers."""
+    found = folder.glob("*.asy") if beside_sheet else folder.rglob("*.asy")
+    return (path for path in found if path.is_file())
 
 
 def find_symbol(symbol: str, sheet_folder: Path | None, libraries: Sequence[Path]) -> Path | None:
@@ -198,6 +206,17 @@ class SymbolResolver:
     def roots(self) -> tuple[Path, ...]:
         """The folders searched, in order: the sheet's own first, then the libraries."""
         return tuple(path for path, _tier in self.precedence)
+
+    def for_sheet(self, path: Path) -> SymbolResolver:
+        """A resolver for the sheet at ``path``, with this one's libraries and
+        caches: what a sheet another loads, such as a block's own, is read with."""
+        return SymbolResolver(
+            local_dir=path.parent,
+            project_paths=self._project,
+            stock_paths=self._stock,
+            parse_cache=self._parse_cache,
+            stock_lookups=self._stock_lookups,
+        )
 
     def resolve(self, symbol: str) -> Path | None:
         """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.

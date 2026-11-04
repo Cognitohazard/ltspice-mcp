@@ -19,7 +19,6 @@ mismatches, etc.
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -34,6 +33,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     SubcktCard,
     body_has_stray_kv_remnant,
+    probe_refs,
     read_instance,
 )
 
@@ -159,107 +159,6 @@ def leading_numeric_tokens(tokens: list[str]) -> list[float]:
     return nums
 
 
-def _finite_point_count(span: float) -> int | None:
-    """``int(span) + 1`` sample points for a swept span, or None if non-finite.
-
-    Guards ``int(...)`` against a pathological directive whose span overflows to
-    inf/nan (e.g. ``.tran 1e-200 1e200``) — those are unestimable, not a crash.
-    """
-    return int(span) + 1 if math.isfinite(span) else None
-
-
-def _estimate_tran_points(line: str) -> int | None:
-    # .tran <Tstep> <Tstop> [<Tstart> [<Tmax>]] — points ≈ (Tstop-Tstart)/Tstep.
-    # A bare Tstop or Tstep=0 is auto-timestep: unknowable up front → None.
-    nums = leading_numeric_tokens(line.split()[1:])
-    if len(nums) < 2:
-        return None
-    tstep, tstop = nums[0], nums[1]
-    tstart = nums[2] if len(nums) >= 3 else 0.0
-    if tstep <= 0 or tstop <= tstart:
-        return None
-    return _finite_point_count((tstop - tstart) / tstep)
-
-
-def _estimate_ac_points(line: str) -> int | None:
-    # .ac <dec|oct|lin> <N> <fstart> <fstop>
-    tokens = line.split()
-    if len(tokens) < 5:
-        return None
-    kind = tokens[1].lower()
-    nums = leading_numeric_tokens(tokens[2:5])
-    if len(nums) < 3:
-        return None
-    n, fstart, fstop = nums
-    if n <= 0 or fstart <= 0 or fstop <= fstart:
-        return None
-    if kind == "dec":
-        return _finite_point_count(n * math.log10(fstop / fstart))
-    if kind == "oct":
-        return _finite_point_count(n * math.log2(fstop / fstart))
-    if kind == "lin":
-        return _finite_point_count(n)
-    return None
-
-
-def _estimate_dc_points(line: str) -> int | None:
-    # .dc <src> <start> <stop> <incr> [<src2> <start2> <stop2> <incr2> ...]
-    # Nested sweeps multiply. Each group is name + 3 numbers.
-    tokens = line.split()[1:]
-    total = 1
-    found = False
-    i = 0
-    while i + 4 <= len(tokens):
-        nums = leading_numeric_tokens(tokens[i + 1 : i + 4])
-        if len(nums) < 3:
-            break
-        start, stop, incr = nums
-        if incr == 0:
-            break
-        count = _finite_point_count(abs((stop - start) / incr))
-        if count is None:
-            return None
-        total *= max(count, 1)
-        found = True
-        i += 4
-    return total if found else None
-
-
-def estimate_analysis_points(netlist_text: str, *, deterministic_only: bool = False) -> int | None:
-    """Rough saved-point-count estimate for the deck's analysis directive.
-
-    Parses ``.tran`` / ``.ac`` / ``.dc`` to size the raw a run will produce, for
-    the preflight size guard. An ESTIMATE only, and an auto-timestep or
-    parameterised directive returns ``None`` (unknowable up front). When several
-    analyses are present the largest estimate wins; ``None`` when nothing is
-    estimable.
-
-    ``.ac`` (lin/dec/oct) and ``.dc`` have a deterministic saved-point count.
-    ``.tran`` does NOT: LTspice's Tstep is a plotting increment / initial-step
-    guess, and adaptive stepping plus waveform compression move the real count
-    far off Tstop/Tstep in either direction — so it can't be a bound. Pass
-    ``deterministic_only=True`` to consider only ``.ac``/``.dc`` (the count the
-    hard size refusal may safely act on); the default includes ``.tran`` for the
-    soft warning path.
-    """
-    best: int | None = None
-    for raw_line in netlist_text.splitlines():
-        line = raw_line.strip()
-        low = line.lower()
-        est: int | None = None
-        if low.startswith(".tran"):
-            if deterministic_only:
-                continue
-            est = _estimate_tran_points(line)
-        elif low.startswith(".ac"):
-            est = _estimate_ac_points(line)
-        elif low.startswith(".dc"):
-            est = _estimate_dc_points(line)
-        if est is not None:
-            best = est if best is None else max(best, est)
-    return best
-
-
 def _validate_tran_tstep(directive: str, simulator: str) -> ValidationError | None:
     """Flag ``.tran 0 <tstop>`` (zero step time) when targeting ngspice.
 
@@ -356,10 +255,24 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     meas_cards = [c for c in cards if c.kind == "meas"]
     if not meas_cards:
         return None
-    if (error := meas_name_refused(meas_cards[0], simulator)) is not None:
-        return error
-    refused = meas_functions_refused(meas_cards[0], simulator)
-    return refused[0][1] if refused else None
+    return validate_directive_card(meas_cards[0], simulator)
+
+
+def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> ValidationError | None:
+    """``validate_directive`` for one lexed card of a deck.
+
+    The card is read as the simulator reads it: its ``+`` lines joined and
+    its comments left out, so a ``.meas`` whose function sits on a
+    continuation line is checked whole. A card that is no directive passes.
+    """
+    if card.kind == "meas":
+        if (error := meas_name_refused(card, simulator)) is not None:
+            return error
+        refused = meas_functions_refused(card, simulator)
+        return refused[0][1] if refused else None
+    if card.kind != "directive":
+        return None
+    return validate_directive(card.body, simulator)
 
 
 def meas_functions_refused(
@@ -392,14 +305,12 @@ ARITY_CHECKS: dict[str, Literal["error", "warning"]] = {
 }
 
 # Keywords that carry a two-terminal element's value, so every positional
-# token on the card is a node: LTspice's charge-defined capacitor
-# (``C1 a b Q=...``), flux-defined inductor (``L1 a b Flux=...``) and a source
-# playing a .wav file (``V1 a b wavefile="in.wav"``). The primary-value keys
-# (``R1 a b R=1k``) are not here: ``InstanceLine`` already reads every
-# positional of that form as a node.
+# token on the card is a node: a source playing a .wav file
+# (``V1 a b wavefile="in.wav"``). The primary-value keys (``R1 a b R=1k``) and
+# the charge and flux of ``C1 a b Q=...`` and ``L1 a b Flux=...`` are not
+# here: ``InstanceLine`` already reads every positional of those forms as a
+# node.
 _VALUE_KEYWORDS: dict[str, frozenset[str]] = {
-    "C": frozenset({"q"}),
-    "L": frozenset({"flux"}),
     "V": frozenset({"wavefile"}),
     "I": frozenset({"wavefile"}),
 }
@@ -464,9 +375,9 @@ def validate_netlist_arity(
         required = 2 if spec.kind_for(has_kv=has_kv) == "params_only" else spec.min_nodes
 
         # A value carried by a keyword the view does not read as the value
-        # (``C1 a b Q=...``) leaves every positional token after the ref a
-        # node. Re-count from the raw token stream so the last node is not read
-        # as a positional value.
+        # (``V1 a b wavefile=...``) leaves every positional token after the
+        # ref a node. Re-count from the raw token stream so the last node is
+        # not read as a positional value.
         node_count = len(inst.nodes)
         value_keys = _VALUE_KEYWORDS.get(prefix, frozenset())
         if any(key.casefold() in value_keys for key in inst.params):
@@ -543,6 +454,12 @@ def validate_netlist_arity(
 # Node spellings that are always considered connected (the SPICE ground).
 _GROUND_NODES = frozenset({"0", "gnd"})
 
+
+def is_ground_node(name: str) -> bool:
+    """Whether a deck's node name is ground, as the validator reads it."""
+    return name.casefold() in _GROUND_NODES
+
+
 # Characters that cannot appear in a plain node name. Positional tokens
 # carrying them are value syntax that spilled into the node slots (PULSE
 # fragments, braced expressions), not nodes.
@@ -579,11 +496,6 @@ _TERMINAL_COUNTS: dict[str, int] = {
 # the terminal slice so a short form (e.g. a 3-node MOSFET) cannot count
 # its model name as a terminal.
 _TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z"})
-
-# V(...) / I(...) probe references inside expression text on instance
-# cards (B/E/G bodies, behavioural params). Probed identifiers are
-# connections too — they feed the suppressor set, never a terminal count.
-PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
 
 
 def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
@@ -648,18 +560,6 @@ class _NodeUse:
     directive: str
     is_port: bool
     count: int = 1
-
-
-def drop_title_card(cards: list[SpiceCard]) -> list[SpiceCard]:
-    """Drop the card a SPICE deck's title line was lexed as.
-
-    Line 1 of a netlist is a free-text title, whatever it says. The lexer has
-    no title concept, so a title that starts with an element letter parses as
-    an instance card, and one that starts with a dot as a directive. LTspice
-    reads neither: ``.param r=2k`` on line 1 defines nothing. A title that is
-    a comment or blank is no card and stays as it is.
-    """
-    return [card for card in cards if card.line_start != 1 or card.kind in {"comment", "blank"}]
 
 
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
@@ -754,19 +654,14 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                     continue
                 record(card.scope, node, inst.ref, card)
             suppressed.update(tok.lower() for tok in rest)
-            for probe in PROBE_REF_RE.finditer(card.body):
-                for part in probe.group(1).split(","):
-                    name = part.strip()
-                    if name:
-                        suppressed.add(name.lower())
+            # Probed identifiers in an expression (a B/E/G body, a behavioural
+            # parameter) are connections too: they feed the suppressor set,
+            # never a terminal count.
+            suppressed.update(name.lower() for probe in probe_refs(card) for name in probe.names)
         elif card.kind in ("directive", "meas"):
             # A node that exists only to be probed by a .meas/.print/.plot/.save
             # is intentional, not dangling — suppress it like instance probe refs.
-            for probe in PROBE_REF_RE.finditer(card.body):
-                for part in probe.group(1).split(","):
-                    name = part.strip()
-                    if name:
-                        suppressed.add(name.lower())
+            suppressed.update(name.lower() for probe in probe_refs(card) for name in probe.names)
 
     issues: list[dict[str, object]] = []
     for scope, nodes in occurrences.items():
@@ -870,9 +765,9 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
     ``V(vref)`` and silently resolves to nothing. Matching is
     case-insensitive; hierarchical refs (``V(X1:out)``) and expression
     fragments (``V(a*2)``) are left alone. Each genuinely-missing name is
-    reported once. The caller attaches severity.
+    reported once. The caller attaches severity. ``cards`` are the cards the
+    simulator reads (``spice_lex.lex_deck``).
     """
-    cards = drop_title_card(cards)
     known = _known_names(cards)
 
     issues: list[dict[str, object]] = []
@@ -885,11 +780,9 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
         # .func defines a formal-parameter expression; its V(formal) is not a node.
         if card.kind == "directive" and card.body.lstrip().lower().startswith(".func"):
             continue
-        for probe in PROBE_REF_RE.finditer(card.body):
-            kind = probe.group(0)[0].upper()  # 'V' or 'I'
-            for part in probe.group(1).split(","):
-                name = part.strip()
-                if not name or not _PLAIN_REF_RE.fullmatch(name):
+        for probe in probe_refs(card):
+            for name in probe.names:
+                if not _PLAIN_REF_RE.fullmatch(name):
                     continue
                 key = name.lower()
                 if key in known or key in seen:
@@ -900,7 +793,7 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
                         "line": card.line_start,
                         "directive": _card_directive(card),
                         "message": (
-                            f"References {kind}({name}) but no node or device named "
+                            f"References {probe.kind}({name}) but no node or device named "
                             f"'{name}' exists in the netlist."
                         ),
                         "suggestion": (

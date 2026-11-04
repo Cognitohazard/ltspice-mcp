@@ -1,7 +1,8 @@
 """Error hierarchy for ltspice-mcp server."""
 
+import difflib
 from collections.abc import Collection, Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
@@ -14,6 +15,8 @@ def compact_validation_error(
     field_owners: Mapping[str, Sequence[str]] | None = None,
     nested: Mapping[str, Sequence[str]] | None = None,
     renamed: Mapping[str, str] | None = None,
+    accepted: Mapping[str, Sequence[str]] | None = None,
+    branches: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> str:
     """Render validation failures without input echoes or documentation URLs.
 
@@ -22,13 +25,23 @@ def compact_validation_error(
     ``circuits[].path``), named first, and ``field_owners`` to the tools
     that take it at their top level. An unknown field at any depth that is
     a name this tool retired is referred to the one that replaced it, by
-    ``renamed``.
+    ``renamed``. An unknown field with no such referral is answered with the
+    names its place takes, from ``accepted`` (the place spelled as the
+    reference table spells it: ``""`` for the tool's own arguments,
+    ``circuits[]`` inside each circuit), the closest one first.
+
+    ``branches`` maps each field that chooses a branch (``action``, ``op``) to
+    each branch's fields. A missing one is answered with the values it takes,
+    and the item's fields that no branch takes, which validation never
+    reaches without a branch, are refused beside it.
     """
     if not isinstance(exc, ValidationError):
         return str(exc)
     renamed = renamed or {}
     nested = nested or {}
     field_owners = field_owners or {}
+    accepted = accepted or {}
+    branches = branches or {}
 
     def referral(field: str) -> str:
         if field in renamed:
@@ -47,36 +60,112 @@ def compact_validation_error(
             text += f" Field {field!r} is accepted by {', '.join(owners)}."
         return text
 
-    entries: list[tuple[tuple[object, ...], str, str]] = []
-    seen: set[tuple[tuple[object, ...], str, str]] = set()
-    referrals: list[str] = []
-    for error in exc.errors(include_url=False, include_input=False):
+    # The item's input is read for its field names only, never echoed.
+    errors: list[tuple[tuple[object, ...], str, str]] = []
+    #: The names an untagged item's place takes, by the location of each field
+    #: it carries that no branch does.
+    taken_at: dict[tuple[object, ...], tuple[str, ...]] = {}
+    for error in exc.errors(include_url=False):
         loc = tuple(error["loc"])
         error_type = error["type"]
         message = error["msg"]
+        ctx = error.get("ctx") or {}
         if error_type == "union_tag_invalid":
-            loc, message = _tag_mismatch(loc, error.get("ctx") or {}, message)
-        key = (loc, error_type, message)
-        if key in seen:
+            loc, message = _tag_mismatch(loc, ctx, message)
+        elif error_type == "union_tag_not_found" and _discriminator(ctx):
+            discriminator = _discriminator(ctx)
+            fields = branches.get(discriminator, {})
+            errors.append((*_tag_missing(loc, discriminator, fields), error_type))
+            if fields and isinstance(error.get("input"), Mapping):
+                taken = (discriminator, *dict.fromkeys(n for f in fields.values() for n in f))
+                for name in error["input"]:
+                    if isinstance(name, str) and name not in taken:
+                        taken_at[(*loc, name)] = taken
+                        errors.append(
+                            ((*loc, name), "Extra inputs are not permitted", "extra_forbidden")
+                        )
             continue
-        seen.add(key)
-        entries.append(key)
+        errors.append((loc, message, error_type))
+
+    entries: list[tuple[tuple[object, ...], str]] = []
+    seen: set[tuple[tuple[object, ...], str, str]] = set()
+    referrals: list[str] = []
+    for loc, message, error_type in errors:
+        if (loc, message, error_type) in seen:
+            continue
+        seen.add((loc, message, error_type))
+        entries.append((loc, message))
         field = loc[-1] if loc else None
         if error_type != "extra_forbidden" or not isinstance(field, str):
             continue
         if field in renamed or (len(loc) == 1 and (field in nested or field in field_owners)):
             sentence = referral(field)
-            if sentence not in referrals:
-                referrals.append(sentence)
+        else:
+            sentence = _accepted_here(field, loc[:-1], accepted, taken_at.get(loc, ()))
+        if sentence and sentence not in referrals:
+            referrals.append(sentence)
 
     rendered = [
         f"{'.'.join(str(part) for part in loc) or '<root>'}: {message}"
-        for loc, _, message in entries[:_MAX_VALIDATION_ERRORS]
+        for loc, message in entries[:_MAX_VALIDATION_ERRORS]
     ]
     remaining = len(entries) - _MAX_VALIDATION_ERRORS
     if remaining > 0:
         rendered.append(f"… and {remaining} more")
-    return ("; ".join(rendered) or "Validation failed") + "".join(referrals)
+    text = "; ".join(rendered) or "Validation failed"
+    return text + ("." if referrals else "") + "".join(referrals)
+
+
+def _place(loc: Sequence[object]) -> str:
+    """A location as the reference table spells a field's place: ``("circuits",
+    0)`` is ``circuits[]``, the tool's own arguments are ``""``."""
+    place = ""
+    for part in loc:
+        if isinstance(part, int):
+            place += "[]"
+        else:
+            place += f".{part}" if place else str(part)
+    return place
+
+
+def _accepted_here(
+    field: str,
+    loc: Sequence[object],
+    accepted: Mapping[str, Sequence[str]],
+    taken: Sequence[str] = (),
+) -> str:
+    """The names the place of an unknown ``field`` takes, the closest first.
+
+    ``taken`` stands in where the reference table lists no place: the names
+    the branches of an untagged item take, offered as the closest only.
+    """
+    place = _place(loc)
+    names = list(accepted.get(place, ()))
+    close = difflib.get_close_matches(field, names or list(taken), n=1)
+    guess = f" Did you mean {close[0]!r} for {field!r}?" if close else ""
+    if not names:
+        return guess
+    where = "This tool takes" if not place else f"{place} takes"
+    return f"{guess} {where} {', '.join(names)}."
+
+
+def _discriminator(ctx: Mapping[str, Any]) -> str:
+    """The field that chooses a branch, as a union error's context names it."""
+    return str(ctx.get("discriminator", "")).strip("'")
+
+
+def _tag_missing(
+    loc: tuple[object, ...], discriminator: str, fields: Mapping[str, Sequence[str]]
+) -> tuple[tuple[object, ...], str]:
+    """A missing field that chooses a branch, said at that field with the
+    values it takes.
+
+    pydantic says it as "Unable to extract tag using discriminator '…'",
+    located at the union rather than at the missing field.
+    """
+    if not fields:
+        return (*loc, discriminator), "Field required"
+    return (*loc, discriminator), "Field required, one of " + ", ".join(map(repr, fields))
 
 
 #: How much of a rejected branch name the rewritten message quotes.
@@ -92,7 +181,7 @@ def _tag_mismatch(
     of the expected tags: …", located at the union rather than at the field,
     and quoting whatever the field held, an object included.
     """
-    discriminator = str(ctx.get("discriminator", "")).strip("'")
+    discriminator = _discriminator(ctx)
     expected = ctx.get("expected_tags")
     if not discriminator or not expected:
         return loc, message
@@ -130,9 +219,15 @@ class LTSpiceMCPError(Exception):
 
     The set of codes is public: adding one is fine, renaming or removing one is
     a client-visible change. ``tests/test_error_codes.py`` pins the vocabulary.
+
+    ``takes_family_hint`` — False on a type whose family's recovery hint would
+    send the caller the wrong way: it says its own recovery in its message, or
+    it is not the failure its family's hint is about. :func:`hint_for_type`
+    stops at such a type.
     """
 
     code: str = "internal_error"
+    takes_family_hint: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -165,6 +260,7 @@ class UnsupportedFileError(NetlistError):
     circuit is needed."""
 
     code = "unsupported_file"
+    takes_family_hint = False
 
 
 class SymbolResolutionError(NetlistError):
@@ -178,6 +274,7 @@ class SymbolResolutionError(NetlistError):
     """
 
     code = "symbol_unresolved"
+    takes_family_hint = False
 
 
 class SimulationError(LTSpiceMCPError):
@@ -203,6 +300,7 @@ class OtherRawNotWritten(ResultError):
     transient's operating point) of a kind its run did not write."""
 
     code = "other_raw_not_written"
+    takes_family_hint = False
 
 
 class AnalysisDeadlineExceeded(ResultError):
@@ -216,6 +314,7 @@ class AnalysisDeadlineExceeded(ResultError):
     """
 
     code = "analysis_deadline"
+    takes_family_hint = False
 
 
 class NoAxisError(ResultError):
@@ -228,6 +327,7 @@ class NoAxisError(ResultError):
     """
 
     code = "no_axis"
+    takes_family_hint = False
 
 
 class LibraryError(LTSpiceMCPError):
@@ -240,6 +340,98 @@ class BatchJobError(LTSpiceMCPError):
     """Batch job error (config not found, job not found, invalid config, etc.)."""
 
     code = "batch_job_error"
+
+
+class RecipeInvalidError(LTSpiceMCPError):
+    """An analysis recipe, or the request around it, that is not a valid
+    ``analyze_results`` request.
+
+    Raised where the whole call is refused for it: an analysis attached to
+    ``run_experiments`` is checked at submission, before anything runs.
+    ``analyze_results`` itself reports an invalid recipe as that recipe's
+    failure, under the same code, and runs the others. Resending the same
+    request fails the same way, so it is never retryable.
+    """
+
+    code = "recipe_invalid"
+
+
+class InvalidCursorError(LTSpiceMCPError):
+    """A page cursor did not decode, failed its integrity check, or was minted
+    for another listing, view, request or result set.
+
+    One type for every tool's cursors, so the same mistake carries the same
+    code on every tool, and its recovery is the one that applies: send back
+    the cursor that tool's own previous page returned, not check a job or
+    lint a netlist.
+    """
+
+    code = "invalid_cursor"
+
+
+# Error type → the recovery step every surface that reports it gives. Hints name
+# only tools the consolidated surface exposes (the only profile since 0.6.0).
+# PathSecurityError is handled separately: its hint is the session's sandbox
+# guidance, which reads the sandbox as it stands at the call.
+ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
+    SimulationError: ("Use inspect with a capabilities query to verify simulator availability."),
+    NetlistError: (
+        "Use verify_circuit to lint the file, or inspect its components — "
+        "or read the netlist directly."
+    ),
+    JobNotFoundError: (
+        'Use jobs with action:"list" to see known jobs — the id may be '
+        "mistyped, evicted, or from a previous server session."
+    ),
+    ResultError: (
+        'Verify the run reached a terminal state with jobs (action:"status"), '
+        "and read signals with analyze_results."
+    ),
+    LibraryError: (
+        'Use inspect with a model query (mode:"search") to find the part in the '
+        "simulator's own libraries, or add .lib/.include directives to the netlist."
+    ),
+    RecipeInvalidError: (
+        "Correct the recipe and send the call again; inspect(kind='reference', "
+        "query='<metric>') lists each recipe's fields."
+    ),
+    InvalidCursorError: (
+        "Send back, unchanged, the cursor this tool's own previous page returned "
+        "(next_cursor; for analyze_results also the next block's cursor), or leave "
+        "it out to start from the first page."
+    ),
+}
+
+
+def hint_for_type(err_type: type[LTSpiceMCPError]) -> str | None:
+    """The recovery hint for an error type: its own entry in ``ERROR_HINTS``,
+    else its nearest ancestor's.
+
+    A subclass added to a family gets that family's recovery unless the
+    subclass, or an ancestor below the one with the entry, sets
+    ``takes_family_hint = False``.
+    """
+    for cls in err_type.__mro__:
+        if cls.__dict__.get("takes_family_hint") is False:
+            return None
+        hint = ERROR_HINTS.get(cls)
+        if hint is not None:
+            return hint
+    return None
+
+
+def error_hint(exc: BaseException) -> str | None:
+    """The recovery step for ``exc``, by :func:`hint_for_type`.
+
+    One answer for every surface that reports a failure, whether it raises it
+    (``server._invoke``) or carries it in its own envelope (a coverage row, a
+    batch item, a jobs error), so one kind of failure gets one hint everywhere.
+    None for a type with none, and for an error that carries precise guidance
+    of its own (``show_hint=False``).
+    """
+    if not isinstance(exc, LTSpiceMCPError) or not exc.show_hint:
+        return None
+    return hint_for_type(type(exc))
 
 
 def raise_site_code(exc: BaseException) -> str | None:

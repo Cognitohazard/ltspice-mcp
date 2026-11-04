@@ -32,7 +32,7 @@ There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, py
 - Re-run a passing suite only after the tree changes.
 - In tests, wait for the value the assertion reads, never for a side effect or a fixed time. Await work the server started through the object that started it (`await runner.settled(job)`, `await state.settled()`), and anything else (a thread, a fake simulator's callback, another process) through an event or a handshake. A timeout on a wait only caps a hang (`LIVENESS_S` in `tests/conftest.py`), so it is not a test of speed. `tests/test_test_hygiene.py` checks part of this rule mechanically. To reproduce on Linux a test that fails only on Windows, rerun it with `--jitter-seed=random`, which perturbs thread hand-offs, timers and process starts as Windows scheduling does (`tests/schedule_jitter.py`) and prints the seed that reproduces a failure. A test that fails only under a seed has a race. No gate runs it; use it to investigate a flaky test.
 
-Read `docs/TESTING.md` before adding a tool or an op. Some tests check the code against a committed snapshot. After a deliberate change, regenerate the snapshot by running the test with its variable (`LTSPICE_MCP_RECORD_SHEET_FINDINGS`, `LTSPICE_MCP_RECORD_ROUTE_PLANNER`, `LTSPICE_MCP_RECORD_LABELS_AND_MOVES`, `LTSPICE_MCP_RECORD_BUILD_BENCHMARK` or `LTSPICE_MCP_RECORD_INSPECT_SHEETS`) set to `1`. `LTSPICE_MCP_RECORD_SHEET_EDITS` re-records the result of every `edit_schematic` call in the suite (`tests/sheet_edit_record.py`), so it needs a run of the whole suite with no LTspice library installed or visible.
+Read `docs/TESTING.md` before adding a tool or an op. Some tests check the code against a committed snapshot. After a deliberate change, regenerate the snapshot by running the test with its variable (`LTSPICE_MCP_RECORD_SHEET_FINDINGS`, `LTSPICE_MCP_RECORD_ROUTE_PLANNER`, `LTSPICE_MCP_RECORD_LABELS_AND_MOVES`, `LTSPICE_MCP_RECORD_BUILD_BENCHMARK`, `LTSPICE_MCP_RECORD_INSPECT_SHEETS` or `LTSPICE_MCP_RECORD_TOOL_ARGUMENTS`) set to `1`. `LTSPICE_MCP_RECORD_SHEET_EDITS` re-records the result of every `edit_schematic` call in the suite (`tests/sheet_edit_record.py`), so it needs a run of the whole suite with no LTspice library installed or visible.
 
 ### Recorded LTspice behaviour
 
@@ -112,7 +112,7 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
 - A handler that a registered tool delegates to declares its own output schema with `@declare_output_schema(...)`, so the suite checks its `structuredContent` against that schema instead of the delegating tool's; `tests/test_conformance_hook_armed.py` fails a delegation without one.
 - Keep argument descriptions to one or two plain sentences (unit, sign convention, default, interaction with a sibling field). Put longer explanation in a guide section and point to it (`tests/test_guide_delivery.py` checks that pointers resolve).
 - A file argument is named `path`.
-- Raise errors from the hierarchy in `errors.py`. `server.py:call_tool` converts every failure into an `is_error` result, with one recovery hint per error type in `_ERROR_HINTS`.
+- Raise errors from the hierarchy in `errors.py`. `server.py:call_tool` converts every failure into an `is_error` result, with one recovery hint per error family in `errors.ERROR_HINTS` (`errors.error_hint`).
 
 ## Rules the code depends on
 
