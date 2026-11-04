@@ -696,6 +696,19 @@ class TestTheServerFindsASymbolWhereEitherBuildDoes:
             opened = True
         assert opened == found
 
+    async def test_the_listing(self, case_id: str, config, work_dir: Path):
+        """Every name ``inspect(kind="symbols")`` lists for the sheet resolves,
+        so ``inspect(kind="symbol")`` and ``add_component`` take it."""
+        sheet, name, libraries = _staged_search(case_id, work_dir)
+        state = SessionState.create(
+            dataclasses.replace(config, symbol_paths=libraries), available={}
+        )
+        listed = (await inspect_one(state, {"kind": "symbols", "path": str(sheet)}))["symbols"]
+        resolver = state.symbols.for_sheet(sheet)
+        assert [one for one in listed if resolver.load(one) is None] == []
+        bare = name.replace("\\", "/").rsplit("/", 1)[-1]
+        assert (bare in listed) == (resolver.resolve(bare) is not None)
+
 
 #: ``connectivity/bus_label``: the pins both builds put on one node, because a
 #: wire labelled as a bus (``D[0:3]``) is on the node of the bus's first member

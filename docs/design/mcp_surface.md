@@ -1612,8 +1612,9 @@ cursors where listed:
     ["allowed_paths", "config_path"], to check after a config edit) returns
     only those top-level keys; without it the whole report is returned
 {kind: "symbols", path?, filter?, cursor?}
-    legal symbol names and resolution order; `path` adds schematic-local
-    directories to the reported precedence
+    the symbol names the libraries resolve, and resolution order; `path` adds
+    the sheet's own folder, where only a symbol directly in it is found by its
+    bare name, to the reported precedence
 {kind: "symbol", name, path?}
     pins per rotation, bbox, origin
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | "NAME" | [x, y], cursor?}

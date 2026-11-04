@@ -194,7 +194,7 @@ from ltspice_mcp.lib.simulator_build import (
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
-from ltspice_mcp.lib.symbol_library import SymbolResolver
+from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
@@ -1311,7 +1311,8 @@ def _symbol_precedence(asc_path: Path | None, state: SessionState) -> list[tuple
 def _symbols_payload(
     precedence: list[tuple[Path, str]], name_filter: str | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Walk the precedence dirs, collecting legal ``.asy`` names (immutable I/O)."""
+    """Walk the precedence dirs, collecting the ``.asy`` names they resolve
+    (``symbol_library.symbol_files``; immutable I/O)."""
     prec_report: list[dict[str, Any]] = []
     names: list[str] = []
     seen_names: set[str] = set()
@@ -1321,7 +1322,7 @@ def _symbols_payload(
         prec_report.append({"dir": str(path), "tier": tier, "exists": exists})
         if not exists:
             continue
-        for asy in path.rglob("*.asy"):
+        for asy in symbol_files(path, beside_sheet=tier == "schematic-local"):
             stem = asy.stem
             if stem in seen_names:
                 continue
