@@ -48,6 +48,7 @@ from weakref import WeakKeyDictionary
 from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
 from spicelib.editor.asc_editor import LTSPICE_ATTRIBUTES, LTSPICE_PARAMETERS
+from spicelib.editor.asy_reader import AsyReader
 from spicelib.editor.base_schematic import (
     ERotation,
     Line,
@@ -141,7 +142,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
 from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, usable_symbol_info
-from ltspice_mcp.lib.symbol_library import SymbolResolver
+from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver
 from ltspice_mcp.state import SessionState
 
 
@@ -1039,7 +1040,16 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
 
 
 class _AscEditor(AscEditor):
-    """spicelib's editor, opening a sheet whose block symbol has no sheet.
+    """spicelib's editor, finding each symbol as the session does and opening a
+    sheet whose block symbol has no sheet.
+
+    A part's symbol is the file ``symbols`` resolves its name to
+    (``symbol_library.find_symbol``), the one ``inspect``, ``verify_circuit``
+    and the drawing read. spicelib's own search walked every folder under the
+    sheet's, so it found a bare name in a folder neither LTspice build looks
+    in; kept the folder a name gives, so it missed a symbol XVII finds beside
+    the sheet; and cached each name's file for the whole process
+    (``docs/spicelib_bugs.md``, Bug 17).
 
     LTspice netlists an instance of a block symbol as a call to a subcircuit
     of the symbol's name, defined by its own sheet, by a library on the sheet,
@@ -1059,13 +1069,23 @@ class _AscEditor(AscEditor):
         asc_file: str | Path,
         encoding: str = "autodetect",
         *,
+        symbols: SymbolResolver,
         searched: dict[tuple[str, str], str | None] | None = None,
     ) -> None:
+        self._symbols = symbols
         # Where each sheet not beside its symbol was found, shared with the
         # sheets this one opens: a search walks every folder it is given, and
         # a sheet may place the same block many times.
         self._searched = {} if searched is None else searched
         super().__init__(asc_file, encoding)
+
+    def _get_symbol(self, symbol: str) -> AsyReader:
+        found = self._symbols.resolve(symbol)
+        if found is None:
+            raise FileNotFoundError(
+                f"Symbol '{symbol}' not found beside the sheet or in any symbol library"
+            )
+        return AsyReader(found)
 
     def reset_netlist(self, create_blank: bool = False) -> None:
         super().reset_netlist(create_blank)
@@ -1095,7 +1115,11 @@ class _AscEditor(AscEditor):
                     sheet.name, folder, ".", *self.custom_lib_paths
                 )
             sheet = self._searched[sheet.name, folder]
-        return None if sheet is None else type(self)(sheet, searched=self._searched)
+        if sheet is None:
+            return None
+        return type(self)(
+            sheet, symbols=self._symbols.for_sheet(Path(sheet)), searched=self._searched
+        )
 
 
 def _refuse_lost_records(path: Path, editor: AscEditor) -> None:
@@ -1154,8 +1178,13 @@ def _refuse_lost_records(path: Path, editor: AscEditor) -> None:
     )
 
 
-def make_editor(path: Path) -> Editor:
+def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
+
+    A sheet's symbols are found with ``symbols``, the session's resolver for
+    it (``SymbolLibrary.for_sheet``); without one, with the libraries spicelib
+    is configured with (``engine.py`` sets them from the session's), searched
+    as the session searches them.
 
     Raises NetlistError if the file is not found, has no Version line the
     schematic editor can find, holds a line it cannot read or would skip, or
@@ -1167,7 +1196,13 @@ def make_editor(path: Path) -> Editor:
         if path.suffix.lower() != ".asc":
             return SpiceEditor(str(path))
         try:
-            editor = _AscEditor(str(path))
+            if symbols is None:
+                library = SymbolLibrary(
+                    [Path(folder) for folder in AscEditor.custom_lib_paths],
+                    [Path(folder) for folder in AscEditor.simulator_lib_paths],
+                )
+                symbols = library.for_sheet(path)
+            editor = _AscEditor(str(path), symbols=symbols)
         except NotImplementedError as e:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
@@ -1192,7 +1227,7 @@ def make_editor(path: Path) -> Editor:
 
 def _get_editor(path: Path, state: SessionState) -> Editor:
     """Get a cached editor instance, creating via make_editor if needed."""
-    return state.editors.get(path, lambda p: make_editor(p))
+    return state.editors.get(path, lambda p: make_editor(p, state.symbols.for_sheet(p)))
 
 
 def get_asc_editor(path: Path, state: SessionState) -> AscEditor:

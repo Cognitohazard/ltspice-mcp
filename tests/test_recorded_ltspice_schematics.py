@@ -9,6 +9,7 @@ connected, and how a card is spelled.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Iterator
 from pathlib import Path, PureWindowsPath
@@ -667,6 +668,33 @@ class TestTheServerFindsASymbolWhereEitherBuildDoes:
         either = any(_found_by(build, case_id) for build in rec.BUILDS)
         assert (resolver.resolve(name) is not None) == either
         assert resolver.resolve(name) == find_symbol(name, sheet.parent, libraries)
+
+    @pytest.mark.parametrize("cache", ["empty", "warmed elsewhere"])
+    def test_the_editor(self, case_id: str, cache: str, tmp_path: Path):
+        """The schematic editor opens the sheet exactly when the session finds its
+        symbol. spicelib's own search, which walked every folder under the
+        sheet's and kept a folder the name gave, and its cache of each name's
+        file for the whole process (docs/spicelib_bugs.md, Bug 17), decide
+        nothing: a cache warmed by a sheet in another folder is passed over."""
+        from ltspice_mcp.errors import SymbolResolutionError
+
+        sheet, name, libraries = _staged_search(case_id, tmp_path)
+        if cache != "empty":
+            elsewhere = tmp_path / "elsewhere"
+            elsewhere.mkdir()
+            for stem in ("part", "battery"):
+                copy = elsewhere / f"{stem}.asy"
+                copy.write_bytes((INPUTS / "search" / "lib" / "part.asy").read_bytes())
+                for folder in ("", "lib/", "Misc/", "Wrong/"):
+                    AscEditor.symbol_cache[f"{folder}{stem}.asy"] = str(copy)
+        found = find_symbol(name, sheet.parent, libraries) is not None
+        try:
+            make_editor(sheet, SymbolLibrary(libraries).for_sheet(sheet))
+        except SymbolResolutionError:
+            opened = False
+        else:
+            opened = True
+        assert opened == found
 
 
 #: ``connectivity/bus_label``: the pins both builds put on one node, because a

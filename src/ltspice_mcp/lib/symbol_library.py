@@ -199,6 +199,17 @@ class SymbolResolver:
         """The folders searched, in order: the sheet's own first, then the libraries."""
         return tuple(path for path, _tier in self.precedence)
 
+    def for_sheet(self, path: Path) -> SymbolResolver:
+        """A resolver for the sheet at ``path``, with this one's libraries and
+        caches: what a sheet another loads, such as a block's own, is read with."""
+        return SymbolResolver(
+            local_dir=path.parent,
+            project_paths=self._project,
+            stock_paths=self._stock,
+            parse_cache=self._parse_cache,
+            stock_lookups=self._stock_lookups,
+        )
+
     def resolve(self, symbol: str) -> Path | None:
         """Return the ``.asy`` path for ``symbol``, or ``None`` if unresolved.
 

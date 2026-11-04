@@ -1592,9 +1592,12 @@ upstream changes.
 limitation, and we ship no workaround.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.symbol_cache` and `_asy_file_find`).
-**Our workaround:** none for spicelib's own loading. Our pin geometry does not
-read this cache: the session's `lib/symbol_library.py` `SymbolLibrary` looks
-for a symbol beside the sheet itself and caches what it reads by file.
+**Our workaround:** `_AscEditor._get_symbol` in `lib/schematic_ops.py` finds
+each part's symbol with the session's `lib/symbol_library.py`
+`SymbolResolver`, so the server's editor neither reads nor fills this cache
+(Bug 37). Our pin geometry does not read it either: the session's
+`SymbolLibrary` looks for a symbol beside the sheet itself and caches what it
+reads by file.
 
 ### Summary
 
@@ -1681,7 +1684,9 @@ def test_same_named_block_beside_two_sheets_resolves_per_folder(tmp_path):
 ### Cross-reference
 
 Our pin geometry is pinned per folder by
-`tests/test_circuit_asc.py::TestSheetLocalSymbols::test_same_named_symbols_beside_two_sheets_keep_their_own_pins`.
+`tests/test_circuit_asc.py::TestSheetLocalSymbols::test_same_named_symbols_beside_two_sheets_keep_their_own_pins`,
+and the editor's lookup, with the cache warmed by another folder's file, by
+`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`.
 `edit_schematic` cannot reach the write in the reproduction, because it
 refuses pending child edits before saving (the workaround for Bug 13), but it
 can reach the wrong read. The test suite fills this cache for the fixture
@@ -3771,3 +3776,99 @@ def test_a_text_line_with_wider_spacing_is_kept(tmp_path):
 pins the refusal for each of the three spacings, and
 `test_every_sheet_the_editor_opens` holds the editor's record counts to the
 sheet reader's on every sheet in the suite.
+
+---
+
+## Bug 37 — `AscEditor` finds a symbol where LTspice does not, and misses one where LTspice finds it (limitation)
+
+**Status:** known limitation, recorded against LTspice's own behaviour.
+Observed 2026-11-04.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor._get_symbol` and `_asy_file_find`; `spicelib/utils/file_search.py`,
+`find_file_in_directory`).
+**Our workaround:** `_AscEditor._get_symbol` in `lib/schematic_ops.py` finds
+the file through the session's `SymbolResolver`, which follows
+`lib/symbol_library.py` `find_symbol`, and reads it with `AsyReader`.
+
+### Summary
+
+`_get_symbol` turns a part's symbol name into a relative path, keeping any
+folder the name gives (`lib\part` becomes `lib/part.asy`), and
+`_asy_file_find` walks the sheet's folder, the working directory, each
+library's `sym` folder and the custom library paths, each with `os.walk`,
+for a file of that name in any case. LTspice 26 and LTspice XVII were
+recorded doing otherwise (the `symbol-beside-sheet` and
+`symbol-named-with-a-folder-it-is-not-in` cases):
+
+- neither build finds a bare name in a folder below the sheet's, which the
+  walk does (`search/in_subfolder`);
+- XVII finds `lib\part` as `part.asy` right beside the sheet when there is
+  no `lib` folder, which the walk does not, because it looks only under
+  `<sheet folder>/lib` (`search_flat/named_folder_absent`);
+- neither build searches the working directory of the process.
+
+The result is also cached for the whole process by file name (Bug 17), so
+which file a name means depends on what the process opened before.
+
+### Affected code
+
+```python
+def _get_symbol(self, symbol: str) -> AsyReader:
+    asy_filename = symbol + os.path.extsep + "asy"
+    ...
+    asy_path = self._asy_file_find(asy_filename)
+
+def find_file_in_directory(directory, filename):
+    path, filename = os.path.split(filename)
+    if path != '':
+        directory = os.path.join(directory, path)
+    for root, dirs, files in os.walk(directory):
+        ...
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+# The sheet says "part"; the symbol is in lib/ beside it. Neither LTspice
+# build netlists this sheet, and spicelib opens it.
+Path("lib").mkdir()
+Path("lib/part.asy").write_text(PART_ASY)
+Path("sub.asc").write_text(SHEET_PLACING_part)
+AscEditor("sub.asc")        # opens
+
+# The sheet says "lib\part"; part.asy is beside it and there is no lib/.
+# LTspice XVII netlists it; spicelib raises FileNotFoundError.
+```
+
+### Impact
+
+`edit_schematic` refused a sheet that LTspice XVII netlists and that
+`inspect` and `verify_circuit` read, and its advice to set `symbol_paths` did
+not help. It also opened a sheet neither build netlists, placing the part
+with a symbol no other reader of the sheet found.
+
+### Proposed fix
+
+Search beside the sheet only where the name says, then under its bare name
+beside the sheet, and walk folders only in the libraries, as
+`lib/symbol_library.py` `find_symbol` does; leave out the working directory.
+
+### Suggested upstream test
+
+```python
+def test_a_bare_name_is_not_found_below_the_sheet(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "part.asy").write_text(PART_ASY)
+    (tmp_path / "sub.asc").write_text(SHEET_PLACING_part)
+    with pytest.raises(FileNotFoundError):
+        AscEditor(tmp_path / "sub.asc")
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`
+holds the editor to `find_symbol` on every recorded search, with spicelib's
+cache empty and warmed by another folder's files.

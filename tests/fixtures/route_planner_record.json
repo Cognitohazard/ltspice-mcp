@@ -7175,11 +7175,6 @@
     "routed: joins its net by waypoint": 1
    }
   },
-  "fixtures/ltspice_recorded/inputs/search/in_subfolder.asc": {
-   "proposals": 0,
-   "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-   "shapes": {}
-  },
   "fixtures/ltspice_recorded/inputs/search/named_subfolder.asc": {
    "proposals": 28,
    "sha256": "84970b35a66485009515bcae44ecda2eac54829e215c11c1e3caba295d681c12",

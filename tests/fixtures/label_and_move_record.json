@@ -2696,28 +2696,6 @@
     }
    }
   },
-  "fixtures/ltspice_recorded/inputs/search/in_subfolder.asc": {
-   "labels": {
-    "proposals": 9,
-    "sha256": "07711cc9a29c565e6e75a48392beaac3e9f257770503391c75d8c51cea0ecb1b",
-    "shapes": {
-     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
-     "placed [a name already elsewhere; 1 at the point, 0 named]": 1,
-     "placed [a name already here; 1 at the point, 1 named]": 1,
-     "placed [a new name; 0 at the point, 0 named]": 1,
-     "placed [a new name; 1 at the point, 0 named]": 1,
-     "placed [ground; 0 at the point, 0 named]": 1,
-     "placed [ground; 1 at the point, 0 named]": 1,
-     "placed [ground; 1 at the point, 1 named]": 1,
-     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 1
-    }
-   },
-   "moves": {
-    "proposals": 0,
-    "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-    "shapes": {}
-   }
-  },
   "fixtures/ltspice_recorded/inputs/search/named_subfolder.asc": {
    "labels": {
     "proposals": 15,
