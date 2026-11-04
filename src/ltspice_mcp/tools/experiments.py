@@ -1345,26 +1345,25 @@ async def _load_matching_replay(
     if index is None:
         return None
     refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
-    job_id = str(index.get("job_id", ""))
-    job = state.all_jobs.get(job_id)
+    # Resolved as every job id is (``services.resolve_job``): the registry adopts
+    # the record, writes back what the store reconciled when its owner died,
+    # and re-reads a job another process runs. An id the index names but no
+    # record answers is the request gate's to handle.
+    try:
+        job = await state.job_registry.get_or_load_async(str(index.get("job_id", "")))
+    except ValueError:
+        return None
     if job is None:
-        job = await asyncio.to_thread(
-            experiment_store.load_job,
-            job_id,
-            state.working_dir,
-            own_is_alive=True,
-        )
-        if job is None:
-            return None
-        state.add_experiment_job(job, already_persisted=True)
+        return None
+    job = await state.job_registry.refresh_foreign_job_async(job)
     refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
     await asyncio.to_thread(
         lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
-    # The record is left as it is: the receipt's ``replayed`` is the fact about
-    # this call, and only the owner writes a job's record.
+    # The receipt's ``replayed`` is the fact about this call; the record changes
+    # only as resolution reconciles it.
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
