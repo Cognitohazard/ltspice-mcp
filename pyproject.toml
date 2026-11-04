@@ -162,7 +162,6 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.connectivity.partition".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
 "ltspice_mcp.lib.connectivity.NetPartition".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
 "ltspice_mcp.lib.connectivity.label_folded_nets".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
-"ltspice_mcp.lib.connectivity.NamedNets".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
 "ltspice_mcp.lib.connectivity.net_members".msg = "Kept only until its readers move: read a sheet's nets from connectivity.nets_by_ltspice."
 
 [tool.ruff.lint.per-file-ignores]
