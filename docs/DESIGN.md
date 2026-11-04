@@ -89,7 +89,10 @@ The same holds for every refusal, finding and error, whether or not a write
 was involved: it names the field, the place and the way round, such as the
 fields an argument accepts, the coordinates of a collision, or the run that
 gives a result this one cannot. Tests pin what a refusal names
-(`tests/test_validation_errors.py` for argument refusals).
+(`tests/test_validation_errors.py` for argument refusals), generate a
+misspelled, missing and misplaced argument for every tool
+(`tests/test_refusals_name_the_fix.py`), and refuse any reply in the suite
+whose finding gives no line, coordinates or part reference (`tests/conftest.py`).
 
 ### No auto-routing
 
@@ -115,6 +118,8 @@ A check must say what it did not look at: a comparison that leaves part of a
 circuit out says which part, a list cut short says how to read the rest, and
 a check that did not run is reported as not run. A verdict that reads as
 complete while it covered only part of the circuit is worse than no verdict.
+`tests/test_check_scope_is_stated.py` and
+`tests/test_capped_lists_say_how_to_continue.py` hold the tools to this.
 
 ### Structured outputs
 
@@ -198,7 +203,8 @@ staging a copy, taking locks, exporting, comparing, running. One
 repeating a `request_id` returns the earlier job, so comparing two settings
 takes one call; `jobs(action="place_beside_sheet")` puts a run's results where
 LTspice opens them. When a task takes a sequence of calls, the fix is an op or
-an option, not a documented sequence.
+an option, not a documented sequence. `tests/test_one_call_per_task.py` counts
+the calls each of these takes.
 
 ### A short reply, the data behind an id
 
@@ -206,34 +212,39 @@ A reply carries a summary that is true on its own. The bulk stays on disk,
 recorded per job and case and addressed by id and path, for a later call or
 the Python API to read and reduce, so an old run reloads without simulating
 again. A reply should name the call that reads more, and a result too large
-to read whole should be readable in part.
+to read whole should be readable in part
+(`tests/test_short_reply_data_behind_an_id.py`).
 
 ### Repeatable requests
 
 The same `request_id` returns the same job ("Backend: spicelib" below), so a
 retry is safe. A client keeps its own copy of the tool definitions, so a
 renamed argument breaks it until it reloads them. Renames are therefore made
-together, in one release, and the refusal of an old name says so.
+together, in one release, and the refusal of an old name says so
+(`tests/test_argument_names_are_kept.py`).
 
 ### LTspice's own tools as peers
 
 The server writes the files LTspice reads (a sheet's netlist, its `.plt` plot
 settings, a run's results beside its sheet) and shows a sheet or a run in
 LTspice's own window, rather than imitating them ("The file on disk is
-authoritative" below).
+authoritative" below). `tests/test_files_ltspice_reads_are_recorded.py` ties
+each such file to a recording of LTspice reading it.
 
 ### Evidence before assumption
 
 The server models only LTspice behaviour recorded from both supported builds
 ([TESTING.md](TESTING.md), "Recorded LTspice behaviour"). Unrecorded
 behaviour is where the server goes wrong, so a recording comes before the
-code that relies on it.
+code that relies on it. `tests/test_ltspice_readers_are_recorded.py` requires
+every module that reads an LTspice format to name its recording.
 
 ### Fast enough to try
 
 Small runs stay fast enough that an agent runs an experiment instead of
 reasoning one out, and work added to the run path is weighed against that.
-Tests do not time anything (`CLAUDE.md`, "Working practice").
+Tests do not time anything (`CLAUDE.md`, "Working practice");
+`scripts/benchmark_small_runs.py` compares small runs with a local baseline.
 
 ### The file on disk is authoritative
 
