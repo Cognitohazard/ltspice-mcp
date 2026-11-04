@@ -621,11 +621,7 @@ class TestExperimentSubmission:
         index = experiment_store.load_request_index(request.request_id, work_dir)
         assert index is not None
         await await_until(lambda: len(submissions) == 1)
-        persisted = experiment_store.load_job(
-            str(index["job_id"]),
-            work_dir,
-            own_is_alive=True,
-        )
+        persisted = experiment_store.load_job(str(index["job_id"]), work_dir)
         assert persisted is not None
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
@@ -1710,9 +1706,17 @@ class TestCancellationAndAnalysis:
             runner.submit(_request(state_no_sim, work_dir, request_id="token-auth"))
         )
         await await_until(lambda: len(submissions) == 1)
+        # The record's pid says nothing about who runs the job; a runner that
+        # does not run it is a stranger to it, and needs the token.
         receipt.job.owner_pid = -1
+        stranger = ExperimentRunner(
+            asyncio.get_running_loop(),
+            MockSimulator,
+            work_dir,
+            max_parallel=1,
+        )
         with pytest.raises(ExperimentCancellationError, match="not authorized"):
-            await runner.cancel(receipt.job, control_token="wrong-token")
+            await stranger.cancel(receipt.job, control_token="wrong-token")
         token = submissions[0]
         callbacks[token](_success(work_dir, token))
         assert await job_done(state_no_sim, receipt.job)

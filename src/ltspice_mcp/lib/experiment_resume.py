@@ -26,6 +26,7 @@ from ltspice_mcp.lib.experiment_inputs import (
     verify_startup,
 )
 from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
     AnalysisStage,
     ExperimentCase,
     ExperimentJob,
@@ -61,8 +62,9 @@ from ltspice_mcp.lib.recovery_records import (
     ProcessIdentity,
     RecoveryError,
 )
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
-from ltspice_mcp.lib.store import OwnerLiveness, Store, path_digest
+from ltspice_mcp.lib.store import OwnerLiveness, Store, is_this_process, path_digest
 from ltspice_mcp.lib.sweep_utils import generate_id
 
 if TYPE_CHECKING:
@@ -115,25 +117,15 @@ def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
     if recovery is None:
         raise RecoveryError("not_recoverable", "This experiment was not submitted as recoverable")
     owner = recovery.owner
-    own = (
-        owner.pid == os.getpid()
-        and process_identity_presence(owner.pid, owner.start_marker) is ProcessPresence.PRESENT
-    )
-    token_matches = (
-        control_token is not None
-        and bool(job.control_token)
-        and secrets.compare_digest(control_token, job.control_token)
-    )
-    if not own and not token_matches:
+    own = is_this_process(owner.pid, owner.start_marker)
+    if not own and not experiment_store.holds_control_token(job, control_token):
         raise RecoveryError("resume_not_authorized", "The experiment control token is required")
     return job.control_token
 
 
 async def resume_control_token(state: SessionState, job_id: str, control_token: str | None) -> str:
     """Authorize a private detached handoff from a fresh parent record."""
-    job = await asyncio.to_thread(
-        experiment_store.load_job, job_id, state.working_dir, own_is_alive=True
-    )
+    job = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)
     if job is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
     return authorize_resume(job, control_token)
@@ -203,7 +195,7 @@ def _entry_for(journal: RecoveryJournal, job_id: str) -> JournalEntry:
 def _load_attempt(journal: RecoveryJournal, entry: JournalEntry, store: Store) -> ExperimentJob:
     if entry.job_id is None:
         raise RecoveryError("recovery_record_invalid", "No-op entry has no job record")
-    job = experiment_store.load_job(entry.job_id, store.working_dir, own_is_alive=True)
+    job = experiment_store.load_job(entry.job_id, store.working_dir)
     if job is None:
         # An unreadable record is evidence too. Never replace it with an older
         # candidate that would erase a launch or a completion.
@@ -311,7 +303,7 @@ def _verify_absence(job: ExperimentJob, simulator: type) -> None:
                 "recovery_process_active", "Prior simulator absence is unconfirmed"
             )
         if (
-            "ltspice" in job.simulator.lower()
+            dialect_for_simulator_name(job.simulator) == "ltspice"
             and wsl.is_wsl()
             and wsl.windows_ltspice_presence(case.run_token) is not ProcessPresence.ABSENT
         ):
@@ -509,10 +501,18 @@ async def mark_attempt_launched(job: ExperimentJob, state: SessionState) -> None
             await asyncio.to_thread(save_journal, store, updated)
 
 
+#: The stops a resume retries by default: the process running the job went away
+#: (``OWNER_STOPPED``, which a crash and a shutdown both record, and
+#: ``server_shutdown``, which earlier builds recorded for a shutdown), or the job
+#: deadline elapsed. An explicit cancel needs ``retry_cancelled``, any other
+#: failure ``retry_failed``.
+_RETRIED_BY_DEFAULT = frozenset({OWNER_STOPPED, "server_shutdown", "job_deadline"})
+
+
 def _eligible(case: ExperimentCase, *, retry_failed: bool, retry_cancelled: bool) -> bool:
     if case.recovery is None or case.status == "produced":
         return False
-    if case.failure_code in {"server_restarted", "job_deadline"}:
+    if case.failure_code in _RETRIED_BY_DEFAULT:
         return True
     if case.status == "cancelled" or case.failure_code == "cancelled":
         return retry_cancelled
@@ -657,9 +657,7 @@ async def resume_experiment(
         raise RecoveryError(
             "recovery_persistence_required", "Resume requires durable job persistence"
         )
-    parent = await asyncio.to_thread(
-        experiment_store.load_job, job_id, state.working_dir, own_is_alive=True
-    )
+    parent = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)
     if parent is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
     recovery = _required_recovery(parent)

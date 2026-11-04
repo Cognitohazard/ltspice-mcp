@@ -1592,9 +1592,12 @@ upstream changes.
 limitation, and we ship no workaround.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.symbol_cache` and `_asy_file_find`).
-**Our workaround:** none for spicelib's own loading. Our pin geometry does not
-read this cache: the session's `lib/symbol_library.py` `SymbolLibrary` looks
-for a symbol beside the sheet itself and caches what it reads by file.
+**Our workaround:** `_AscEditor._get_symbol` in `lib/schematic_ops.py` finds
+each part's symbol with the session's `lib/symbol_library.py`
+`SymbolResolver`, so the server's editor neither reads nor fills this cache
+(Bug 37). Our pin geometry does not read it either: the session's
+`SymbolLibrary` looks for a symbol beside the sheet itself and caches what it
+reads by file.
 
 ### Summary
 
@@ -1681,7 +1684,9 @@ def test_same_named_block_beside_two_sheets_resolves_per_folder(tmp_path):
 ### Cross-reference
 
 Our pin geometry is pinned per folder by
-`tests/test_circuit_asc.py::TestSheetLocalSymbols::test_same_named_symbols_beside_two_sheets_keep_their_own_pins`.
+`tests/test_circuit_asc.py::TestSheetLocalSymbols::test_same_named_symbols_beside_two_sheets_keep_their_own_pins`,
+and the editor's lookup, with the cache warmed by another folder's file, by
+`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`.
 `edit_schematic` cannot reach the write in the reproduction, because it
 refuses pending child edits before saving (the workaround for Bug 13), but it
 can reach the wrong read. The test suite fills this cache for the fixture
@@ -3246,7 +3251,7 @@ pins that the check gives no warning for a resistor named `X9` with the value
 **Status:** draft for an upstream spicelib pull request. Observed 2026-10-29.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor._load_asc_file` and `save_netlist`).
-**Our workaround:** `lib/schematic_ops.py:_refuse_lost_parts` refuses to open a
+**Our workaround:** `lib/schematic_ops.py:_refuse_lost_records` refuses to open a
 sheet when the editor holds fewer components than the file has `SYMBOL`
 records, naming each shared reference and where its parts are.
 
@@ -3556,3 +3561,314 @@ def test_text_on_its_side_is_saved_on_its_side(tmp_path):
 pins the workaround against both recordings, and
 `tests/test_sheet_findings_snapshot.py::test_an_edit_and_a_check_find_the_same_of_a_sheet`
 through an edit of the recorded sheet.
+
+---
+
+## Bug 35 — `LTSpiceLogReader` keeps a stepped table's unit-suffixed values as text
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-04.
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepped-table loop; `try_convert_value` in
+`spicelib/log/logfile_data.py`).
+**Our workaround:** `log_parser.printed_measurement` in
+`src/ltspice_mcp/lib/log_parser.py` reads such a value as its number, in
+`parse_measurements` and in the measurements check of `lib/log_decode.py`.
+
+### Summary
+
+LTspice 26 prints a stepped frequency response analysis's margins in the
+log's measurement table with their units: a phase margin as `90.6295°`, and a
+gain margin whose phase never crosses 0 degrees as `infdB`. The stepped-table
+loop converts each cell with `try_convert_value`, which tries `int`,
+`float`, `complex` and `LTComplex` and otherwise keeps the text. None of them
+reads a number followed by `°` or `dB`, so the reader's dataset holds the
+strings `'90.6295°'` and `'infdB'` where every other measurement holds a
+number, and nothing says the value was not read.
+
+### Affected code
+
+```python
+# ltsteps.py, LTSpiceLogReader.__init__, stepped measurement tables
+tokens = line.split("\t")
+...
+meas = tokens[1:]  # remove the first token
+measurements.append(try_convert_value(meas))
+```
+
+```python
+# logfile_data.py
+def try_convert_value(value):
+    ...
+    try:
+        ans = int(value)
+    except ValueError:
+        try:
+            ans = float(value)
+        except ValueError:
+            try:
+                ans = complex(value)
+            except ValueError:
+                try:
+                    ans = LTComplex(value)
+                except ValueError:
+                    ans = value.strip()
+    return ans
+```
+
+### Reproduction
+
+The table LTspice 26.1.1 wrote for a `.fra` run under `.step param r list 1k
+2k` (recorded as `tests/fixtures/ltspice_recorded/ltspice26/raw/fra_step.log`):
+
+```
+Measurement: PhaseMargin_1
+  step	PhaseMargin	at
+     1	90.6295°	15900.4
+     2	90.1991°	8007.62
+
+Measurement: GainMargin_1
+  step	GainMargin	at
+     1	infdB	inf
+     2	infdB	inf
+```
+
+```python
+from spicelib.log.ltsteps import LTSpiceLogReader
+reader = LTSpiceLogReader("fra_step.log")
+reader.dataset["phasemargin_1"]     # ['90.6295°', '90.1991°']
+reader.dataset["phasemargin_1_at"]  # [15900.4, 8007.62]
+reader.dataset["gainmargin_1"]      # ['infdB', 'infdB']
+```
+
+### Impact
+
+A caller that does arithmetic on the measurements of a stepped `.fra` run
+gets strings for its margins. A reader that requires numbers has to refuse
+the value, and before our workaround this project refused the whole
+measurements section of such a log, losing every other measurement with it.
+
+### Proposed fix
+
+Read a number followed by a unit LTspice prints as that number before
+falling back to the text, in `try_convert_value`:
+
+```python
+_UNIT_NUMBER = re.compile(
+    r"([-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
+)
+...
+                except ValueError:
+                    match = _UNIT_NUMBER.fullmatch(value.strip())
+                    ans = float(match.group(1)) if match else value.strip()
+```
+
+### Suggested upstream test
+
+```python
+def test_stepped_table_values_with_units_read_as_numbers(tmp_path):
+    log = tmp_path / "fra_step.log"
+    log.write_text(
+        "Circuit: * fra\n\n.step r=1000\n.step r=2000\n\n"
+        "Measurement: PhaseMargin_1\n  step\tPhaseMargin\tat\n"
+        "     1\t90.6295°\t15900.4\n     2\t90.1991°\t8007.62\n\n"
+        "Measurement: GainMargin_1\n  step\tGainMargin\tat\n"
+        "     1\tinfdB\tinf\n     2\tinfdB\tinf\n",
+        encoding="utf-8",
+    )
+    reader = LTSpiceLogReader(str(log))
+    assert reader.dataset["phasemargin_1"] == [90.6295, 90.1991]
+    assert reader.dataset["gainmargin_1"] == [math.inf, math.inf]
+```
+
+### Cross-reference
+
+`tests/test_recorded_log_measurements.py::test_a_stepped_fra_runs_margins_read_as_the_numbers_printed`
+pins the workaround against the recording, and
+`::test_every_recorded_logs_measurements_decode` decodes every recorded log
+of both builds.
+
+---
+
+## Bug 36 — `AscEditor` skips a `TEXT` line spaced otherwise than LTspice saves one, and saving deletes it
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-04.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/ltspice_utils.py`,
+`TEXT_REGEX`; read by `AscEditor.reset_netlist`).
+**Our workaround:** `lib/schematic_ops.py:_refuse_lost_records` refuses to
+open a sheet when the editor holds fewer `TEXT`, `WIRE` or `FLAG` records
+than the file has, naming the first `TEXT` line spicelib skipped. This entry
+is apart from Bug 34, which is about the `V` of a justification in a line
+the pattern does match.
+
+### Summary
+
+`reset_netlist` takes every line that starts with `TEXT` to its `TEXT`
+branch, and keeps a text only when `TEXT_REGEX` matches the line:
+
+```python
+TEXT_REGEX = re.compile(
+    r"TEXT (-?\d+)\s+(-?\d+)\s+V?(Left|Right|Top|Bottom|Center|Invisible)\s(\d+)\s*(?P<type>[!;])(?P<text>.*)",
+    re.IGNORECASE
+)
+```
+
+The pattern needs exactly one space after `TEXT` and exactly one whitespace
+character before the size. A line with two spaces or a tab after `TEXT`, or
+two spaces before the size, does not match, and the branch goes on to the
+next line without an error. The text is then in no list of the editor's, so
+`save_netlist` writes the sheet without it.
+
+### Affected code
+
+```python
+# asc_editor.py, AscEditor.reset_netlist
+elif line.startswith("TEXT"):
+    match = TEXT_REGEX.match(line)
+    if match:
+        ...
+        self.directives.append(text)
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+Path("spaced.asc").write_text(
+    "Version 4\nSHEET 1 880 680\nTEXT  16 16 Left 2 !.tran 1m\n"
+)
+editor = AscEditor("spaced.asc")
+editor.directives                  # [], though the sheet holds a directive
+editor.save_netlist("spaced.asc")
+Path("spaced.asc").read_text()     # "Version 4\nSHEET 1 880 680\n"
+```
+
+### Impact
+
+On a sheet written by hand or by another tool, a simulation directive or a
+comment that is spaced otherwise than LTspice saves one is deleted by the
+next edit saved through spicelib, with no warning. Whether LTspice itself
+reads such a line is not recorded.
+
+### Proposed fix
+
+Accept any run of whitespace between the fields, and raise on a line that
+starts with `TEXT` and still does not match, rather than skipping it:
+
+```python
+r"TEXT\s+(-?\d+)\s+(-?\d+)\s+(V?(?:Left|Right|Top|Bottom|Center|Invisible))\s+(\d+)\s*(?P<type>[!;])(?P<text>.*)"
+```
+
+### Suggested upstream test
+
+```python
+def test_a_text_line_with_wider_spacing_is_kept(tmp_path):
+    sheet = tmp_path / "spaced.asc"
+    sheet.write_text("Version 4\nSHEET 1 880 680\nTEXT  16 16 Left 2 !.tran 1m\n")
+    editor = AscEditor(sheet)
+    assert [d.text for d in editor.directives] == [".tran 1m"]
+```
+
+### Cross-reference
+
+`tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped`
+pins the refusal for each of the three spacings, and
+`test_every_sheet_the_editor_opens` holds the editor's record counts to the
+sheet reader's on every sheet in the suite.
+
+---
+
+## Bug 37 — `AscEditor` finds a symbol where LTspice does not, and misses one where LTspice finds it (limitation)
+
+**Status:** known limitation, recorded against LTspice's own behaviour.
+Observed 2026-11-04.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor._get_symbol` and `_asy_file_find`; `spicelib/utils/file_search.py`,
+`find_file_in_directory`).
+**Our workaround:** `_AscEditor._get_symbol` in `lib/schematic_ops.py` finds
+the file through the session's `SymbolResolver`, which follows
+`lib/symbol_library.py` `find_symbol`, and reads it with `AsyReader`.
+
+### Summary
+
+`_get_symbol` turns a part's symbol name into a relative path, keeping any
+folder the name gives (`lib\part` becomes `lib/part.asy`), and
+`_asy_file_find` walks the sheet's folder, the working directory, each
+library's `sym` folder and the custom library paths, each with `os.walk`,
+for a file of that name in any case. LTspice 26 and LTspice XVII were
+recorded doing otherwise (the `symbol-beside-sheet` and
+`symbol-named-with-a-folder-it-is-not-in` cases):
+
+- neither build finds a bare name in a folder below the sheet's, which the
+  walk does (`search/in_subfolder`);
+- XVII finds `lib\part` as `part.asy` right beside the sheet when there is
+  no `lib` folder, which the walk does not, because it looks only under
+  `<sheet folder>/lib` (`search_flat/named_folder_absent`);
+- neither build searches the working directory of the process.
+
+The result is also cached for the whole process by file name (Bug 17), so
+which file a name means depends on what the process opened before.
+
+### Affected code
+
+```python
+def _get_symbol(self, symbol: str) -> AsyReader:
+    asy_filename = symbol + os.path.extsep + "asy"
+    ...
+    asy_path = self._asy_file_find(asy_filename)
+
+def find_file_in_directory(directory, filename):
+    path, filename = os.path.split(filename)
+    if path != '':
+        directory = os.path.join(directory, path)
+    for root, dirs, files in os.walk(directory):
+        ...
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+# The sheet says "part"; the symbol is in lib/ beside it. Neither LTspice
+# build netlists this sheet, and spicelib opens it.
+Path("lib").mkdir()
+Path("lib/part.asy").write_text(PART_ASY)
+Path("sub.asc").write_text(SHEET_PLACING_part)
+AscEditor("sub.asc")        # opens
+
+# The sheet says "lib\part"; part.asy is beside it and there is no lib/.
+# LTspice XVII netlists it; spicelib raises FileNotFoundError.
+```
+
+### Impact
+
+`edit_schematic` refused a sheet that LTspice XVII netlists and that
+`inspect` and `verify_circuit` read, and its advice to set `symbol_paths` did
+not help. It also opened a sheet neither build netlists, placing the part
+with a symbol no other reader of the sheet found.
+
+### Proposed fix
+
+Search beside the sheet only where the name says, then under its bare name
+beside the sheet, and walk folders only in the libraries, as
+`lib/symbol_library.py` `find_symbol` does; leave out the working directory.
+
+### Suggested upstream test
+
+```python
+def test_a_bare_name_is_not_found_below_the_sheet(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "part.asy").write_text(PART_ASY)
+    (tmp_path / "sub.asc").write_text(SHEET_PLACING_part)
+    with pytest.raises(FileNotFoundError):
+        AscEditor(tmp_path / "sub.asc")
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`
+holds the editor to `find_symbol` on every recorded search, with spicelib's
+cache empty and warmed by another folder's files.

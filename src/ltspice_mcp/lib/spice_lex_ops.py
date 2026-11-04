@@ -455,6 +455,19 @@ def fold_micro_suffix_cards(cards: list[SpiceCard]) -> tuple[ValueSuffixSite, ..
 SECTION_SIGN = "§"
 
 
+def section_sign_names(ref: str) -> tuple[str, ...]:
+    """The other names of an instance LTspice exported with its section sign.
+
+    ``R§Load`` is ``RLoad`` without the marker, as an ngspice copy of the deck
+    names it (``strip_instance_section_signs``) and ``verify_circuit`` reports
+    it, and ``Load``, the part's own name on the sheet, which LTspice's results
+    use (``I(Load)``, recorded ``deck/section_sign_*``). A reference without
+    the marker has no other name.
+    """
+    letter, sign, own = ref.partition(SECTION_SIGN)
+    return (letter + own, own) if sign and own else ()
+
+
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     """Drop ``§`` from every instance name that holds one, wherever it is named.
 

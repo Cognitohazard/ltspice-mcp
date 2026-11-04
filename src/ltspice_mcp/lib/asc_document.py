@@ -39,6 +39,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import PurePath
 from typing import Any, ClassVar, Literal, Self, cast
 
 from ltspice_mcp.errors import NetlistError
@@ -64,6 +65,11 @@ _TEXT = re.compile(
     r"\s*TEXT\s+(-?[0-9]+)\s+(-?[0-9]+)\s+(\S+)\s+([0-9]+)\s*([!;])(.*)",
     re.DOTALL,
 )
+
+
+def is_asc(path: PurePath) -> bool:
+    """Whether ``path`` names a schematic sheet: an ``.asc`` file, in any case."""
+    return path.suffix.lower() == ".asc"
 
 
 @dataclass(frozen=True)

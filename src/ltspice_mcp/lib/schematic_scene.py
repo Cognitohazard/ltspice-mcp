@@ -39,7 +39,7 @@ from ltspice_mcp.lib.sheet import (
     read_sheet,
     read_sheet_text,
 )
-from ltspice_mcp.lib.sheet_findings import Part, SheetView
+from ltspice_mcp.lib.sheet_findings import Part, SheetView, label_connects
 from ltspice_mcp.lib.symbol_file import SymbolArc
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
@@ -838,25 +838,22 @@ def scene_of_sheet(
     wires = [Wire(*wire) for wire in sheet.wires]
     scene.wires.extend(wires)
     # Placement needs the wire set, so resolve it once the wires are known.
-    # A flag counts as connected if a wire ends on it, a wire runs through it,
-    # or a symbol pin sits on it; only a truly isolated flag gets the marker.
-    pin_points = {(p.x, p.y) for sym in scene.symbols for p in sym.pins}
-    segments = [((w.x1, w.y1), (w.x2, w.y2)) for w in wires]
+    # Only a flag on nothing gets the marker: the one test the dangling_label
+    # rule makes too (``label_connects``).
+    connected = label_connects(
+        [(p.x, p.y) for sym in scene.symbols for p in sym.pins],
+        [((w.x1, w.y1), (w.x2, w.y2)) for w in wires],
+    )
     flags = [NetFlag(x, y, name, is_ground=(name.strip() == "0")) for x, y, name in sheet.labels]
     for fl in flags:
         occupied = wire_directions_at(wires, fl.x, fl.y)
         orientation, text_vertical = resolve_flag_placement(fl.is_ground, occupied)
-        connected = (
-            bool(occupied)
-            or (fl.x, fl.y) in pin_points
-            or any(point_on_segment((fl.x, fl.y), a, b) for a, b in segments)
-        )
         scene.flags.append(
             replace(
                 fl,
                 orientation=orientation,
                 text_vertical=text_vertical,
-                unconnected=not connected,
+                unconnected=not connected((fl.x, fl.y)),
             )
         )
     scene.directives.extend(

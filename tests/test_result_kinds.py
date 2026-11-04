@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.decoded_raw import PlotDescriptor
 from ltspice_mcp.lib.result_kinds import STEPPED_KINDS, SteppedKind
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -64,9 +65,9 @@ def test_a_recording_decodes_as_the_kind_that_names_it(
     assert descriptor.analysis in kind.analyses
     if kind.step_values == "raw":
         assert descriptor.step_variables
-        assert {name for step in descriptor.steps for name, _ in step.parameters} == set(
-            descriptor.step_variables
-        )
+        assert {name for step in descriptor.steps for name, _ in step.parameters} == {
+            _step_name(descriptor, variable) for variable in descriptor.step_variables
+        }
     else:
         assert descriptor.step_variables == ()
     assert (descriptor.axis is not None) == (kind.axis == "raw")
@@ -83,6 +84,13 @@ POINT_A_STEP = [
 ]
 
 
+def _step_name(descriptor: PlotDescriptor, variable: str) -> str:
+    """The name a step variable's values are held under: the deck's ``.step``
+    name, ``temp`` for the variable LTspice declares ``temperature``."""
+    (declared,) = [trace.declared_type for trace in descriptor.traces if trace.name == variable]
+    return "temp" if declared == "temperature" else variable
+
+
 def _step_variable(build: str, case_id: str, scratch: Path) -> str:
     (variable,) = rec.decode(build, case_id, scratch).raw.descriptor.step_variables
     return variable
@@ -94,11 +102,12 @@ def test_the_api_reads_a_step_variable_as_a_step_value(
 ):
     """Its values are in the steps and it is no signal; asked for as one, it
     says where its values are."""
-    variable = _step_variable(build, case_id, work_dir / "decoded")
+    descriptor = rec.decode(build, case_id, work_dir / "decoded").raw.descriptor
+    (variable,) = descriptor.step_variables
     loaded = SyncApi(state_no_sim).load_raw(rec.stage_run(build, case_id, work_dir / "run"))
     assert variable not in loaded.signals
     assert len(loaded.steps) == rec.declared_points(build, case_id)
-    assert all(variable in step for step in loaded.steps)
+    assert all(_step_name(descriptor, variable) in step for step in loaded.steps)
     with pytest.raises(ResultError, match="stepped value, not a signal"):
         loaded.trace(variable)
 

@@ -25,6 +25,7 @@ from ltspice_mcp.lib.result_kinds import (
     Analysis,
     header_analysis,
     kind_named,
+    plot_analysis,
     sampled_axis,
     stepped_kind,
 )
@@ -135,6 +136,9 @@ class PlotDescriptor:
         return tuple(trace for trace in self.traces if trace.name not in self.step_variables)
 
 
+# The SI unit of each type a simulator declares a trace with. An unknown type
+# has none rather than a guess; an analysis can still override a declared type
+# that does not hold for what it writes (_trace_descriptor).
 _UNITS = {
     "voltage": "V",
     "current": "A",
@@ -148,6 +152,16 @@ _UNITS = {
     "voltage-density": "V/√Hz",
     "current-density": "A/√Hz",
 }
+
+
+def declared_unit(declared_type: str | None) -> str | None:
+    """The SI unit of a trace's declared type (the raw header's own word for
+    what it holds), or None for a type with no known unit."""
+    if not declared_type:
+        return None
+    return _UNITS.get(declared_type.strip().lower())
+
+
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
 
 
@@ -157,7 +171,7 @@ def _trace_descriptor(
     variable = header.variables[index]
     declared = variable.declared_type.lower()
     name = variable.name.lower()
-    unit = _UNITS.get(declared)
+    unit = declared_unit(declared)
     evidence = "declared_type" if unit else None
     normalization = None
     # ngspice's native analyses emit generic voltage types for derived facts.
@@ -236,18 +250,43 @@ def _step_descriptors(
     return tuple(descriptors), (*starts, points)
 
 
-def transient_time_offset(header: RawPlotHeader) -> float:
-    """Validate the time offset using header facts before numeric allocation."""
-    analysis = header_analysis(header)
-    if (
-        analysis != "transient"
-        or sampled_axis(analysis, header.variables[0].declared_type) is None
-    ):
-        return 0.0
-    offset = float(next((value for key, value in header.fields if key.lower() == "offset"), "0"))
-    if not math.isfinite(offset):
+def time_offset(plot_name: str, first_type: str, offset: str | None) -> float | None:
+    """Where a transient's stored time axis starts in deck time: the header's
+    ``Offset`` field, which LTspice sets for ``.tran 0 <tstop> <tstart>`` and
+    writes as 0 otherwise. None for a plot whose axis is not a transient's
+    time, which is read as stored. The one reading of the field, for the
+    decoder and for the progress reader of a running job.
+
+    Raises:
+        ValueError: The field is not a finite number.
+    """
+    analysis = plot_analysis(plot_name, first_type)
+    if analysis != "transient" or sampled_axis(analysis, first_type) is None:
+        return None
+    value = float(offset if offset is not None else "0")
+    if not math.isfinite(value):
         raise ValueError("Transient time offset must be finite")
-    return offset
+    return value
+
+
+def deck_time(stored: NDArray, offset: float) -> NDArray:
+    """A transient's stored times in deck time. LTspice may store a time
+    negated (spicelib's reader takes the absolute value of a time axis too),
+    and stores a windowed run's times from 0, with its start in ``offset``."""
+    corrected = np.abs(stored, dtype=np.result_type(stored.dtype, offset))
+    corrected += offset
+    return corrected
+
+
+def transient_time_offset(header: RawPlotHeader) -> float:
+    """Validate the time offset using header facts before numeric allocation;
+    0 for a plot with no time axis."""
+    offset = time_offset(
+        header.plot_name,
+        header.first_type,
+        next((value for key, value in header.fields if key.lower() == "offset"), None),
+    )
+    return 0.0 if offset is None else offset
 
 
 def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool, Monotonicity]:
@@ -383,9 +422,7 @@ class DecodedPlot:
             if np.iscomplexobj(arrays[0]):
                 raise ValueError("Transient time must be real and its offset finite")
             if offset or np.any(arrays[0] < 0):
-                corrected = np.abs(arrays[0], dtype=np.result_type(arrays[0].dtype, offset))
-                corrected += offset
-                arrays[0] = corrected
+                arrays[0] = deck_time(arrays[0], offset)
         traces = tuple(
             _trace_descriptor(header, i, wave, analysis) for i, wave in enumerate(arrays)
         )

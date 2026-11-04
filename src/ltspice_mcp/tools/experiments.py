@@ -16,12 +16,14 @@ from pydantic import (
     SkipValidation,
     ValidationError,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
 from ltspice_mcp.errors import (
     NetlistError,
     PathSecurityError,
+    RecipeInvalidError,
     ResultError,
     SimulationError,
     UnsupportedFileError,
@@ -33,6 +35,7 @@ from ltspice_mcp.lib import (
     now,
     response_budget,
 )
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
@@ -62,6 +65,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.native_inputs import NativeCaseValidator
 from ltspice_mcp.lib.native_records import NativeCaseRecord
@@ -77,12 +81,13 @@ from ltspice_mcp.lib.pdk_native import (
 from ltspice_mcp.lib.recent import is_circuit_file
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
+    DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
     validate_recipe,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
-from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
     current_ngbehavior,
@@ -137,11 +142,11 @@ from ltspice_mcp.tools.analyze import (
 )
 from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
-    TERMINAL_EXPERIMENT_STATUSES,
     ReceiptBuilt,
     finalize_receipt,
     render_receipt_snapshot,
     render_run_receipt,
+    resolve_run_fields,
     runs_page,
     snapshot_receipt,
     snapshot_receipt_live,
@@ -283,10 +288,23 @@ class AnalysisPerRun(analyze.CappedPerRunLimit):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Nothing has been paged at submission time; leave it unset and page the "
+            "Refused when set: nothing has been paged at submission. Page the "
             "finished analysis with analyze_results."
         ),
     )
+
+    @field_validator("cursor")
+    @classmethod
+    def _nothing_paged_yet(cls, value: str | None) -> str | None:
+        # Refused here rather than after every run, when the analysis would
+        # decode it and fail: fixing the block then changes the request, so
+        # the retry would run every case again.
+        if value is not None:
+            raise ValueError(
+                "an attached analysis has no page to resume at submission; leave "
+                "cursor unset and page the finished analysis with analyze_results"
+            )
+        return value
 
 
 class AnalysisInclude(NotedModel):
@@ -327,7 +345,13 @@ class AnalysisInclude(NotedModel):
 
     @model_validator(mode="after")
     def _fields_read_once(self) -> AnalysisInclude:
+        # Read as analyze_results reads them, so the rows it renders are the
+        # rows analyze_results would: a bare name under 'value', an unknown
+        # root refused here rather than an empty row after the runs.
         if self.fields is not None:
+            resolved = analyze.resolve_row_fields(self.fields)
+            if resolved != self.fields:
+                object.__setattr__(self, "fields", resolved)  # not re-validated
             self.keep_first("fields")
         return self
 
@@ -403,17 +427,16 @@ class AttachedAnalysis(
 #: by every client in every session whether or not it ever attaches an
 #: analysis, to say something already said one tool away. What a caller cannot
 #: derive is which metrics exist, so that is what the stub keeps — the same
-#: bargain the dormant recipe branches strike, including their two-channel
-#: pointer and their deliberate permissiveness: no ``additionalProperties``,
+#: bargain the dormant recipe branches strike, including their pointer
+#: (the same text) and their deliberate permissiveness: no ``additionalProperties``,
 #: so a client pre-validating a full recipe against this shape still sends it.
 #: The model behind it is the real union, and every attached recipe is
 #: validated at submission, before a deck is staged.
 _ATTACHED_RECIPE_WIRE_STUB: dict[str, Any] = {
     "type": "object",
     "description": (
-        "One entry of analyze_results.recipes: same grammar, same metrics, "
-        "validated at submission. Fields per metric: "
-        "api.reference('analyze_results') or guide section 'tools'."
+        "An analyze_results.recipes entry, checked on submit."
+        + DORMANT_POINTER.format(metric="<metric>")
     ),
     "properties": {
         "key": {"type": "string", "minLength": 1},
@@ -591,6 +614,11 @@ class RunExperimentsInput(ToolInput):
         ge=response_budget.BUDGET_MIN_TOKENS,
         description=response_budget.BUDGET_DESCRIPTION,
     )
+
+    @field_validator("run_fields")
+    @classmethod
+    def _run_fields_name_run_keys(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else resolve_run_fields(value)
 
 
 @registry.tool(
@@ -884,6 +912,18 @@ async def handle_run_experiments(
             code=exc.code,
             message=str(exc),
             stage="recovery",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+        )
+    except RecipeInvalidError as exc:
+        # As analyze_results reports the same recipe: the request is wrong, so
+        # sending it again unchanged fails the same way.
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="validate",
             retryable=False,
             commit_state="not_started",
             budget=budget,
@@ -1243,7 +1283,7 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
         for raw_recipe in request.get("recipes") or []:
             validate_recipe(raw_recipe)
     except (ValidationError, ValueError) as exc:
-        raise SimulationError(
+        raise RecipeInvalidError(
             "The attached analyze block is not a valid analyze_results request: "
             f"{validation_error_detail('analyze_results', exc)}"
         ) from exc
@@ -1346,26 +1386,22 @@ async def _load_matching_replay(
     if index is None:
         return None
     refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
-    job_id = str(index.get("job_id", ""))
-    job = state.all_jobs.get(job_id)
-    if job is None:
-        job = await asyncio.to_thread(
-            experiment_store.load_job,
-            job_id,
-            state.working_dir,
-            own_is_alive=True,
-        )
-        if job is None:
-            return None
-        state.add_experiment_job(job, already_persisted=True)
+    # Resolved as every job id is: the registry adopts the record, writes back
+    # what the store reconciled when its owner died, and re-reads a job another
+    # process runs. An id the index names but no record answers is the request
+    # gate's to handle.
+    try:
+        job = await resolve_job_async(str(index.get("job_id", "")), state)
+    except ResultError:  # an unknown job (JobNotFoundError) among them
+        return None
     refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission
     # resolves it: a default simulator that changed since is a different build.
     await asyncio.to_thread(
         lambda: verify_replay(job, args.request_id, executable_identity(simulator))
     )
-    # The record is left as it is: the receipt's ``replayed`` is the fact about
-    # this call, and only the owner writes a job's record.
+    # The receipt's ``replayed`` is the fact about this call; the record changes
+    # only as resolution reconciles it.
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
@@ -1400,7 +1436,7 @@ async def _dwell_and_respond(
     """Wait up to ``wait_s`` for the job, then return its receipt. A job still
     running when the dwell ends is said to be by the receipt's ``hint``."""
     job = receipt.job
-    if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
+    if job.status not in TERMINAL_STATUSES and wait_s > 0:
         job, _ = await state.job_registry.wait(job, wait_s)
     snapshot = await snapshot_receipt_live(
         job,
@@ -1423,6 +1459,7 @@ async def _dwell_and_respond(
             analysis_fields=analysis_fields,
             analysis_answer_channel=rung is not None and rung.answer_channel,
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+            analysis_served=frozenset(state.tool_dispatch),
         )
         data["replayed"] = receipt.replayed
         if warnings:
@@ -1483,7 +1520,7 @@ def _append_terminal_cases(
 def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
     if isinstance(exc, (VariationError, DeckStagingError, MismatchPlanError)):
         return exc.code, str(exc)
-    if source_path.suffix.casefold() == ".asc" and isinstance(exc, SimulationError):
+    if is_asc(source_path) and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)
     if isinstance(exc, FileNotFoundError):
         return "source_not_found", str(exc)

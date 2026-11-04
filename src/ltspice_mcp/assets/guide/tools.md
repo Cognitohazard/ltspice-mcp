@@ -99,9 +99,10 @@ lineage, and its head is the newest of them, which a resume reply returns as
 `head_job_id`. Only the head can be resumed; an older job returns
 `recovery_stale_parent`. Once the head is terminal, recover it with
 `jobs(action="resume", job_id=..., resume_request_id="retry-1", control_token=...)`.
-Cases that failed with code `server_restarted` (the owning process exited) or
-`job_deadline` are retried by default; add `retry_failed=true` for other
-failed cases or `retry_cancelled=true` for explicit cancellation.
+Cases that failed with code `server_restarted` (the owning process exited, or
+shut down while they ran) or `job_deadline` are retried by default; add
+`retry_failed=true` for other failed cases or `retry_cancelled=true` for
+explicit cancellation.
 `case_ids` limits the retry to those of the eligible cases, and naming an
 unknown or `produced` case returns `recovery_case_selection`. `wait_s`
 defaults to zero and is capped at 120 s. The child copies the parent's

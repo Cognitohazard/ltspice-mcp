@@ -114,7 +114,12 @@ def test_malformed_raw_does_not_suppress_measurements(state_no_sim, work_dir):
     )
     assert reply["outcome"] == "partial"
     assert reply["results"]["meas"]["per_run"]["items"]
-    assert "raw" not in reply["results"]
+    raw_entry = reply["results"]["raw"]
+    assert (
+        not raw_entry.get("values")
+        and not raw_entry.get("per_run", {}).get("items")
+        and any(warning.startswith("No rows:") for warning in raw_entry["warnings"])
+    )
     assert any(failure["stage"] == "analyze" for failure in reply["failures"])
 
 

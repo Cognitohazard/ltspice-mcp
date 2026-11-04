@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
@@ -28,12 +27,12 @@ from ltspice_mcp.lib.store import (
     Store,
     atomic_write_json,
     envelope,
+    is_sha256,
     json_default,
     path_digest,
     validate_job_id,
 )
 
-_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _ENVELOPE_FIELDS = frozenset({"schema", "store_version", "kind"})
 
 
@@ -87,7 +86,7 @@ class JournalEntry(_Record):
 
     def __post_init__(self) -> None:
         _request_id(self.request_id)
-        if type(self.fingerprint) is not str or not _DIGEST.fullmatch(self.fingerprint):
+        if not is_sha256(self.fingerprint):
             raise _invalid("Journal fingerprints must be lowercase SHA256 digests")
         if type(self.attempt_index) is not int or self.attempt_index < 0:
             raise _invalid("Journal attempt indices must be nonnegative integers")
@@ -228,8 +227,7 @@ def _validate_journal(journal: RecoveryJournal, store: Store | None = None) -> N
     children: list[JournalEntry] = []
     for digest, entry in journal.resumes.items():
         if (
-            type(digest) is not str
-            or not _DIGEST.fullmatch(digest)
+            not is_sha256(digest)
             or not isinstance(entry, JournalEntry)
             or digest != path_digest(entry.request_id)
         ):

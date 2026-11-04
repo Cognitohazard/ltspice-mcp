@@ -86,6 +86,8 @@ blocked waiting on it.
 deadlock.
 
 **`close()`** cancels the jobs this process owns, as server shutdown does.
+Their unfinished cases fail with code `server_restarted`, as after a crash, so
+`jobs(action="resume")` retries them by default.
 Calls made after it starts raise `ApiClosedError`. It is idempotent, and a
 second `close()` from another thread returns once the first has finished. A
 call already running in another thread when `close()` starts is cancelled and
@@ -145,7 +147,10 @@ returns all of it:
   the sources and recording their content hashes and log diagnostics does not
   finish within the first pass, the call raises `AnalysisDeadlineExceeded` and
   creates no result set or cursor; retry the original request with fewer
-  sources or a larger `analysis_budget_s`.
+  sources or a larger `analysis_budget_s`. `result["results"]` has an entry
+  for every recipe, so `result["results"][key]` never raises for a recipe
+  that failed: its rows are empty and a `No rows:` warning names the
+  `failures` places that explain it.
 - `verify_circuit` returns every finding for each rule. The MCP tool caps the
   findings per rule and reports the truncation.
 - `edit_schematic` applies the batch once and returns its views whole. The
@@ -365,7 +370,7 @@ Each of the six methods has its `reference()` text as its `__doc__`, so
 as does any relative entry in `allowed_paths` (such as a config file's
 `allowed_paths = ["."]`). The MCP server resolves a relative path from the
 first allowed directory when there is a sandbox, and from its working
-directory otherwise.
+directory otherwise; its `spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 
@@ -375,7 +380,9 @@ directory otherwise.
   server would return it as an `isError` result instead. A
   `PathSecurityError` gets one note (PEP 678) with the same guidance as a tool
   call's `hint`, so the traceback shows what to change (with a sandbox, the
-  setting that defines it); its type and message are not changed.
+  setting that defines it); its type and message are not changed. The note
+  names `working_dir` as the folder a relative path is taken from, since that
+  is where the API takes it from.
 - A result with `isError=True` raises `ApiCallError`, which contains the
   complete structured payload and has the attributes `code`, `commit_state`,
   `job_id` and `control_token`. When the error comes after a job was submitted
@@ -402,9 +409,12 @@ Default (automatic) mode **drops** the two presentation controls, `budget`
 and `execution.wait_s`, and lists each dropped field in the result's
 `warnings`. Neither is part of a request's idempotency fingerprint, so an MCP
 call replayed through the API with them attached is the same request. It
-**rejects** any field, at any depth, named `cursor`, `continuation`,
-`continue` or `view_cursors` or ending in `_cursor` or `_cursors`, with an
-`ApiValidationError` that names `raw_page=True` as the fix. It never changes
+**rejects** any of the operation's own fields, at any depth, named `cursor`,
+`continuation`, `continue` or `view_cursors` or ending in `_cursor` or
+`_cursors`, with an `ApiValidationError` that names `raw_page=True` as the fix.
+A key that is the caller's own data, such as a parameter named `budget` or
+`bias_cursor` in an `assign` variation, is not a control and passes as
+written. It never changes
 request fields that are part of the fingerprint. It passes `per_run`,
 `outliers` and `signals_available` exactly as the caller wrote them, so
 replaying an MCP request through the API cannot cause an idempotency conflict.
@@ -437,6 +447,9 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- Each of these reads takes exactly one of `path` and `job_id`. Neither or
+  both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
+  `path` raises `ApiValidationError`, as the operations do.
 - `observations` describes the result as it was read. It contains
   `partial_raw` for a stopped case's raw kept with
   `execution.keep_partial_raw`, whose values end where the run was stopped,
@@ -452,7 +465,9 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 - `compare` reports how far `other`'s traces are from this result's and
   returns `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
   only_there, span, points}`. A signal named in `signals` is looked up in each
-  result the way `trace` looks it up. By default it compares every signal both
+  result the way `trace` looks it up, a node pair `V(a,b)` included, and is
+  reported under the name `trace` resolves it to; one either result lacks is
+  refused with the reason. By default it compares every signal both
   results hold except the axis. It pairs signals by name, ignoring case; a
   node or device inside subcircuits is matched by its path, however each
   build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
@@ -497,7 +512,8 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   same parser and result cache as the tools, so a primitive and a tool read a
   file the same way. Step metadata (`raw.steps`) comes from the files read
   with the result, the `.raw` and the `.log` beside it; no other log is opened
-  to fill it in.
+  to fill it in. Each step names its values as the deck's `.step` does, a
+  stepped temperature `temp`, whichever of the two files holds them.
 - RAW decoding runs in a separate parser process with a deadline of 120
   seconds (`AnalysisDeadlineExceeded` when it runs out) and a memory limit of
   2 GiB; the returned arrays are fully in memory. `measurements` returns
@@ -531,7 +547,11 @@ The `measurements` recipe's rows are the MCP rows, rendered by the same code.
 For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
 for that name, and the name is then listed in
-`row["value"]["failed_measurements"]`. Any crossing or `AT` point the log
+`row["value"]["failed_measurements"]`. Where the log printed something other
+than a number for it (a WHEN threshold written as a parameter or an
+expression), `row["value"]["unreadable"][name]` gives the log line and the
+reason, as `measurements()` does on the entry; only that name fails. Any
+crossing or `AT` point the log
 printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
 off the default row; `include={"fields": ["value"]}` returns it. A stepped
 run's row contains only `stats`. Reductions read `stats` either way, so

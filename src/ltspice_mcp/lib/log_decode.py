@@ -17,41 +17,29 @@ from typing import Any
 
 from ltspice_mcp.lib import log_parser
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
+from ltspice_mcp.lib.log_types import LOG_SECTIONS
 from ltspice_mcp.lib.log_types import LogDecodeError as LogDecodeError
 from ltspice_mcp.lib.log_types import LogLimitError as LogLimitError
 from ltspice_mcp.lib.log_types import LogLimits as LogLimits
 from ltspice_mcp.lib.log_types import log_section as _section
 from ltspice_mcp.lib.native_log_tables import decode_native_tables
-from ltspice_mcp.lib.parser_capture import CapturedInputs
-from ltspice_mcp.lib.store import parser_file_in
-
-_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
-_SECTIONS = (
-    "diagnostics",
-    "measurements",
-    "device_op",
-    "steps",
-    "op_iterations",
-    "temperatures",
-    "fourier",
-    "native_tables",
-    "error_context",
-)
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES, CapturedInputs
+from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 
 def _read_captures(captured: CapturedInputs, directory: Path, limits: LogLimits) -> dict[str, str]:
     roles = [item.role for item in captured.files] + list(captured.absent)
-    if len(roles) != 3 or set(roles) != set(_NAMES):
+    if len(roles) != 3 or set(roles) != set(CAPTURED_NAMES):
         raise LogDecodeError("Each captured role must occur exactly once, present or absent")
     records = {item.role: item for item in captured.files}
     for item in captured.files:
         if (
-            item.name != _NAMES[item.role]
+            item.name != CAPTURED_NAMES[item.role]
             or type(item.size_bytes) is not int
             or item.size_bytes < 0
         ):
             raise LogDecodeError("Invalid captured log filename or size")
-        if not re.fullmatch(r"[0-9a-f]{64}", item.sha256):
+        if not is_sha256(item.sha256):
             raise LogDecodeError("Invalid captured log digest")
     logs = [item for item in captured.files if item.role != "raw"]
     if sum(item.size_bytes for item in logs) > limits.log_bytes:
@@ -62,7 +50,7 @@ def _read_captures(captured: CapturedInputs, directory: Path, limits: LogLimits)
         raise LogLimitError("Shared log reader byte cap exceeded")
     result = {}
     line_count = 0
-    for role, name in _NAMES.items():
+    for role, name in CAPTURED_NAMES.items():
         if role == "raw":
             continue
         path = parser_file_in(directory, name)
@@ -148,20 +136,18 @@ def _temperatures(text: str) -> dict[str, float | None]:
 def _steps(text: str) -> list[dict[str, float]]:
     markers = 0
     for line in io.StringIO(text):
-        match = log_parser._RE_STEP_LINE.match(line.strip())  # pyright: ignore[reportPrivateUsage]
-        if match is None:
+        step = log_parser.read_step_line(line)
+        if step is None:
             continue
         markers += 1
         seen: set[str] = set()
-        for parameter in log_parser._RE_STEP_KV.finditer(match[1]):  # pyright: ignore[reportPrivateUsage]
-            name = parameter[1].casefold()
+        for parameter in step.parameters:
+            name = parameter.name.casefold()
             if name in seen:
-                raise LogDecodeError(f"Duplicate step parameter {parameter[1]!r}")
+                raise LogDecodeError(f"Duplicate step parameter {parameter.name!r}")
             seen.add(name)
-            try:
-                float(parameter[2])
-            except ValueError as exc:
-                raise LogDecodeError("Step parameter is not numeric") from exc
+            if parameter.number is None:
+                raise LogDecodeError("Step parameter is not numeric")
     rows = log_parser.parse_step_iterations(text=text)
     if len(rows) != markers:
         raise LogDecodeError("Step rows were not completely decoded")
@@ -210,7 +196,7 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
     must run this synchronous operation in its killable parser worker.
     """
     text = _read_captures(captured, directory, limits)
-    log_path = parser_file_in(directory, "input.log")
+    log_path = parser_file_in(directory, CAPTURED_NAMES["log"])
     body = text.get("log", "")
     sections = {}
     sections["error_context"] = (
@@ -228,7 +214,11 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
     )
     _, attempts = log_parser.scan_op_step_log(text=body)
     sections["steps"] = _section(
-        lambda: _steps(body), limits, present=bool(re.search(r"^\s*\.step\s+", body, re.M | re.I))
+        lambda: _steps(body),
+        limits,
+        # A log with no '.step' anywhere has no step line to read.
+        present=".step" in body.lower()
+        and any(log_parser.read_step_line(line) for line in io.StringIO(body)),
     )
     sections["op_iterations"] = _section(
         lambda: {"attempts": attempts, "succeeded": log_parser.count_op_iterations(text=body)},
@@ -272,21 +262,6 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
                 reader = log_parser.make_log_reader(normalized, scratch_dir=directory)
 
             def measurements() -> Any:
-                for name in reader.get_measure_names():
-                    if name.lower() == "circuit":
-                        continue
-                    for value in reader.dataset.get(name.lower(), []):
-                        if (
-                            value is not None
-                            and not isinstance(value, complex)
-                            and str(value).upper() != "FAILED"
-                        ):
-                            try:
-                                float(value)
-                            except (ValueError, TypeError) as exc:
-                                raise LogDecodeError(
-                                    f"Measurement {name!r} is not numeric"
-                                ) from exc
                 value = log_parser.parse_measurements(log_path, reader=reader)
                 named = re.findall(r"^Measurement:\s*(\S+)", body, re.M)
                 if any(name.lower() not in value["measurements"] for name in named):
@@ -319,7 +294,7 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
             "complete": True,
             "capturedbytes": sum(item.size_bytes for item in captured.files if item.role != "raw"),
         },
-        **{name: sections[name] for name in _SECTIONS},
+        **{name: sections[name] for name in LOG_SECTIONS},
     }
     # Streaming byte accounting prevents a second oversized result allocation.
     size = 0
