@@ -12,13 +12,13 @@ Nothing here writes a file or needs the event loop.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
-from ltspice_mcp.lib.connectivity import NetPartition, partition
+from ltspice_mcp.lib.connectivity import NetPartition, fold_case, partition
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
@@ -158,6 +158,29 @@ def _numbered(document: AscDocument) -> Iterator[tuple[int, Record]]:
         line += len(record.source or ())
 
 
+def references_named(reference: str, references: Iterable[str]) -> list[str]:
+    """The references among ``references`` that ``reference`` names: each spelled
+    as it is, else each that differs from it only in case.
+
+    LTspice compares references without case (recorded as
+    ``connectivity/shared_reference_case``), so ``r1`` names a part ``R1``.
+    Where a sheet holds both spellings, which neither build netlists, each is
+    named by its own.
+    """
+    given = list(references)
+    exact = [name for name in given if name == reference]
+    if exact:
+        return exact
+    key = fold_case(reference)
+    return [name for name in given if fold_case(name) == key]
+
+
+def missing_part(reference: str, references: Iterable[str]) -> NetlistError:
+    """The refusal for a reference that names no part, naming the parts there are."""
+    available = sorted({name for name in references if name})
+    return NetlistError(f"Component '{reference}' not found. Available: {', '.join(available)}")
+
+
 def find_pin(
     pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
 ) -> Point:
@@ -246,8 +269,10 @@ class Sheet:
         return notes
 
     def parts_named(self, reference: str) -> tuple[SheetPart, ...]:
-        """Every part with instance name ``reference``; more than one when the sheet repeats it."""
-        return tuple(part for part in self.parts if part.reference == reference)
+        """Every part ``reference`` names (``references_named``); more than one
+        when the sheet repeats it."""
+        named = references_named(reference, (part.reference for part in self.parts))
+        return tuple(part for part in self.parts if part.reference in named)
 
     def pin_at(self, spec: str) -> Point:
         """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is, by ``find_pin``.
@@ -264,10 +289,7 @@ class Sheet:
         reference, pin_name = spec.rsplit(".", 1)
         named: list[SheetPart] = list(self.parts_named(reference))
         if not named:
-            available = sorted({part.reference for part in self.parts if part.reference})
-            raise NetlistError(
-                f"Component '{reference}' not found. Available: {', '.join(available)}"
-            )
+            raise missing_part(reference, (part.reference for part in self.parts))
         if len(named) > 1:
             places = ", ".join(f"({part.at[0]},{part.at[1]})" for part in named)
             raise NetlistError(
@@ -276,7 +298,7 @@ class Sheet:
             )
         part = named[0]
         problem = "not found" if part.symbol is None else part.symbol.problem
-        return find_pin(part.pins, reference, part.symbol_name, pin_name, problem)
+        return find_pin(part.pins, part.reference, part.symbol_name, pin_name, problem)
 
     def partition(self) -> NetPartition:
         """The sheet's nets, grouped by ``connectivity.partition``."""

@@ -6,9 +6,11 @@ through the shared op runner (``tests/_asc_ops.py``) and then read the sheet bac
 off disk, so a claim about geometry is checked against what was actually written.
 """
 
+import json
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from mcp.types import TextContent
@@ -3899,3 +3901,91 @@ class TestMoveOp:
         apply_one(asc_state, asc, {"op": "move", "dx": -48, "dy": 32, **moved})
         # The editor writes wires before parts; every record is where it was.
         assert sorted(_records(asc)) == sorted(before)
+
+
+#: R1 and R2 side by side, R1's pin 1 labelled ``a``, and a wire between their
+#: pins 2.
+_TWO_PARTS = (
+    _res("R1", 96, 96),
+    _res("R2", 288, 96),
+    "WIRE 96 144 288 144",
+    "FLAG 96 48 a",
+)
+
+#: Every op that names a part, with ``REF`` where the part's reference goes.
+_NAMING_OPS: tuple[dict[str, Any], ...] = (
+    {"op": "set_component_value", "reference": "REF", "value": "2k"},
+    {
+        "op": "set_component_attribute",
+        "reference": "REF",
+        "attribute": "SpiceLine",
+        "value": "x=1",
+    },
+    {"op": "set_component_attribute", "reference": "REF", "attribute": "InstName", "value": "R5"},
+    {"op": "remove_component", "reference": "REF"},
+    {"op": "move_component", "reference": "REF", "x": 96, "y": 400},
+    {"op": "move", "references": ["REF"], "dx": 0, "dy": 400},
+    {"op": "add_net_label", "net": "b", "pin": "REF.2"},
+    {"op": "remove_net_label", "pin": "REF.1"},
+    {"op": "wire_pins", "from_pin": "REF.1", "to_pin": "R2.1"},
+    {"op": "remove_wire", "pin": "REF.2"},
+)
+
+
+def _naming(op: dict[str, Any], reference: str) -> dict[str, Any]:
+    """``op`` with ``REF`` replaced by ``reference``."""
+    return json.loads(json.dumps(op).replace('"REF', f'"{reference}'))
+
+
+class TestAReferenceNamesThePartLTspiceDoes:
+    """LTspice compares references without case (recorded as
+    ``connectivity/shared_reference_case``), so ``r1`` names R1 for every op,
+    as it already did for ``add_component``'s check that a name is free. A
+    reference that names no part is refused with the parts there are."""
+
+    @pytest.mark.parametrize("op", _NAMING_OPS, ids=lambda op: op["op"])
+    def test_every_op_reads_a_reference_in_any_case(
+        self, asc_state: SessionState, work_dir: Path, op: dict[str, Any]
+    ):
+        written: dict[str, bytes] = {}
+        for spelling in ("R1", "r1"):
+            asc = _write_sheet(work_dir / f"spelled_{spelling}.asc", *_TWO_PARTS)
+            apply_one(asc_state, asc, _naming(op, spelling))
+            written[spelling] = asc.read_bytes()
+        assert written["r1"] == written["R1"]
+
+    @pytest.mark.parametrize("op", _NAMING_OPS, ids=lambda op: op["op"])
+    def test_a_reference_no_part_has_is_refused_with_the_parts_there_are(
+        self, asc_state: SessionState, work_dir: Path, op: dict[str, Any]
+    ):
+        asc = _write_sheet(work_dir / "missing.asc", *_TWO_PARTS)
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match=r"^Component 'R9' not found\. Available: R1, R2$"):
+            apply_one(asc_state, asc, _naming(op, "R9"))
+        assert asc.read_bytes() == before
+
+    def test_adding_a_part_under_another_case_of_a_reference_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "taken.asc", *_TWO_PARTS)
+        add = {"op": "add_component", "symbol": "res", "x": 600, "y": 96}
+        with pytest.raises(NetlistError, match="'r1' names it too"):
+            apply_one(asc_state, asc, {**add, "reference": "r1"})
+
+    @pytest.mark.parametrize("spelling", ["R1", "r1", "R9"])
+    async def test_inspect_traces_the_net_of_a_pin_in_any_case(
+        self, asc_state: SessionState, work_dir: Path, spelling: str
+    ):
+        from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+        asc = _write_sheet(work_dir / "traced.asc", *_TWO_PARTS)
+        query = {"kind": "net", "path": str(asc), "at": f"{spelling}.1"}
+        result = await handle_inspect(InspectInput.model_validate({"queries": [query]}), asc_state)
+        assert result.structured_content is not None
+        (item,) = result.structured_content["results"]
+        if spelling == "R9":
+            assert item["error"]["message"] == "Component 'R9' not found. Available: R1, R2"
+        else:
+            assert item["ok"], item
+            assert item["data"]["labels"] == ["a"]
+            assert [(p["reference"], p["pin"]) for p in item["data"]["pins"]] == [("R1", "1")]

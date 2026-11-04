@@ -2031,6 +2031,13 @@ The thirteen op kinds, discriminated on `op`, are `add_component`,
 is atomic, so the first op that fails aborts the transaction and nothing is
 written.
 
+An op names a part by its reference, as `REF` or in a pin as `REF.PIN`, and
+so does `inspect(kind="net")` on a sheet. The part spelled so is named, else
+the one whose reference differs only in case, since LTspice compares
+references without case; `add_component` refuses a reference another case of
+which is taken. A reference that names no part is refused with the list of
+the parts there are.
+
 `move` shifts any mix of records by one offset, `dx` and `dy`. It selects
 parts by `references`, net labels and grounds by point (`labels`), wires by
 their two ends (`wires`), and directives and comments by exact text or

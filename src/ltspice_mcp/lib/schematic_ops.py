@@ -125,6 +125,8 @@ from ltspice_mcp.lib.sheet import (
     PlacedPin,
     element_letter,
     find_pin,
+    missing_part,
+    references_named,
 )
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import (
@@ -500,6 +502,25 @@ def _reference_taken(
     )
 
 
+def part_reference(editor: AscEditor, reference: str) -> str:
+    """The reference of the part ``reference`` names on the editor's sheet
+    (``sheet.references_named``): the one spelled so, else the one whose
+    reference differs from it only in case.
+
+    Raises NetlistError naming the parts there are when it names none, and
+    naming each when it names several, which differ from it only in case.
+    """
+    named = references_named(reference, editor.components)
+    if not named:
+        raise missing_part(reference, editor.components)
+    if len(named) > 1:
+        raise NetlistError(
+            f"'{reference}' names {len(named)} parts whose references differ only in case "
+            f"({', '.join(sorted(named))}); give the reference as one of them spells it."
+        )
+    return named[0]
+
+
 def _same_reference_note(asked: str, taken: str) -> str:
     """What to add when ``asked`` differs from ``taken`` only in case."""
     if asked == taken:
@@ -756,8 +777,6 @@ def collect_component_geometry(editor: AscEditor) -> list[dict]:
 
 def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, int]]:
     """Pin coordinates for a single component, ``set()`` if symbol unknown."""
-    if reference not in editor.components:
-        return set()
     geo = placed_geometry(editor, reference)
     return set() if geo is None else {(p["x"], p["y"]) for p in geo["pins"]}
 
@@ -1360,9 +1379,7 @@ class _MovePlan(NamedTuple):
 
 def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _MovePlan:
     """Resolve a ``move``'s selection, refusing anything it names that is not there."""
-    for ref in op.references:
-        if ref not in editor.components:
-            raise NetlistError(f"Component '{ref}' not found.")
+    references = [part_reference(editor, ref) for ref in op.references]
     labels: set[int] = set()
     for point in op.labels:
         at = [i for i, lbl in enumerate(editor.labels) if _xy(lbl.coord) == (point.x, point.y)]
@@ -1384,7 +1401,7 @@ def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _M
             raise NetlistError(f"No directive or comment matched {wanted!r}.")
         texts.update(found)
 
-    parts = list(dict.fromkeys(op.references))
+    parts = list(dict.fromkeys(references))
     region = op.region
     if region is not None:
 
@@ -1635,12 +1652,7 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         )
 
     ref, pin_name = pin_ref.rsplit(".", 1)
-    component_refs = editor.get_components()
-    if ref not in component_refs:
-        raise NetlistError(
-            f"Component '{ref}' not found. Available: {', '.join(sorted(component_refs))}"
-        )
-
+    ref = part_reference(editor, ref)
     symbol = editor.components[ref].symbol
     geometry = placed_geometry(editor, ref)
     pins = [
@@ -2422,55 +2434,52 @@ def apply_op_inplace(
         return {"op": "add_component", **placed}
 
     if isinstance(op, OpSetComponentValue):
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
-        before = _attributes_of(editor, op.reference)
-        _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
+        reference = part_reference(editor, op.reference)
+        before = _attributes_of(editor, reference)
+        _apply_component_value(editor, reference, op.value, element_class(editor, reference))
         result: dict[str, object] = {
             "op": "set_component_value",
-            "reference": op.reference,
+            "reference": reference,
             "value": op.value,
         }
-        if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
+        if changed := _attributes_changed(before, _attributes_of(editor, reference)):
             result["changed"] = changed
         return result
 
     if isinstance(op, OpSetComponentAttribute):
         _reject_unknown_attr(op.attribute)
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
-        before = _attributes_of(editor, op.reference)
+        reference = part_reference(editor, op.reference)
+        before = _attributes_of(editor, reference)
         if not op.value.strip():
             # Empty value = clear. LTspice's format has no "empty value"
             # representation (a 2-token SYMATTR line is unreadable), so the
             # line is removed instead.
-            _require_clearable_attr(op.reference, op.attribute)
-            editor.get_component(op.reference).attributes.pop(op.attribute, None)
+            _require_clearable_attr(reference, op.attribute)
+            editor.get_component(reference).attributes.pop(op.attribute, None)
         elif op.attribute == "InstName":
-            return _rename_component(editor, op.reference, op.value.strip())
+            return _rename_component(editor, reference, op.value.strip())
         else:
             editor.set_component_attribute(
-                op.reference,
+                reference,
                 op.attribute,
-                _attribute_value(op.reference, op.attribute, op.value),
+                _attribute_value(reference, op.attribute, op.value),
             )
         attr_result: dict[str, object] = {
             "op": "set_component_attribute",
-            "reference": op.reference,
+            "reference": reference,
             "attribute": op.attribute,
         }
-        if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
+        if changed := _attributes_changed(before, _attributes_of(editor, reference)):
             attr_result["changed"] = changed
         return attr_result
 
     if isinstance(op, OpRemoveComponent):
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
-        target_only = _component_pin_coords(editor, op.reference) - _other_components_pin_coords(
-            editor, op.reference
+        reference = part_reference(editor, op.reference)
+        target_only = _component_pin_coords(editor, reference) - _other_components_pin_coords(
+            editor, reference
         )
-        editor.remove_component(op.reference)
-        rm_result: dict[str, object] = {"op": "remove_component", "reference": op.reference}
+        editor.remove_component(reference)
+        rm_result: dict[str, object] = {"op": "remove_component", "reference": reference}
         # A wire it leaves on nothing is the finished sheet's to say
         # (dangling_wire_end), so a later op of the batch that removes or
         # reconnects it leaves nothing said.
@@ -2479,28 +2488,27 @@ def apply_op_inplace(
         return rm_result
 
     if isinstance(op, OpMoveComponent):
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
+        reference = part_reference(editor, op.reference)
         new_rot = (
             _parse_rotation(op.rotation)
             if op.rotation is not None
-            else editor.get_component_position(op.reference)[1]
+            else editor.get_component_position(reference)[1]
         )
-        old_pins = _component_pin_coords(editor, op.reference)
-        moved_symbol = editor.components[op.reference].symbol
+        old_pins = _component_pin_coords(editor, reference)
+        moved_symbol = editor.components[reference].symbol
         moved_info = symbol_info_for(editor, moved_symbol) if moved_symbol else None
         if moved_info is not None:
             _pins_on_crossings(
                 editor,
-                op.reference,
+                reference,
                 compute_placed_geometry(moved_info, op.x, op.y, new_rot.name)["pins"],
-                f"move {op.reference}",
+                f"move {reference}",
                 already=old_pins,
             )
         # Wires left at its old pins are the finished sheet's to say
         # (dangling_wire_end), as for remove_component.
-        editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
-        return {"op": "move_component", "reference": op.reference}
+        editor.set_component_position(reference, Point(op.x, op.y), new_rot)
+        return {"op": "move_component", "reference": reference}
 
     if isinstance(op, OpMove):
         return {"op": "move", **_apply_move(editor, op)}

@@ -310,7 +310,7 @@
   "sheet": "2f66633286ed1ad2"
  },
  "4767f9162f023155": {
-  "reply": "114e0c0a1d8aff91",
+  "reply": "024f13d176dc43d7",
   "sheet": null
  },
  "485b44f24a2d190a": {
@@ -720,7 +720,7 @@
   "sheet": "2f66633286ed1ad2"
  },
  "abde1b61253f8cde": {
-  "reply": "08cc53627b347879",
+  "reply": "64914105893fc016",
   "sheet": null
  },
  "ac2845fd90a494da": {
@@ -961,6 +961,13 @@
  "e1cd00a2a8e2d318": {
   "reply": "366c5dbd848ca722",
   "sheet": "1cd64b7050cdd9bd"
+ },
+ "e287b9960a486623": {
+  "varies": [
+   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT  16 16 Left 2 !.tran 1m]",
+   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT 16 16 Left  2 !.tran 1m]",
+   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT\\t16 16 Left 2 !.tran 1m]"
+  ]
  },
  "e585d938b1c68137": {
   "reply": "e8299003ffc2c16a",
