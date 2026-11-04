@@ -118,6 +118,7 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     comparison_mismatch,
+    difference_in_full,
     format_response,
     outcome_of,
     page_schema,
@@ -1328,17 +1329,10 @@ def _window_differs(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
     )
 
 
-# ``_window_differs`` names a difference by a few first lines a side; these are
-# the calls that read every entry of it (inspect's open_in_ltspice, given the
-# sheet, and the window where more than one has it open).
-_DIFFERENCE_IN_ONE = (
-    "inspect(kind='open_in_ltspice') with this path lists every entry where the "
-    "window's copy differs from the file."
-)
-_DIFFERENCE_IN_EACH = (
-    "inspect(kind='open_in_ltspice') with this path and a window's process as pid "
-    "lists every entry where that window's copy differs from the file."
-)
+# ``_window_differs`` names a difference by a few first lines a side; these
+# name the call that reads every entry of it, for one window and for several.
+_DIFFERENCE_IN_ONE = difference_in_full()
+_DIFFERENCE_IN_EACH = difference_in_full(window="a window's process")
 
 _WINDOW_REMEDY = (
     "Ask the user whether to keep the changes in their LTspice window; "

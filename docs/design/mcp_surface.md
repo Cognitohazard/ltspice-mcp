@@ -1285,10 +1285,9 @@ a window's copy and does not check. For one that replaces the sheet:
   last changed, and committing would leave two sheets, each missing the
   other's changes. The call then fails with `open_window_differs` at stage
   `window_check`, naming a few of the differing entries, and writes nothing;
-  its `hint` names `inspect(kind="open_in_ltspice")` with this path (and the
-  window's `pid` where more than one window differs) as the call that reads
-  every entry. A dry run reports the same difference in a note, with the
-  same call.
+  its `hint` names `inspect(kind="open_in_ltspice")` with this path and the
+  window's process as `pid` as the call that reads every entry. A dry run
+  reports the same difference in a note, with the same call.
   A call with no ops and `open_window` set to the user's choice settles it.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
   and the reply gives the file's new `sha256`. Where more than one window
@@ -1484,7 +1483,9 @@ bridge LTspice ships. The reply's `ltspice` block reports the result:
 reason?}`. A sheet the window already had open is brought to the front as the
 window has it, because LTspice does not read a file again; its copy is
 compared with the file, and `differs_from_file` is set when the user is
-looking at something other than what was checked. With no window open,
+looking at something other than what was checked; `difference` then names a
+few entries, and the `hint` names `inspect(kind="open_in_ltspice")` with this
+path and the block's `pid` as the call that reads every entry. With no window open,
 LTspice is started in view (`started: true`); with `[schematic]
 start_ltspice` off, the block reports that no window is open and the check
 results are still returned. `in_ltspice` never fails the call.
@@ -1747,7 +1748,9 @@ cursors where listed:
     the documents open in the LTspice windows on this machine: `windows`
     (how many are running), `total`, and `designs`, each {path, kind:
     "schematic"|"netlist"|"other", active (the one in front in its window),
-    pid, version, in_sandbox}. A sheet the server may read adds its `sha256`
+    pid, version, in_sandbox}, paged by `cursor`. The cursor is bound to the
+    documents open, by window and path, so a page asked after one was opened
+    or closed fails as `invalid_cursor`. A sheet the server may read adds its `sha256`
     and `differs_from_file`. When the window's copy differs from the file,
     `difference` names a few entries in a sentence, and `only_in_window` and
     `only_in_file` list the differing entries (a symbol with its
@@ -1763,8 +1766,8 @@ cursors where listed:
     page, so a page asked after either copy changed fails as
     `invalid_cursor`. A path no window has open fails as `sheet_not_open`,
     and more than one window without a `pid` as `window_not_chosen`, naming
-    the processes; `pid` and `cursor` without a `path`, or a path that is
-    not a `.asc`, fail as `invalid_query`. Fails as
+    the processes; `pid` without a `path`, or a path that is not a `.asc`,
+    fails as `invalid_query`. Fails as
     `open_windows_unavailable` where there is no bridge to ask (not
     Windows, LTspice before 26.1, the setting off) and as
     `open_windows_unreachable` when the bridge does not answer

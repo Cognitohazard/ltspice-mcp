@@ -17,7 +17,7 @@ import pytest
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools
-from ltspice_mcp.tools._base import DIFFERENCE_IN_FULL
+from ltspice_mcp.tools._base import difference_in_full
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests._ltspice_window import (
     PID,
@@ -167,7 +167,7 @@ async def test_a_long_difference_is_listed_up_to_a_limit_and_the_rest_counted(
     assert row["only_in_window"] == sorted(wires)[:25]
     assert "only_in_file" not in row
     assert row["difference_omitted"] == 5
-    assert row["hint"] == DIFFERENCE_IN_FULL
+    assert row["hint"] == difference_in_full(window="this pid")
 
 
 def wires(y: int, count: int) -> list[str]:
@@ -210,7 +210,7 @@ async def test_every_entry_of_a_long_difference_is_read_through_the_call_its_hin
 
     (row,) = (await ask(asc_state))["data"]["designs"]
     assert row["difference_omitted"] == (30 - 25) + (40 - 25)
-    assert row["hint"] == DIFFERENCE_IN_FULL
+    assert row["hint"] == difference_in_full(window="this pid")
     # A page smaller than either side, so both sides take several pages.
     monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 7)
     pages = await read_in_full(asc_state, path=row["path"], pid=row["pid"])
@@ -339,8 +339,7 @@ async def test_a_sheet_no_window_has_open_fails_and_says_where_to_look(
     ("query", "said"),
     [
         ({"path": "amp.net"}, "path must be a .asc sheet"),
-        ({"pid": PID}, "pid and cursor need path"),
-        ({"cursor": "x"}, "pid and cursor need path"),
+        ({"pid": PID}, "pid needs path"),
     ],
 )
 async def test_a_query_that_names_no_sheet_to_compare_is_refused(
@@ -440,21 +439,48 @@ async def test_a_bridge_that_does_not_answer_fails_the_query(
 
 
 @pytest.mark.parametrize("extra", [41, 0])
-async def test_a_long_list_is_cut_and_counted(
+async def test_every_open_document_is_read_by_following_the_cursor(
     asc_state: SessionState,
     asc_file: Path,
     tmp_path: Path,
     extra: int,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(inspect_tools, "_OPEN_DESIGNS_LIMIT", 3)
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 3)
     designs = {str(asc_file.with_name(f"deck{n}.net")): "* deck\n" for n in range(3 + extra)}
     put_windows(asc_state, tmp_path / "world.json", [a_window(designs)])
 
-    data = (await ask(asc_state))["data"]
+    pages = [await ask(asc_state)]
+    while "next_cursor" in pages[-1]:
+        assert len(pages) < 100, "the cursor never ran out"
+        pages.append(await ask(asc_state, cursor=pages[-1]["next_cursor"]))
 
-    assert len(data["designs"]) == 3
-    assert data["total"] == 3 + extra
+    assert all(page["ok"] for page in pages), pages
+    assert len(pages[0]["data"]["designs"]) == 3
+    assert {page["data"]["total"] for page in pages} == {3 + extra}
+    read = [row["path"] for page in pages for row in page["data"]["designs"]]
+    assert read == list(designs)
+
+
+async def test_a_page_of_the_list_asked_after_a_document_opened_is_refused(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The cursor carries an offset into the documents it was minted for: one
+    opened or closed in between would shift the rest, so the page is refused."""
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 3)
+    world = tmp_path / "world.json"
+    designs = {str(asc_file.with_name(f"deck{n}.net")): "* deck\n" for n in range(5)}
+    put_windows(asc_state, world, [a_window(designs)])
+    first = await ask(asc_state)
+    designs[str(asc_file.with_name("late.net"))] = "* late\n"
+    write_world(world, [a_window(designs)])
+
+    later = await ask(asc_state, cursor=first["next_cursor"])
+    forged = await ask(asc_state, cursor="x")
+
+    assert later["ok"] is False
+    assert later["error"]["code"] == "invalid_cursor"
+    assert forged["error"]["code"] == "invalid_cursor"
 
 
 async def test_capabilities_say_whether_ltspice_is_started_on_request(

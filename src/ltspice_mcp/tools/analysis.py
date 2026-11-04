@@ -96,6 +96,7 @@ from ltspice_mcp.tools._base import (
     OptionalRawSelectionFields,
     OtherRawFields,
     ToolInput,
+    difference_in_full,
     format_observations,
     format_response,
     image_content,
@@ -1321,6 +1322,10 @@ def _show_from_sheet(
     _say_shown(report, shown, _TIED_NOTE if shown.tied else _ALONE_NOTE, left_alone)
     if shown.held is not None:
         report.update(window_difference(sheet.read_bytes(), shown.held))
+    if report.get("differs_from_file"):
+        # ``difference`` names the entries in part; the note names the call for all of them.
+        whole = difference_in_full(sheet="this sheet", window="this pid")
+        report["note"] = f"{report['note']} {whole}" if report.get("note") else whole
 
 
 def _why_no_axis(descriptor: PlotDescriptor) -> str:

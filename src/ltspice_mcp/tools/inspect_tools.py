@@ -80,7 +80,8 @@ than a hunt.
   (unsaved changes, or a file that changed after it was opened), which is what
   ``edit_schematic`` refuses on, and where they differ, up to 25 entries a
   side. A document outside the sandbox, when one is
-  set, is listed and not read. It is asked of LTspice itself, through the bridge it ships from
+  set, is listed and not read. The documents are paged by ``cursor``. It is
+  asked of LTspice itself, through the bridge it ships from
   26.1; where that cannot be reached the query fails, saying why, since
   "nothing is open" would be a different answer. With a ``path`` (and a
   ``pid`` where more than one window has it open) it answers for that one
@@ -867,13 +868,13 @@ class OpenInLtspiceQuery(StrictModel):
     )
     cursor: str | None = Field(
         default=None,
-        description="Page token from a previous 'next_cursor'; stale once either copy changes.",
+        description="Page token from a previous 'next_cursor'; stale once what it pages changes.",
     )
 
     @model_validator(mode="after")
     def _sheet_named(self) -> OpenInLtspiceQuery:
-        if self.path is None and (self.pid is not None or self.cursor is not None):
-            raise ValueError("pid and cursor need path, the sheet whose difference they read")
+        if self.path is None and self.pid is not None:
+            raise ValueError("pid needs path, the sheet whose window it chooses")
         if self.path is not None and _design_kind(self.path) != "schematic":
             raise ValueError(
                 "path must be a .asc sheet: only a sheet's window copy is compared with its file"
@@ -2052,8 +2053,6 @@ def _simulator_docs_page(
 # open_in_ltspice
 # ---------------------------------------------------------------------------
 
-#: The most documents one reply lists; the rest are counted.
-_OPEN_DESIGNS_LIMIT = 100
 #: The most differing entries listed from each side of one sheet; the rest are counted.
 _DIFFERENCE_ENTRIES_LIMIT = 25
 
@@ -2100,17 +2099,20 @@ def _windows_error(exc: BridgeError) -> _QueryError:
 async def _do_open_in_ltspice(
     q: OpenInLtspiceQuery, state: SessionState, view: _View
 ) -> dict[str, Any]:
-    """What LTspice has open, asked of LTspice (``OpenWindows.designs``), or
-    with ``path`` where one window's copy of that sheet differs from the file.
+    """What LTspice has open, asked of LTspice (``OpenWindows.designs``), a
+    page of documents at a time; or with ``path``, where one window's copy of
+    that sheet differs from the file.
 
     A sheet's copy in the window is read only for a file the sandbox admits,
     and compared with that file by content. Both the bridge and the files are
-    read off the loop.
+    read off the loop. The cursor binds the documents open, by window and
+    path, so a page asked after one was opened or closed is refused rather
+    than read from an offset into a different list.
     """
     if q.path is not None:
-        return await _window_difference_page(q, q.path, state, view)
+        return await _window_difference_page(q, safe_path(q.path, state), state, view)
 
-    def read() -> tuple[int, int, list[dict[str, Any]]]:
+    def read() -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
         # Where the sandbox admits each document, decided once: it says which
         # copies a window is asked for and which files are then read.
         admitted: dict[str, Path | None] = {}
@@ -2120,14 +2122,15 @@ async def _do_open_in_ltspice(
             return admitted[spelled] is not None and _design_kind(spelled) == "schematic"
 
         count, designs = state.open_windows.designs(is_readable_sheet)
-        listed = designs[:_OPEN_DESIGNS_LIMIT]
-        return count, len(designs), [_design_row(d, admitted[d.path]) for d in listed]
+        revision = canonical_hash([[design.pid, design.path] for design in designs])
+        page = _paginate(designs, "open_in_ltspice", {}, q.cursor, (), view, revision)
+        return count, page, [_design_row(d, admitted[d.path]) for d in page["items"]]
 
     try:
-        count, total, rows = await asyncio.to_thread(read)
+        count, page, rows = await asyncio.to_thread(read)
     except BridgeError as exc:
         raise _windows_error(exc) from exc
-    data: dict[str, Any] = {"windows": count, "designs": rows, "total": total}
+    data: dict[str, Any] = {"windows": count, "designs": rows, "total": page["total"]}
     hints: list[str] = []
     if any(row.get("differs_from_file") for row in rows):
         hints.append(
@@ -2142,7 +2145,7 @@ async def _do_open_in_ltspice(
         )
     if hints:
         data["hint"] = " ".join(hints)
-    return {"data": data}
+    return {"data": data, "next_cursor": page["next_cursor"], "page": _page_meta(page, "designs")}
 
 
 def _held_by(holding: Sequence[OpenSheet]) -> str:
@@ -2150,16 +2153,15 @@ def _held_by(holding: Sequence[OpenSheet]) -> str:
 
 
 async def _window_difference_page(
-    q: OpenInLtspiceQuery, path: str, state: SessionState, view: _View
+    q: OpenInLtspiceQuery, target: Path, state: SessionState, view: _View
 ) -> dict[str, Any]:
-    """Where one window's copy of a sheet differs from the file: every entry,
-    the two sides paged under one cursor.
+    """Where one window's copy of the sheet ``target`` differs from the file:
+    every entry, the two sides paged under one cursor.
 
     The window and the file are read again for every page, and the cursor binds
     the difference itself, so a page asked after either copy changed is refused
     rather than read from offsets into a different list.
     """
-    target = safe_path(path, state)
 
     def read() -> tuple[list[OpenSheet], bytes]:
         return state.open_windows.holding(target), target.read_bytes()
