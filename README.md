@@ -46,11 +46,16 @@ The server needs Python 3.11 or newer. In Claude Code,
 JSON.
 
 **You also need LTspice or ngspice** on the same machine. The server finds an
-installed simulator automatically on Windows, Linux and macOS. On WSL, you
+installed simulator automatically on Windows and Linux. On WSL, you
 have to set the LTspice path yourself ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)). Editing `.asc`
 schematics needs LTspice, because the server uses LTspice's symbol libraries.
 Reading and checking netlists works without a simulator. The plugin and the
 extension need [`uv`](https://docs.astral.sh/uv/).
+
+**macOS is not supported yet: the server cannot read simulation results
+there.** It reads each `.raw` and `.log` file in a separate process with a
+hard memory limit and cleans up that process and any it started, and neither
+has been validated on macOS, so it refuses every result read there.
 
 **Make sure the assistant uses the server.** Some assistants run the
 simulator from the shell instead. Name the server `spice`, as the plugin

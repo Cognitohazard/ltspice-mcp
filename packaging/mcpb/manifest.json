@@ -33,12 +33,12 @@
     "simulator_exe": {
       "type": "file",
       "title": "Simulator executable (optional)",
-      "description": "Path to LTspice or ngspice. Leave blank to auto-detect, which works on most native macOS/Windows installs.",
+      "description": "Path to LTspice or ngspice. Leave blank to auto-detect, which works on most Windows installs.",
       "required": false,
       "default": ""
     }
   },
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"]
+    "platforms": ["win32", "linux"]
   }
 }

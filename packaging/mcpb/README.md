@@ -1,8 +1,14 @@
 # LTspice-MCP Desktop Extension (.mcpb)
 
-This extension installs the server in **Claude Desktop** (macOS/Windows). On
+This extension installs the server in **Claude Desktop** on Windows. On
 install, Claude Desktop asks for two optional settings, a sandbox folder and
 the simulator path; there is no JSON config to edit.
+
+The extension does not install on macOS, because the server cannot read
+simulation results there yet. It reads each `.raw` and `.log` file in a
+separate process with a hard memory limit and cleans up that process and any
+it started, and neither has been validated on macOS, so it refuses every
+result read there.
 
 ## Contents and host requirements
 
@@ -17,7 +23,7 @@ one OS and Python ABI. `uv` downloads the correct wheels for the host instead.
 **Requirements on the host machine:**
 
 - **`uv`** on `PATH`. See <https://docs.astral.sh/uv/> for installation.
-- **A simulator** — **LTspice** (Windows/macOS) or **ngspice**. The bundle
+- **A simulator** — **LTspice** or **ngspice**. The bundle
   cannot ship either (LTspice is a licensed app; ngspice is a native binary).
 - **Network access on first run**, so `uv` can download the package.
 
@@ -55,8 +61,7 @@ npx @anthropic-ai/mcpb pack . ltspice-mcp.mcpb      # zip this directory into th
    request (e.g. "validate this netlist": a two-resistor divider).
 
 If the server fails to start, the usual cause is `uv` not being on the
-GUI app's `PATH` (notably on macOS, where launched apps don't inherit your
-shell `PATH`). To fix it, install `uv` system-wide; the extension runs the
+GUI app's `PATH`. To fix it, install `uv` system-wide; the extension runs the
 command `uv` and has no setting for its path. If the server starts but finds
 no simulator, set the simulator path in the extension's settings. Report what
 you see and we'll adjust the manifest.
