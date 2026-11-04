@@ -34,7 +34,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
@@ -59,15 +59,8 @@ _RUN_PAGE_LIMIT = 50
 
 JOBS_PAGE_LIMIT = 50
 
-TERMINAL_EXPERIMENT_STATUSES = frozenset(
-    {
-        "completed",
-        "completed_with_failures",
-        "failed",
-        "cancelled",
-        "interrupted",
-    }
-)
+#: The job statuses a receipt reads as finished: the record's own terminal set.
+TERMINAL_EXPERIMENT_STATUSES = TERMINAL_STATUSES
 
 _MANIFEST_SCHEMA: dict[str, Any] = {
     "type": "object",

@@ -29,6 +29,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import finished, reconcile_experiment_restart
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
@@ -95,9 +96,6 @@ CANONICALIZER_VERSION = 6
 #      carry an optional exact instance selector in their normalized payload.
 #   6: attached analysis includes plot_index and dialect, which select the
 #      result data and participate even when normalized to their defaults.
-
-_LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
-
 
 FOREIGN_RECORD_POLL_S = 0.5
 """How often a server re-reads a record another server process writes: the
@@ -471,7 +469,7 @@ def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path,
 
 
 def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
-    if job.status not in _LIVE_STATUSES:
+    if job.status not in NON_TERMINAL_LIVE_STATUSES:
         return
     if liveness is OwnerLiveness.UNKNOWN:
         # Not an answer, so not grounds to take a peer's live experiment away
@@ -582,6 +580,12 @@ def deserialize_job(
     )
     if has_recovery and data.get("store_version") != 4:
         raise RecoveryError("recovery_record_invalid", "Legacy records cannot claim recovery")
+    status = data.get("status", "interrupted")
+    if status not in TERMINAL_STATUSES | NON_TERMINAL_LIVE_STATUSES:
+        # A status no writer of this vocabulary produces (a hand-edited or
+        # foreign record) is neither live nor terminal, so a wait, a receipt
+        # and a reconciliation would each read it their own way. Refused.
+        raise ValueError(f"unknown experiment status {status!r}")
     started_at = parse_iso_datetime(data.get("started_at")) or now()
     completeness_data = data.get("completeness") or {}
     completeness = Completeness(
@@ -607,7 +611,7 @@ def deserialize_job(
         ],
         simulator=str(data.get("simulator", "")),
         completeness=completeness,
-        status=str(data.get("status", "interrupted")),  # type: ignore[arg-type]
+        status=status,
         started_at=started_at,
         completed_at=parse_iso_datetime(data.get("completed_at")),
         error=data.get("error"),
@@ -688,7 +692,7 @@ def load_job_from_path(
         return None
     try:
         liveness = OwnerLiveness.UNKNOWN
-        if data.get("status") in _LIVE_STATUSES:
+        if data.get("status") in NON_TERMINAL_LIVE_STATUSES:
             pid = pid_of(data)
             recovery_data = data.get("recovery")
             if recovery_data is not None:

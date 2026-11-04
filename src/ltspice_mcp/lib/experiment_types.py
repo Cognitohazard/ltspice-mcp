@@ -19,16 +19,20 @@ if TYPE_CHECKING:
     from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery
     from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 
-ExperimentStatus = Literal[
-    "queued",
-    "running",
-    "analyzing",
+#: The statuses of a job some process is still working on.
+LiveExperimentStatus = Literal["queued", "running", "analyzing"]
+#: The statuses of a finished job. 'interrupted' is one: the process running
+#: the job went away before its runs did.
+TerminalExperimentStatus = Literal[
     "completed",
     "completed_with_failures",
     "failed",
     "cancelled",
     "interrupted",
 ]
+#: Every status a job record holds; ``lib.job_types`` derives its two status
+#: sets from the two halves, so a status is live or terminal and never both.
+ExperimentStatus = Literal[LiveExperimentStatus, TerminalExperimentStatus]
 
 ExperimentCaseStatus = Literal[
     "queued",

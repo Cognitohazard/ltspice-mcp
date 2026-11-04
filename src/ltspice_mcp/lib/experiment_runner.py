@@ -1050,13 +1050,7 @@ class ExperimentRunner(RunnerBase):
                 status="failed",
                 error="Experiment coordination failed before attached analysis completed",
             )
-            if job.status not in {
-                "completed",
-                "completed_with_failures",
-                "failed",
-                "cancelled",
-                "interrupted",
-            }:
+            if job.status not in TERMINAL_STATUSES:
                 try:
                     await self._transition_job(execution, "failed", error=job.error)
                 except Exception as checkpoint_error:
