@@ -28,7 +28,7 @@ from typing import Any
 import jsonschema
 import pytest
 
-from ltspice_mcp.errors import NetlistError, ResultError, SimulationError
+from ltspice_mcp.errors import InvalidCursorError, SimulationError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
@@ -1044,14 +1044,12 @@ class TestCursorTamperOnEveryPaginatedInput:
     through its own decode path rather than crashing."""
 
     def test_jobs_cursor_rejects_garbage(self):
-        from ltspice_mcp.tools.jobs import _JobsActionError
-
-        with pytest.raises(_JobsActionError) as exc:
+        with pytest.raises(InvalidCursorError) as exc:
             _decode_jobs_cursor("not-a-cursor")
         assert exc.value.code == "invalid_cursor"
 
     def test_analyze_cursor_rejects_garbage(self):
-        with pytest.raises(ResultError):
+        with pytest.raises(InvalidCursorError):
             result_store.cursor_result_set_id("not-a-cursor")
 
     def test_shared_view_paginator_rejects_garbage(self):
@@ -1068,7 +1066,7 @@ class TestCursorTamperOnEveryPaginatedInput:
             paginate_view([1, 2, 3, 4], "bind:b", cursor=cursor, limit=2)
 
     def test_edit_schematic_view_cursor_rejects_garbage(self):
-        with pytest.raises(NetlistError):
+        with pytest.raises(InvalidCursorError):
             _validate_view_cursors(EditViewCursors(pin_legend="tampered"))
 
 

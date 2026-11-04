@@ -24,6 +24,7 @@ from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
+    InvalidCursorError,
     LTSpiceMCPError,
     OtherRawNotWritten,
     PathSecurityError,
@@ -4299,13 +4300,13 @@ async def _resolve_drive_start(
         resumed = True
         cursor_fields = result_store.cursor_view(page_cursor)
         if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
-            raise ResultError(
+            raise InvalidCursorError(
                 "The per_run cursor carries a different include.fields view; replay "
                 "page 1 with the new fields projection instead of changing fields on "
                 "a cursor call."
             )
         if item.inputs.get("request_hash") != _request_hash(args):
-            raise ResultError(
+            raise InvalidCursorError(
                 "The per_run cursor does not match these sources, recipes, grouping, "
                 "and include options."
             )

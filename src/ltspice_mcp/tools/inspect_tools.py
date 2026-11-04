@@ -123,6 +123,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import (
+    InvalidCursorError,
     LTSpiceMCPError,
     NetlistError,
     PathSecurityError,
@@ -941,7 +942,7 @@ def _file_stamp(path: Path) -> list[int] | None:
 
 def _invalid_cursor(exc: PageCursorError) -> _QueryError:
     """A tampered, stale, or cross-query cursor, isolated to the one query."""
-    return _QueryError("invalid_cursor", f"cursor is invalid or stale: {exc}")
+    return _QueryError(InvalidCursorError.code, f"cursor is invalid or stale: {exc}")
 
 
 def _paginate(

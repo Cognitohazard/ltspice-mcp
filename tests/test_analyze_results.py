@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
+    InvalidCursorError,
     ResultError,
     compact_validation_error,
 )
@@ -820,7 +821,7 @@ async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
     cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
     assert cursor is not None
 
-    with pytest.raises(ResultError, match="replay page 1"):
+    with pytest.raises(InvalidCursorError, match="replay page 1"):
         await handle_analyze_results(
             AnalyzeResultsInput.model_validate(
                 {
@@ -878,7 +879,7 @@ async def test_a_cursor_without_a_row_view_is_rejected(
     body.pop("view")
     viewless = cursor_codec.encode_cursor(body)
 
-    with pytest.raises(ResultError, match="Invalid analyze_results cursor"):
+    with pytest.raises(InvalidCursorError, match="Invalid analyze_results cursor"):
         await handle_analyze_results(
             AnalyzeResultsInput.model_validate(
                 {
@@ -899,7 +900,7 @@ def test_invalid_and_expired_cursor_errors(work_dir: Path):
         source_jobs={},
         ttl_hours=24,
     )
-    with pytest.raises(ResultError, match="Invalid"):
+    with pytest.raises(InvalidCursorError, match="Invalid"):
         result_store.decode_cursor("tampered", item)
 
     path = result_store.result_path(item.result_set_id, work_dir)

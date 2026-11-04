@@ -32,7 +32,7 @@ from ltspice_mcp.api._primitives import (
     load_raw_result,
     measurements_of,
 )
-from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
 from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.pathutil import relative_paths_from
@@ -566,7 +566,7 @@ async def _collect_inspect(
             invalid_cursor = (
                 not page_item.get("ok")
                 and isinstance(error, Mapping)
-                and error.get("code") == "invalid_cursor"
+                and error.get("code") == InvalidCursorError.code
             )
             if invalid_cursor:
                 if original_index in restarted:

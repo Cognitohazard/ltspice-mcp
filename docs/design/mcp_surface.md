@@ -99,6 +99,7 @@ Codes by kind of failure:
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
+| `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request; the `hint` says to send back the cursor the same tool returned |
 | `idempotency_conflict` | a `request_id` was reused for a different payload |
 | `request_gate_busy` | another submission holds that `request_id`; retry with the same id |
 | `cancel_not_authorized` | the call reached a server process other than the one running the job (the job's owning process) and presented no matching `control_token` |

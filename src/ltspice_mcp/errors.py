@@ -236,6 +236,19 @@ class BatchJobError(LTSpiceMCPError):
     code = "batch_job_error"
 
 
+class InvalidCursorError(LTSpiceMCPError):
+    """A page cursor did not decode, failed its integrity check, or was minted
+    for another listing, view, request or result set.
+
+    One type for every tool's cursors, so the same mistake carries the same
+    code on every tool, and its recovery is the one that applies: send back
+    the cursor that tool's own previous page returned, not check a job or
+    lint a netlist.
+    """
+
+    code = "invalid_cursor"
+
+
 # Error type → the recovery step every surface that reports it gives. Hints name
 # only tools the consolidated surface exposes (the only profile since 0.6.0).
 # PathSecurityError is handled separately: its hint is the session's sandbox
@@ -257,6 +270,11 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     LibraryError: (
         'Use inspect with a model query (mode:"search") to find the part in the '
         "simulator's own libraries, or add .lib/.include directives to the netlist."
+    ),
+    InvalidCursorError: (
+        "Send back, unchanged, the cursor this tool's own previous page returned "
+        "(next_cursor; for analyze_results also the next block's cursor), or leave "
+        "it out to start from the first page."
     ),
 }
 

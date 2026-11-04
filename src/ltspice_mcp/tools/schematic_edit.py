@@ -43,7 +43,7 @@ from mcp import types
 from pydantic import Field
 from spicelib import AscEditor
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import InvalidCursorError, NetlistError
 from ltspice_mcp.lib import O_BINARY, fsync_dir, fsync_fd, replace_file
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
@@ -2025,7 +2025,7 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
         try:
             decode_page_cursor(cursor, kind)
         except PageCursorError as exc:
-            raise NetlistError(f"invalid view_cursors.{kind}: {exc}") from exc
+            raise InvalidCursorError(f"invalid view_cursors.{kind}: {exc}") from exc
 
 
 def _commit_codec(loaded_as: str, original: bytes | None, text: str) -> str:

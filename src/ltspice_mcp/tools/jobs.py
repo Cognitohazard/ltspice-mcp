@@ -27,6 +27,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import (
+    InvalidCursorError,
     JobNotFoundError,
     LTSpiceMCPError,
     PathSecurityError,
@@ -679,10 +680,8 @@ class _JobsActionError(Exception):
 def _decode_jobs_cursor(cursor: str | None) -> int:
     offset = decode_offset(cursor)
     if offset is None:
-        raise _JobsActionError(
-            "invalid_cursor",
-            "Invalid jobs cursor; use the opaque next_cursor returned by the prior page",
-            stage="pagination",
+        raise InvalidCursorError(
+            "Invalid jobs cursor; use the opaque next_cursor returned by the prior page"
         )
     return offset
 
@@ -1185,6 +1184,8 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
 def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
     if isinstance(exc, _JobsActionError):
         return exc.code, exc.stage, exc.retryable
+    if isinstance(exc, InvalidCursorError):
+        return exc.code, "pagination", False
     if isinstance(exc, JobNotFoundError):
         return exc.code, "resolution", False
     if isinstance(exc, PathSecurityError):

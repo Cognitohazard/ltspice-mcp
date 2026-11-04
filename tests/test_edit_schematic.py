@@ -27,7 +27,7 @@ from pydantic import TypeAdapter, ValidationError
 from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import NetlistError, PathSecurityError
+from ltspice_mcp.errors import InvalidCursorError, NetlistError, PathSecurityError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.schematic_ops import (
     KEEPS_WIRING,
@@ -1549,7 +1549,7 @@ async def test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate(asc_sta
 async def test_malformed_preexisting_cursor_is_rejected_before_the_sheet_is_written(asc_state):
     sheet = await _untidy_sheet(asc_state, "untidy-badcursor")
     before = sheet.read_bytes()
-    with pytest.raises(NetlistError, match="preexisting"):
+    with pytest.raises(InvalidCursorError, match="preexisting"):
         await apply_ops(
             asc_state,
             sheet,
@@ -1669,7 +1669,7 @@ async def test_cross_view_cursor_rejected(asc_state):
     data = await _build_blank(asc_state, "xcursor", _many_labeled_ops(5), view_limit=2)
     legend_cursor = data["wiring"]["label_only_pins"]["next_cursor"]
     # Feeding a label_only_pins cursor to pin_legend is rejected up front.
-    with pytest.raises(NetlistError, match="pin_legend"):
+    with pytest.raises(InvalidCursorError, match="pin_legend"):
         await handle_edit_schematic(
             _edit_input(
                 path="xcursor.asc",
@@ -1693,7 +1693,7 @@ async def test_malformed_touched_cursor_is_rejected_before_the_sheet_is_written(
     sheet = Path(asc_state.working_dir) / "touchedcursor.asc"
     before = sheet.read_bytes()
 
-    with pytest.raises(NetlistError, match="touched"):
+    with pytest.raises(InvalidCursorError, match="touched"):
         await handle_edit_schematic(
             _edit_input(
                 path="touchedcursor.asc",
