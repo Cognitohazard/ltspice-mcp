@@ -1279,9 +1279,14 @@ a window's copy and does not check. For one that replaces the sheet:
   `window_check`, naming a few of the differing entries, and writes nothing.
   A call with no ops and `open_window` set to the user's choice settles it.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
-  and the reply gives the file's new `sha256`. A box LTspice shows instead of
-  saving fails the call with `window_not_saved`, quoting the box, and the
-  server closes the box with Cancel, which leaves the window's copy as it was.
+  and the reply gives the file's new `sha256`. Where more than one window
+  holds a different copy, `window_pid` names the process whose copy the user
+  chose, the other windows are handed the saved sheet, and a call without it,
+  or with a process that holds no different copy, fails with
+  `window_not_chosen`, listing each window's difference. A box
+  LTspice shows instead of saving fails the call with `window_not_saved`,
+  quoting the box, and the server closes the box with Cancel, which leaves the
+  window's copy as it was.
   With `"discard"`, the server closes the sheet in each window that differs
   without saving and opens it again from the file, which is unchanged; a
   window whose copy changes meanwhile is left open and fails the call with

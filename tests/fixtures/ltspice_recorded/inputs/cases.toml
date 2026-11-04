@@ -690,6 +690,11 @@ summary = "What the sheet menu's Save, sent to a window from outside, does to a 
 model = ["lib/ltspice_window.py", "lib/ltspice_frame.py", "tools/schematic_edit.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet to save'; manifest.json, sheet_commands. LTspice XVII has no bridge to find the window through."
 
+[behaviour.sheet-open-in-two-windows]
+summary = "What a second LTspice started with a sheet another LTspice has open does: it is a window of its own, offered to the bridge with the sheet open; each window holds the copy it was handed; and a Save in one writes its copy to the file while the other keeps its own."
+model = ["lib/ltspice_window.py", "tools/schematic_edit.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'opened again, the window holds the file', made by starting a second LTspice on the same desktop of its own. LTspice XVII has no bridge to find the windows through."
+
 [behaviour.plot-tied-to-sheet]
 summary = "That LTspice ties a plot to a sheet, so that clicking a net plots it, when the results are opened from the sheet (a run made in that window, or the sheet's Visible Traces command), and not when the bridge opens them, by the results file's path or by the sheet's; and that the command reads the results file as it is when the command is given."
 model = ["lib/ltspice_window.py", "tools/analysis.py", "assets/guide/schematics.md"]

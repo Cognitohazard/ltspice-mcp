@@ -107,6 +107,30 @@ class WindowsUnavailable(BridgeError):
     """There is no bridge to ask here: off Windows, turned off, or none installed."""
 
 
+class ChooseWindow(BridgeError):
+    """No one window was chosen to keep its copy of a sheet: more than one
+    holds a copy that differs from the file, ``differing``, or the process
+    chosen, ``pid``, holds none. Which to keep is the user's choice."""
+
+    def __init__(
+        self,
+        differing: Sequence[tuple[OpenSheet, Difference]],
+        pid: int | None = None,
+        *,
+        has_it: bool = False,
+    ) -> None:
+        count = len(differing)
+        said = (
+            f"{count} LTspice windows hold different copies"
+            if count > 1
+            else "one LTspice window holds a different copy"
+        ) + f" ({copies_by_process(differing)})"
+        if pid is not None:
+            chosen = "holds the file's copy" if has_it else "does not have the sheet open"
+            said = f"LTspice process {pid} {chosen}, and {said}"
+        super().__init__(said)
+
+
 class NoWindow(BridgeError):
     """No LTspice window is open to show something in."""
 
@@ -317,9 +341,28 @@ class Saved:
     others: list[tuple[OpenSheet, WindowUpdate]]
 
 
-def _differing(sheets: list[OpenSheet], on_disk: bytes) -> list[OpenSheet]:
-    """The windows of ``sheets`` whose copy differs from the file, ``on_disk``."""
-    return [each for each in sheets if file_difference(on_disk, each.text) is not None]
+def differing_copies(
+    sheets: Sequence[OpenSheet], on_disk: bytes
+) -> list[tuple[OpenSheet, Difference]]:
+    """The windows of ``sheets`` whose copy differs from the file, ``on_disk``,
+    each with how."""
+    return [
+        (each, difference)
+        for each in sheets
+        if (difference := file_difference(on_disk, each.text)) is not None
+    ]
+
+
+def copies_by_process(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
+    """How each window's copy differs from the file, by process, for a reply."""
+    return "; ".join(
+        f"process {each.pid}: {difference.summary()}" for each, difference in differing
+    )
+
+
+def _as_read(sheet: OpenSheet) -> Callable[[str], bool]:
+    """Whether a window's copy is still what ``sheet`` held when it was read."""
+    return lambda text: content_difference(sheet.text, text) is None
 
 
 def _reads_as(on_disk: bytes) -> Callable[[str], bool]:
@@ -791,38 +834,39 @@ class OpenWindows:
             raise BridgeError(f"LTspice did not take its answer about {sheet.name}")
         return now if keep else None
 
-    def save(self, sheet: Path, on_disk: bytes) -> Saved | None:
+    def save(self, sheet: Path, on_disk: bytes, pid: int | None = None) -> Saved | None:
         """Have LTspice save ``sheet`` from the window whose copy differs from the
         file, ``on_disk``, as its Save command does. Blocks.
 
-        None when no window holds a copy different from the file, and nothing
-        is saved. Each other window that has the sheet open holds the file's
-        sheet, so it is handed the saved one, as after a commit. LTspice writes
-        the sheet in its own way, so the file's bytes change even where its
-        content is the window's, and a sheet an older build wrote is saved as
-        LTspice 26 writes one (recorded). Only for a caller whose user agreed
-        to keep the changes made in that window.
+        Where more than one window holds a different copy, ``pid`` is the
+        process of the one the user chose to keep. None when no window holds a
+        copy different from the file, and nothing is saved. Each other window
+        that has the sheet open is handed the saved sheet, as after a commit,
+        and a window with a copy of its own loses it there, which the user's
+        choice allows: a second LTspice keeps its copy when the first saves
+        (recorded). LTspice writes the sheet in its own way, so the file's
+        bytes change even where its content is the window's, and a sheet an
+        older build wrote is saved as LTspice 26 writes one (recorded). Only
+        for a caller whose user agreed to keep the changes made in that window.
 
-        Raises ``BridgeError`` when there is no bridge, when two windows hold
-        different copies (which to keep is the user's choice), when the sheet
-        cannot be put in front, while LTspice waits on a box of its own, and
-        when the file does not come to hold the window's copy in time.
+        Raises ``ChooseWindow`` when ``pid`` is not given and more than one
+        window holds a different copy, or when ``pid`` holds none, and
+        ``BridgeError`` when there is no bridge, when the sheet cannot be put
+        in front, while LTspice waits on a box of its own, and when the file
+        does not come to hold the window's copy in time.
         """
         holding = self.holding(sheet)
-        differing = _differing(holding, on_disk)
+        differing = differing_copies(holding, on_disk)
         if not differing:
             return None
-        if len(differing) > 1:
-            processes = " and ".join(str(each.pid) for each in differing)
-            raise BridgeError(
-                f"LTspice processes {processes} each hold a copy of {sheet.name} that "
-                "differs from the file; the user saves the one to keep there, or closes "
-                "the others without saving"
-            )
-        (window,) = differing
+        chosen = [each for each, _ in differing if pid is None or each.pid == pid]
+        if len(chosen) != 1:
+            has_it = any(each.pid == pid for each in holding)
+            raise ChooseWindow(differing, pid, has_it=has_it)
+        (window,) = chosen
         data = self._save_window(window, on_disk)
         others = [each for each in holding if each is not window]
-        updates = self.show_each(others, window.text, on_disk)
+        updates = self.show_each(others, window.text)
         return Saved(window, data, list(zip(others, updates, strict=True)))
 
     def _save_window(self, sheet: OpenSheet, on_disk: bytes) -> bytes:
@@ -871,7 +915,8 @@ class OpenWindows:
         be asked.
         """
         updates = [
-            (each, self._discarded(each)) for each in _differing(self.holding(sheet), on_disk)
+            (each, self._discarded(each))
+            for each, _ in differing_copies(self.holding(sheet), on_disk)
         ]
         return [(each, update) for each, update in updates if update is not None]
 
@@ -880,9 +925,7 @@ class OpenWindows:
         copy it held when read, and open it again from the file. None where
         the window no longer has it open, so holds nothing to drop."""
         try:
-            came = self._closed_and_opened(
-                sheet, lambda text: content_difference(sheet.text, text) is None
-            )
+            came = self._closed_and_opened(sheet, _as_read(sheet))
         except BridgeError as error:
             return WindowUpdate(f"it could not be closed and opened again: {error}")
         if came == "gone":
@@ -931,12 +974,13 @@ class OpenWindows:
             session.attach(sheet.pid)
             session.replace_design_text(sheet.path, text)
 
-    def show_each(self, sheets: Sequence[OpenSheet], text: str, was: bytes) -> list[WindowUpdate]:
-        """``show`` for every window, which ``text`` was committed over the file
-        ``was``, and what each window shows then.
+    def show_each(self, sheets: Sequence[OpenSheet], text: str) -> list[WindowUpdate]:
+        """``show`` for every window, which ``text`` was written to the file
+        over, and what each window shows then.
 
         A window that does not take the sheet is closed and opened again from
-        the file (``_reopened``). One that cannot be updated either way is an
+        the file (``_reopened``), where it still holds what it held when it
+        was read. One that cannot be updated either way is an
         answer saying why, never an exception: the file is already committed
         when this runs, and a window left behind is a fact about that window.
         """
@@ -945,28 +989,25 @@ class OpenWindows:
             try:
                 self.show(sheet, text)
             except BridgeError as error:
-                updates.append(self._reopened(sheet, text, was, error))
+                updates.append(self._reopened(sheet, text, error))
             else:
                 updates.append(WindowUpdate())
         return updates
 
-    def _reopened(
-        self, sheet: OpenSheet, text: str, was: bytes, error: BridgeError
-    ) -> WindowUpdate:
-        """Close ``sheet`` in its window and open the committed file there, for a
-        window that ``show`` did not hand ``text`` (``error``).
+    def _reopened(self, sheet: OpenSheet, text: str, error: BridgeError) -> WindowUpdate:
+        """Close ``sheet`` in its window and open the file there, for a window
+        that ``show`` did not hand ``text`` (``error``).
 
-        What the window holds then decides it. The committed sheet: a request
-        that timed out was carried out after all. The sheet as the file held
-        it before the commit, ``was``: it is closed and opened again, losing
-        nothing. Anything else holds changes made there since, and is left
-        open. A window that no longer has the sheet open shows no old copy and
-        is left as it is.
+        What the window holds then decides it. ``text``: a request that timed
+        out was carried out after all. What it held when it was read, which
+        the caller may replace: it is closed and opened again. Anything else
+        holds changes made there since, and is left open. A window that no
+        longer has the sheet open shows no old copy and is left as it is.
         """
         try:
             came = self._closed_and_opened(
                 sheet,
-                _reads_as(was),
+                _as_read(sheet),
                 settled=lambda held: content_difference(text, held) is None,
             )
         except BridgeError as again:

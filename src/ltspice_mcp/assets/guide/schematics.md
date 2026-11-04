@@ -87,7 +87,8 @@ LTspice ships its own MCP server, which a session may have beside this one
 (its tools include `set_design_content` and `start_simulation`). It acts on
 the copy in the LTspice window instead of the file. Make edits with
 `edit_schematic`. A sheet changed through LTspice's server changes only in the
-window, and `edit_schematic` then refuses that sheet until the user saves it.
+window, and `edit_schematic` then refuses that sheet until the window's copy is
+saved or dropped with `open_window` (below).
 A run started through LTspice's server simulates the window's copy and leaves
 no job, so run with `run_experiments`. When one of its tools reports that it
 could not start or attach an LTspice instance, no LTspice window is open. Do
@@ -113,7 +114,11 @@ the sheet as Ctrl+S would, and the reply gives the file's new `sha256`. With
 again from the file, so their changes are gone and the file is unchanged. Read
 the sheet again before you resubmit. Pass `open_window` only with the user's
 answer, because `"save"` writes their unsaved work into the file and
-`"discard"` throws it away.
+`"discard"` throws it away. When the sheet is open in more than one LTspice
+window and each holds a different copy, the refusal lists them by process. Ask
+the user which copy to keep and pass that process as `window_pid` with
+`"save"`. The other windows are then handed the saved sheet, so their copies
+are gone, and `"discard"` drops every copy.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
   `Prefix` replaces its symbol's element letter on export, on both builds, so
