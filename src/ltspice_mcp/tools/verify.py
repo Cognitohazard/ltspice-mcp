@@ -2158,32 +2158,37 @@ def _comparison_unverified(comparison: dict[str, Any] | None) -> bool:
     return comparison is not None and comparison.get("equivalent") is None
 
 
-def _named_checks(args: VerifyCircuitInput) -> frozenset[str]:
-    """The checks the caller asked for by name: one that does not run is a shortfall.
+def _checks_asked_for(args: VerifyCircuitInput, kind: str) -> frozenset[str]:
+    """The checks the caller asked for: one that does not run is a shortfall.
 
-    The ``checks`` list when one is given; otherwise the comparison, when a
-    reference is supplied. The default list means "every check that applies",
-    so a check it holds that cannot run here (``export`` without LTspice) is
-    reported as skipped without being a shortfall. ``render.mode='only'`` asks
-    for no check at all.
+    The ``checks`` list when one is given, which are then the only checks that
+    run; otherwise the comparison, when a reference is supplied. A sheet is
+    compared as its LTspice export, so asking to compare an ``.asc`` asks for
+    the export it reads too, either way. The default list means "every check
+    that applies", so a check it holds that cannot run here (``export``
+    without LTspice, with no comparison) is reported as skipped without being
+    a shortfall. ``render.mode='only'`` asks for no check at all.
     """
     if args.render is not None and args.render.mode == "only":
         return frozenset()
-    if args.checks is not None:
-        return frozenset(args.checks)
-    return frozenset({"compare"}) if args.compare is not None else frozenset()
+    asked = set(args.checks) if args.checks is not None else set()
+    if args.checks is None and args.compare is not None:
+        asked.add("compare")
+    if kind == "asc" and "compare" in asked and args.compare is not None:
+        asked.add("export")
+    return frozenset(asked)
 
 
-def _named_not_run(data: Mapping[str, Any], named: Collection[str]) -> list[str]:
-    """The checks the caller named that did not run, in check order."""
+def _asked_for_not_run(data: Mapping[str, Any], asked: Collection[str]) -> list[str]:
+    """The checks the caller asked for that did not run, in check order."""
     ran = set(data["checks_run"])
-    return [check for check in CHECK_ORDER if check in named and check not in ran]
+    return [check for check in CHECK_ORDER if check in asked and check not in ran]
 
 
-def _outcome(data: Mapping[str, Any], named: Collection[str]) -> CallOutcome:
+def _outcome(data: Mapping[str, Any], asked: Collection[str]) -> CallOutcome:
     """This tool's shortfalls, handed to the shared outcome rule.
 
-    A check that failed to run, a check the caller named that did not run, a
+    A check that failed to run, a check the caller asked for that did not run, a
     finding at error or warning severity, and a comparison that came back
     non-equivalent are each a reason the caller did not get the clean answer
     they asked for. The call fails only when nothing it asked for came back:
@@ -2191,7 +2196,7 @@ def _outcome(data: Mapping[str, Any], named: Collection[str]) -> CallOutcome:
     reported, and the outcome is ``partial``.
     """
     return outcome_of(
-        data["failures"] or _named_not_run(data, named),
+        data["failures"] or _asked_for_not_run(data, asked),
         partial=any(f["severity"] in ("error", "warning") for f in data["findings"])
         or comparison_mismatch(data.get("comparison")),
         delivered=bool(data["checks_run"]) or data.get("render") is not None,
@@ -2236,7 +2241,7 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     return "In front in LTspice."
 
 
-def _hint(data: dict[str, Any], named: Collection[str]) -> str:
+def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
     """One concrete thing the caller most needs to know."""
     failures = data["failures"]
     if failures:
@@ -2250,9 +2255,9 @@ def _hint(data: dict[str, Any], named: Collection[str]) -> str:
     warnings_channel = data.get("warnings") or []
     if warnings_channel:
         parts.append(warnings_channel[0].rstrip("."))
-    # A check the caller named that did not run is why the outcome is not
+    # A check the caller asked for that did not run is why the outcome is not
     # complete, so the headline names it beside the findings.
-    not_run = set(_named_not_run(data, named))
+    not_run = set(_asked_for_not_run(data, asked))
     unmet = [row for row in data["checks_skipped"] if row["check"] in not_run]
     if unmet:
         lead = "no check asked for ran" if data["outcome"] == "failed" else "asked for but not run"
@@ -2329,9 +2334,9 @@ class VerifyCircuitEvaluation:
     is_error: bool = False
     capped_rules: frozenset[str] = frozenset()
     observation_events: tuple[str | _FindingCapSummary, ...] = ()
-    #: The checks the caller asked for by name (``_named_checks``), which the
+    #: The checks the caller asked for (``_checks_asked_for``), which the
     #: outcome holds the evaluation to.
-    named_checks: frozenset[str] = frozenset()
+    checks_asked_for: frozenset[str] = frozenset()
 
 
 def _base_data(path: str) -> dict[str, Any]:
@@ -2408,7 +2413,7 @@ async def evaluate_verify_circuit(
     kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
     applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
-    requested = set(args.checks) if args.checks is not None else None
+    asked = _checks_asked_for(args, kind)
     render_only = render is not None and render.mode == "only"
 
     findings: list[dict[str, Any]] = []
@@ -2436,7 +2441,7 @@ async def evaluate_verify_circuit(
             skip(check, f"not applicable to a {kind_label} file")
             wanted[check] = False
             continue
-        if requested is not None and check not in requested:
+        if args.checks is not None and check not in asked:
             skip(check, "not requested")
             wanted[check] = False
             continue
@@ -2685,15 +2690,14 @@ async def evaluate_verify_circuit(
             "failures": failures,
         }
     )
-    named = _named_checks(args)
-    data["outcome"] = _outcome(data, named)
-    data["hint"] = _hint(data, named)
+    data["outcome"] = _outcome(data, asked)
+    data["hint"] = _hint(data, asked)
     return VerifyCircuitEvaluation(
         data=data,
         inline_image=inline_image,
         capped_rules=frozenset(capped_rules),
         observation_events=tuple(observation_events),
-        named_checks=named,
+        checks_asked_for=asked,
     )
 
 
@@ -2729,8 +2733,8 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
         )
     data["observations"] = observations
     if not evaluation.is_error:
-        data["outcome"] = _outcome(data, evaluation.named_checks)
-        data["hint"] = _hint(data, evaluation.named_checks)
+        data["outcome"] = _outcome(data, evaluation.checks_asked_for)
+        data["hint"] = _hint(data, evaluation.checks_asked_for)
 
     result = format_response(data["hint"], data)
     if evaluation.is_error:

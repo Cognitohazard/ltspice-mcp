@@ -1356,6 +1356,69 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
     assert not (work_dir / "amp.net").exists()
 
 
+class TestComparingASheetRunsTheExportItReads:
+    """A sheet is compared as its LTspice export, so ``checks=["compare"]`` on
+    an ``.asc`` asks for that export too. It used to skip the export as not
+    requested and then the comparison for want of its netlist, so the call
+    compared nothing whatever the session could run. Through both doors that
+    answer which checks a call asks for: the server's dispatch, and the Python
+    API, which returns the evaluation's own payload."""
+
+    @staticmethod
+    def _arguments(sheet: Path) -> dict[str, Any]:
+        return {"path": str(sheet), "checks": ["compare"], "compare": {"reference": str(sheet)}}
+
+    @staticmethod
+    def _assert_compared(data: dict) -> None:
+        assert data["checks_run"] == ["export", "compare"], data
+        assert data["export"]["ok"] is True
+        assert data["comparison"]["equivalent"] is True
+        skipped = {row["check"] for row in data.get("checks_skipped", ())}
+        assert not skipped & {"export", "compare"}, data
+        assert data["outcome"] == "complete", data
+
+    @staticmethod
+    def _assert_named_what_it_lacked(data: dict) -> None:
+        reasons = {row["check"]: row["reason"] for row in data["checks_skipped"]}
+        assert reasons["export"] == "LTspice not detected"
+        assert "compare" in reasons
+        assert data["outcome"] == "failed"
+        # The root cause, not only the comparison it stopped.
+        assert "export (LTspice not detected)" in data["hint"], data["hint"]
+
+    async def test_through_the_server(self, exporting_state, work_dir):
+        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        result = await dispatch(exporting_state, "verify_circuit", self._arguments(sheet))
+        self._assert_compared(_assert_schema(result))
+
+    def test_through_the_python_api(self, exporting_state, work_dir):
+        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        self._assert_compared(SyncApi(exporting_state).verify_circuit(**self._arguments(sheet)))
+
+    async def test_without_ltspice_through_the_server(self, state_no_sim, work_dir, asc_symbols):
+        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        result = await dispatch(state_no_sim, "verify_circuit", self._arguments(sheet))
+        self._assert_named_what_it_lacked(_assert_schema(result))
+
+    def test_without_ltspice_through_the_python_api(self, state_no_sim, work_dir, asc_symbols):
+        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        data = SyncApi(state_no_sim).verify_circuit(**self._arguments(sheet))
+        self._assert_named_what_it_lacked(data)
+
+    async def test_a_netlist_compares_without_an_export(self, exporting_state, work_dir):
+        """A netlist is compared as it stands, so asking for the comparison
+        asks for no export, which does not apply to it."""
+        deck = _write(work_dir, "d.cir", _BASE)
+        result = await dispatch(
+            exporting_state,
+            "verify_circuit",
+            {"path": str(deck), "checks": ["compare"], "compare": {"reference": _BASE}},
+        )
+        data = _assert_schema(result)
+        assert data["checks_run"] == ["compare"]
+        assert data["outcome"] == "complete"
+
+
 async def test_hand_written_reference_matches_the_export(exporting_state, work_dir):
     """Continuation lines, spacing, case, parameter order and the exporter's
     boilerplate are spelling, not circuit: none of them is a difference."""

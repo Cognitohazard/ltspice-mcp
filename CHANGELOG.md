@@ -88,7 +88,13 @@ tool-surface changes.
   outcome alone: one left out of `checks`, one that does not apply to the file
   kind under the default list, every check under `render.mode: "only"`, and a
   default-list check this session cannot run, such as `export` without
-  LTspice, which `checks_skipped` still reports.
+  LTspice when nothing is compared, which `checks_skipped` still reports.
+- `verify_circuit` with `checks=["compare"]` on an `.asc` compared nothing,
+  even with LTspice: it skipped the export as not requested, then skipped the
+  comparison for want of the exported netlist it reads. Asking to compare a
+  sheet now asks for its export too, which runs and reports as a check that
+  ran, with its `export` block and findings. Without LTspice the `hint` names
+  the export as the check that could not run, with the comparison it stopped.
 - An argument refusal names the fix for a field it does not know: an unknown
   field is answered with the names its place takes, the closest first ("Did
   you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
