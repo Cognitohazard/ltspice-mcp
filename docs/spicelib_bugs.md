@@ -3246,7 +3246,7 @@ pins that the check gives no warning for a resistor named `X9` with the value
 **Status:** draft for an upstream spicelib pull request. Observed 2026-10-29.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor._load_asc_file` and `save_netlist`).
-**Our workaround:** `lib/schematic_ops.py:_refuse_lost_parts` refuses to open a
+**Our workaround:** `lib/schematic_ops.py:_refuse_lost_records` refuses to open a
 sheet when the editor holds fewer components than the file has `SYMBOL`
 records, naming each shared reference and where its parts are.
 
@@ -3681,3 +3681,93 @@ def test_stepped_table_values_with_units_read_as_numbers(tmp_path):
 pins the workaround against the recording, and
 `::test_every_recorded_logs_measurements_decode` decodes every recorded log
 of both builds.
+
+---
+
+## Bug 36 — `AscEditor` skips a `TEXT` line spaced otherwise than LTspice saves one, and saving deletes it
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-04.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/ltspice_utils.py`,
+`TEXT_REGEX`; read by `AscEditor.reset_netlist`).
+**Our workaround:** `lib/schematic_ops.py:_refuse_lost_records` refuses to
+open a sheet when the editor holds fewer `TEXT`, `WIRE` or `FLAG` records
+than the file has, naming the first `TEXT` line spicelib skipped. This entry
+is apart from Bug 34, which is about the `V` of a justification in a line
+the pattern does match.
+
+### Summary
+
+`reset_netlist` takes every line that starts with `TEXT` to its `TEXT`
+branch, and keeps a text only when `TEXT_REGEX` matches the line:
+
+```python
+TEXT_REGEX = re.compile(
+    r"TEXT (-?\d+)\s+(-?\d+)\s+V?(Left|Right|Top|Bottom|Center|Invisible)\s(\d+)\s*(?P<type>[!;])(?P<text>.*)",
+    re.IGNORECASE
+)
+```
+
+The pattern needs exactly one space after `TEXT` and exactly one whitespace
+character before the size. A line with two spaces or a tab after `TEXT`, or
+two spaces before the size, does not match, and the branch goes on to the
+next line without an error. The text is then in no list of the editor's, so
+`save_netlist` writes the sheet without it.
+
+### Affected code
+
+```python
+# asc_editor.py, AscEditor.reset_netlist
+elif line.startswith("TEXT"):
+    match = TEXT_REGEX.match(line)
+    if match:
+        ...
+        self.directives.append(text)
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+Path("spaced.asc").write_text(
+    "Version 4\nSHEET 1 880 680\nTEXT  16 16 Left 2 !.tran 1m\n"
+)
+editor = AscEditor("spaced.asc")
+editor.directives                  # [], though the sheet holds a directive
+editor.save_netlist("spaced.asc")
+Path("spaced.asc").read_text()     # "Version 4\nSHEET 1 880 680\n"
+```
+
+### Impact
+
+On a sheet written by hand or by another tool, a simulation directive or a
+comment that is spaced otherwise than LTspice saves one is deleted by the
+next edit saved through spicelib, with no warning. Whether LTspice itself
+reads such a line is not recorded.
+
+### Proposed fix
+
+Accept any run of whitespace between the fields, and raise on a line that
+starts with `TEXT` and still does not match, rather than skipping it:
+
+```python
+r"TEXT\s+(-?\d+)\s+(-?\d+)\s+(V?(?:Left|Right|Top|Bottom|Center|Invisible))\s+(\d+)\s*(?P<type>[!;])(?P<text>.*)"
+```
+
+### Suggested upstream test
+
+```python
+def test_a_text_line_with_wider_spacing_is_kept(tmp_path):
+    sheet = tmp_path / "spaced.asc"
+    sheet.write_text("Version 4\nSHEET 1 880 680\nTEXT  16 16 Left 2 !.tran 1m\n")
+    editor = AscEditor(sheet)
+    assert [d.text for d in editor.directives] == [".tran 1m"]
+```
+
+### Cross-reference
+
+`tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped`
+pins the refusal for each of the three spacings, and
+`test_every_sheet_the_editor_opens` holds the editor's record counts to the
+sheet reader's on every sheet in the suite.

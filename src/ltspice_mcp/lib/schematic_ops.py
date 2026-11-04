@@ -1079,30 +1079,59 @@ class _AscEditor(AscEditor):
         return None if sheet is None else type(self)(sheet, searched=self._searched)
 
 
-def _refuse_lost_parts(path: Path, editor: AscEditor) -> None:
-    """Refuse a sheet the editor holds fewer parts of than the file places.
+def _refuse_lost_records(path: Path, editor: AscEditor) -> None:
+    """Refuse a sheet the editor holds fewer records of than the file has.
 
-    spicelib keeps one part per reference (docs/spicelib_bugs.md, Bug 31), so
-    a sheet on which two parts share one opens with only the last of them, and
-    saving any edit deletes the others. Neither LTspice build netlists such a
-    sheet either (recorded as ``connectivity/shared_reference``).
+    An edit is committed from what the editor read, so a record it did not
+    read would be deleted by any edit. spicelib keeps one part per reference
+    (docs/spicelib_bugs.md, Bug 31), so a sheet on which two parts share one
+    opens with only the last of them. Neither LTspice build netlists such a
+    sheet either (recorded as ``connectivity/shared_reference``). spicelib also
+    skips, without a word, a ``TEXT`` line its pattern does not match, such as
+    one with two spaces after the keyword (Bug 36). How LTspice reads that line
+    is not recorded; the sheet's own reader (``asc_document``) reads it, so
+    ``inspect`` and ``verify_circuit`` show it, and it is refused here rather
+    than lost.
     """
-    placed = parse_asc(path.read_bytes()).symbols
-    if len(placed) == len(editor.components):
+    document = parse_asc(path.read_bytes())
+    placed = document.symbols
+    if len(placed) != len(editor.components):
+        by_reference: dict[str, list[tuple[int, int]]] = {}
+        for symbol in placed:
+            by_reference.setdefault(symbol.reference, []).append((symbol.x, symbol.y))
+        shared = "; ".join(
+            f"'{reference}' at " + ", ".join(f"({x},{y})" for x, y in places)
+            for reference, places in by_reference.items()
+            if len(places) > 1
+        )
+        raise NetlistError(
+            f"Cannot open {path.name} for editing: parts share a reference ({shared}). "
+            "The schematic editor keeps one part per reference and would delete the "
+            "others on saving, and neither LTspice build netlists such a sheet. "
+            "Rename the repeated parts in LTspice, then edit the sheet here."
+        )
+    held = {"TEXT": editor.directives, "WIRE": editor.wires, "FLAG": editor.labels}
+    read = {"TEXT": document.texts, "WIRE": document.wires, "FLAG": document.flags}
+    lost = [keyword for keyword in held if len(held[keyword]) != len(read[keyword])]
+    if not lost:
         return
-    by_reference: dict[str, list[tuple[int, int]]] = {}
-    for symbol in placed:
-        by_reference.setdefault(symbol.reference, []).append((symbol.x, symbol.y))
-    shared = "; ".join(
-        f"'{reference}' at " + ", ".join(f"({x},{y})" for x, y in places)
-        for reference, places in by_reference.items()
-        if len(places) > 1
-    )
+    first, number = lost[0], 1
+    for record in document.records:
+        line = (record.source or ("",))[0]
+        if first == "TEXT" and line.startswith("TEXT") and not TEXT_REGEX.match(line):
+            raise NetlistError(
+                f"Cannot open {path.name} for editing: line {number} "
+                f"({line.rstrip()!r}) is a TEXT record the schematic editor skips, "
+                "and saving any edit would delete it. Write it as LTspice saves one, "
+                "with one space between its fields, then edit the sheet here.",
+                show_hint=False,
+            )
+        number += len(record.source or ())
     raise NetlistError(
-        f"Cannot open {path.name} for editing: parts share a reference ({shared}). "
-        "The schematic editor keeps one part per reference and would delete the "
-        "others on saving, and neither LTspice build netlists such a sheet. "
-        "Rename the repeated parts in LTspice, then edit the sheet here."
+        f"Cannot open {path.name} for editing: the schematic editor skips "
+        f"{len(read[first]) - len(held[first])} of its {len(read[first])} {first} records, "
+        "and saving any edit would delete them.",
+        show_hint=False,
     )
 
 
@@ -1110,8 +1139,8 @@ def make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
     Raises NetlistError if the file is not found, has no Version line the
-    schematic editor can find, holds a line it cannot read, or places two
-    parts under one reference, and
+    schematic editor can find, holds a line it cannot read or would skip, or
+    places two parts under one reference, and
     SymbolResolutionError if a file the schematic refers to (a symbol, a
     sub-sheet) is missing.
     """
@@ -1124,7 +1153,7 @@ def make_editor(path: Path) -> Editor:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
-        _refuse_lost_parts(path, editor)
+        _refuse_lost_records(path, editor)
         return editor
     except FileNotFoundError as e:
         if not path.is_file():
