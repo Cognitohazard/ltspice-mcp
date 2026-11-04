@@ -406,14 +406,12 @@ ARITY_CHECKS: dict[str, Literal["error", "warning"]] = {
 }
 
 # Keywords that carry a two-terminal element's value, so every positional
-# token on the card is a node: LTspice's charge-defined capacitor
-# (``C1 a b Q=...``), flux-defined inductor (``L1 a b Flux=...``) and a source
-# playing a .wav file (``V1 a b wavefile="in.wav"``). The primary-value keys
-# (``R1 a b R=1k``) are not here: ``InstanceLine`` already reads every
-# positional of that form as a node.
+# token on the card is a node: a source playing a .wav file
+# (``V1 a b wavefile="in.wav"``). The primary-value keys (``R1 a b R=1k``) and
+# the charge and flux of ``C1 a b Q=...`` and ``L1 a b Flux=...`` are not
+# here: ``InstanceLine`` already reads every positional of those forms as a
+# node.
 _VALUE_KEYWORDS: dict[str, frozenset[str]] = {
-    "C": frozenset({"q"}),
-    "L": frozenset({"flux"}),
     "V": frozenset({"wavefile"}),
     "I": frozenset({"wavefile"}),
 }
@@ -478,9 +476,9 @@ def validate_netlist_arity(
         required = 2 if spec.kind_for(has_kv=has_kv) == "params_only" else spec.min_nodes
 
         # A value carried by a keyword the view does not read as the value
-        # (``C1 a b Q=...``) leaves every positional token after the ref a
-        # node. Re-count from the raw token stream so the last node is not read
-        # as a positional value.
+        # (``V1 a b wavefile=...``) leaves every positional token after the
+        # ref a node. Re-count from the raw token stream so the last node is
+        # not read as a positional value.
         node_count = len(inst.nodes)
         value_keys = _VALUE_KEYWORDS.get(prefix, frozenset())
         if any(key.casefold() in value_keys for key in inst.params):

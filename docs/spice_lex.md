@@ -300,6 +300,10 @@ These exceptions change the default:
   `set_nodes` edits only these prefixes.
 - `R1 a b R=1k` (and the `C=`/`L=` forms) gives the value as a parameter,
   so every positional token is a node and `value` is the parameter's.
+- `C1 b 0 Q=100n*x` and `L1 c 0 Flux=1m*x` define the part by its charge or
+  flux, which both LTspice builds run as a part between its two nodes
+  (`deck/keyword_values`): every positional token is a node and `value` is
+  None; the expression is `params["Q"]` or `params["Flux"]`.
 - On Q/J/M lines, a trailing area factor or `OFF` after the model is
   moved into `value` (`Q2 c b e QN 8`), as long as the minimum node count
   and a model remain. On S/W lines, a trailing `ON`/`OFF` is moved into

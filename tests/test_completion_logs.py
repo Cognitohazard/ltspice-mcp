@@ -57,7 +57,9 @@ def test_deck_snapshot_keeps_original_analyses_under_control(tmp_path, kind):
 
 def test_deck_snapshot_is_frozen_deduplicated_and_stops_at_end(tmp_path):
     deck = tmp_path / "test.cir"
-    deck.write_text("* t\n.TRAN 1u 1m\n.tran 2u 2m\n.op\n.end\n.ac dec 10 1 10\n", encoding="ascii")
+    deck.write_text(
+        "* t\n.TRAN 1u 1m\n.tran 2u 2m\n.op\n.end\n.ac dec 10 1 10\n", encoding="ascii"
+    )
     requirements = runner_base.deck_requirements(deck)
     assert requirements.analyses == requirements.raw_analyses == (".tran", ".op")
     assert requirements.has_save is requirements.has_control is False

@@ -430,6 +430,10 @@ _EXACT_NODE_COUNT: dict[str, int] = {
     "H": 2,
 }
 
+# The keyword that defines a capacitor by its charge, or an inductor by its
+# flux, in place of a value: ``C1 b 0 Q=100n*x``, ``L1 c 0 Flux=1m*x``.
+_DEFINING_KEYS: dict[str, str] = {"C": "q", "L": "flux"}
+
 # A switch (S/W) carries an optional ON/OFF state token AFTER its model name.
 # It is never a model name, so it is peeled into the value tail before model
 # identification — otherwise the last-positional heuristic would mistake the
@@ -642,6 +646,14 @@ class InstanceLine:
                 # KEY_VALUE token and must be edited through set_param.
                 nodes = [t.text for t in positional]
                 value = params[value_param_key]
+            elif any(key.casefold() == _DEFINING_KEYS.get(prefix) for key in params):
+                # A capacitor defined by its charge, an inductor by its flux
+                # (``C1 b 0 Q=100n*x``): both builds run each as a part
+                # between its two nodes (deck/keyword_values). Every
+                # positional is a node and the card has no value.
+                nodes = [t.text for t in positional]
+                value = None
+                model_token = None
 
         # Node-edit span (set_nodes): the first N positional tokens for a
         # fixed-arity element. Computed from the exact count, not the per-kind

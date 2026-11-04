@@ -26,14 +26,18 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
-from ltspice_mcp.lib.netlist_graph import compare_graphs, values_equal
+from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph, values_equal
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
 from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
-from ltspice_mcp.lib.spice_validator import validate_directive, validate_netlist_arity
+from ltspice_mcp.lib.spice_validator import (
+    _instance_terminals,
+    validate_directive,
+    validate_netlist_arity,
+)
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
     RandomVariation,
@@ -844,6 +848,36 @@ class TestRecordedValuesOfTheForms:
         assert voltages["v(mid)"] == pytest.approx(1.0)
         assert voltages["v(mid2)"] == pytest.approx(1.0)
         assert voltages["v(mid3)"] == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_charge_or_flux_defined_part_has_two_terminals(
+    build: str, tmp_path: Path, state_no_sim, work_dir: Path
+):
+    """``C1 b 0 Q=100n*x`` and ``L1 c 0 Flux=1m*x``, each behind 1k from a
+    1 V step: current flows through each to ground, so the node it sits on
+    stays below the step where both builds measured it. Every reader of the
+    card's terminals gives both: the graph, the inspect net query and the
+    validator."""
+    logs = rec.decode_log(build, "deck/keyword_values", tmp_path)
+    measured = logs.value("measurements")["measurements"]
+    # With no path to ground each node would sit at the step's 1 V.
+    assert 0.9 < measured["vb"]["values"][0] < 0.999
+    assert 0.6 < measured["vc"]["values"][0] < 0.7
+
+    text = deck_text("deck/keyword_values")
+    expected = {"C1": ["b", "0"], "L1": ["c", "0"]}
+    graph = {c.ref: list(c.nodes) for c in parse_netlist_graph(text).components}
+    assert {ref: graph[ref] for ref in expected} == expected
+    lines = {line.ref: line for line in map(read_instance, lex_deck(text).cards) if line}
+    assert {ref: _instance_terminals(lines[ref])[0] for ref in expected} == expected
+    assert {ref: lines[ref].nodes for ref in expected} == expected
+    path = work_dir / "keyword_values.cir"
+    path.write_text(text, encoding="utf-8")
+    (result,) = await _run(state_no_sim, [{"kind": "net", "path": str(path), "at": "0"}])
+    assert result["ok"], result
+    on_ground = {(m["reference"], m["terminal"]) for m in result["data"]["members"]}
+    assert {("C1", 2), ("L1", 2)} <= on_ground
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
