@@ -1521,6 +1521,56 @@ class TestSetComponentValueMultiTokenValues:
             self._set(asc_state, asc, "Vload", "AC 1")
 
 
+class TestSetComponentValueSplitsAsTheLexerDoes:
+    """A value's ``KEY=VALUE`` parameters are told from its head by the lexer,
+    for the check of the value and for the write alike. The check split the
+    value on whitespace, so a braced parameter with a space in it was refused,
+    with advice to put it in braces, although the write reads it as one
+    parameter."""
+
+    @pytest.mark.parametrize(
+        ("symbol", "ref", "value"),
+        [
+            ("cap", "C1", "1u Rser={0.1 * k}"),
+            ("res", "R1", "1k tc={a * b}"),
+            ("res", "R1", "{R0} tc = 0.001"),
+            ("ind", "L1", "10u Rser = 0.1"),
+            ("res", "R1", "1k tc=0.001"),
+            ("nmos4", "M1", "NMOS1 W={2 * w} L=1u"),
+        ],
+    )
+    def test_the_head_is_the_value_and_each_parameter_goes_to_spiceline(
+        self, asc_state: SessionState, work_dir: Path, symbol: str, ref: str, value: str
+    ):
+        from ltspice_mcp.lib.spice_lex import TokenKind, tokenize_body
+
+        tokens = tokenize_body(value)
+        head = " ".join(tok.text for tok in tokens if tok.kind != TokenKind.KEY_VALUE)
+        params = " ".join(f"{t.key}={t.value}" for t in tokens if t.kind == TokenKind.KEY_VALUE)
+        asc = _write_sheet(
+            work_dir / "split.asc",
+            f"SYMBOL {symbol} 100 100 R0",
+            f"SYMATTR InstName {ref}",
+            "SYMATTR Value 1",
+        )
+
+        apply_one(asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value})
+
+        assert _attributes(asc, ref) == {"Value": head, "SpiceLine": params}
+
+    @pytest.mark.parametrize("value", ["1 k tc=0.001", "tc=0.001 1k", "1k tc={a * b} 2"])
+    def test_more_than_one_token_besides_the_parameters_is_still_refused(
+        self, asc_state: SessionState, work_dir: Path, value: str
+    ):
+        asc = _write_sheet(work_dir / "split.asc", "SYMBOL res 100 100 R0", "SYMATTR InstName R1")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match="whitespace"):
+            apply_one(
+                asc_state, asc, {"op": "set_component_value", "reference": "R1", "value": value}
+            )
+        assert asc.read_bytes() == before
+
+
 @pytest.mark.asyncio
 class TestSetComponentValueCreatesMissingValue:
     """Regression: set_component_value on a component added without a Value slot

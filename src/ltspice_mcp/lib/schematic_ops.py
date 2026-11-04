@@ -130,6 +130,7 @@ from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
+    Token,
     TokenKind,
     key_value_tokens,
     tokenize_body,
@@ -316,12 +317,6 @@ def _parse_rotation(rotation: str) -> ERotation:
     return erot
 
 
-# Matches one ``KEY=VALUE`` token (value may have braces, parens, sign, etc.).
-# Validation uses it to accept a value shaped ``"NMOS1 W=10u L=1u"``: one head
-# token, then only parameters.
-_PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
-
-
 # Element classes with exactly two terminals before a value that runs to the
 # end of the line: an independent source's spec (``DC 5 AC 1``). LTspice writes
 # the nodes from the symbol's pins, so nothing in the value can be read as a
@@ -370,6 +365,20 @@ def _device_tail_ok(element: str, tokens: list) -> bool:
     return area <= 1 and off <= 1
 
 
+def _head_then_parameters(tokens: Sequence[Token]) -> bool:
+    """Whether ``tokens`` read as ``[MODEL] KEY=VALUE ...``: at most one token,
+    then one or more ``KEY=VALUE`` tokens and nothing else."""
+    first = next(
+        (index for index, tok in enumerate(tokens) if tok.kind == TokenKind.KEY_VALUE),
+        len(tokens),
+    )
+    return (
+        first <= 1
+        and first < len(tokens)
+        and all(tok.kind == TokenKind.KEY_VALUE for tok in tokens[first:])
+    )
+
+
 def _validate_component_value(reference: str, value: str, element: str) -> None:
     """Reject values that would corrupt the netlist line on write.
 
@@ -380,7 +389,8 @@ def _validate_component_value(reference: str, value: str, element: str) -> None:
     as (``element_class``); the shapes that cannot do that are accepted:
 
     - SPICE expressions in braces (``{1/(2*pi*RC)}``) and quoted strings;
-    - ``[MODEL] KEY=VALUE ...`` parameter lists (split by ``_apply_component_value``);
+    - ``[MODEL] KEY=VALUE ...`` parameter lists, split by the lexer as
+      ``_apply_component_value`` splits them;
     - waveform functions (``PULSE(...)``, ``SIN(...) AC 1``), whose parentheses
       protect their spaces;
     - for an independent or behavioural source, any well-formed run of tokens
@@ -440,23 +450,12 @@ def _validate_component_value(reference: str, value: str, element: str) -> None:
         and all(t.kind in POSITIONAL_KINDS for t in toks)
     ):
         return
-    # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one bare
-    # head token (the model name) followed by a non-empty list of KEY=VALUE
-    # tokens. The pure-params and head+params forms collapse into one rule.
-    if "=" in stripped:
-        tokens = stripped.split()
-        head_tokens: list[str] = []
-        for tok in tokens:
-            if "=" in tok:
-                break
-            head_tokens.append(tok)
-        rest = tokens[len(head_tokens) :]
-        if (
-            len(head_tokens) <= 1
-            and rest
-            and all(bool(_PARAM_TOKEN_RE.fullmatch(tok)) for tok in rest)
-        ):
-            return
+    # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one head
+    # token (the model name) followed by a non-empty list of KEY=VALUE tokens,
+    # as the lexer splits them, which is the split ``_apply_component_value``
+    # writes: a braced parameter value with spaces in it is one token.
+    if well_formed and _head_then_parameters(toks):
+        return
     if element in _AREA_CLASSES:
         shape = "a model name, then an optional area factor and 'off' (e.g. '2N3904 2 off')"
     elif element == "M":
