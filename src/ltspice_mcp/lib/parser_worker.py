@@ -12,16 +12,13 @@ costs to start.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib.log_types import LogLimits
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs, parser_cache_key
 from ltspice_mcp.lib.raw_header import RawLimits, preflight_raw
-from ltspice_mcp.lib.store import parser_file_in
-
-_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 
 def _positive(value: Any, name: str) -> int:
@@ -79,7 +76,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     if (
         not isinstance(keys, list)
         or len(keys) > 32
-        or any(not isinstance(key, str) or _DIGEST.fullmatch(key) is None for key in keys)
+        or any(not is_sha256(key) for key in keys)
     ):
         raise ValueError("Parser cache keys must be bounded content identities")
     captured = capture_inputs(

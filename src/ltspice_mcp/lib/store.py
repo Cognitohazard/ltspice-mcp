@@ -133,7 +133,21 @@ KIND_DETACHED_REQUEST = "detached-request"
 KIND_DETACHED_RECEIPT = "detached-receipt"
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def is_store_name(name: object) -> bool:
+    """Whether ``name`` is one path segment the store forms: a run token (the
+    base name of a case's run files, which the recovery records and the
+    controlled LTspice launch check too), a circuit id, a lock or a result set."""
+    return isinstance(name, str) and _NAME_RE.fullmatch(name) is not None
+
+
+def is_sha256(value: object) -> bool:
+    """Whether ``value`` is a SHA-256 digest as every record writes one: 64
+    lowercase hex digits."""
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
 
 
 class StoreError(ValueError):
@@ -172,7 +186,7 @@ def _record(directory: Path, name: str, error: str) -> Path:
 
 def _validate_name(name: str, what: str) -> str:
     """Validate any other caller-supplied path segment."""
-    if not isinstance(name, str) or _NAME_RE.fullmatch(name) is None:
+    if not is_store_name(name):
         raise StoreError(f"Invalid {what}: {name!r}")
     return name
 

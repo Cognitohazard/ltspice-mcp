@@ -34,6 +34,8 @@ from pathlib import Path, PurePath
 
 import psutil
 
+from ltspice_mcp.lib import RUN_DECK_SUFFIXES
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,13 +82,14 @@ def token_in_argument(token: str, arg: str) -> bool:
 def _names_run_deck(token: str, arg: str) -> bool:
     """True when ``arg`` is the path of ``token``'s own run deck.
 
-    LTspice runs only ``.cir``/``.net``/``.sp`` decks, and every case's deck is
-    ``{token}`` plus one of them, so a process launched for the case carries
-    that path while one that merely mentions the token does not. The server's
-    WSL process query carries ``*{token}.*``, and a script named after a case
-    carries ``{token}.py``.
+    LTspice runs only decks with one of ``RUN_DECK_SUFFIXES``, and every case's
+    deck is ``{token}`` plus one of them, so a process launched for the case
+    carries that path while one that merely mentions the token does not. The
+    server's WSL process query carries ``*{token}.*``, and a script named after
+    a case carries ``{token}.py``.
     """
-    return re.search(re.escape(token) + r"\.(?:cir|net|sp)$", arg, re.IGNORECASE) is not None
+    folded = arg.casefold()
+    return any(folded.endswith(f"{token}{suffix}".casefold()) for suffix in RUN_DECK_SUFFIXES)
 
 
 def _running_processes(attrs: tuple[str, ...]) -> Iterator[psutil.Process]:

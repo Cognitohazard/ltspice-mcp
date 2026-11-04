@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +16,7 @@ from ltspice_mcp.lib.instance_targeting import SourceLineage
 from ltspice_mcp.lib.ngspice_driver import validate_seed
 from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativeLaunchPolicy
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
-from ltspice_mcp.lib.store import validate_job_id
-
-_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+from ltspice_mcp.lib.store import is_sha256, is_store_name, validate_job_id
 
 
 class RecoveryError(SimulationError):
@@ -84,7 +81,7 @@ def _positive(value: float | int, name: str, *, zero: bool = False) -> None:
 
 
 def _artifact(value: ArtifactDigest) -> None:
-    if not value.path.is_absolute() or not _DIGEST.fullmatch(value.sha256):
+    if not value.path.is_absolute() or not is_sha256(value.sha256):
         raise ValueError("Artifact requires an absolute path and SHA256 digest")
 
 
@@ -157,7 +154,7 @@ class ExecutionRecord(_Record):
         if (
             not exe.path
             or exe.sha256 is None
-            or not _DIGEST.fullmatch(exe.sha256)
+            or not is_sha256(exe.sha256)
             or type(exe.bytes) is not int
             or exe.bytes <= 0
             or not exe.modified
@@ -217,7 +214,7 @@ class LaunchIntent(_Record):
 
     def __post_init__(self) -> None:
         _artifact(self.executed)
-        if not _DIGEST.fullmatch(self.electrical_sha256):
+        if not is_sha256(self.electrical_sha256):
             raise ValueError("Launch intent requires the source electrical digest")
         if self.adaptation not in {"identity", "logopinfo", "native_driver", "seeded_driver"}:
             raise ValueError("Unsupported execution adaptation")
@@ -252,7 +249,7 @@ class CaseAttempt(_Record):
         validate_job_id(self.execution_job_id)
         if type(self.attempt_index) is not int or self.attempt_index < 0:
             raise ValueError("Case attempt must be a nonnegative integer")
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", self.run_token):
+        if not is_store_name(self.run_token):
             raise ValueError("Case attempt requires a safe run token")
         if type(self.reused) is not bool:
             raise ValueError("Reused must be a boolean")

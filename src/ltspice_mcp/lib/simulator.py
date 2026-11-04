@@ -78,6 +78,21 @@ _FAMILY_BASES: dict[str, type] = {**SIMULATORS, "ltspice": LTspice}
 _FAMILY_BY_CLASS_NAME: dict[str, str] = {
     cls.__name__: family for family, cls in (*SIMULATORS.items(), *_FAMILY_BASES.items())
 }
+# The class each of those names is, for what a recorded name needs the class for.
+_CLASS_BY_NAME: dict[str, type] = {
+    cls.__name__: cls for cls in (*SIMULATORS.values(), *_FAMILY_BASES.values())
+}
+
+
+def raw_extension_for(simulator: type | str | None) -> str:
+    """The extension a simulator gives the raw it writes: its class's
+    ``raw_extension`` (QSPICE's is ``.qraw``). A string is a recorded class
+    name (``job.simulator``), read through the class it names; anything else
+    writes ``.raw``."""
+    if isinstance(simulator, str):
+        simulator = _CLASS_BY_NAME.get(simulator)
+    extension = getattr(simulator, "raw_extension", None)
+    return extension if isinstance(extension, str) and extension else ".raw"
 
 
 def simulator_family(simulator: type | str | None) -> str | None:

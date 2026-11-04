@@ -33,6 +33,7 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
+from ltspice_mcp.lib.simulator import raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
     KIND_CANCELLATION,
@@ -436,11 +437,13 @@ def case_raw_path(job: ExperimentJob, case: ExperimentCase) -> Path | None:
     """Where a case's raw is, or is being written: as recorded, else by its run token.
 
     The runner names every artifact ``{run_token}.{ext}`` inside the job's
-    output folder. None for a record written before that folder was persisted.
+    output folder, the raw with the simulator class's ``raw_extension``
+    (``simulator.raw_extension_for``). None for a record written before that
+    folder was persisted.
     """
     if job.output_folder is None or not case.run_token:
         return None
-    extension = ".qraw" if "qspice" in job.simulator.lower() else ".raw"
+    extension = raw_extension_for(job.simulator)
     return case.raw_file or job.output_folder / f"{case.run_token}{extension}"
 
 

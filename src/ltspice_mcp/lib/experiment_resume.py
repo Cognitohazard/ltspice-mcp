@@ -62,6 +62,7 @@ from ltspice_mcp.lib.recovery_records import (
     ProcessIdentity,
     RecoveryError,
 )
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
 from ltspice_mcp.lib.store import OwnerLiveness, Store, is_this_process, path_digest
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -304,7 +305,7 @@ def _verify_absence(job: ExperimentJob, simulator: type) -> None:
                 "recovery_process_active", "Prior simulator absence is unconfirmed"
             )
         if (
-            "ltspice" in job.simulator.lower()
+            dialect_for_simulator_name(job.simulator) == "ltspice"
             and wsl.is_wsl()
             and wsl.windows_ltspice_presence(case.run_token) is not ProcessPresence.ABSENT
         ):

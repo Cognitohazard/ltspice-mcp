@@ -76,7 +76,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     describe_executable,
@@ -2115,7 +2115,7 @@ class ExperimentRunner(RunnerBase):
         all but the raw ``kept`` for reads."""
         if _keeps_stopped_artifacts(job):
             return
-        raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
+        raw_extension = raw_extension_for(self.simulator_class)
         run_suffix = ".cir" if case.native_statistics else case.staged_deck.suffix or ".net"
         # The job's own run directory, which is also what the record persists —
         # the same reconstruction the crash reconciliation uses to FIND these.
