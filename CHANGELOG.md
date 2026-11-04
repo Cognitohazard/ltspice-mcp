@@ -293,6 +293,28 @@ tool-surface changes.
 - The refusal for a missing `raster` extra named ways to install the server
   with the extra, none of which reaches a server run from a source checkout.
   It now also names `uv sync --extra raster` for that case.
+- The documentation and package metadata no longer claim that the server
+  runs on macOS. It refuses every `.raw` and `.log` read there, because the
+  memory limit of the process that reads results and the cleanup of that
+  process and its children have not been validated on macOS. Yet the README
+  said it found a simulator on macOS, the PyPI classifiers listed macOS, and
+  the Claude Desktop extension offered itself on macOS. The extension's
+  manifest now lists Windows and Linux only, and the README, `docs/DESIGN.md`
+  and the extension's README say that macOS is not supported yet.
+- The Claude Code plugin and Desktop-extension manifests still said 0.6.1
+  after the 0.7.0 release, because the 0.7.0 tag was cut without
+  `scripts/release.sh`, which stamps them. They now say 0.7.0, and the
+  publish workflow refuses a tag whose manifests name another version.
+- `SECURITY.md` named the retired file arguments `raw_path`, `log_path` and
+  `raw_file` where the tools now take `path`. It also listed the
+  `<name>.net` beside a schematic that `run_experiments` no longer writes,
+  and left out the results `jobs(action="place_beside_sheet")` copies beside
+  a sheet.
+- The README described the SPICEAssistant study (arXiv:2507.10639) as
+  comparing scalar results with raw output. Its o3 solve rates of 25.4% and
+  84.9% compare no simulation with simulation feedback from tools that
+  return values read from each run as text (section 4.3, Table 2), and the
+  README now says so.
 
 ### Added
 
