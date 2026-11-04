@@ -476,9 +476,10 @@ class TestDeckStructure:
         rows = await hierarchy_rows(state_no_sim, work_dir, "deck/gnd_alias")
         for instance in (("R1",), ("X1", "R1")):
             ground = rows[instance]["nodes"][1]
-            assert (ground["scope"], ground["name"]) == ([], "0"), instance
+            # A node at the top level has no scope, which the reply leaves out.
+            assert (ground.get("scope", []), ground["name"]) == ([], "0"), instance
         port = rows[("X2", "R1")]["nodes"][1]
-        assert (port["scope"], port["name"]) == ([], "mid")
+        assert (port.get("scope", []), port["name"]) == ([], "mid")
 
     @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
     async def test_the_net_query_reads_gnd_as_node_0(
@@ -675,11 +676,13 @@ class TestDeckSemantics:
         rows = await hierarchy_rows(state_no_sim, work_dir, "deck/caret_power")
         for reference, node in (("R1", "a"), ("R2", "b"), ("R3", "c"), ("R4", "d")):
             fact = rows[(reference,)]["value"]
-            if fact["value"] is not None:
+            if fact.get("value") is not None:
                 assert fact["value"] == pytest.approx(read[f"v({node})"]), reference
-        # The two the server cannot be wrong about because it declines them.
-        assert rows[("R1",)]["value"]["value"] is None
-        assert rows[("R4",)]["value"]["value"] is None
+        # The two the server cannot be wrong about because it declines them:
+        # unresolved, with no value in the reply.
+        for reference in ("R1", "R4"):
+            assert rows[(reference,)]["value"]["status"] == "unresolved"
+            assert "value" not in rows[(reference,)]["value"]
         with pytest.raises(ValueError, match="caret"):
             evaluate("2^3", lambda name: 0.0, simulator="ltspice")
 

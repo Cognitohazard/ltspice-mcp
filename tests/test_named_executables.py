@@ -471,14 +471,13 @@ class TestRoutedRuns:
                 "job_id": receipt["job_id"],
                 "case_id": receipt["runs"]["items"][0]["case_id"],
             },
-            "dialect": None,
             "executable": str(builds["xvii"]),
             "executable_sha256": _sha256(builds["xvii"]),
         }
         # A run on one build never speaks for another, nor for the family's own.
-        assert named["ltspice:lt24"]["version"] is None
+        assert "version" not in named["ltspice:lt24"]
         assert named["ltspice:lt24"]["executable"] == str(builds["lt24"])
-        assert caps["simulators"]["ltspice"]["version"] is None
+        assert "version" not in caps["simulators"]["ltspice"]
         assert caps["simulators"]["ltspice"]["executable"] == str(builds["default"])
 
     async def test_a_schematic_is_exported_by_the_build_that_runs_it(

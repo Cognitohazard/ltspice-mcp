@@ -336,7 +336,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "description": (
                 "The commit-protocol stages that did not complete (revision_check, "
                 "apply_ops, stage_asc, stage_plot_settings, rename, then the post-commit "
-                "views, reference and response); empty when every stage did."
+                "views, reference and response); absent when every stage did."
             ),
             "items": {
                 "type": "object",
@@ -411,7 +411,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "label_only_pins": {"type": "integer"},
                 "cursor": {
                     "type": ["string", "null"],
-                    "description": "Starts the views.preexisting page; null when count is 0.",
+                    "description": "Starts the views.preexisting page; absent when count is 0.",
                 },
             },
             "required": ["count", "findings", "label_only_pins", "cursor"],
@@ -457,7 +457,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "report how much they took; remove_directive names each text it "
                 "removed in removed_texts, with its kind and place. set_component_value and "
                 "set_component_attribute report each attribute they changed, with "
-                "what it was and what it is now (null where absent). set_plot_panes "
+                "what it was and what it is now (no was or now where the attribute is absent). set_plot_panes "
                 "reports the plot_settings file it writes and the replaced_panes it "
                 "held before, which passed back as panes restore them."
             ),

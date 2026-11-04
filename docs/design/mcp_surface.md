@@ -60,7 +60,8 @@ These conventions apply to all six tools.
 
 **Envelope.** `outcome` is `complete`, `partial`, `failed` or `in_progress`;
 `in_progress` is a receipt for a job that is still running. A failure includes
-`error {code, message, stage, retryable, commit_state, item_id?}`.
+`error {code, message, stage, retryable?, commit_state, item_id?}`, where
+`retryable` is present only when it is true (see "Fields left out" below).
 `commit_state` is `not_started` when nothing was recorded or written,
 `committed` when the job or the edit was recorded and a later step failed (so
 do not resubmit under a new id), and `unknown` when the server cannot tell, as
@@ -130,7 +131,10 @@ and wire coordinates together), `total` and `returned` are sums over all of
 them, a `collections {<data key>: {total, returned, truncated}}` block gives
 each collection's counts, and `primary_truncated` reports whether the primary
 collection continues. On every page, `truncated` implies `returned < total`.
-Stop paging when `next_cursor` is null, not by the counters.
+Stop paging when `next_cursor` is absent, not by the counters. A page leaves
+out `items` when it is empty and `truncated` when it is false, as every reply
+leaves out a field that says nothing; `total` and `returned` are always
+there.
 
 **Channels.** `observations`, `warnings` and `failures` are separate channels
 and are never merged. `observations` are structured facts about the data and
@@ -169,15 +173,65 @@ beside the channel it was left out of and gives a way to list it. The call's
 own warnings and failures are never scoped. `edit_schematic`'s `preexisting`
 block (§3.4) applies this rule.
 
-An empty per-circuit lint entry is omitted, so a circuit absent from `lint`
-had no findings; findings themselves are always emitted.
+A circuit absent from `lint` had no findings; findings themselves are always
+emitted. Pages and run rows follow "Fields left out" below like every other
+part of a reply, so a row that produced no raw has no `raw`. Use `run_fields`
+for a narrower row.
 
-Pagination is exempt from the lean rule, so `next_cursor` is always present
-and is null when there is no next page.
+**Fields left out.** Every reply leaves out the fields that say nothing, so a
+reply about work that found nothing costs no tokens for saying so. A field is
+left out when its value is
 
-Run rows are also exempt, so every run row has the same keys regardless of its
-status, the tool that returns it or the budget. Use `run_fields` for a
-narrower row.
+- an empty list or an empty object,
+- a null,
+- a false flag, or
+- a sub-answer the overall answer beside it already gives: in a comparison,
+  `structurally_equivalent` beside `equivalent: true`, and in the capabilities
+  report, `selectable` beside `available: false`. Beside any other overall
+  answer every sub-answer is kept, so the caller sees which part held.
+
+An absent list therefore reads as empty and an absent flag as false. A missing
+field means "checked, and nothing to report"; it never means "not checked". A
+check that did not run, a step that was skipped and a value that could not be
+read are each stated by a field with content (a `checks_skipped` row, a
+failure, a `status`, a `reason`), so they are never left out. The rule applies
+to the fields of objects and never to the items of a list, so a null sample in
+a series keeps its place. An object left empty once its silent fields are gone
+is left out in turn.
+
+One function applies the rule to every reply, on its way out of the server:
+`structuredContent`, the text block when `[tools] text_channel = "json"`, and
+the Python API's complete results, which therefore have the same shape. The
+summary text follows the rule too and does not state an empty result. A
+number that is not finite is the exception: the reply writes it as null at its
+place and names it in `warnings`. Output schemas mark every field a reply may
+leave out as optional. A field is kept anyway only when its empty, null or
+false value is itself the answer. The table lists those fields for each tool,
+wherever they appear in its reply, and is the whole exemption:
+
+| tool | always present, even when empty, null or false | why |
+|-|-|-|
+| every envelope tool | `outcome` | the call's verdict |
+| `run_experiments`, `jobs` | `ok` (lint findings) | false is what the finding reports |
+| | `staged` (`source[].manifest`) | false says a reference was read in place or not staged, beside its `reason` |
+| | `value` (attached analysis rows) | measured data, as for `analyze_results` |
+| `jobs` | `exists` (`list` groups) | false says the circuit's file is gone |
+| | `resumed` | false is a resume that selected nothing to run |
+| `analyze_results` | `value` (rows and `reduced`) | a recipe's measured value is kept as the recipe returns it: a null is a quantity with no number, which reductions and specs count in `no_value_count`, and a false is a measured fact, such as `exact_match: false` for a query point moved to the nearest sample |
+| `inspect` | `ok` (each result) | false carries the query's error |
+| | `available`, `selectable`, `exporter_available`, `png`, `persist_jobs` (capabilities) | false says what this session cannot do |
+| | `allowed_paths` (capabilities) | null says no sandbox is set; asked for by name with `fields` after a config edit |
+| | `in_sandbox` (`open_in_ltspice`) | false says the document is outside the sandbox |
+| `edit_schematic`, `verify_circuit` | `ok` (findings, stages, `export`) | false is what the finding or stage reports |
+| | `equivalent` | false is a mismatch and null is no verdict |
+| | `structurally_equivalent` | kept beside an `equivalent` that is false or null |
+| | `shown` (`open_in_ltspice`, `ltspice`) | false says LTspice does not show what was asked, with the reason |
+| `plot_waveform` | `shown`, `tied` (`ltspice`) | false says the window does not show the plot, or a click on the sheet does not plot |
+| `run_code` | `status` | the snippet's outcome |
+
+The list is `ALWAYS_PRESENT` in `tools/_base.py`, and the suite fails any
+reply that carries a silent field not on it.
+
 
 **Presentation fields.** Fields that control how a receipt is rendered, rather
 than what runs, are excluded from the idempotency fingerprint, so repeating a
@@ -413,8 +467,7 @@ budget               int | null            approximate response-token cap
 `budget` and `analyze.include.fields` control how the durable receipt is
 rendered and do not change what runs. A reply over its budget is rendered
 again with each rung of a fixed ladder in turn until it fits. The trim rung
-removes empty presentation blocks and the `source_hashes` rows (the identity
-echo), the answer rung drops the caller's opt-ins that enlarge the reply
+empties the `source_hashes` rows (the identity echo), the answer rung drops the caller's opt-ins that enlarge the reply
 (such as `include.per_run`, `include.outliers` and `include.provenance`), and
 the shrink rung lowers the number of rows on every page. A call with no
 budget is rendered under the server default (`[analysis] default_budget`,
@@ -463,7 +516,7 @@ those quantities from the waveform (`value`, `signal_stats`) instead.
 **Run timeout.** A case has no time limit unless one is set.
 `execution.run_timeout_s` on the request takes precedence over
 `[simulation] run_timeout` on the server (`limits.run_timeout_s` in
-`inspect(kind="capabilities")`, `null` when unset). A timeout deletes the
+`inspect(kind="capabilities")`, absent when unset). A timeout deletes the
 partial result, unless the job is recoverable or `execution.keep_partial_raw`
 keeps it for reads (below). A running job reports each case's progress
 (below), which shows when a case is stuck. `[simulation] timeout`
@@ -734,7 +787,7 @@ the run reported in its own output. It is read from the LTspice log banner
 (`LTspice 26.0.2 for Windows`), the Xyce log banner
 (`Xyce Release 7.8.0-opensource`), the ngspice console banner
 (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when there
-is none of those (LTspice XVII, QSPICE). It is null when the output names no
+is none of those (LTspice XVII, QSPICE). It is absent when the output names no
 build. It is recorded per case, so an executable replaced during a job shows
 as two builds. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
@@ -911,8 +964,8 @@ gain and phase.
 A result set stores the request, each source's file hashes and the selected
 plot, so a continuation reads the same plot. Each row of a RAW recipe reports
 the `dialect` of the plot it read. Each `source_hashes` row reports the
-`dialect` the caller gave, or else the one the job recorded, which may be null
-because the row is made without decoding the raw. Both include
+`dialect` the caller gave, or else the one the job recorded, and has none
+when neither names one, because the row is made without decoding the raw. Both include
 `plot_index`. A `source_hashes` row includes `snapshot_id`; a default result
 row leaves it, like `deck_sha256`, to `include.fields`, and its `source`
 label names the `source_hashes` row that has it. `step_values` come from the `.step` lines of the run's own
@@ -921,9 +974,8 @@ log is read for them.
 
 The `measurements` recipe reads the `.meas` results in each source's log once,
 including a `.log` `path` source and a finished job case with no RAW. Its rows
-have null `plot_index`. With neither `step` nor `all_steps`, a row holds each
-measurement's statistics over every step and null step fields (the default row
-omits them). With `all_steps` the recipe returns one row per step, and with
+have no `plot_index`. With neither `step` nor `all_steps`, a row holds each
+measurement's statistics over every step and no step fields. With `all_steps` the recipe returns one row per step, and with
 `step` the row of the step the selector picks, each with its `step_index` and
 the `step_values` of the log's `.step` line for that step: row n of a stepped
 `.meas` table is the step of the n-th `.step` line on both LTspice builds. A
@@ -937,7 +989,7 @@ their hashes, and needs no readable RAW. The server does not take the
 producing simulator from a log's contents or from the session's default
 simulator, so only a job source has one. `include.provenance` reports
 `explicit_dialect` and `producing_dialect` separately; `measurements` rows
-report only the producing dialect, which is null for a `path` source. A continuation reports `source_drift` for a source whose
+report only the producing dialect, which a `path` source does not have. A continuation reports `source_drift` for a source whose
 log or console file changed, or appeared after being absent, as it does for a
 changed RAW.
 
@@ -1049,8 +1101,8 @@ continuation replays them.
   the sources again. After that read, every call completes at least one recipe
   evaluation, and work left over when the budget runs out continues through
   the returned `result_set_id`.
-- A `path` source has no job provenance, so its rows have
-  `deck_sha256: null` and an observation.
+- A `path` source has no job provenance, so its rows have no `deck_sha256`,
+  and an observation says why.
 - Full-resolution data is returned as artifact handles
   `{path, content_type, sha256, bytes}`. Inline waveform data is always
   decimated to at most `max_points`, with `points_returned` and
@@ -1124,7 +1176,7 @@ change, which are the parts its ops place, move, remove, wire or label. A part
 whose value or attributes alone changed keeps its pins where they were and
 joined as they were, so a batch of value changes lists no pins, in `touched`
 or in `wiring.label_only_pins`; its label-only pins are counted under
-`preexisting`. A pin's `net` is the name a label gives its net, null when none
+`preexisting`. A pin's `net` is the name a label gives its net, absent when none
 does. LTspice names such a net only when it exports the sheet (`N001`,
 `NC_01` for a pin on nothing), so the name comes from an export and is never
 guessed. A batch with a `compare` exports the committed sheet, and each pin on
@@ -1157,7 +1209,7 @@ other findings are listed in the `preexisting` block, with the label-only pins
 of the parts the batch did not rewire or name:
 
 ```
-preexisting {count, findings, label_only_pins, cursor}
+preexisting {count, findings, label_only_pins, cursor?}
 ```
 
 `rules_run` maps every sheet rule that ran to its number of findings on the
@@ -1380,10 +1432,10 @@ built in one `edit_schematic{base: "blank"}` call.
 
 Output: `outcome, commit_state ("committed" | "not_committed"), path,
 sha256, build_id, stages[] (the stages that did not
-complete; empty on success), netlist? (only when a
+complete; absent on success), netlist? (only when a
 compare did not confirm equivalence), verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
-rules_run {rule: count}, preexisting {count, findings, label_only_pins, cursor},
+rules_run {rule: count}, preexisting {count, findings, label_only_pins, cursor?},
 views {touched?: Page, pin_legend?: Page, preexisting?: Page}, applied, results[],
 open_in_ltspice? (one entry per LTspice window that had the sheet open),
 warnings, failures, observations, hint`.
@@ -1411,7 +1463,7 @@ export_to     "managed" (default) | "sidecar"
 **In LTspice, on request.** `in_ltspice` opens the checked file, sheet or
 netlist, in the running LTspice window and brings it to the front, through the
 bridge LTspice ships. The reply's `ltspice` block reports the result:
-`{shown, path, pid, version, already_open, differs_from_file?, difference?,
+`{shown, path, pid, version, already_open?, differs_from_file?, difference?,
 reason?}`. A sheet the window already had open is brought to the front as the
 window has it, because LTspice does not read a file again; its copy is
 compared with the file, and `differs_from_file` is set when the user is
@@ -1494,6 +1546,12 @@ block `{path, sha256, source_sha256, width, height, downscaled,
 returned_inline, svg?, note, …}`, a scene summary, `outcome` and
 `hint`.
 
+`comparison` is present exactly when `compare` is in `checks_run`. When it is
+not, a `checks_skipped` row says why (no reference supplied, not requested,
+not applicable, or no exported netlist to compare, which names whether the
+export ran) or a `failures` row at stage `compare` gives the error, so a
+reply without a comparison always says which.
+
 In the render block, `sha256` is the image's digest and `source_sha256` the
 digest of the sheet file this call drew. Rendering reads the file on disk, and
 another session sharing the working directory may commit between
@@ -1537,10 +1595,11 @@ cursors where listed:
 {kind: "capabilities", fields?}
     simulators: for each, its executable and sha256; `version`, the build
     the latest run on that executable reported, with `version_source`
-    naming the job and case (null until a run; the executable is never
+    naming the job and case (absent until a run; the executable is never
     launched to ask); `selectable`, whether run_experiments'
     execution.simulator may name it, with `refusal` when this host cannot
-    run the family (detected or not), and for an undetected one the
+    run the family (detected or not), and for an undetected one, whose
+    `available: false` already says it cannot be selected, the
     `remediation` that enables it. named_executables: the same facts and
     the family for each [simulator.executables] entry accepted at startup,
     keyed by its execution.simulator selector ("ltspice:xvii"). Also:
@@ -1629,7 +1688,7 @@ cursors where listed:
     `name = value` entries and `Index frequency` rows, each with its
     block's first and last line (`line_start`, `line_end`), what ended the
     block (`closed_by`) and its printed labels; a unit the log does not
-    print is null. Neither adds plot or step identifiers or inferred
+    print is left out. Neither adds plot or step identifiers or inferred
     formulas, and prefix filters literal measurement or quantity labels.
     The page includes `capture_facts` (whether each file was present, and
     its digest), `scan` (whether the whole log was read) and `section`
@@ -2065,7 +2124,8 @@ selector. Each `data.instances` row contains:
 | `address` | The `device` name the `operating_point` recipe takes and the `.save` line a run needs to record it (`save`), or the `reason` there is none |
 
 Numeric facts have `expression`, `value`, `unit`, `status` and `reason`. An
-unresolved value is null, never a guessed zero. Discovery evaluates only
+unresolved value is left out, never a guessed zero: its `status` is
+`unresolved` and its `reason` says why. Discovery evaluates only
 expressions built from finite SPICE numbers and suffixes, parameter names,
 outer braces or single quotes, parentheses, unary signs, arithmetic
 `+ - * /`, and at most one power operator (`**`, or `^` on ngspice). On

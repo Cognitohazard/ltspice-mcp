@@ -42,7 +42,7 @@ async def test_the_panes_are_written_beside_the_sheet_bottom_first(asc_state, sh
     plot = sheet.with_suffix(".plt")
     (result,) = data["results"]
     assert result["index"] == 0 and result["op"] == "set_plot_panes"
-    assert result["replaced_panes"] == []
+    assert "replaced_panes" not in result
     # The path the sandbox resolved, which may be spelt differently (a short
     # name on Windows, a symlinked temp root elsewhere), names this file.
     assert Path(result["plot_settings"]).samefile(plot)  # noqa: ASYNC240
@@ -113,7 +113,7 @@ async def test_a_file_ltspice_26_wrote_keeps_its_other_sections(asc_state, sheet
 
     data = await apply_ops(asc_state, "rc.asc", [_panes("ac", [{"traces": ["V(out)"]}])])
 
-    assert data["results"][0]["replaced_panes"] == []
+    assert "replaced_panes" not in data["results"][0]
     text = plot.read_bytes().decode("utf-16-le")
     assert text.startswith(existing.decode("utf-8"))
     assert text.count("[AC Analysis]") == 1
@@ -170,7 +170,7 @@ async def test_no_panes_removes_the_analysis_and_then_the_file(asc_state, sheet:
 
 async def test_a_dry_run_reports_and_writes_nothing(asc_state, sheet: Path):
     data = await apply_ops(asc_state, "rc.asc", [_panes("tran", _TWO_PANES)], dry_run=True)
-    assert data["results"][0]["replaced_panes"] == []
+    assert "replaced_panes" not in data["results"][0]
     assert not sheet.with_suffix(".plt").exists()
 
 

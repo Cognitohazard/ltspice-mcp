@@ -247,5 +247,7 @@ class TestControlWriteThroughRunExperiments:
         assert len(decks) == 1
         assert decks[0].count("write ") == 1
         assert not [
-            item for item in data["observations"] if item["code"] == "control_write_injected"
+            item
+            for item in data.get("observations", [])
+            if item["code"] == "control_write_injected"
         ]

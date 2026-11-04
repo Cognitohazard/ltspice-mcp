@@ -137,12 +137,11 @@ async def test_terminal_root_token_noop_replay_and_read_only_views(
     assert root["control_token"]
     assert root["lineage"] == {
         "root_job_id": root["job_id"],
-        "parent_job_id": None,
         "attempt_index": 0,
     }
     attempt = root["runs"]["items"][0]["attempt"]
     assert attempt["execution_job_id"] == root["job_id"]
-    assert attempt["reused"] is False
+    assert "reused" not in attempt
     for action in ("status", "runs", "list"):
         payload = {"action": action}
         if action != "list":
@@ -168,7 +167,7 @@ async def test_terminal_root_token_noop_replay_and_read_only_views(
         JOBS_OUTPUT_SCHEMA,
     )
     assert noop["resumed"] is replay["resumed"] is False
-    assert noop["replayed"] is False and replay["replayed"] is True
+    assert "replayed" not in noop and replay["replayed"] is True
     assert noop["job_id"] == noop["head_job_id"] == root["job_id"]
     assert "control_token" not in noop and "control_token" not in replay
     assert "analyze_results" in noop["hint"]
@@ -219,7 +218,7 @@ async def test_resume_child_reuses_success_and_replays_after_source_deletion(
         "case_ids": [failed_id, failed_id],
     }
     child = _data(await handle_jobs(JobsInput.model_validate(payload), state), JOBS_OUTPUT_SCHEMA)
-    assert child["resumed"] is True and child["replayed"] is False
+    assert child["resumed"] is True and "replayed" not in child
     assert child["job_id"] != root["job_id"]
     assert child["control_token"] != root["control_token"]
     assert child["completeness"]["reused"] == child["completeness"]["submitted"] == 1
@@ -378,7 +377,7 @@ async def test_unsupported_recoverable_inputs_refuse_before_claim(
     data = result.structured_content
     assert result.is_error and data is not None
     assert data["error"]["code"] == "recovery_control_unsupported"
-    assert data["error"]["retryable"] is False
+    assert "retryable" not in data["error"]
     assert data["error"]["commit_state"] == "not_started"
     assert submissions == [] and state.all_jobs == {}
     assert not Store(work_dir).request_index("no-claim").exists()

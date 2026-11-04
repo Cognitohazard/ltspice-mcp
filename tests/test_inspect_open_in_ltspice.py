@@ -105,12 +105,10 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
         {
             "path": str(asc_file),
             "kind": "schematic",
-            "active": False,
             "pid": PID,
             "version": "26.1.1",
             "in_sandbox": True,
             "sha256": digest(asc_file),
-            "differs_from_file": False,
         },
         {
             "path": str(other),
@@ -133,7 +131,6 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
         {
             "path": str(deck),
             "kind": "netlist",
-            "active": False,
             "pid": PID,
             "version": "26.1.1",
             "in_sandbox": True,
@@ -142,7 +139,6 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
         {
             "path": str(outside),
             "kind": "schematic",
-            "active": False,
             "pid": PID,
             "version": "26.1.1",
             "in_sandbox": False,
@@ -166,7 +162,7 @@ async def test_a_long_difference_is_listed_up_to_a_limit_and_the_rest_counted(
 
     assert row["differs_from_file"] is True
     assert row["only_in_window"] == sorted(wires)[:25]
-    assert row["only_in_file"] == []
+    assert "only_in_file" not in row
     assert row["difference_omitted"] == 5
 
 
@@ -213,7 +209,7 @@ async def test_with_ltspice_running_and_nothing_open_the_list_is_empty(
     item = await ask(asc_state)
 
     assert item["ok"] is True
-    assert item["data"] == {"windows": 1, "designs": [], "total": 0}
+    assert item["data"] == {"windows": 1, "total": 0}
 
 
 async def test_with_no_ltspice_running_there_are_no_windows(
@@ -224,7 +220,7 @@ async def test_with_no_ltspice_running_there_are_no_windows(
     item = await ask(asc_state)
 
     assert item["ok"] is True
-    assert item["data"] == {"windows": 0, "designs": [], "total": 0}
+    assert item["data"] == {"windows": 0, "total": 0}
 
 
 async def test_where_windows_cannot_be_read_the_query_fails_and_says_why(asc_state: SessionState):
@@ -289,6 +285,6 @@ async def test_capabilities_say_whether_ltspice_is_started_on_request(
 
     world = tmp_path / "world.json"
     put_windows(asc_state, world, [])
-    assert await reported() == {"available": True, "reason": None, "starts_ltspice": False}
+    assert await reported() == {"available": True}
     put_windows(asc_state, world, [], start=FakeStart(world))
-    assert await reported() == {"available": True, "reason": None, "starts_ltspice": True}
+    assert await reported() == {"available": True, "starts_ltspice": True}

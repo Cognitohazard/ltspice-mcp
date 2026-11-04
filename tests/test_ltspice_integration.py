@@ -442,7 +442,7 @@ class TestSweepIntegration:
         )
         assert receipt["status"] == "completed", receipt.get("failures")
         stage = receipt["analysis"]
-        assert stage["error"] is None, stage["error"]
+        assert "error" not in stage, stage.get("error")
         entry = stage["result"]["results"]["corner"]
 
         reduced = {item["stat"]: item for item in entry["reduced"]}
@@ -501,7 +501,7 @@ class TestMonteCarloIntegration:
         assert counts["failed"] == 0
 
         stage = receipt["analysis"]
-        assert stage["error"] is None, stage["error"]
+        assert "error" not in stage, stage.get("error")
         reduced = {item["stat"]: item for item in stage["result"]["results"]["corner"]["reduced"]}
         # R1 perturbed uniformly by +/-5% around 1k, C1 fixed at 100n: every
         # sampled resistance and every corner frequency stays in its band.
@@ -843,7 +843,7 @@ class TestSheetOpenInAWindow:
         data = await self._edit(ltspice_state, sheet, "2.2k")
 
         assert data["commit_state"] == "committed"
-        assert data["observations"] == []
+        assert "observations" not in data
         assert [(row["pid"], row["shown"]) for row in data["open_in_ltspice"]] == [(pid, True)]
         (held,) = await asyncio.to_thread(windows.holding, sheet)
         assert "SYMATTR Value 2.2k" in held.text
@@ -1011,7 +1011,7 @@ class TestSheetOpenInAWindow:
             True,
         )
         assert design["sha256"] == hashlib.sha256(on_disk).hexdigest()
-        assert design["differs_from_file"] is False
+        assert "differs_from_file" not in design
 
         # Someone changes the sheet in the window and does not save it.
         windows = ltspice_state.open_windows
@@ -1109,7 +1109,7 @@ class TestSheetOpenInAWindow:
 
         assert await asyncio.to_thread(results_in_front) == shown["results"]
         # Nothing was opened in a browser beside it.
-        assert result.structured_content["opened"] is False
+        assert "opened" not in result.structured_content
 
     async def test_a_checked_sheet_is_opened_in_the_window_and_put_in_front(
         self, ltspice_state: SessionState, open_sheet, work_dir: Path
@@ -1144,7 +1144,7 @@ class TestSheetOpenInAWindow:
 
         shown = await show(already_open)
         assert (shown["shown"], shown["already_open"]) == (True, True), shown
-        assert shown["differs_from_file"] is False
+        assert "differs_from_file" not in shown
         front, _designs = await asyncio.to_thread(in_front)
         assert Path(front) == already_open
 
@@ -1415,7 +1415,7 @@ class TestSheetOpenInAWindow:
                 assert len(started) == 1
                 assert (shown["shown"], shown.get("started")) == (True, True), shown
                 assert shown["pid"] == started[0].pid
-                assert shown["already_open"] is False
+                assert "already_open" not in shown
             finally:
                 for process in started:
                     process.kill()

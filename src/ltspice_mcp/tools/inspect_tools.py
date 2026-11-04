@@ -2542,7 +2542,7 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
 _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "section": {
         "type": ["string", "null"],
-        "description": "The section read; null for the core and its index.",
+        "description": "The section read; absent for the core and its index.",
     },
     "title": {"type": "string"},
     "text": {"type": "string", "description": "Markdown."},
@@ -2856,11 +2856,12 @@ def inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 # Rung 0's allowlist, declared as data rather than spelled inside the ``if``
 # that applies it: a rung that exempts content is the one place a checker can
-# silently lose coverage, so it has to be a list a test can read. Both keys are
-# optional on an item schema — pinned by tests/test_response_budget.py. They go
+# silently lose coverage, so it has to be a list a test can read. The key is
+# optional on an item schema — pinned by tests/test_response_budget.py. It goes
 # only from an item with nothing left to fetch, for which the paging block
-# restates counts the rows carry and a null cursor that leads nowhere.
-_TRIM_REMOVE_EXHAUSTED: tuple[str, ...] = ("page", "next_cursor")
+# restates counts the rows carry; such an item's null cursor is left out of
+# every reply anyway.
+_TRIM_REMOVE_EXHAUSTED: tuple[str, ...] = ("page",)
 
 
 def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:

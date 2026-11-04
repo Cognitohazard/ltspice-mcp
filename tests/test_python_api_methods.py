@@ -202,8 +202,8 @@ def test_jobs_list_returns_every_circuit_group_the_wire_would_page(
     assert paged["truncated"] is True
     assert sorted(str(group["path"]) for group in collected["items"]) == sorted(expected)
     assert collected["returned"] == collected["total"] == 7
-    assert collected["truncated"] is False
-    assert collected["next_cursor"] is None
+    assert "truncated" not in collected
+    assert "next_cursor" not in collected
 
 
 @pytest.mark.parametrize("action", ["status", "wait", "runs"])
@@ -291,8 +291,8 @@ def test_run_receipt_assembles_more_than_fifty_runs_with_original_projection(
     )
 
     assert lean["runs"]["returned"] == lean["runs"]["total"] == 61
-    assert lean["runs"]["truncated"] is False
-    assert lean["runs"]["next_cursor"] is None
+    assert "truncated" not in lean["runs"]
+    assert "next_cursor" not in lean["runs"]
     assert set(projected["runs"]["items"][0]) == {"case_id", "raw"}
     direct_runs = api.jobs(action="runs", job_id=job.job_id)
     status = api.jobs(action="status", job_id=job.job_id)
@@ -519,10 +519,9 @@ def test_inspect_batches_live_cursors_and_merges_paired_net_collections(
     assert net["page"] == {
         "total": 5,
         "returned": 5,
-        "truncated": False,
         "collections": {
-            "pins": {"total": 2, "returned": 2, "truncated": False},
-            "coordinates": {"total": 3, "returned": 3, "truncated": False},
+            "pins": {"total": 2, "returned": 2},
+            "coordinates": {"total": 3, "returned": 3},
         },
     }
 
@@ -676,7 +675,7 @@ def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
     complete, wire = _complete_and_wire(state_no_sim, work_dir, recipes)
 
     assert len(complete["failures"]) == 107
-    assert complete["next"] is None
+    assert "next" not in complete
     assert not any(item.get("code") == "failures_truncated" for item in complete["observations"])
     assert len(wire["failures"]) == 100
     assert any(
@@ -750,15 +749,15 @@ def test_analyze_collects_projected_per_run_rows_and_missing_cases_together(
     assert set(data["results"]) == {"summary", "values"}
     values = data["results"]["values"]["per_run"]
     assert values["returned"] == values["total"] == 3
-    assert values["truncated"] is False
-    assert values["next_cursor"] is None
+    assert "truncated" not in values
+    assert "next_cursor" not in values
     assert all(set(row) <= {"case_id", "run_index", "step_index"} for row in values["items"])
     missing = data["coverage"]["missing_cases"]
     assert missing["returned"] == missing["total"] == 1
     assert missing["items"][0]["run_index"] == 3
-    assert missing["truncated"] is False
-    assert missing["next_cursor"] is None
-    assert data["next"] is None
+    assert "truncated" not in missing
+    assert "next_cursor" not in missing
+    assert "next" not in data
 
 
 def test_verify_and_edit_return_uncapped_neutral_data(
@@ -804,8 +803,8 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     legend = edit["views"]["pin_legend"]
     assert legend["items"] == list(pin_rows)
     assert legend["returned"] == legend["total"] == 121
-    assert legend["truncated"] is False
-    assert legend["next_cursor"] is None
+    assert "truncated" not in legend
+    assert "next_cursor" not in legend
 
 
 @pytest.mark.parametrize(
@@ -1021,7 +1020,7 @@ def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(
     monkeypatch.setattr(experiments, "handle_run_experiments", handler)
 
     def codes(receipt: Mapping[str, Any]) -> set[str]:
-        return {item["code"] for item in receipt["observations"]}
+        return {item["code"] for item in receipt.get("observations", [])}
 
     detached = api.run_experiments(
         wait=False,

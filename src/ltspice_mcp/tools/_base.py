@@ -28,6 +28,14 @@ from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
+from ltspice_mcp.lib.reply_fields import (
+    Kept,
+    active_kept,
+    keep_when_no_tool_replies,
+    omit_silent,
+    relax_required,
+    replying_with,
+)
 
 # Re-exported, not defined here: both netlist injections live in the runner
 # layer so the experiment coordinator (lib/) can call them without importing
@@ -163,10 +171,22 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
     return scrubbed
 
 
+def reply_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` as a reply sends it: the fields that say nothing left out, with
+    the kept fields of the tool replying now, and any number that is not finite
+    replaced with null and reported.
+
+    The one place the rule of ``lib/reply_fields.py`` is applied to a reply.
+    The rule runs first, so a null written for a number that is not finite
+    stays, named in ``warnings``. ``data`` is not changed.
+    """
+    return sanitize_payload(omit_silent(data, active_kept()))
+
+
 def json_response(data: Any) -> types.CallToolResult:
     """Return data as JSON text + structuredContent."""
     if isinstance(data, dict):
-        data = sanitize_payload(data)
+        data = reply_payload(data)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=json.dumps(data, indent=2, allow_nan=False))],
         structured_content=data,
@@ -193,14 +213,18 @@ def format_response(
     steps, caveats) must be mirrored into ``data`` — conventionally an
     optional ``hint`` key declared in the tool's output_schema. The text
     channel is presentation only.
+
+    The fields that say nothing are left out of ``data`` here
+    (:func:`reply_payload`), so ``text`` is written as a summary that never
+    states an empty result either.
     """
     # MCP SDK's CallToolResult wants a plain dict for structuredContent;
     # TypedDicts ARE plain dicts at runtime, but wrap defensively so
     # non-dict mappings (rare, but cheap to support) also work.
     payload: dict[str, Any] = dict(data) if not isinstance(data, dict) else data
     if fmt == "json":
-        return json_response(payload)  # sanitizes internally — don't walk twice
-    payload = sanitize_payload(payload)
+        return json_response(payload)  # leans and sanitizes internally — don't walk twice
+    payload = reply_payload(payload)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
         structured_content=payload,
@@ -241,7 +265,7 @@ def image_response(
             "caller's data must not set it (rename the caller's key)"
         )
     payload["image"] = image.to_dict()
-    payload = sanitize_payload(payload)
+    payload = reply_payload(payload)
 
     content: list[Any] = []
     if image.is_raster:
@@ -580,6 +604,138 @@ ENVELOPE_KEYS: tuple[str, ...] = tuple(Envelope.__annotations__)
 
 #: The three fact channels, which stay separate on every tool that has them.
 ENVELOPE_CHANNELS: tuple[str, ...] = ("failures", "observations", "warnings")
+
+
+# ---------------------------------------------------------------------------
+# The fields a reply always carries
+#
+# Every reply leaves out the fields that say nothing (lib/reply_fields.py): an
+# empty list or object, a null, a false flag, a sub-answer the overall answer
+# gives. A field is kept anyway only when its empty, null or false value is
+# itself the answer. Each tool lists those fields here, with the reason, and
+# the list is the whole exemption: no handler leaves a field out, or keeps one,
+# on its own. A key is kept wherever it appears in that tool's reply.
+# ---------------------------------------------------------------------------
+
+_OUTCOME: dict[str, Kept] = {
+    "outcome": Kept("The call's verdict, on every envelope reply; never empty."),
+}
+
+_FINDING_OK: dict[str, Kept] = {
+    "ok": Kept(
+        "A verdict: false is what a finding, a check stage or a query reports, "
+        "and its evidence or error says why."
+    ),
+}
+
+_COMPARISON: dict[str, Kept] = {
+    "equivalent": Kept(
+        "The comparison's verdict: false is a mismatch and null is no verdict "
+        "(a deck that could not be read), which an absent field could not tell apart."
+    ),
+    "structurally_equivalent": Kept(
+        "The wiring-only verdict, kept beside an equivalent that is false or null "
+        "so the caller sees which part held; left out beside equivalent: true, "
+        "which gives it."
+    ),
+}
+
+_SHOWN: dict[str, Kept] = {
+    "shown": Kept(
+        "Whether LTspice shows what was asked: false is the news, and the reason "
+        "beside it says why."
+    ),
+}
+
+_MEASURED: dict[str, Kept] = {
+    "value": Kept(
+        "A recipe's measured value is data, kept as the recipe returns it: a null is "
+        "a quantity with no number, which reductions and specs count in "
+        "no_value_count, and a false is a measured fact, such as exact_match: false "
+        "for a query point moved to the nearest sample.",
+        data=True,
+    ),
+}
+
+_RECEIPT: dict[str, Kept] = {
+    **_OUTCOME,
+    **_FINDING_OK,
+    **_MEASURED,
+    "staged": Kept(
+        "An input reference that was not copied into the job: the run read it in "
+        "place, or the circuit failed; its reason says which."
+    ),
+}
+
+#: Per tool, the fields its replies keep even when empty, null or false.
+ALWAYS_PRESENT: dict[str, dict[str, Kept]] = {
+    "run_experiments": dict(_RECEIPT),
+    "jobs": {
+        **_RECEIPT,
+        "exists": Kept("A listed circuit whose file is gone: false is the news."),
+        "resumed": Kept(
+            "A resume's answer: false is a resume that selected nothing to run, "
+            "and the hint says what to read instead."
+        ),
+    },
+    "analyze_results": {**_OUTCOME, **_MEASURED},
+    "inspect": {
+        **_OUTCOME,
+        **_FINDING_OK,
+        "available": Kept(
+            "Whether a simulator, or the LTspice window sync, can be used here: "
+            "false is the news, with its remediation or reason."
+        ),
+        "selectable": Kept(
+            "Whether run_experiments may name a detected simulator: false comes with "
+            "the refusal. Left out beside available: false, which gives it."
+        ),
+        "exporter_available": Kept("False: no LTspice, so no .asc can be exported or run."),
+        "png": Kept("False: verify_circuit cannot draw a PNG here; missing and remedy say why."),
+        "persist_jobs": Kept("False: job records are not kept on disk ([state] persist_jobs)."),
+        "in_sandbox": Kept("False: a sandbox is set and this open document is outside it."),
+        "allowed_paths": Kept(
+            "The sandbox, null when none is set: asked for by name with "
+            "fields=['allowed_paths'] after a config edit, where an absent key "
+            "would leave the question unanswered."
+        ),
+    },
+    "edit_schematic": {**_OUTCOME, **_FINDING_OK, **_COMPARISON, **_SHOWN},
+    "verify_circuit": {**_OUTCOME, **_FINDING_OK, **_COMPARISON, **_SHOWN},
+    "plot_waveform": {
+        **_SHOWN,
+        "tied": Kept(
+            "Whether the plot is tied to its sheet: false means clicking a net there "
+            "does not plot it, and note says why."
+        ),
+    },
+    "run_code": {
+        "status": Kept("The snippet's outcome (ok, error, timeout, busy, reset); never empty."),
+    },
+}
+
+#: Every tool's kept fields together: what a reply built outside any tool's
+#: call keeps, so a field kept by any tool is never lost there.
+ALL_KEPT: dict[str, Kept] = {
+    name: kept for fields in ALWAYS_PRESENT.values() for name, kept in fields.items()
+}
+keep_when_no_tool_replies(ALL_KEPT)
+
+_Sent = TypeVar("_Sent")
+
+
+def as_sent(value: _Sent, tool: str) -> _Sent:
+    """``value`` as ``tool``'s reply sends it: without the fields that say
+    nothing. The Python API's results are passed through it, so they keep the
+    tool's shape."""
+    return omit_silent(value, ALWAYS_PRESENT[tool])
+
+
+@contextlib.contextmanager
+def replying_as(tool: str) -> Iterator[None]:
+    """Build the replies inside as ``tool``'s, keeping that tool's fields."""
+    with replying_with(ALWAYS_PRESENT[tool]):
+        yield
 
 
 _Number = TypeVar("_Number", int, float)
@@ -935,8 +1091,18 @@ class RegisteredTool:
     instructions all derive from."""
 
 
-def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
-    """Declare the ``warnings`` key any payload can grow.
+def _declare_reply_schema(
+    schema: dict[str, Any], kept: Mapping[str, Kept] | None = None
+) -> dict[str, Any]:
+    """Declare the ``warnings`` key any payload can grow, and mark optional
+    every property a reply may leave out.
+
+    A reply leaves out the fields that say nothing (:func:`reply_payload`), so
+    a property that can be empty, null or false is not required unless the
+    tool keeps it (``kept``, its ``ALWAYS_PRESENT`` entry; every tool's
+    together for a handler that declares a schema of its own). Relaxed here,
+    at the schema choke point, so no schema can require a field its replies
+    leave out.
 
     ``sanitize_payload`` injects a top-level ``warnings`` list into ANY
     tool's payload the moment a float in it is non-finite — reachable
@@ -959,6 +1125,7 @@ def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
     """
     properties = schema.setdefault("properties", {})
     properties.setdefault("warnings", WARNINGS_SCHEMA)
+    relax_required(schema, ALL_KEPT if kept is None else kept)
     return schema
 
 
@@ -1026,7 +1193,10 @@ class ToolRegistry:
             async def wrapped(arguments: Any, state: SessionState) -> types.CallToolResult:
                 if input_model is not None and not isinstance(arguments, input_model):
                     arguments = input_model.model_validate(arguments or {})
-                return await handler(arguments, state)
+                # Every reply built inside keeps this tool's fields
+                # (ALWAYS_PRESENT), whichever helper builds it.
+                with replying_as(name):
+                    return await handler(arguments, state)
 
             definition_kwargs: dict[str, Any] = {
                 "name": name,
@@ -1039,12 +1209,18 @@ class ToolRegistry:
                 ),
                 "annotations": annotations,
             }
-            if output_model is not None:
-                definition_kwargs["output_schema"] = _declare_warnings_key(
-                    schema_from_typeddict(output_model)
+            if name not in ALWAYS_PRESENT:
+                raise ValueError(
+                    f"Tool {name!r} has no entry in ALWAYS_PRESENT: list the fields its "
+                    "replies keep when empty, null or false (an empty dict for none)"
                 )
-            elif output_schema is not None:
-                definition_kwargs["output_schema"] = _declare_warnings_key(output_schema)
+            schema = (
+                schema_from_typeddict(output_model) if output_model is not None else output_schema
+            )
+            if schema is not None:
+                definition_kwargs["output_schema"] = _declare_reply_schema(
+                    schema, ALWAYS_PRESENT[name]
+                )
 
             definition = types.Tool(**definition_kwargs)
             if meta is not None:
@@ -1146,7 +1322,7 @@ def declare_output_schema(
         raise ValueError("supply exactly one of output_schema or output_model")
     schema = schema_from_typeddict(output_model) if output_model is not None else output_schema
     assert schema is not None
-    resolved = _declare_warnings_key(schema)
+    resolved = _declare_reply_schema(schema)
 
     def decorator(handler: Callable) -> Callable:
         _stamp_output_schema(handler, resolved)

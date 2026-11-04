@@ -542,20 +542,24 @@ class TestErrorEnvelope:
                 found.append(err)
         return found
 
-    _FULL_ENVELOPE = frozenset({"code", "message", "stage", "retryable", "commit_state"})
+    _FULL_ENVELOPE = frozenset({"code", "message", "stage", "commit_state"})
 
     @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_every_top_level_error_object_is_the_full_envelope(self, name: str):
         # Uniform failure-shape contract: wherever a tool declares a top-level
-        # error object it carries the full {code, message, stage, retryable,
-        # commit_state} envelope, so a caller can decide whether re-submission
-        # is safe (design section 2). Tools that route failures through findings
-        # or per-item channels declare no top-level error object and pass vacuously.
+        # error object it carries the full {code, message, stage, commit_state}
+        # envelope, so a caller can decide whether re-submission is safe
+        # (design section 2), and declares retryable, which a reply carries
+        # only when it is true, as it leaves out every false flag. Tools that
+        # route failures through findings or per-item channels declare no
+        # top-level error object and pass vacuously.
         for err in self._top_error_objects(name):
             required = set(err.get("required", []))
             assert required >= self._FULL_ENVELOPE, (
                 f"{name}: error envelope missing fields (has {sorted(required)})"
             )
+            assert "retryable" in err["properties"], f"{name}: error declares no retryable"
+            assert "retryable" not in required, f"{name}: a false retryable is left out"
 
     @pytest.mark.parametrize("name", ["run_experiments", "jobs", "edit_schematic"])
     def test_write_and_execute_planes_declare_a_full_error_envelope(self, name: str):
@@ -1066,7 +1070,7 @@ class TestCursorTamperOnEveryPaginatedInput:
 
     def test_shared_view_paginator_rejects_cross_binding(self):
         good = paginate_view([1, 2, 3, 4], "bind:a", cursor=None, limit=2)
-        cursor = good["next_cursor"]
+        cursor = good.get("next_cursor")
         assert cursor is not None
         with pytest.raises(PageCursorError):
             paginate_view([1, 2, 3, 4], "bind:b", cursor=cursor, limit=2)

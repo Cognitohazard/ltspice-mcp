@@ -181,7 +181,7 @@ class TestExecution:
         assert reply["status"] == "ok"
         assert reply["stdout"] == "hi\n"
         assert reply["result"] == "42"
-        assert reply["error"] is None
+        assert "error" not in reply
         assert reply["worker_pid"] and reply["worker_pid"] != os.getpid()
         assert reply["exec_seq"] >= 1
 
@@ -250,7 +250,7 @@ class TestExecution:
         )
         assert reply["status"] == "ok"
         assert reply["stdout"] == "clean\n"
-        assert reply["result"] is None
+        assert "result" not in reply
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ class TestLifetime:
         assert "api.wait('exp-held')" in reply["error"]["message"]
         after = await run(state, "1")
         assert after["worker_pid"] == before
-        assert after["worker_restarted"] is None
+        assert "worker_restarted" not in after
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
     async def test_timeout_interrupts_and_keeps_the_worker(
@@ -346,7 +346,7 @@ class TestLifetime:
         after = await run(state, "1")
         assert after["worker_pid"] == before
         assert after["exec_seq"] == reply["exec_seq"] + 1
-        assert after["worker_restarted"] is None
+        assert "worker_restarted" not in after
 
     @pytest.mark.skipif(not POSIX, reason="the graceful interrupt is POSIX-only")
     async def test_a_snippet_that_swallows_the_interrupt_is_killed(
@@ -414,7 +414,7 @@ class TestLifetime:
         second = await run(state, "2")
         assert second["status"] == "busy"
         assert second["running"]["phase"] == "running"
-        assert second["running"]["same_code"] is False
+        assert "same_code" not in second["running"]
         assert 0 <= second["running"]["elapsed_s"] < LIVENESS_S
         assert "One snippet" in second["hint"]
         same = await run(state, held)
@@ -459,7 +459,7 @@ class TestLifetime:
         assert reply["worker_restarted"] == {"previous_pid": before, "reason": "reset requested"}
         after = await run(state, "1")
         assert after["worker_pid"] != before
-        assert after["worker_restarted"] is None
+        assert "worker_restarted" not in after
         assert after["exec_seq"] == reply["exec_seq"] + 1
 
     async def test_worker_death_is_reported_and_the_next_call_respawns(self, state: SessionState):

@@ -64,7 +64,8 @@ async def test_a_cases_results_are_copied_beside_its_sheet(
     first = await place(state_no_sim)
     assert first["outcome"] == "complete"
     assert first["sheet"] == str(sheet) and first["case_id"] == "case-0000"
-    assert [(Path(f["to"]).name, f["replaced"]) for f in first["files"]] == [
+    # Nothing was there to replace, and a false flag is left out.
+    assert [(Path(f["to"]).name, f.get("replaced", False)) for f in first["files"]] == [
         ("amp.raw", False),
         ("amp.log", False),
     ]
@@ -155,8 +156,8 @@ async def test_a_sheets_receipt_says_where_its_results_are(
     assert 'jobs(action="place_beside_sheet", job_id="placed"' in note["detail"]
     job.simulator = "NGspiceSimulator"
     receipt = await place(state_no_sim, action="status")
-    assert all(o["code"] != "results_not_beside_sheet" for o in receipt["observations"])
+    assert all(o["code"] != "results_not_beside_sheet" for o in receipt.get("observations", []))
     job.simulator = "LTspice"
     job.cases[0].circuit_path = work_dir / "amp.cir"
     receipt = await place(state_no_sim, action="status")
-    assert all(o["code"] != "results_not_beside_sheet" for o in receipt["observations"])
+    assert all(o["code"] != "results_not_beside_sheet" for o in receipt.get("observations", []))
