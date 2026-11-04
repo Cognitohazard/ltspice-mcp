@@ -309,6 +309,8 @@ tool-surface changes.
   A box LTspice shows instead of saving, such as for a write-protected file,
   is quoted in `window_not_saved` and closed with Cancel; a window whose copy
   changes during a discard is left open, with `window_not_discarded`.
+  `open_window="save"` replaces `save_open_window=true`, added earlier in
+  this release; a call that still sends `save_open_window` is told so.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the
