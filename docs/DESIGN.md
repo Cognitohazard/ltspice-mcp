@@ -112,6 +112,15 @@ text, and the test suite checks every reply it produces against its tool's
 schema. The tool listing leaves the output schemas out, because they would be
 its largest part and each reply shows its own structure.
 
+A reply leaves out every field that says nothing: an empty list or object, a
+null, a false flag, and a sub-answer its overall answer already gives. So a
+reply about work that found nothing costs no tokens for saying so. A missing
+field means "checked, and nothing to report", never "not checked": a check
+that did not run or a value that could not be read is always stated. One
+function applies the rule to every reply, and each tool lists the few fields
+it keeps anyway, with the reason ([mcp_surface.md](design/mcp_surface.md),
+"Fields left out").
+
 ### A short tool listing
 
 A client loads every tool definition before its first call, and those tokens
@@ -287,8 +296,9 @@ The run summary also has an `observations` list:
 |`value`|non-finite samples and extreme node values in the trace data|
 |`coverage`|skipped checks, so an incomplete result is not mistaken for a clean one|
 
-An empty `observations` list means that no check fired. It does not mean that
-the result is correct.
+A reply with no `observations` means that no check fired; it leaves out an
+empty list, as it leaves out every field that says nothing. It does not mean
+that the result is correct.
 
 LTspice and ngspice get full diagnostics, with ngspice's console output read
 alongside its log. For QSPICE and Xyce, the server parses convergence and

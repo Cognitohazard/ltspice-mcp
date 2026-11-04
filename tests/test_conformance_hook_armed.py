@@ -56,6 +56,26 @@ async def test_hook_rejects_a_schema_violating_emission(
         )
 
 
+async def test_hook_rejects_a_reply_that_carries_fields_that_say_nothing(
+    state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """A reply that reaches the client with an empty list, a null or a false
+    flag is caught at emission time. With the shared rule switched off in the
+    response builder, a real handler's ordinary reply (a job with no failures,
+    no warnings and no artifacts) carries exactly such fields, and the hook
+    must refuse it; that proves the guard is armed for every new field."""
+    from ltspice_mcp.tools import _base
+
+    job = make_experiment_job(state_no_sim, job_id="silent_specimen", status="completed")
+    monkeypatch.setattr(_base, "omit_silent", lambda value, kept: value)
+
+    with pytest.raises(AssertionError, match="fields that say nothing"):
+        await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": job.job_id}),
+            state_no_sim,
+        )
+
+
 def _scenario_tool_names() -> set[str]:
     """Tool names passed to ``session.call_tool(...)`` in the scenario script."""
     source = (Path(__file__).parent / "scenario_active_filter.py").read_text(encoding="utf-8")

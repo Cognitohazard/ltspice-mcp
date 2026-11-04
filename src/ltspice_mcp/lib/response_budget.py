@@ -5,12 +5,11 @@ of this runs and the response is byte-for-byte what it has always been. Present,
 the tool renders its envelope, the serializer measures it, and while it is over
 the tool re-renders one rung further down a fixed ladder:
 
-0. ``trim``   — suppress presentation blocks named on an explicit per-tool
-   allowlist: optional keys are REMOVED when empty, required keys are EMPTIED
-   in place. An allowlist rather than a predicate because a rung that exempts
-   content is the one place a checker silently loses coverage. Removing an
-   empty block loses nothing, so a response this rung only tidied carries no
-   note; one it emptied a block of names the block.
+0. ``trim``   — empty the presentation blocks named on an explicit per-tool
+   allowlist, which the reply then leaves out, as it leaves out every empty
+   field (``lib/reply_fields.py``). An allowlist rather than a predicate
+   because a rung that exempts content is the one place a checker silently
+   loses coverage. A response whose trim emptied a block names the block.
 1. ``answer`` — revoke the caller's payload-growing opt-ins so the response
    falls back to the answer channel it would have had by default.
 2. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
@@ -24,16 +23,17 @@ the tool re-renders one rung further down a fixed ladder:
 Four rules hold at every rung:
 
 - **Facts survive any budget.** failures, observations, warnings, completeness
-  and spec verdicts are never trimmed, empty or not — an empty ``failures`` IS
-  the answer to "did anything fail". A budget squeezes presentation only.
+  and spec verdicts are never trimmed. An absent ``failures`` is the answer to
+  "did anything fail", which every reply gives by leaving out an empty list. A
+  budget squeezes presentation only.
 - **Rows keep their shape.** A row is an object at every rung, keyed the same
   way whatever the budget: a tight budget returns fewer rows, never differently
   shaped ones. A rung that re-rendered rows as a column list plus arrays of
   values was removed for that reason — it made a caller branch on the shape of
   what came back.
-- **Schema-safe by construction.** No rung deletes a required key; a required
-  presentation block is emptied, never removed, so every emission still
-  validates against the tool's declared output schema.
+- **Schema-safe by construction.** A trimmed block is emptied and so left out,
+  and every block a reply may leave out is optional in the tool's declared
+  output schema, so every emission still validates against it.
 - **Termination rests on rung finiteness.** The ladder ends after rung 2
   whether or not the budget was met. A budget smaller than the facts floor
   returns the floor plus an observation saying so, and stays over the budget.
@@ -46,6 +46,8 @@ import json
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from ltspice_mcp.lib import reply_fields
 
 # The convention for estimating tokens from a payload: compact-JSON characters
 # divided by four. Response size is measured the same way everywhere in this
@@ -125,12 +127,17 @@ class Rung:
         return self.budget - NOTE_RESERVE_TOKENS
 
 
-def estimate_tokens(payload: Any) -> int:
+def estimate_tokens(payload: Any, *, as_sent: bool = True) -> int:
     """Token estimate for ``payload`` — the serializer itself, measure-then-degrade.
 
     Serializes exactly as the transport does (compact separators, no ASCII
     escaping beyond JSON's own), with ``default=str`` so an unserializable leaf
     is measured at its string length rather than raising mid-ladder.
+
+    The payload is measured as it is sent, without the fields that say
+    nothing (``lib/reply_fields.py``), with the kept fields of the tool
+    replying now. ``as_sent=False`` measures data that holds no fields, such
+    as an inline waveform's samples, as it is, without walking every sample.
 
     One thing it cannot see: the non-finite substitution note the response
     builder appends when a payload carries NaN/Inf. That note lives on the
@@ -138,65 +145,38 @@ def estimate_tokens(payload: Any) -> int:
     budget would not cut anyway — so a degenerate result is a few tens of
     tokens heavier than measured here.
     """
-    text = json.dumps(payload, separators=(",", ":"), default=str)
+    sent = reply_fields.omit_silent(payload, reply_fields.active_kept()) if as_sent else payload
+    text = json.dumps(sent, separators=(",", ":"), default=str)
     return len(text) // CHARS_PER_TOKEN
 
 
 # --------------------------------------------------------------------------
-# Rung 0 primitives — remove optional, empty required
+# Rung 0 primitive — empty presentation blocks
 # --------------------------------------------------------------------------
 
 
-def remove_when_empty(container: dict[str, Any], key: str) -> None:
-    """Drop an OPTIONAL presentation key whose value carries nothing.
+def apply_trim(container: dict[str, Any], keys: Sequence[str]) -> list[str]:
+    """Rung 0 over one container: empty, in place, the presentation blocks a
+    tool's declared key list names, which the reply then leaves out.
 
-    Only when empty: a non-empty optional block is content, and content is the
-    business of the rungs above this one.
-    """
-    if key in container and not container[key]:
-        del container[key]
-
-
-def empty_required(container: dict[str, Any], key: str) -> bool:
-    """Empty a REQUIRED presentation key in place — never delete it.
-
-    Deleting it would break the tool's own output schema under
-    ``additionalProperties: false``; emptying keeps every emission valid.
-    Returns whether the key held anything before.
-    """
-    value = container.get(key)
-    if isinstance(value, list):
-        container[key] = []
-    elif isinstance(value, dict):
-        container[key] = {}
-    else:
-        return False
-    return bool(value)
-
-
-def apply_trim(
-    container: dict[str, Any],
-    *,
-    remove: Sequence[str] = (),
-    empty: Sequence[str] = (),
-) -> list[str]:
-    """Rung 0 over one container, from a tool's declared key lists.
-
-    ``remove`` names optional keys, dropped only when they carry nothing;
-    ``empty`` names required keys, emptied in place. The lists are declared as
-    module-level data by each tool rather than spelled inline here: a rung that
-    exempts content is the one place a checker can silently lose coverage, so
-    the allowlist has to be something a test can read.
+    The list is declared as module-level data by each tool rather than spelled
+    inline here: a rung that exempts content is the one place a checker can
+    silently lose coverage, so the allowlist has to be something a test can
+    read. A block that was already empty needs no rung: every reply leaves it
+    out.
 
     Returns the keys it emptied of content, which a renderer adds to its
-    rung's ``cut``. A removed empty key is not among them: it carried nothing,
-    and a note saying it was cut would send the caller after nothing.
+    rung's ``cut``.
 
     Idempotent, so the ladder may re-apply it to an already-trimmed envelope.
     """
-    for key in remove:
-        remove_when_empty(container, key)
-    return [key for key in empty if empty_required(container, key)]
+    emptied = []
+    for key in keys:
+        value = container.get(key)
+        if isinstance(value, (list, dict)) and value:
+            container[key] = type(value)()
+            emptied.append(key)
+    return emptied
 
 
 # --------------------------------------------------------------------------

@@ -32,6 +32,11 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 - A completed run can still hold a degenerate result, such as a coerced value
   or a skipped `.meas`. Read `observations`, `warnings`, `failures` and
   `completeness` before trusting a number.
+- A reply leaves out every field that says nothing: an empty list or object,
+  a null, a false flag. A missing field means checked, with nothing to report,
+  so read one with a default (`row.get("assignments", {})`,
+  `page.get("next_cursor")`). What did not run or could not be read is always
+  stated.
 
 ## Python or tools
 
@@ -74,7 +79,7 @@ for row in receipt["runs"]["items"]:  # one row per case
     r = api.load_raw(job_id=receipt["job_id"], case_id=row["case_id"])
     t, v = r.axis(step=0), r.trace("V(out)", step=0)
     t_w, v_w, _ = window_and_clean(t, v, 4e-3, None)  # from 4 ms to the end
-    print(row["assignments"], compute_signal_stats(t_w, v_w)["mean"])
+    print(row.get("assignments", {}), compute_signal_stats(t_w, v_w)["mean"])
 ```
 
 - The methods take the tools' arguments as keywords and return complete

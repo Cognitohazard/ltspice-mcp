@@ -34,6 +34,7 @@ from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools import jobs as jobs_module
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
     JOBS_WAIT_CAP_S,
@@ -647,7 +648,7 @@ class TestActionShapesAndTokenSecrecy:
             )
         )
         assert follow["returned"] == 10
-        assert follow["truncated"] is False
+        assert "truncated" not in follow
 
     async def test_completed_with_failures_status_reports_partial_outcome(
         self,
@@ -816,8 +817,10 @@ class TestReceiptSnapshotCoherence:
         )
 
         assert data["returned"] == 1 and data["total"] == 201
-        assert data["next_cursor"] is None
-        assert all(data["items"][0][key] == value for key, value in expected.items())
+        assert "next_cursor" not in data
+        # The row as a reply sends it: without the fields that say nothing.
+        lean = as_sent(expected, "jobs")
+        assert all(data["items"][0][key] == value for key, value in lean.items())
         assert len(calls) == (0 if fields == ["case_id"] else 1)
 
     async def test_native_snapshot_keeps_its_facts_after_live_record_changes(
@@ -1170,7 +1173,9 @@ class TestDurableProgress:
         after = _assert_jobs_schema(
             await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
         )
-        assert not [item for item in after["observations"] if item["code"] == "run_progress"]
+        assert not [
+            item for item in after.get("observations", []) if item["code"] == "run_progress"
+        ]
         # Read on request only: the job record itself never holds it.
         assert not [item for item in running.observations if item["code"] == "run_progress"]
 
@@ -1248,7 +1253,7 @@ class TestWait:
                 state_no_sim,
             )
         )
-        assert runs_done["timed_out"] is False
+        assert "timed_out" not in runs_done
         assert runs_done["status"] == "analyzing"
         assert runs_done["analysis_status"] == "running"
 
@@ -1340,7 +1345,7 @@ class TestWait:
         )
         await writer
 
-        assert data["timed_out"] is False
+        assert "timed_out" not in data
         assert data["status"] == "completed"
 
 
@@ -1443,7 +1448,7 @@ class TestCancellationAuthority:
         assert first["items"][0]["prior_status"] == "running"
 
         second = _assert_jobs_schema(await handle_jobs(args, state_no_sim))
-        assert second["items"] == [], second["items"]
+        assert "items" not in second, second["items"]
 
     async def test_foreign_token_sets_durable_submission_barrier(
         self,

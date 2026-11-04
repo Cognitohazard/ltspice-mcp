@@ -220,16 +220,18 @@ async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
         return await coroutine
 
 
-async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
-    """Run one automatic-mode coroutine with the interface marked for the handlers.
+async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _T:
+    """Run one automatic-mode coroutine with the interface marked for the handlers,
+    and with ``tool``'s reply fields named, as its MCP replies name them.
 
     Marked inside the coroutine, not around the ``_call`` that marshals it: the
-    handlers read the flag from the engine loop's task context, and a set on the
+    handlers read both from the engine loop's task context, and a set on the
     calling thread would never reach it.
     """
-    from ltspice_mcp.tools._base import automatic_door  # deferred with the tool modules
+    # Deferred with the tool modules.
+    from ltspice_mcp.tools._base import automatic_door, replying_as
 
-    with automatic_door():
+    with automatic_door(), replying_as(tool):
         return await coroutine
 
 
@@ -668,7 +670,20 @@ class _CataloguedMethod:
         return self if instance is None else MethodType(self, instance)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.__func__(*args, **kwargs)
+        """Run the operation and return its result, or raise its error, as the
+        tool's reply sends it: without the fields that say nothing
+        (``lib/reply_fields.py``), so a script and a tool call read one shape.
+        This is the one place the API applies the rule; a raw page already is a
+        sent reply."""
+        if kwargs.get("raw_page"):
+            return self.__func__(*args, **kwargs)
+        from ltspice_mcp.tools._base import as_sent  # an operation call pays the import anyway
+
+        try:
+            return as_sent(self.__func__(*args, **kwargs), self.__name__)
+        except ApiCallError as exc:
+            exc.payload = as_sent(exc.payload, self.__name__)
+            raise
 
     @property
     def __signature__(self) -> inspect.Signature:  # type: ignore[override]
@@ -818,7 +833,7 @@ class ApiMethodsMixin(ABC):
         coroutine = (
             _handler_page(handler, request, self._state)
             if raw_page
-            else _through_auto_door(collector(request, self._state))
+            else _through_auto_door(collector(request, self._state), name)
         )
         payload = self._marshal(
             coroutine,
@@ -881,7 +896,8 @@ class ApiMethodsMixin(ABC):
         )
         receipt = self._marshal(
             _through_auto_door(
-                _handler_page(experiments.handle_run_experiments, request, self._state)
+                _handler_page(experiments.handle_run_experiments, request, self._state),
+                "run_experiments",
             ),
             preserve_interrupt=True,
         )
@@ -898,7 +914,9 @@ class ApiMethodsMixin(ABC):
             if waited_job is not None:
                 self.wait(waited_job)
             complete = self._marshal(
-                _through_auto_door(_complete_run_receipt(receipt, request, self._state))
+                _through_auto_door(
+                    _complete_run_receipt(receipt, request, self._state), "run_experiments"
+                )
             )
             return _with_warnings(complete if wait else _note_process_owned_job(complete), dropped)
         except KeyboardInterrupt as exc:

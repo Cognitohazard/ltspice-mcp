@@ -38,6 +38,7 @@ from ltspice_mcp.lib.schematic_ops import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import (
     EditSchematicInput,
@@ -385,7 +386,7 @@ async def test_dry_run_needs_no_expected_sha_and_hands_back_the_digest(asc_state
     assert "error" not in data
     assert data["sha256"] == current
     assert "expected_sha256" in data["hint"]
-    assert data["observations"] == []
+    assert "observations" not in data
     assert _fingerprint(work_dir) == before
 
 
@@ -762,7 +763,8 @@ async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, wor
 
     mcp = _assert_schema(await handle_edit_schematic(args, asc_state))
     page = mcp["views"]["pin_legend"]
-    assert page["items"] == list(neutral.views.pin_legend[:2])
+    # The same rows, as a reply sends them: without the fields that say nothing.
+    assert page["items"] == as_sent(list(neutral.views.pin_legend[:2]), "edit_schematic")
     assert (page["total"], page["returned"], page["truncated"]) == (5, 2, True)
     assert page["total"] - page["returned"] == len(neutral.views.pin_legend) - 2
 
@@ -878,7 +880,6 @@ async def test_a_blank_build_withholds_nothing(asc_state):
         "count": 0,
         "findings": 0,
         "label_only_pins": 0,
-        "cursor": None,
     }
 
 
@@ -942,7 +943,7 @@ async def test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheet
 
     data = await apply_ops(asc_state, sheet, ops)
 
-    assert data["warnings"] == []
+    assert "warnings" not in data
     assert data["preexisting"]["findings"] == _UNTIDY_FINDINGS
 
 
@@ -975,7 +976,7 @@ async def test_a_finding_at_a_routes_coordinate_endpoint_is_still_the_sheets(asc
     )
 
     assert data["commit_state"] == "committed"
-    assert not any(w.startswith("Duplicate wire") for w in data["warnings"])
+    assert not any(w.startswith("Duplicate wire") for w in data.get("warnings", []))
     assert data["preexisting"]["findings"] >= 1
 
 
@@ -1067,7 +1068,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
     }
     assert list(data["rules_run"]) == list(se.RULES)
     assert sum(data["rules_run"].values()) == (
-        len(data["warnings"]) + data["preexisting"]["findings"]
+        len(data.get("warnings", [])) + data["preexisting"]["findings"]
     )
     # A check of the same sheet ran all of them but the one its export check holds.
     assert checked["rules_run"] == {
@@ -1202,7 +1203,7 @@ async def test_a_route_already_drawn_through_a_part_is_not_the_batchs(asc_state)
     assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
     (drawn,) = data["results"]
     assert drawn["already_present"] == [{"from": {"x": 100, "y": 252}, "to": {"x": 500, "y": 252}}]
-    assert _THROUGH_R4 not in data["warnings"]
+    assert _THROUGH_R4 not in data.get("warnings", [])
     assert _THROUGH_R4 in [row["message"] for row in data["views"]["preexisting"]["items"]]
 
 
@@ -1222,9 +1223,9 @@ async def test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs(asc_state)
         asc_state, sheet, [{"op": "set_component_value", "reference": "R3", "value": "2k"}]
     )
 
-    assert _OVERLAP not in about_r2["warnings"]
+    assert _OVERLAP not in about_r2.get("warnings", [])
     assert _OVERLAP in [row["message"] for row in about_r2["views"]["preexisting"]["items"]]
-    assert about_r3["warnings"] == []
+    assert "warnings" not in about_r3
 
 
 _ACROSS = "is drawn across wire (100,120)->(100,220)"
@@ -1249,7 +1250,7 @@ async def test_a_new_value_on_a_text_that_overlapped_before_is_not_the_batchs(as
     )
 
     assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
-    assert data["warnings"] == []
+    assert "warnings" not in data
     left = [row["message"] for row in data["views"]["preexisting"]["items"]]
     assert any(_ACROSS in message for message in left), left
 
@@ -1264,7 +1265,7 @@ async def test_what_a_moved_part_had_moves_with_it_and_is_not_the_batchs(asc_sta
     )
 
     assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
-    assert data["warnings"] == []
+    assert "warnings" not in data
 
 
 async def test_a_value_that_makes_an_overlap_is_the_batchs(asc_state):
@@ -1403,7 +1404,8 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
                 {"op": "set_component_value", "reference": "R3", "value": "2k"},
                 {"op": "set_component_value", "reference": "R3", "value": "3k"},
             ],
-            [{"Value": {"was": None, "now": "2k"}}, {"Value": {"was": "2k", "now": "3k"}}],
+            # An attribute that was not there before has no "was".
+            [{"Value": {"now": "2k"}}, {"Value": {"was": "2k", "now": "3k"}}],
         ),
         (
             # The second changes nothing, and says nothing.
@@ -1411,7 +1413,7 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
                 {"op": "set_component_value", "reference": "R3", "value": "2k"},
                 {"op": "set_component_value", "reference": "R3", "value": "2k"},
             ],
-            [{"Value": {"was": None, "now": "2k"}}],
+            [{"Value": {"now": "2k"}}],
         ),
         (
             [
@@ -1422,7 +1424,7 @@ async def test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals(as
                     "value": "tc=0.001",
                 }
             ],
-            [{"SpiceLine": {"was": None, "now": "tc=0.001"}}],
+            [{"SpiceLine": {"now": "tc=0.001"}}],
         ),
     ],
     ids=["value", "attribute", "value-unchanged"],
@@ -1436,9 +1438,9 @@ async def test_a_batch_that_changes_no_wiring_lists_no_pins(asc_state, ops, chan
 
     data = await apply_ops(asc_state, sheet, ops)
 
-    assert data["wiring"]["label_only_pins"]["items"] == []
+    assert "items" not in data["wiring"]["label_only_pins"]
     assert data["preexisting"]["label_only_pins"] == _UNTIDY_LABEL_ONLY
-    assert data["views"]["touched"]["items"] == []
+    assert "items" not in data["views"]["touched"]
     assert [entry["changed"] for entry in data["results"]] == changed
 
 
@@ -1455,7 +1457,7 @@ async def test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call
     page = data["views"]["preexisting"]
     assert page["total"] == data["preexisting"]["count"]
     assert "listed in views.preexisting" in data["hint"]
-    assert page["next_cursor"] is None
+    assert "next_cursor" not in page
     findings = [row["message"] for row in page["items"] if row["kind"] != "label_only_pin"]
     pins = [row["pin"] for row in page["items"] if row["kind"] == "label_only_pin"]
     assert sorted(pins) == ["R3.1", "R4.1"]
@@ -1483,7 +1485,7 @@ async def test_the_preexisting_cursor_pages_every_withheld_row(asc_state):
         view = page["views"]["preexisting"]
         assert view["returned"] <= 3
         rows += view["items"]
-        cursor = view["next_cursor"]
+        cursor = view.get("next_cursor")
         if cursor is None:
             break
 
@@ -1537,7 +1539,8 @@ async def test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate(asc_sta
     data = await apply_ops(asc_state, sheet, [], return_views=["pin_legend", "preexisting"])
 
     traced = {
-        f"{row['ref']}.{pin['name']}": pin["net"]
+        # A pin no label names has no net.
+        f"{row['ref']}.{pin['name']}": pin.get("net")
         for row in data["views"]["pin_legend"]["items"]
         for pin in row["pins"]
     }
@@ -1623,8 +1626,8 @@ async def test_view_pagination_cursor_resumption(asc_state):
 
     seen_refs = [it["ref"] for it in pl1["items"]]
     seen_pins = [it["pin"] for it in lo1["items"]]
-    cursor_lo = lo1["next_cursor"]
-    cursor_pl = pl1["next_cursor"]
+    cursor_lo = lo1.get("next_cursor")
+    cursor_pl = pl1.get("next_cursor")
     # Walk the rest through cursor resumption.
     for _ in range(5):
         page = _assert_schema(
@@ -1656,8 +1659,8 @@ async def test_view_pagination_cursor_resumption(asc_state):
         )
         seen_pins += [it["pin"] for it in page["wiring"]["label_only_pins"]["items"]]
         seen_refs += [it["ref"] for it in page["views"]["pin_legend"]["items"]]
-        cursor_lo = page["wiring"]["label_only_pins"]["next_cursor"]
-        cursor_pl = page["views"]["pin_legend"]["next_cursor"]
+        cursor_lo = page["wiring"]["label_only_pins"].get("next_cursor")
+        cursor_pl = page["views"]["pin_legend"].get("next_cursor")
         if cursor_lo is None and cursor_pl is None:
             break
     # Full coverage, no duplicates.
@@ -1667,7 +1670,7 @@ async def test_view_pagination_cursor_resumption(asc_state):
 
 async def test_cross_view_cursor_rejected(asc_state):
     data = await _build_blank(asc_state, "xcursor", _many_labeled_ops(5), view_limit=2)
-    legend_cursor = data["wiring"]["label_only_pins"]["next_cursor"]
+    legend_cursor = data["wiring"]["label_only_pins"].get("next_cursor")
     # Feeding a label_only_pins cursor to pin_legend is rejected up front.
     with pytest.raises(NetlistError, match="pin_legend"):
         await handle_edit_schematic(
@@ -1795,7 +1798,7 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
         assert Path(named).resolve() == (work_dir / "ref.cir").resolve()  # noqa: ASYNC240
     assert "netlist" not in data
     # Every stage completed, so none is listed.
-    assert data["stages"] == []
+    assert "stages" not in data
 
 
 async def test_reference_outside_sandbox_names_the_text_alternative(asc_state):
@@ -1827,7 +1830,7 @@ async def test_reference_structural_diff_reports_the_delta(asc_state, monkeypatc
     assert comparison["components_added"] == ["R3"]
     # A node rewire is not a value change: structural_diff lists it under neither
     # 'changed' nor 'removed'; equivalence mode is the one that catches it.
-    assert comparison["components_removed"] == []
+    assert "components_removed" not in comparison
     assert data["verification"]["equivalent"] is False
     assert data["outcome"] == "partial"
 
@@ -1979,14 +1982,14 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     comparison = verification["comparison"]
     if mode == "structural_diff":
         assert comparison["components_added"] == ["R2"]
-        assert comparison["components_removed"] == []
-        assert comparison["components_changed"] == []
-        assert comparison["directives_added"] == []
-        assert comparison["directives_removed"] == []
+        assert "components_removed" not in comparison
+        assert "components_changed" not in comparison
+        assert "directives_added" not in comparison
+        assert "directives_removed" not in comparison
     else:
         assert [c["ref"] for c in comparison["added"]] == ["R2"]
-        assert comparison["removed"] == []
-        assert comparison["value_mismatches"] == []
+        assert "removed" not in comparison
+        assert "value_mismatches" not in comparison
     assert verification["equivalent"] is False
     # The reference was exported from a copy; nothing was written beside it.
     assert not (work_dir / "amp_orig.net").exists()
@@ -2039,7 +2042,7 @@ async def test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export(
     verification = data["verification"]
     assert (verification.get("export_error"), verification.get("compare_error")) == (None, None)
     assert verification["comparison"]["components_added"] == ["R2"]
-    assert verification["comparison"]["components_changed"] == []
+    assert "components_changed" not in verification["comparison"]
 
 
 async def test_unexportable_asc_reference_is_a_compare_error(asc_state, work_dir, monkeypatch):
@@ -2215,7 +2218,7 @@ async def test_bad_op_aborts_transaction_nothing_written(asc_state, work_dir):
     # is not retryable, and nothing was written.
     assert data["error"]["code"] == "op_failed"
     assert data["error"]["stage"] == "apply_ops"
-    assert data["error"]["retryable"] is False
+    assert "retryable" not in data["error"]
     assert data["error"]["commit_state"] == "not_started"
     assert not (work_dir / "abort.asc").exists()
 

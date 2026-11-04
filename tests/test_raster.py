@@ -313,7 +313,8 @@ def test_metadata_survives_for_structured_only_clients() -> None:
     payload = result.structured_content
     assert payload["path"] == "/tmp/rc.asc"
     assert payload["image"]["image_format"] == SVG
-    assert payload["image"]["scale"] is None
+    # An SVG has no raster scale, and a reply leaves out a null.
+    assert "scale" not in payload["image"]
     assert payload["image"]["bytes"] == len(b"<svg/>")
     assert "cairosvg" in payload["image"]["note"]
 
@@ -341,7 +342,8 @@ def test_raster_response_carries_caller_text_and_full_metadata() -> None:
     assert meta["scale"] == 3.0
     assert (meta["width"], meta["height"]) == (60, 30)
     assert meta["bytes"] == len(b"\x89PNG-ish")
-    assert meta["note"] is None
+    # Nothing degraded, so there is no note to send.
+    assert "note" not in meta
 
 
 def test_caller_cannot_clobber_the_image_metadata_key() -> None:

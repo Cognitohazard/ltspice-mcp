@@ -401,7 +401,7 @@ async def test_recorded_inspect_pages_table_and_binds_cursor(state_no_sim, work_
     second = await call({**request, "cursor": first["next_cursor"]})
     assert second["ok"]
     assert second["data"]["table"][0]["signal"] == "v(inoise_total)"
-    assert second["next_cursor"] is None
+    assert "next_cursor" not in second
     changed_view = await call({**request, "view": "signals", "cursor": first["next_cursor"]})
     assert not changed_view["ok"]
     changed_plot = await call(
