@@ -1,0 +1,9 @@
+* .save names both nodes of the pair a .meas reads, not the pair
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in mid 1k
+R2 mid out 1k
+C1 out 0 100n
+.save V(in) V(mid)
+.tran 0 1m 0 20u
+.meas tran vpair FIND V(in,mid) AT 0.9m
+.end

@@ -1,0 +1,24 @@
+Circuit: * .save names the pair a .meas reads, as a pair
+
+.OP point found by inspection.
+
+vpair: v(in,mid)=0.00522099 at 0.0009
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 158
+traniter = 158
+tranpoints = 80
+accept = 78
+rejected = 2
+matrix size = 4
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+
