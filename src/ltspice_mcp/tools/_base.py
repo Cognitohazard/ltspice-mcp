@@ -733,6 +733,26 @@ def outcome_schema(*outcomes: str) -> dict[str, Any]:
 
 OUTCOME_SCHEMA: dict[str, Any] = outcome_schema()
 
+#: The ``error`` object an envelope carries when the call failed: the shared
+#: convention ``docs/design/mcp_surface.md`` gives every enveloped tool
+#: (section 2, "Envelope"), declared once so the tools that report it cannot
+#: drift apart.
+ENVELOPE_ERROR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "stage": {"type": "string"},
+        "retryable": {"type": "boolean"},
+        "commit_state": {
+            "type": "string",
+            "enum": ["not_started", "committed", "unknown"],
+        },
+        "item_id": {"type": "string"},
+    },
+    "required": ["code", "message", "stage", "retryable", "commit_state"],
+}
+
 
 def failures_schema(row: dict[str, Any]) -> dict[str, Any]:
     """The ``failures`` channel over one tool's failure-row shape."""

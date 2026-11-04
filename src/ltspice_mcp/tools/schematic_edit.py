@@ -65,19 +65,9 @@ from ltspice_mcp.lib.schematic_ops import (
     KEEPS_WIRING,
     OP_RESULT_FACTS,
     GridPoint,
-    OpAddComponent,
-    OpAddDirective,
-    OpAddNetLabel,
     OpMove,
-    OpMoveComponent,
-    OpRemoveComponent,
-    OpRemoveDirective,
-    OpRemoveNetLabel,
-    OpRemoveWire,
-    OpSetComponentAttribute,
-    OpSetComponentValue,
     OpSetPlotPanes,
-    OpWirePins,
+    SchematicOp,
     SheetPlotSettings,
     attach_symbols,
     blank_sheet,
@@ -103,6 +93,7 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    ENVELOPE_ERROR_SCHEMA,
     LTSPICE_WINDOW_PROPERTIES,
     OUTCOME_SCHEMA,
     RULES_RUN_SCHEMA,
@@ -139,22 +130,10 @@ _DEFAULT_VIEW_LIMIT = 100
 # learned neither which kinds exist nor what their own payload was missing. With
 # it, an unknown op is one error naming every accepted kind, and a known op with
 # a bad field reports against that kind alone.
-ConsolidatedOp = Annotated[
-    OpAddComponent
-    | OpSetComponentValue
-    | OpSetComponentAttribute
-    | OpRemoveComponent
-    | OpMoveComponent
-    | OpMove
-    | OpAddNetLabel
-    | OpRemoveNetLabel
-    | OpRemoveWire
-    | OpWirePins
-    | OpAddDirective
-    | OpRemoveDirective
-    | OpSetPlotPanes,
-    Field(discriminator="op"),
-]
+#
+# The members are the engine's own op list, so an op the engine applies is one
+# the tool accepts, and the reverse.
+ConsolidatedOp = Annotated[SchematicOp, Field(discriminator="op")]
 
 
 # The views return_views can name, each resumable through its own field of
@@ -304,20 +283,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "sha256": {"type": ["string", "null"]},
         "build_id": {"type": "string"},
         "base": {"type": "string"},
-        "error": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "message": {"type": "string"},
-                "stage": {"type": "string"},
-                "retryable": {"type": "boolean"},
-                "commit_state": {
-                    "type": "string",
-                    "enum": ["not_started", "committed", "unknown"],
-                },
-            },
-            "required": ["code", "message", "stage", "retryable", "commit_state"],
-        },
+        "error": ENVELOPE_ERROR_SCHEMA,
         "stages": {
             "type": "array",
             "description": (

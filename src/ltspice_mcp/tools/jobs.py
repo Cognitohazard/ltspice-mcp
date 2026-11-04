@@ -60,6 +60,7 @@ from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.sheet_results import place_beside_sheet, run_by_ltspice
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    ENVELOPE_ERROR_SCHEMA,
     HINT_SCHEMA,
     OUTCOME_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
@@ -396,29 +397,13 @@ def jobs_input_schema() -> dict[str, Any]:
     }
 
 
-_JOBS_ERROR_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "code": {"type": "string"},
-        "message": {"type": "string"},
-        "stage": {"type": "string"},
-        "retryable": {"type": "boolean"},
-        "commit_state": {
-            "type": "string",
-            "enum": ["not_started", "committed", "unknown"],
-        },
-        "item_id": {"type": "string"},
-    },
-    "required": ["code", "message", "stage", "retryable", "commit_state"],
-}
-
 _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
     "outcome": OUTCOME_SCHEMA,
     "observations": {"type": "array", "items": OBSERVATION_SCHEMA},
     "warnings": {"type": "array", "items": {"type": "string"}},
     "failures": failures_schema(CASE_FAILURE_SCHEMA),
     "hint": HINT_SCHEMA,
-    "error": _JOBS_ERROR_SCHEMA,
+    "error": ENVELOPE_ERROR_SCHEMA,
 }
 
 _JOBS_COMMON_REQUIRED = [

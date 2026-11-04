@@ -481,15 +481,26 @@ class _View:
 
 # Every rotation LTspice can place a symbol at, in a stable reported order.
 
-# Dwell caps mirrored for capabilities disclosure. Source of truth: the field
-# constraints on experiments.ExecutionInput.wait_s (run_experiments) and
-# experiments.JobsInput.timeout_s (jobs), themselves the A5 timing defaults.
-# Duplicated as documented constants to keep inspect free of experiments'
-# heavy import side effects; the capabilities test pins key presence, not value.
-_RUN_EXPERIMENTS_WAIT_DEFAULT_S = 60.0
-_RUN_EXPERIMENTS_WAIT_MAX_S = 120.0
-_JOBS_WAIT_DEFAULT_S = 60.0
-_JOBS_WAIT_MAX_S = 300.0
+
+def _dwell_report() -> dict[str, float]:
+    """The dwell defaults and caps, read off what enforces them: the
+    run_experiments ``execution.wait_s`` and jobs ``wait`` ``timeout_s`` fields
+    and the caps their handlers hold them to.
+
+    Imported here, at report time, rather than at module load: inspect stays
+    free of the run and jobs modules' import, and by the time a report is
+    asked for every tool is loaded anyway.
+    """
+    from ltspice_mcp.tools import experiments, jobs
+
+    return {
+        "run_experiments_wait_default_s": experiments.ExperimentExecution.model_fields[
+            "wait_s"
+        ].default,
+        "run_experiments_wait_max_s": experiments.SUBMISSION_DWELL_CAP_S,
+        "jobs_wait_default_s": jobs.JobsWaitInput.model_fields["timeout_s"].default,
+        "jobs_wait_max_s": experiments.JOBS_WAIT_CAP_S,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1260,12 +1271,7 @@ def _do_capabilities(
             "export_timeout_s": state.config.default_timeout,
             "inspect_page_size": _PAGE_SIZE,
             "inspect_coordinate_page_size": _COORD_PAGE_SIZE,
-            "dwell": {
-                "run_experiments_wait_default_s": _RUN_EXPERIMENTS_WAIT_DEFAULT_S,
-                "run_experiments_wait_max_s": _RUN_EXPERIMENTS_WAIT_MAX_S,
-                "jobs_wait_default_s": _JOBS_WAIT_DEFAULT_S,
-                "jobs_wait_max_s": _JOBS_WAIT_MAX_S,
-            },
+            "dwell": _dwell_report(),
         },
         "linter_version": linter_version,
     }

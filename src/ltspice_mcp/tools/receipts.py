@@ -50,6 +50,7 @@ from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    ENVELOPE_ERROR_SCHEMA,
     FINDING_SCHEMA,
     OUTCOME_SCHEMA,
     CallOutcome,
@@ -385,21 +386,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "warnings": {"type": "array", "items": {"type": "string"}},
         "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA},
         "hint": {"type": "string"},
-        "error": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "message": {"type": "string"},
-                "stage": {"type": "string"},
-                "retryable": {"type": "boolean"},
-                "commit_state": {
-                    "type": "string",
-                    "enum": ["not_started", "committed", "unknown"],
-                },
-                "item_id": {"type": "string"},
-            },
-            "required": ["code", "message", "stage", "retryable", "commit_state"],
-        },
+        "error": ENVELOPE_ERROR_SCHEMA,
     },
     "required": [
         "job_id",
