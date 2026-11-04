@@ -124,6 +124,22 @@ def leading_parameters(plot: RawPlotHeader) -> list[int]:
     return leading
 
 
+#: What a stepped temperature is called: the deck steps it as ``.step temp``
+#: and LTspice's log names each step ``.step temp=-40°``, while the raw of a
+#: run that stores a point a step declares the same values as a variable
+#: ``temperature`` of type ``temperature`` (the recorded ``raw/step_temp`` and
+#: ``raw/step_temp_op``, on both builds).
+STEPPED_TEMPERATURE = "temp"
+
+
+def step_parameter_name(variable: RawVariable) -> str:
+    """The name a leading parameter variable's values are stepped under, as
+    the deck's ``.step`` spells it (:data:`STEPPED_TEMPERATURE`)."""
+    if variable.declared_type.casefold() == "temperature":
+        return STEPPED_TEMPERATURE
+    return variable.name
+
+
 @dataclass(frozen=True)
 class RawHeader:
     size_bytes: int

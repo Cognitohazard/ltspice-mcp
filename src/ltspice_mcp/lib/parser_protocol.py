@@ -14,7 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, StepValue, transient_time_offset
 from ltspice_mcp.lib.parser_capture import parser_cache_key
-from ltspice_mcp.lib.raw_header import RawHeader, RawLimits, leading_parameters
+from ltspice_mcp.lib.raw_header import (
+    RawHeader,
+    RawLimits,
+    leading_parameters,
+    step_parameter_name,
+)
 from ltspice_mcp.lib.store import parser_file_in
 
 if TYPE_CHECKING:
@@ -359,8 +364,13 @@ def _materialize_raw(
         ranges, steps = step_views[index]
         parameters = reply.plots[index].step_parameters
         if parameters is not None:
+            # Named as the deck and the log name them, so a run stored a
+            # point a step and one stored a sweep a step use one vocabulary.
             steps = [
-                {plot.variables[i].name: float(np.real(waves[i][point])) for i in parameters}
+                {
+                    step_parameter_name(plot.variables[i]): float(np.real(waves[i][point]))
+                    for i in parameters
+                }
                 for point in range(plot.point_count)
             ]
         plots.append(

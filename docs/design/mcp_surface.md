@@ -874,7 +874,11 @@ recipes    list[Recipe]   Appendix A.2; unique key; optional per-recipe
 group_by   list[assignment param | "circuit" | step-axis name]
 step       {axis, value} | null   for a deck carrying `.step`: read the one
                                   iteration at that axis value. Default is the
-                                  first
+                                  first. A number, or a string in SPICE
+                                  notation ('2k'), picks the nearest step; any
+                                  other string must equal a step's value as
+                                  text. An axis or text value the run does
+                                  not have is refused with the ones it has
 all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
                                   exclusive with `step`
 include    {per_run?: {limit? (capped at 100), cursor?} | bool, outliers?, signals_available?,
@@ -910,7 +914,11 @@ because the row is made without decoding the raw. Both include
 row leaves it, like `deck_sha256`, to `include.fields`, and its `source`
 label names the `source_hashes` row that has it. `step_values` come from the `.step` lines of the run's own
 log as read when the result set was created, string values included; no other
-log is read for them.
+log is read for them. A run LTspice stores a point a step (a stepped `.op`,
+`.tf`, or one-frequency `.ac` or `.noise`) keeps its step values in the raw
+instead, under the same names: a stepped temperature is `temp` either way, as
+the deck's `.step temp` names it, and `step` and `group_by` also take
+`temperature` for it.
 
 The `measurements` recipe reads the `.meas` results in each source's log once,
 including a `.log` `path` source and a finished job case with no RAW. Its rows

@@ -491,7 +491,8 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   same parser and result cache as the tools, so a primitive and a tool read a
   file the same way. Step metadata (`raw.steps`) comes from the files read
   with the result, the `.raw` and the `.log` beside it; no other log is opened
-  to fill it in.
+  to fill it in. Each step names its values as the deck's `.step` does, a
+  stepped temperature `temp`, whichever of the two files holds them.
 - RAW decoding runs in a separate parser process with a deadline of 120
   seconds (`AnalysisDeadlineExceeded` when it runs out) and a memory limit of
   2 GiB; the returned arrays are fully in memory. `measurements` returns

@@ -73,6 +73,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     StepSelector,
     WaveformRecipe,
+    step_axis_key,
     validate_recipe,
 )
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
@@ -2359,7 +2360,10 @@ def _group_values(
             if dimension == "circuit":
                 value = identity.circuit
             else:
-                value = identity.assignments.get(dimension, identity.step_values.get(dimension))
+                stepped = identity.step_values
+                value = identity.assignments.get(
+                    dimension, stepped.get(step_axis_key(dimension, stepped))
+                )
             values.append((dimension, value))
         grouped.setdefault(tuple(values), []).append(record)
     kept = list(grouped.items())[:limit]
