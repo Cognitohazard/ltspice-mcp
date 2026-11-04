@@ -282,7 +282,7 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
             wait=False, detach=True, request_id=request_id, circuits=circuits
         )
         job_id = first["job_id"]
-        assert first["replayed"] is False
+        assert "replayed" not in first
         api.wait(job_id, timeout=HANDOFF_TIMEOUT_S)
 
         # In this process, the ordinary route: the request index already names

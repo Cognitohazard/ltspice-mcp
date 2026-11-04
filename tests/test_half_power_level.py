@@ -37,7 +37,7 @@ def _rc_reply(state: SessionState, raw: Path, recipes: list[dict]) -> dict[str, 
         recipes=recipes,
         include={"fields": ["value"]},
     )
-    assert reply["failures"] == []
+    assert reply.get("failures", []) == []
     return {key: result["values"][0]["value"] for key, result in reply["results"].items()}
 
 

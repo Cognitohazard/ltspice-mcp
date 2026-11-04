@@ -104,12 +104,12 @@ async def test_a_record_s_owner_answers_load_wait_and_cancel_alike(
 
     if alive:
         assert (status["status"], waited["status"], on_disk) == ("running",) * 3
-        assert waited["timed_out"] is True
+        assert waited.get("timed_out", False) is True
         assert cancel["error"]["code"] == "cancel_not_authorized"
     else:
         assert (status["status"], waited["status"], on_disk) == ("interrupted",) * 3
-        assert waited["timed_out"] is False
-        assert "error" not in cancel and cancel["items"] == []
+        assert waited.get("timed_out", False) is False
+        assert "error" not in cancel and cancel.get("items", []) == []
 
 
 @pytest.mark.asyncio

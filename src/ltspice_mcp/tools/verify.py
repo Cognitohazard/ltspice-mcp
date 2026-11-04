@@ -50,12 +50,13 @@ have to make assumptions?"), free-text with one thing to fix. It also keeps the
 channel consistent with ``diff_circuit``, which has surfaced these same messages,
 from this same helper, in ``warnings`` all along.
 
-``export_to`` is ``sidecar`` by default: the export overwrites the schematic's
-conventional ``<name>.net`` under the export lock, the file LTspice itself writes
-beside a schematic it runs (and ``run_experiments`` exports through), and reports
-the structural delta from the prior one. ``managed`` is the non-destructive
-alternative: it stages the schematic with its project-local files in the store's
-scratch and exports there, writing nothing beside the caller's file.
+``export_to`` is ``managed`` by default: it stages the schematic with its
+project-local files in the store's scratch and exports there, writing nothing
+beside the caller's file, as ``run_experiments`` exports a copy. ``sidecar``
+overwrites the schematic's conventional ``<name>.net`` under the export lock,
+the file LTspice itself writes beside a schematic it runs. Both report the
+structural delta from the schematic's previous export: sidecar from the file it
+replaces, managed from the copy the store kept of the previous managed export.
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ import asyncio
 import contextlib
 import functools
 import hashlib
+import os
 import re
 import shutil
 import uuid
@@ -77,10 +79,16 @@ from mcp import types
 from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError, python_route_text
-from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, capabilities
+from ltspice_mcp.lib import (
+    NETLIST_SUFFIX_TEXT,
+    NETLIST_SUFFIXES,
+    atomic_write_bytes,
+    capabilities,
+)
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
@@ -311,9 +319,10 @@ _EXPORT_SCHEMA: dict[str, Any] = {
             "properties": dict(STRUCTURAL_DELTA_PROPS),
             "required": list(STRUCTURAL_DELTA_PROPS),
             "description": (
-                "sidecar mode only: the structural delta between the .net that was "
-                "already on disk and the one just exported. Null when there was no "
-                "prior file or the export was managed."
+                "The structural delta from the previous export of this schematic: "
+                "in sidecar mode the .net it replaced beside the schematic, in "
+                "managed mode the previous managed export, which the server keeps. "
+                "Absent when there was no previous export."
             ),
         },
     },
@@ -584,8 +593,9 @@ _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
 COMPARISON_SCHEMA: dict[str, Any] = {
     "type": ["object", "null"],
     "description": (
-        "The reference comparison, null when no reference was supplied or compare "
-        "did not run. 'mode' selects which keys are present."
+        "The reference comparison, present when compare ran (checks_run lists it); "
+        "otherwise checks_skipped or failures says why it did not. 'mode' selects "
+        "which keys are present."
     ),
     "properties": {
         "mode": {
@@ -877,19 +887,18 @@ class VerifyCircuitInput(ToolInput):
     )
 
     export_to: Literal["sidecar", "managed"] = Field(
-        default="sidecar",
+        default="managed",
         description=(
-            "'sidecar' overwrites <name>.net next to the schematic, as LTspice "
-            "does when it runs one; 'managed' exports a copy in the server's "
-            "scratch and writes nothing there."
+            "'managed' exports a copy in the server's scratch; 'sidecar' "
+            "overwrites <name>.net next to the schematic, as LTspice does. "
+            "Both report what changed since the last export."
         ),
     )
 
 
 VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
-    "it checks; the export check writes the .net next to an .asc unless "
-    "export_to='managed'. For a "
+    "it checks, or write next to it unless export_to='sidecar'. For a "
     "netlist: SPICE syntax, directive and element arity, non-ASCII "
     "value suffixes such as µ, and connectivity "
     "facts — nodes wired to one terminal, V()/I() naming something no element "
@@ -1585,10 +1594,11 @@ async def _run_export(
 ) -> _ExportOutcome:
     """Export a schematic to a netlist, managed (scratch copy) or sidecar (in place).
 
-    The
-    ``sidecar`` mode runs under the export lock (it overwrites ``<name>.net``) and
-    records a structural ``diff_vs_prior``; ``managed`` stages the schematic with its
-    project-local assets and exports there, touching none of the caller's files.
+    The ``sidecar`` mode runs under the export lock (it overwrites ``<name>.net``);
+    ``managed`` stages the schematic with its project-local assets and exports
+    there, touching none of the caller's files. Both record a structural
+    ``diff_vs_prior``: sidecar against the ``.net`` it replaces, managed against
+    the store's copy of the schematic's previous managed export.
 
     Both modes measure the netlist they just wrote *inside* their own export
     lock (see ``_measure_netlist``): the file is a shared path a peer export
@@ -1640,6 +1650,11 @@ async def _run_export(
                 measured = await asyncio.to_thread(
                     _measure_netlist, net_path, cp1252_reader=cp1252_reader
                 )
+                if measured is not None:
+                    payload["diff_vs_prior"], diff_warnings = await _diff_vs_last_managed(
+                        asc_path, net_path, state
+                    )
+                    warnings.extend(diff_warnings)
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         return _ExportOutcome(
             payload,
@@ -1682,10 +1697,60 @@ async def _run_export(
     return _ExportOutcome(payload, None, observations, warnings, measured.findings)
 
 
+# The in-process half of the lock on a schematic's kept managed export; the
+# cross-process half is ``circuit_file_lock``.
+_last_export_locks: dict[Path, asyncio.Lock] = {}
+
+
+def _last_managed_export(state: SessionState, asc_path: Path) -> Path:
+    """Where the store keeps the last managed export of ``asc_path``.
+
+    Keyed by the schematic's path, not its content, so each export is compared
+    with the one before it whatever changed in between. The path is case-folded
+    where the platform folds it, so two spellings of one Windows path share it.
+    """
+    key = hashlib.sha256(os.path.normcase(str(asc_path)).encode("utf-8")).hexdigest()[:16]
+    return _scratch_dir(state, "last-export") / f"{asc_path.stem}.{key}.net"
+
+
+def _read_if_present(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+async def _diff_vs_last_managed(
+    asc_path: Path, net_path: Path, state: SessionState
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """The delta from the schematic's previous managed export, which this one replaces.
+
+    A managed export writes nothing beside the schematic, so what it is compared
+    with is the copy the store kept of the previous one: None when there was
+    none. Keeping the copy is bookkeeping, so a failure to keep it leaves the
+    export standing and says the next one will have nothing to compare with.
+    """
+    last = _last_managed_export(state, asc_path)
+    async with path_lock(_last_export_locks, last), circuit_file_lock(last):
+        prior = await asyncio.to_thread(_read_if_present, last)
+        delta: dict[str, Any] | None = None
+        warnings: list[str] = []
+        if prior is not None:
+            delta, warnings = await asyncio.to_thread(_diff_vs_prior, prior, net_path, state)
+        try:
+            exported = await asyncio.to_thread(net_path.read_bytes)
+            await asyncio.to_thread(atomic_write_bytes, last, exported, durable=False)
+        except OSError as exc:
+            warnings.append(
+                f"This export was not kept, so the next one has nothing to compare with: {exc}"
+            )
+    return delta, warnings
+
+
 def _diff_vs_prior(
     prior_bytes: bytes, new_path: Path, state: SessionState
 ) -> tuple[dict[str, Any], list[str]]:
-    """Structural delta between the sidecar .net's prior content and the fresh one.
+    """Structural delta between a previous export's content and the fresh one.
 
     The staged copy of the prior content is named for what it is, not for its
     digest alone, so a parse warning naming that file still identifies it.
@@ -2104,8 +2169,9 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     if shown.get("differs_from_file"):
         return (
             "LTspice already had the sheet open and shows a different one from the file "
-            f"that was checked ({shown['difference']}); to see the file's, close it there "
-            "without saving and ask again."
+            f"that was checked ({shown['difference']}). Ask the user whether to keep the "
+            "window's copy, then call edit_schematic with ops=[] and open_window='save' "
+            "to write it to the file or open_window='discard' to open the file there."
         )
     if shown.get("started"):
         return "LTspice was started, with it in front."
@@ -2458,7 +2524,14 @@ async def evaluate_verify_circuit(
         # --- compare ------------------------------------------------------------
         if wanted.get("compare") and reference is not None:
             if candidate is None:
-                skip("compare", "the exported netlist is required and the export did not run")
+                # Two different facts, so two reasons: an export that ran and
+                # wrote no netlist has its own failure row beside this one.
+                skip(
+                    "compare",
+                    "the export ran and wrote no netlist to compare"
+                    if "export" in checks_run
+                    else "the exported netlist is required and the export did not run",
+                )
             else:
                 assert compare is not None  # guarded by `reference is not None`
                 ref_source = reference if isinstance(reference, Path) else path
@@ -2530,7 +2603,7 @@ async def evaluate_verify_circuit(
     data.update(
         {
             "checks_run": checks_run,
-            **({"rules_run": rules_run} if rules_run else {}),
+            "rules_run": rules_run,
             "checks_skipped": skipped,
             "findings": findings,
             "observations": [event for event in observation_events if isinstance(event, str)],
@@ -2608,9 +2681,9 @@ def render_verify_circuit(
     title="Check Circuit",
     description=VERIFY_DESCRIPTION,
     input_model=VerifyCircuitInput,
-    # Not read-only: export writes a file on every path, by default the deck's
-    # .net beside the schematic (export_to:managed writes scratch instead). The
-    # annotation states the worst case; the description carries the nuance.
+    # Not read-only: export writes a file on every path, by default in the
+    # store's scratch (export_to:sidecar writes the .net beside the schematic).
+    # The annotation states the worst case; the description carries the nuance.
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,
     output_schema=_OUTPUT_SCHEMA,
 )

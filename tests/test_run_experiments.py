@@ -35,6 +35,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools import receipts as receipts_mod
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import (
@@ -136,21 +137,11 @@ def test_wait_caps_are_held_not_advertised_as_a_maximum():
         run_schema["properties"]["execution"],
     )
     jobs_schema = build_input_schema(JobsInput)
-    # The dwell cap lives on the action that takes it, so it is read through
-    # that action's branch rather than off a flat property list.
-    wait_branch = resolve_local_ref(
-        jobs_schema,
-        next(
-            entry["then"]
-            for entry in jobs_schema["allOf"]
-            if entry["if"]["properties"]["action"]["const"] == "wait"
-        ),
-    )
 
     # A strict client checks a maximum before sending and would refuse on the
     # server's behalf; the descriptions name the cap instead.
     assert "maximum" not in execution_schema["properties"]["wait_s"]
-    assert "maximum" not in wait_branch["properties"]["timeout_s"]
+    assert "maximum" not in jobs_schema["properties"]["timeout_s"]
     assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
 
@@ -278,7 +269,7 @@ def _export_snapshots(data: dict, work_dir: Path) -> list[Path]:
 
 
 def _observation_code(data: dict, code: str) -> dict | None:
-    return next((item for item in data["observations"] if item["code"] == code), None)
+    return next((item for item in data.get("observations", []) if item["code"] == code), None)
 
 
 async def _status_payload(job_id: str, state: SessionState) -> dict:
@@ -918,7 +909,7 @@ class TestIdempotency:
         args = _args(deck, "replay-voice")
 
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
-        assert first["replayed"] is False
+        assert "replayed" not in first
         await state_with_sim.job_registry.drain_pending()
         record = Store(work_dir).job_record(first["job_id"])
         before = record.read_bytes()
@@ -1016,11 +1007,11 @@ class TestIdempotency:
         data = _assert_schema(result)
 
         assert result.is_error
+        # Not retryable, so the reply leaves the false flag out.
         assert set(data["error"]) == {
             "code",
             "message",
             "stage",
-            "retryable",
             "commit_state",
         }
         assert data["error"] == {
@@ -1034,7 +1025,6 @@ class TestIdempotency:
                 "new request_id"
             ),
             "stage": "submission",
-            "retryable": False,
             "commit_state": "not_started",
         }
         assert "control_token" not in data
@@ -1066,8 +1056,10 @@ class TestLeanReceipt:
         (row,) = data["runs"]["items"]
         assert row["status"] == "produced"
         assert Path(row["raw"]).is_file() and Path(row["log"]).is_file()  # noqa: ASYNC240
-        assert "simulator_version" in row
-        assert row["assignments"] == {}
+        # The fake simulator's output names no build, and the run assigned
+        # nothing, so the row says neither.
+        assert "simulator_version" not in row
+        assert "assignments" not in row
 
     async def test_a_row_names_the_raws_a_run_wrote_beside_its_raw(
         self,
@@ -1148,14 +1140,17 @@ class TestLeanReceipt:
 
         (snapshot,) = captured
         expected = receipts_mod.project_receipt_runs(snapshot, run_fields)
-        assert data["runs"] == expected
+        # The same page, as a reply sends it: without the fields that say nothing.
+        assert data["runs"] == as_sent(expected, "run_experiments")
 
-    async def test_non_completed_rows_keep_artifact_path_keys(
+    async def test_a_row_that_wrote_nothing_names_no_artifact(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        """A case that ended without output has no raw or log to name, and the
+        reply leaves out a field that says nothing; its status says why."""
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_blocked.cir", body="V1 in 0 1\nR1 out 1k\n.op\n.end\n")
 
@@ -1165,7 +1160,7 @@ class TestLeanReceipt:
 
         (row,) = data["runs"]["items"]
         assert row["status"] != "produced"
-        assert "raw" in row and "log" in row
+        assert "raw" not in row and "log" not in row
 
     async def test_analysis_request_echo_is_provenance(
         self,
@@ -1894,10 +1889,12 @@ class TestLintModes:
         )
         assert await asyncio.to_thread(Path(include).read_bytes) == b"C1 out 0 23u\n"
         # The simulator reads 'u' as the source's µ meant, so nothing is reported.
-        assert not [item for item in data["observations"] if item["code"] == "micro_sign_folded"]
+        assert not [
+            item for item in data.get("observations", []) if item["code"] == "micro_sign_folded"
+        ]
         assert not [
             finding
-            for block in data["lint"]
+            for block in data.get("lint", [])
             for finding in block["findings"]
             if finding["rule_id"].startswith("value-suffix")
         ]
@@ -2011,9 +2008,7 @@ class TestLintModes:
         data = _assert_schema(await handle_run_experiments(_args(deck, "bandgap"), state_with_sim))
 
         assert len(submissions) == 1
-        assert [
-            finding["rule_id"] for block in data["lint"] for finding in block["findings"]
-        ] == []
+        assert "lint" not in data
 
     async def test_warn_proceeds_and_preserves_findings(
         self,
@@ -2116,7 +2111,7 @@ class TestLintModes:
 
         assert len(submissions) == 1
         assert data["outcome"] == "complete"
-        assert data["failures"] == []
+        assert "failures" not in data
 
     async def test_off_skips_linter(
         self,
@@ -2140,7 +2135,7 @@ class TestLintModes:
         assert len(submissions) == 1
         # No findings (linting was off) -> no lint entry at all; an empty
         # per-circuit row is ceremony the lean receipt no longer carries.
-        assert data["lint"] == []
+        assert "lint" not in data
 
 
 @pytest.mark.asyncio
@@ -2655,7 +2650,7 @@ class TestAttachedAnalysis:
         assert analysis["status"] == "completed", analysis["error"]
         result = analysis["result"]
         assert result is not None, analysis
-        assert result["coverage"]["missing_cases"]["items"] == []
+        assert "items" not in result["coverage"]["missing_cases"]
         # Real recipe output, addressed by the recipe key the caller chose.
         groups = result["results"]["vout"]["groups"]
         assert sorted(group["by"]["R1"] for group in groups) == ["1k", "2k"]
@@ -3031,8 +3026,8 @@ class TestAttachedAnalysis:
         assert entry["values"] == expected
         assert answer_result["outcome"] == expected_result["outcome"]
         assert answer_result["coverage"] == expected_result["coverage"]
-        assert answer_result["next"] is None
-        assert answer_result["cursor"] is None
+        assert "next" not in answer_result
+        assert "cursor" not in answer_result
         assert "signals_available" not in answer_result
         assert "signals_available" in job.analysis.result["top"]
         restored = _assert_schema(await _completed_analysis_receipt(request, state_with_sim))
@@ -3122,7 +3117,7 @@ class TestAttachedAnalysis:
         job_id = receipt["job_id"]
 
         runs_done = await _jobs_wait(state_with_sim, job_id, "runs", LIVENESS_S)
-        assert runs_done["timed_out"] is False
+        assert "timed_out" not in runs_done
         assert runs_done["status"] == "analyzing"
 
         # timing: asserts this wait times out while the analysis is held
@@ -3133,7 +3128,7 @@ class TestAttachedAnalysis:
         # A bound on liveness, not speed: each read the analysis makes is a
         # parser process, whose startup alone varies by interpreter and host.
         finished = await _jobs_wait(state_with_sim, job_id, "all", 30.0)
-        assert finished["timed_out"] is False
+        assert "timed_out" not in finished
         assert finished["status"] == "completed"
         assert finished["analysis_status"] == "completed"
 

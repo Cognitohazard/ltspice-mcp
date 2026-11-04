@@ -70,8 +70,8 @@ _CAUSES = [
 def _no_rows(entry: dict[str, Any], explained: bool) -> None:
     rows = entry.get("values", []) + entry.get("per_run", {}).get("items", [])
     assert rows == []
-    pointers = [warning for warning in entry["warnings"] if warning.startswith("No rows:")]
-    assert bool(pointers) is explained, entry["warnings"]
+    pointers = [warning for warning in entry.get("warnings", []) if warning.startswith("No rows:")]
+    assert bool(pointers) is explained, entry.get("warnings", [])
 
 
 @pytest.mark.parametrize("cause", _CAUSES)
@@ -99,8 +99,8 @@ def test_a_recipe_with_no_rows_keeps_its_entry_on_every_door(
         _no_rows(door["results"]["k"], explained)
     if "ok" in keys:
         assert page["results"]["ok"]["values"]
-    assert page["results"]["k"]["warnings"] == complete["results"]["k"]["warnings"]
-    assert page["results"]["k"]["warnings"] == attached["results"]["k"]["warnings"]
+    assert page["results"]["k"].get("warnings", []) == complete["results"]["k"].get("warnings", [])
+    assert page["results"]["k"].get("warnings", []) == attached["results"]["k"].get("warnings", [])
 
 
 async def test_the_entries_keep_the_order_the_recipes_were_asked_in(

@@ -139,7 +139,7 @@ RUN_CODE_OUTPUT_SCHEMA: dict[str, Any] = {
         "stderr": {"type": "string", "description": "Python-level stderr; tail kept."},
         "result": {
             "type": ["string", "null"],
-            "description": "repr of a trailing expression, or null.",
+            "description": "repr of a trailing expression; absent when there is none.",
         },
         "truncated": {"type": "boolean"},
         "chars_dropped": {"type": "integer"},

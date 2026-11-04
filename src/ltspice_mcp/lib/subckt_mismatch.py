@@ -32,11 +32,12 @@ mid-simulation.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cache, cached_property, partial
 from pathlib import Path
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
@@ -46,7 +47,8 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.hierarchy import ResolvedInstance, SemanticProfile
+from ltspice_mcp.lib.hierarchy import ResolvedInstance, SemanticProfile, param_assignments
+from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, multiplier_product
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -152,6 +154,10 @@ def require_positional(files: Sequence[ClosureFile]) -> None:
             )
 
 
+# The multiplier of a device with no ``m`` written on its X line or itself.
+_ONE_COPY = NumericFact("1", 1.0, None, "resolved")
+
+
 @dataclass(frozen=True)
 class XFetTarget:
     """One inner MOS device addressable through exactly one ``X`` level."""
@@ -165,6 +171,9 @@ class XFetTarget:
     model_name: str
     width: float | None
     length: float | None
+    #: The X line's ``m`` times the inner device's ``m``, as ngspice multiplies
+    #: them; unresolved, with the reason, when either is written but cannot be read.
+    multiplier: NumericFact = _ONE_COPY
 
     @property
     def ref(self) -> str:
@@ -288,6 +297,24 @@ def require_geometry(target: XFetTarget) -> tuple[float, float]:
             "numeric W/L on the instance",
         )
     return target.width, target.length
+
+
+def require_multiplier(target: XFetTarget) -> float:
+    """Return how many parallel copies share the device's draw, or refuse.
+
+    The draw's area is ``m·W·L``. A multiplier the plan could not read has the
+    same problem as unreadable geometry: drawn as one copy, m copies would get
+    a sigma √m too large.
+    """
+    if target.multiplier.value is None:
+        raise MismatchPlanError(
+            "mismatch_geometry_unresolved",
+            f"The multiplier of {target.ref!r} cannot be read ({target.multiplier.reason}), "
+            "so a geometry-scaled sigma cannot be computed for it; supply exact "
+            "per-instance values instead, or write m as a number on the X line and "
+            "on the inner device",
+        )
+    return target.multiplier.value
 
 
 def closure_from_deck(
@@ -457,6 +484,54 @@ def _instances(children: Iterable[tuple[int, SpiceCard]], prefix: str) -> list[S
     ]
 
 
+def _body_environment(
+    x_view: InstanceLine, opener: SpiceCard, children: Iterable[tuple[int, SpiceCard]]
+) -> Environment:
+    """The parameters an inner device's expressions read under one X line.
+
+    The body's defaults (on the ``.subckt`` line, then its own ``.param``
+    cards, as ngspice orders them) overridden by what the X line gives. Only
+    literal values on the X line resolve: this plan reads no deck-level
+    ``.param``. A ``.param`` card is read as hierarchy discovery reads it, an
+    unbraced expression whole; one it cannot read leaves every value in the
+    body unresolved, with the reason.
+    """
+    expressions = dict(SubcktCard.from_card(opener).param_defaults)
+    outer = Environment({}, simulator="ngspice")
+    overrides = {key.casefold(): outer.fact(value) for key, value in x_view.params.items()}
+    try:
+        for _, card in children:
+            if card.kind == "param":
+                expressions.update(param_assignments(card))
+    except NetlistError as exc:
+        return Environment(
+            expressions, simulator="ngspice", overrides=overrides, dynamic_reason=str(exc)
+        )
+    return Environment(expressions, simulator="ngspice", overrides=overrides)
+
+
+def _device_multiplier(
+    x_view: InstanceLine, inner: InstanceLine, body: Callable[[], Environment]
+) -> NumericFact:
+    """How many parallel copies of ``inner`` ngspice builds under ``x_view``.
+
+    ngspice multiplies an X line's ``m`` into every device of the body, and an
+    inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
+    on top of it, so the copies are the product. ``body`` builds the scope the
+    inner ``m`` is read in, so a device that writes none never builds it.
+    """
+    x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
+    return multiplier_product(
+        [
+            (
+                f"the X line {x_view.ref}",
+                None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
+            ),
+            (f"the inner device {inner.ref}", None if inner_m is None else body().fact(inner_m)),
+        ]
+    )
+
+
 def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
     """Read LEVEL off the model card an inner device names, binned or not.
 
@@ -593,8 +668,10 @@ def build_plan(
         raw_length = parse_value(view.get_param("L") or "")
         width = None if raw_width is None else raw_width * scale
         length = None if raw_length is None else raw_length * scale
+        body_env = cache(partial(_body_environment, view, def_index.cards[opener_index], children))
         for inner in chosen:
             inner_view = InstanceLine.from_card(inner)
+            multiplier = _device_multiplier(view, inner_view, body_env)
             _refuse_preexisting(
                 x_ref, inner_view, MISMATCH_PARAMS, f"inner device {inner_view.ref}"
             )
@@ -616,6 +693,7 @@ def build_plan(
                     model_name=inner_view.model,
                     width=width,
                     length=length,
+                    multiplier=multiplier,
                 )
             )
 
@@ -1194,6 +1272,7 @@ def draw_mismatch(
         if rule is None or (rule.avt <= 0.0 and rule.ak <= 0.0):
             continue
         width, length = require_geometry(target)
+        multiplier = require_multiplier(target)
         deltas = sample_instance_mismatch(
             sampler,
             InstanceGeometry(
@@ -1201,6 +1280,7 @@ def draw_mismatch(
                 model_name=target.model_name,
                 width_m=width,
                 length_m=length,
+                multiplier=multiplier,
             ),
             rule,
         )

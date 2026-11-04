@@ -147,4 +147,4 @@ async def test_a_known_and_an_unknown_job_in_one_call_are_told_apart(
     rows = {row["label"]: row for row in analyzed["coverage"]["missing_cases"]["items"]}
     assert rows["typo"]["code"] == "job_not_found" and _UNKNOWN_JOB in rows["typo"]["detail"]
     assert rows["gone"]["code"] == "result_unreadable" and "nope.raw" in rows["gone"]["detail"]
-    assert analyzed["failures"] == []
+    assert analyzed.get("failures", []) == []

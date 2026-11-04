@@ -26,6 +26,7 @@ from ltspice_mcp.lib.ltspice_frame import (
     SaveQuestion,
     menu_command,
 )
+from ltspice_mcp.lib.ltspice_window import file_difference
 from tests._ltspice_window import PID, FakeFrame, a_window, fake_command, read_world, write_world
 from tests.conftest import LIVENESS_S
 from tests.ltspice_bridge_recorder import (
@@ -480,6 +481,41 @@ def test_the_stand_in_saves_a_sheet_as_ltspice_was_recorded_saving_one(build: st
         frame.close(pane)
         assert [not frame.is_open(pane), frame.save_question(PID) is None] == facts[
             "saved, it closes without a question"
+        ]
+
+
+@pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_discards_a_changed_sheet_as_ltspice_was_recorded_discarding_one(
+    build: str, tmp_path: Path
+):
+    facts = observed(build)
+    sheet = tmp_path / "discarding.asc"
+    shutil.copyfile(INPUTS / "older_version.asc", sheet)
+    on_disk = sheet.read_bytes()
+    world = tmp_path / "world.json"
+    held = (FIXTURES / build / "sheets" / "older_version.asc").read_text(encoding="utf-8")
+    write_world(world, [a_window({str(sheet): held})])
+    frame = FakeFrame(world)
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        session.attach(PID)
+        changed = held.replace("SYMATTR Value 1k", "SYMATTR Value 4.7k")
+        session.replace_design_text(str(sheet), changed)
+        pane = frame.pane(PID, sheet.name)
+        assert pane is not None
+        frame.close(pane)
+        question = frame.save_question(PID)
+        assert (question is not None and Path(question.path) == sheet) is facts[
+            "a sheet whose window copy differs from the file is asked about before it closes"
+        ]
+        assert question is not None
+        frame.answer(question, discard=True)
+        assert [not frame.is_open(pane), sheet.read_bytes() == on_disk] == facts[
+            "answered No, it closes and its file is as it was"
+        ]
+        session.open_design(str(sheet))
+        assert (file_difference(on_disk, session.design_text(str(sheet))) is None) is facts[
+            "opened again, the window holds the file"
         ]
 
 

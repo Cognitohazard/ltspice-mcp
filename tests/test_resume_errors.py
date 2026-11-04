@@ -132,7 +132,7 @@ def test_resume_discovery_failure_retains_journal_committed_child(
     assert error.control_token == child.control_token
     assert error.payload["request_id"] == error.payload["resume_request_id"] == entry.request_id
     assert error.payload["addressed_parent_job_id"] == root["job_id"]
-    assert error.payload["resumed"] and not error.payload["replayed"]
+    assert error.payload["resumed"] and not error.payload.get("replayed")
     assert len(submissions) == 2
 
 
@@ -168,7 +168,7 @@ def test_root_discovery_and_snapshot_failure_retains_journal_committed_root(
     assert error.job_id == journal.head_job_id == root.job_id
     assert error.control_token == root.control_token
     assert error.payload["request_id"] == arguments["request_id"]
-    assert not error.payload["replayed"]
+    assert not error.payload.get("replayed")
     assert "is running" not in error.payload["hint"]
     assert len(submissions) == 2
 
@@ -195,7 +195,7 @@ def test_resume_snapshot_failure_retains_committed_child(
     assert error.control_token == child.control_token
     assert error.payload["request_id"] == "public-error-retry"
     assert error.payload["addressed_parent_job_id"] == root["job_id"]
-    assert error.payload["resumed"] and not error.payload["replayed"]
+    assert error.payload["resumed"] and not error.payload.get("replayed")
     assert "Snapshot dialect read failed" in str(error)
     final = api.wait(child.job_id, timeout=30)
     assert final["status"] == "completed" and final["completeness"]["reused"] == 1

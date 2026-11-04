@@ -440,7 +440,7 @@ class TestSweepIntegration:
         )
         assert receipt["status"] == "completed", receipt.get("failures")
         stage = receipt["analysis"]
-        assert stage["error"] is None, stage["error"]
+        assert "error" not in stage, stage.get("error")
         entry = stage["result"]["results"]["corner"]
 
         reduced = {item["stat"]: item for item in entry["reduced"]}
@@ -499,7 +499,7 @@ class TestMonteCarloIntegration:
         assert counts["failed"] == 0
 
         stage = receipt["analysis"]
-        assert stage["error"] is None, stage["error"]
+        assert "error" not in stage, stage.get("error")
         reduced = {item["stat"]: item for item in stage["result"]["results"]["corner"]["reduced"]}
         # R1 perturbed uniformly by +/-5% around 1k, C1 fixed at 100n: every
         # sampled resistance and every corner frequency stays in its band.
@@ -791,7 +791,7 @@ class TestSheetOpenInAWindow:
         state: SessionState, sheet: Path, value: str | None = None, **extra: object
     ) -> dict:
         """An edit of R1's value, or with ``extra`` such as ``ops=[]`` and
-        ``save_open_window=True``, against the file as it is now."""
+        ``open_window="save"``, against the file as it is now."""
         import hashlib
 
         from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
@@ -819,7 +819,7 @@ class TestSheetOpenInAWindow:
         data = await self._edit(ltspice_state, sheet, "2.2k")
 
         assert data["commit_state"] == "committed"
-        assert data["observations"] == []
+        assert "observations" not in data
         assert [(row["pid"], row["shown"]) for row in data["open_in_ltspice"]] == [(pid, True)]
         (held,) = await asyncio.to_thread(windows.holding, sheet)
         assert "SYMATTR Value 2.2k" in held.text
@@ -854,13 +854,42 @@ class TestSheetOpenInAWindow:
         changed = held.text.replace("SYMATTR Value 1k", "SYMATTR Value 9k")
         await asyncio.to_thread(windows.show, held, changed)
 
-        saved = await self._edit(ltspice_state, sheet, ops=[], save_open_window=True)
+        saved = await self._edit(ltspice_state, sheet, ops=[], open_window="save")
 
         assert saved["commit_state"] == "committed", saved
         assert [(row["pid"], row["saved"]) for row in saved["open_in_ltspice"]] == [(pid, True)]
         on_disk = await asyncio.to_thread(sheet.read_bytes)
         assert file_difference(on_disk, changed) is None
         assert saved["sha256"] == hashlib.sha256(on_disk).hexdigest()
+        await self._window_settled(ltspice_state, pid)
+
+        data = await self._edit(ltspice_state, sheet, "2.2k")
+        assert data["commit_state"] == "committed", data
+
+    async def test_a_window_the_user_agreed_to_drop_is_opened_again_from_the_file(
+        self, ltspice_state: SessionState, open_sheet
+    ):
+        """LTspice asks before closing the changed sheet, the answer is No, and
+        an edit made against the unchanged file then commits."""
+        from ltspice_mcp.lib.ltspice_window import file_difference
+
+        sheet, pid = open_sheet
+        windows = ltspice_state.open_windows
+        on_disk = await asyncio.to_thread(sheet.read_bytes)
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        # Someone changes the sheet in the window and does not save it.
+        changed = held.text.replace("SYMATTR Value 1k", "SYMATTR Value 9k")
+        await asyncio.to_thread(windows.show, held, changed)
+
+        dropped = await self._edit(ltspice_state, sheet, ops=[], open_window="discard")
+
+        assert dropped["commit_state"] == "not_committed", dropped
+        assert [(row["pid"], row["reopened"]) for row in dropped["open_in_ltspice"]] == [
+            (pid, True)
+        ]
+        assert await asyncio.to_thread(sheet.read_bytes) == on_disk
+        (now,) = await asyncio.to_thread(windows.holding, sheet)
+        assert file_difference(on_disk, now.text) is None
         await self._window_settled(ltspice_state, pid)
 
         data = await self._edit(ltspice_state, sheet, "2.2k")
@@ -919,7 +948,7 @@ class TestSheetOpenInAWindow:
             True,
         )
         assert design["sha256"] == hashlib.sha256(on_disk).hexdigest()
-        assert design["differs_from_file"] is False
+        assert "differs_from_file" not in design
 
         # Someone changes the sheet in the window and does not save it.
         windows = ltspice_state.open_windows
@@ -1017,7 +1046,7 @@ class TestSheetOpenInAWindow:
 
         assert await asyncio.to_thread(results_in_front) == shown["results"]
         # Nothing was opened in a browser beside it.
-        assert result.structured_content["opened"] is False
+        assert "opened" not in result.structured_content
 
     async def test_a_checked_sheet_is_opened_in_the_window_and_put_in_front(
         self, ltspice_state: SessionState, open_sheet, work_dir: Path
@@ -1052,7 +1081,7 @@ class TestSheetOpenInAWindow:
 
         shown = await show(already_open)
         assert (shown["shown"], shown["already_open"]) == (True, True), shown
-        assert shown["differs_from_file"] is False
+        assert "differs_from_file" not in shown
         front, _designs = await asyncio.to_thread(in_front)
         assert Path(front) == already_open
 
@@ -1245,6 +1274,28 @@ class TestSheetOpenInAWindow:
         ]
         await self._window_settled(ltspice_state, pid)
 
+    async def test_once_its_changes_are_dropped_the_run_shown_again_is_tied_to_the_sheet(
+        self, ltspice_state: SessionState, open_sheet, work_dir: Path
+    ):
+        """What the note on an untied plot tells the agent to do after 'discard'."""
+        _sheet, pid = open_sheet
+        sheet, job_id = await self._opened_before_it_ran(ltspice_state, work_dir, "dropped")
+        windows = ltspice_state.open_windows
+        (held,) = await asyncio.to_thread(windows.holding, sheet)
+        changed = held.text.replace("SYMATTR Value 1k", "SYMATTR Value 9k")
+        await asyncio.to_thread(windows.show, held, changed)
+        alone = await self._plot(ltspice_state, job_id, "V(filtered)")
+        assert (alone["shown"], alone["tied"]) == (True, False), alone
+
+        dropped = await self._edit(ltspice_state, sheet, ops=[], open_window="discard")
+        assert dropped["commit_state"] == "not_committed", dropped
+        shown = await self._plot(ltspice_state, job_id, "V(filtered)")
+
+        assert (shown["shown"], shown["tied"], shown["differs_from_file"]) == (True, True, False)
+        # The discard opened the sheet with its results beside it, which ties it.
+        assert "sheet_reopened" not in shown
+        await self._window_settled(ltspice_state, pid)
+
     async def test_with_no_window_open_ltspice_is_started_and_shows_the_sheet(
         self, ltspice_state: SessionState, work_dir: Path
     ):
@@ -1301,7 +1352,7 @@ class TestSheetOpenInAWindow:
                 assert len(started) == 1
                 assert (shown["shown"], shown.get("started")) == (True, True), shown
                 assert shown["pid"] == started[0].pid
-                assert shown["already_open"] is False
+                assert "already_open" not in shown
             finally:
                 for process in started:
                     process.kill()

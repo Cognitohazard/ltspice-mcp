@@ -170,7 +170,11 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   there and has it write an image (*Drawn sheets* below). A behaviour with no
   input of its own names in an `evidence` key where it is recorded instead (a
   manifest field, the files of other cases, or the bridge recordings), or
-  gives in an `unrecordable` key the reason it cannot be recorded.
+  gives in an `unrecordable` key the reason it cannot be recorded. A behaviour
+  whose inputs were written where no LTspice runs carries a `pending` key
+  saying how to record them. The tree checks excuse it from having a
+  recording and fail once it has one, so the key comes out with the
+  recording, and a test that reads the recording skips while it is pending.
 - `ltspice26/` and `ltspice17/` hold each build's output, one file per output,
   and a `manifest.json` with the executable's digest, size and version; the
   build name its own output reports; the build's defaults for the settings the
@@ -556,6 +560,30 @@ something that varies. Add a varying path, date or duration to the scrubber
 (`Scrubber` in `tests/ltspice_recorder.py`). A file that differs for another
 person on the same build comes from one of their settings; add its key to
 `BEHAVIOUR_KEYS` (the waveform grid was one, *Plot settings* above).
+
+### A new LTspice release
+
+Each manifest names the executable it was recorded with, by digest, size and
+version, and a recording changes only when it is made again. The opt-in tier
+compares an installed build with the main recordings, but no test compares it
+with the bridge recording. So when a new LTspice is released, install it on a
+Windows machine and record both again:
+
+```bash
+uv run python scripts/record_ltspice_fixtures.py --check
+uv run python scripts/record_ltspice_fixtures.py
+uv run python scripts/record_ltspice_bridge.py
+```
+
+Read what `--check` prints before recording, as for a failure in the opt-in
+tier. Run the bridge recorder last, because it passes the main recordings'
+results files to LTspice's reader. Both recorders start LTspice on a separate
+desktop, so neither takes the keyboard focus. A release with the same major
+version, such as 26.2, replaces the files under `ltspice26/`; a new major
+version adds a directory beside it. `git diff` then shows what the release
+changed, and each change is a finding (*Tests that read the recordings*
+above). Last, run the suite and the opt-in tier, whose
+`TestSheetOpenInAWindow` drives the new build's own window and bridge.
 
 ### How LTspice draws text
 

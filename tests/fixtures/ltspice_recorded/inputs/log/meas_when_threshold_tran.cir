@@ -1,0 +1,13 @@
+* WHEN against a number, a parameter, expressions and another measurement (transient)
+.param vth=0.5
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out 1k
+C1 out 0 100n
+.tran 0 1m 0 1u
+.meas tran t_number WHEN V(out)=0.5
+.meas tran t_param WHEN V(out)=vth
+.meas tran t_expr WHEN V(out)=1/sqrt(4)
+.meas tran t_braced WHEN V(out)={vth}
+.meas tran vmax MAX V(out)
+.meas tran t_meas WHEN V(out)=vmax/2
+.end

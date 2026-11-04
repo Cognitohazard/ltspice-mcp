@@ -1,0 +1,12 @@
+* WHEN against a number, a parameter, an expression and another measurement (AC)
+.param k=0.70710678
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.154943n
+.ac dec 10 10 100k
+.meas ac f_number WHEN mag(V(out))=0.70710678
+.meas ac f_param WHEN mag(V(out))=k
+.meas ac f_expr WHEN mag(V(out))=1/sqrt(2)
+.meas ac g0 FIND mag(V(out)) AT 10
+.meas ac f_meas WHEN mag(V(out))=g0/sqrt(2)
+.end

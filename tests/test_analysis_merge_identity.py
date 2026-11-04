@@ -58,7 +58,7 @@ async def test_drive_does_not_retain_artifacts_evicted_from_result_cache(
         state_no_sim,
     )
     data = response.structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     assert data["results"]["loop"]["per_run"]["total"] == 6
 
 
@@ -114,7 +114,7 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
         analyze.AnalyzeResultsInput.model_validate(request), state_no_sim
     )
     data = first.structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     page = data["results"]["loop"]["per_run"]
     assert page["total"] == 45 and 0 < page["returned"] < 45
     assert page["items"][0]["value"]["cutoff_high_hz"] > 0
@@ -130,7 +130,7 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
         state_no_sim,
     )
     continued = resumed.structured_content
-    assert continued is not None and continued["failures"] == []
+    assert continued is not None and "failures" not in continued
     next_page = continued["results"]["loop"]["per_run"]
     offset = page["returned"]
     assert (next_page["items"][0]["source"], next_page["items"][0]["step_index"]) == (
@@ -229,15 +229,15 @@ async def test_unlabelled_log_continuation_echo_keeps_the_immutable_record(
         analyze.AnalyzeResultsInput.model_validate(request), state_no_sim
     )
     data = first.structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     row = data["results"]["meas"]["per_run"]["items"][0]
     assert row["source"] == raw.stem
     assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
     manifest = data["source_hashes"][0]
-    assert manifest["raw_present"] is False and manifest["log_sha256"]
+    assert "raw_present" not in manifest and manifest["log_sha256"]
     path = result_store.result_path(data["result_set_id"], work_dir)
     before = path.read_bytes()
-    cursor = data["coverage"]["missing_cases"]["next_cursor"]
+    cursor = data["coverage"]["missing_cases"].get("next_cursor")
     assert cursor is not None
     continuation = {"result_set_id": data["result_set_id"], "cursor": cursor}
     resumed = await analyze.handle_analyze_results(
@@ -245,7 +245,7 @@ async def test_unlabelled_log_continuation_echo_keeps_the_immutable_record(
         state_no_sim,
     )
     continued = resumed.structured_content
-    assert continued is not None and continued["failures"] == []
+    assert continued is not None and "failures" not in continued
     assert continued["coverage"]["missing_cases"]["returned"] == 20
     assert path.read_bytes() == before
 
@@ -262,5 +262,5 @@ async def test_stepped_plot_keeps_its_distinct_axes_without_union_facts(
     data = response.structured_content
     assert data is not None
     assert data["steps_plotted"] == data["series_count"] == data["n_steps"] > 1
-    assert data["observations"] == []
+    assert "observations" not in data
     assert await asyncio.to_thread(Path(data["path"]).is_file)

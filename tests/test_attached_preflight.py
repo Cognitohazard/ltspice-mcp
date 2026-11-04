@@ -75,7 +75,7 @@ async def test_an_invalid_recipe_is_reported_as_analyze_results_reports_it(
         )
     ).structured_content
     assert page is not None
-    (failure,) = page["failures"]
+    (failure,) = page.get("failures", [])
     assert (failure["code"], failure["stage"]) == ("recipe_invalid", "validate")
 
     submissions: list[str] = []
@@ -85,7 +85,7 @@ async def test_an_invalid_recipe_is_reported_as_analyze_results_reports_it(
     assert result.structured_content is not None
     error = result.structured_content["error"]
     assert (error["code"], error["stage"]) == (failure["code"], failure["stage"])
-    assert error["retryable"] is False
+    assert error.get("retryable", False) is False
     assert error["commit_state"] == "not_started"
     assert submissions == []
 
@@ -150,7 +150,7 @@ async def test_every_field_the_block_accepts_runs_after_the_runs(
         AnalyzeResultsInput.model_validate(payload), state_with_sim
     )
     shown = analyze.render_attached_analysis(stored, fields=block.include and block.include.fields)
-    assert shown["failures"] == []
+    assert shown.get("failures", []) == []
     assert set(shown["results"]) == {"k", "m"}
     rows = shown["results"]["k"]["per_run"]["items"]
     assert rows and all(set(row) == {"case_id", "value"} and "rms" in row["value"] for row in rows)

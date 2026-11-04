@@ -316,12 +316,21 @@ class MismatchRule:
 
 @dataclass(frozen=True)
 class InstanceGeometry:
-    """Geometric inputs needed to compute Pelgrom σ for one transistor."""
+    """Geometric inputs needed to compute Pelgrom σ for one transistor.
+
+    ``multiplier`` is the product of the device's own ``m`` and the ``m`` of
+    every subcircuit instance above it: the number of parallel copies the
+    simulator builds from one card. All of them share the card's one draw, so
+    the gate area the draw stands for is ``multiplier · W · L``. ``None`` means
+    a multiplier was written but is not a positive number this module can
+    read, which leaves σ undefined.
+    """
 
     ref: str
     model_name: str
     width_m: float
     length_m: float
+    multiplier: float | None = 1.0
 
 
 def sample_instance_mismatch(
@@ -338,12 +347,21 @@ def sample_instance_mismatch(
     Each ``(instance, channel)`` pair draws from its own sub-stream
     (``"mismatch:<REF>.dvth"`` / ``"mismatch:<REF>.dk_over_k"``) so
     adding a new transistor doesn't perturb existing ones' samples.
+
+    The area is ``multiplier · W · L``: m parallel copies share this one draw,
+    so their combined offset has σ/√m of a single copy's.
     """
+    multiplier = instance.multiplier
+    if multiplier is None or not math.isfinite(multiplier) or multiplier <= 0.0:
+        raise ValueError(
+            f"{instance.ref}: the device multiplier m is not a positive number, "
+            "so its mismatch sigma is undefined"
+        )
     # Convert W·L to µm² for the Pelgrom denominator (coefficients given
     # in mV·µm and %·µm conventions).
     w_um = instance.width_m * 1e6
     l_um = instance.length_m * 1e6
-    wl_um2 = max(w_um * l_um, rule.min_wl_um2)
+    wl_um2 = max(multiplier * w_um * l_um, rule.min_wl_um2)
     sqrt_wl = math.sqrt(wl_um2)
 
     dvth = 0.0
@@ -491,6 +509,11 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
     ``parse_spice_value`` so engineering suffixes (``10u``, ``180n``)
     work. Instances missing W, L, or a model are skipped (Pelgrom σ
     is undefined without those).
+
+    An ``m`` on the card is the device's multiplier. Absent, it is 1; written
+    but not a positive literal number, the instance is still returned, with
+    ``multiplier=None``, so a rule that reaches it is refused rather than
+    drawn as if it were one copy.
     """
     instances: list[InstanceGeometry] = []
     result = lex(netlist_text)
@@ -512,12 +535,17 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
                 view.params,
             )
             continue
+        written = view.get_param("M")
+        multiplier = 1.0 if written is None else parse_value(written)
+        if multiplier is not None and not multiplier > 0.0:
+            multiplier = None
         instances.append(
             InstanceGeometry(
                 ref=view.ref,
                 model_name=view.model,
                 width_m=w,
                 length_m=l_val,
+                multiplier=multiplier,
             )
         )
     return instances

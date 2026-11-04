@@ -2108,7 +2108,7 @@ class OpMove(StrictModel):
     wires: list[WireEnds] = Field(default_factory=list)
     texts: list[str] = Field(
         default_factory=list,
-        description="Directives and comments, as remove_directive names them; each match moves.",
+        description="Directives and comments, named as for remove_directive; each moves.",
     )
     region: SheetRegion | None = Field(
         default=None,
@@ -2185,7 +2185,7 @@ class OpRemoveWire(StrictModel):
     pin: str | None = Field(
         default=None,
         description=(
-            "Incident-point form: removes each wire that ends on this pin, other "
+            "Incident-point form: removes each wire ending on this pin, other "
             "connections' too; one passing through stays."
         ),
     )

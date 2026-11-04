@@ -9,6 +9,7 @@ lint and arity rules read the same card and have to reach the same answer.
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
+from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph, values_equal
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
@@ -615,9 +618,10 @@ class TestDeckStructure:
         rows = await hierarchy_rows(state_no_sim, work_dir, "deck/gnd_alias")
         for instance in (("R1",), ("X1", "R1")):
             ground = rows[instance]["nodes"][1]
-            assert (ground["scope"], ground["name"]) == ([], "0"), instance
+            # A node at the top level has no scope, which the reply leaves out.
+            assert (ground.get("scope", []), ground["name"]) == ([], "0"), instance
         port = rows[("X2", "R1")]["nodes"][1]
-        assert (port["scope"], port["name"]) == ([], "mid")
+        assert (port.get("scope", []), port["name"]) == ([], "mid")
 
     @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
     async def test_the_net_query_reads_gnd_as_node_0(
@@ -644,7 +648,7 @@ class TestDeckStructure:
             ("I3", 1),
             ("R3", 2),
         }
-        assert any("kiltpsa" in warning for warning in data["warnings"]), data
+        assert any("kiltpsa" in warning for warning in data.get("warnings", [])), data
 
 
 #: Recorded decks whose lines each build reads in a way a line-by-line reader
@@ -768,7 +772,7 @@ async def test_the_checks_read_only_the_cards_ltspice_reads(
             sorted((f["rule_id"], f["at"]["line"]) for f in linted),
             sorted(
                 (f["rule_id"], f["at"].get("line"))
-                for f in verified.structured_content["findings"]
+                for f in verified.structured_content.get("findings", [])
             ),
             deck_requirements(path),
             parse_requested_outputs(text),
@@ -824,7 +828,9 @@ async def test_a_card_ltspice_does_not_read_changes_no_reading(
         VerifyCircuitInput.model_validate({"path": str(path)}), state_no_sim
     )
     assert verified.structured_content is not None
-    assert [f for f in verified.structured_content["findings"] if f["severity"] == "error"] == []
+    assert [
+        f for f in verified.structured_content.get("findings", []) if f["severity"] == "error"
+    ] == []
     assert deck_requirements(path) == deck_requirements(read)
     assert parse_requested_outputs(text) == parse_requested_outputs(as_ltspice_reads(text))
     assert parse_source_amplitudes(text) == parse_source_amplitudes(as_ltspice_reads(text))
@@ -985,6 +991,64 @@ def test_the_functions_the_directive_check_allows_all_measure(build: str):
 
 
 # --------------------------------------------------------------------------
+# A .meas of a node pair, against what .save names
+# --------------------------------------------------------------------------
+
+#: V(in,mid) at 0.9 ms: C1 charges through 2k (tau 200 us), and R1 drops half.
+PAIR_VOLTS = math.exp(-4.5) / 2
+
+
+def pair_run(build: str, case_id: str, tmp_path: Path) -> tuple[list[str], MeasurementsOutput]:
+    """The traces a recorded pair run's raw holds, and its log's measurements."""
+    traces = rec.decode(build, case_id, tmp_path).raw.get_trace_names()
+    return traces, parse_measurements(rec.recorded(build, f"{case_id}.log"))
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_pair_measured_from_its_two_saved_nodes_is_refused_by_the_lint(
+    build: str, tmp_path: Path
+):
+    """``.save V(in) V(mid)`` with ``FIND V(in,mid)``: both builds take the
+    measurement from the two nodes, the only voltages the raw holds, and
+    ``save-meas-coverage`` refuses the deck for want of the pair."""
+    traces, data = pair_run(build, "deck/save_pair_both_nodes", tmp_path)
+    assert traces == ["time", "V(in)", "V(mid)"]
+    assert data["measurements"]["vpair"]["values"][0] == pytest.approx(PAIR_VOLTS, abs=5e-4)
+    assert refusals("deck/save_pair_both_nodes") == {"save-meas-coverage"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_saving_a_pair_saves_its_two_nodes(build: str, tmp_path: Path):
+    """``.save V(in,mid)`` is accepted: the raw holds V(in) and V(mid), not the
+    pair, the pair is measured from them as when both are saved, and the
+    checks accept the deck."""
+    traces, data = pair_run(build, "deck/save_pair_as_pair", tmp_path)
+    assert traces == ["time", "V(in)", "V(mid)"]
+    _, both = pair_run(build, "deck/save_pair_both_nodes", tmp_path)
+    assert data["measurements"]["vpair"]["values"] == both["measurements"]["vpair"]["values"]
+    assert refusals("deck/save_pair_as_pair") == set()
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_node_against_ground_is_not_measured_with_only_the_node_saved(
+    build: str, tmp_path: Path
+):
+    """``.save V(mid)`` with ``FIND V(mid,0)``: neither build takes the
+    measurement. LTspice 26 stops it with "Voltage not found." and XVII prints
+    it FAIL'ed. The raw holds V(mid) alone, and ``save-meas-coverage`` refuses
+    the deck."""
+    traces, data = pair_run(build, "deck/save_pair_to_ground", tmp_path)
+    assert traces == ["time", "V(mid)"]
+    if rec.generation(build) == "xvii":
+        assert data["failed_measurements"] == ["vground"]
+    else:
+        assert "vground" not in data["measurements"]
+        log = read_spice_text(rec.recorded(build, "deck/save_pair_to_ground.log"))
+        assert "Voltage not found." in log
+    assert refusals("deck/save_pair_to_ground") == {"save-meas-coverage"}
+
+
+# --------------------------------------------------------------------------
 # What a deck means
 # --------------------------------------------------------------------------
 
@@ -1016,11 +1080,13 @@ class TestDeckSemantics:
         rows = await hierarchy_rows(state_no_sim, work_dir, "deck/caret_power")
         for reference, node in (("R1", "a"), ("R2", "b"), ("R3", "c"), ("R4", "d")):
             fact = rows[(reference,)]["value"]
-            if fact["value"] is not None:
+            if fact.get("value") is not None:
                 assert fact["value"] == pytest.approx(read[f"v({node})"]), reference
-        # The two the server cannot be wrong about because it declines them.
-        assert rows[("R1",)]["value"]["value"] is None
-        assert rows[("R4",)]["value"]["value"] is None
+        # The two the server cannot be wrong about because it declines them:
+        # unresolved, with no value in the reply.
+        for reference in ("R1", "R4"):
+            assert rows[(reference,)]["value"]["status"] == "unresolved"
+            assert "value" not in rows[(reference,)]["value"]
         with pytest.raises(ValueError, match="caret"):
             evaluate("2^3", lambda name: 0.0, simulator="ltspice")
 

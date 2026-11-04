@@ -54,11 +54,7 @@ from tests.test_analyze_results import _analyze
 # the coverage test below fails on any `_TRIM_*` constant declared anywhere in
 # the package that is not here, so a new allowlist cannot slip in unpinned.
 _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
-    (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
-    (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
     (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
-    (receipts_mod, "_TRIM_REMOVE_RECEIPT", receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
-    (receipts_mod, "_TRIM_REMOVE_RECEIPT", jobs_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
 ]
 
@@ -93,8 +89,8 @@ class TestRungZeroAllowlists:
     It is the one rung that exempts content, so its keys are declared as data
     and checked here rather than reasoned about at the call site. A ``REMOVE``
     key must be optional — deleting a required key would make the emission fail
-    the tool's own schema — and an ``EMPTY`` key must be required, because an
-    optional key that is only ever emptied should have been removed instead.
+    the tool's own schema — and so must an ``EMPTY`` key, a block the rung
+    empties of content, because the reply then leaves the empty block out.
     """
 
     @pytest.mark.parametrize(
@@ -110,10 +106,10 @@ class TestRungZeroAllowlists:
         required = set(schema.get("required", ()))
         for key in keys:
             assert key in schema["properties"], f"{name} names {key!r}, absent from the schema"
-            if "_REMOVE_" in name:
-                assert key not in required, f"{name} would delete required key {key!r}"
-            else:
-                assert key in required, f"{name} empties optional key {key!r}; remove it instead"
+            assert key not in required, f"{name} would leave out required key {key!r}"
+            if "_EMPTY_" in name:
+                kind = schema["properties"][key].get("type")
+                assert kind in ("array", "object"), f"{name} empties {key!r}, which holds no block"
 
     def test_every_declared_allowlist_is_pinned(self):
         """The fail-closed half: a rung-0 list declared anywhere in the package
@@ -289,21 +285,18 @@ class TestLadderPrimitives:
         # Nothing fits: the floor, which is the one limit it may return unseen.
         assert response_budget.largest_fitting(50, fits_up_to(-1), floor=1) == 1
 
-    def test_rung_zero_removes_optional_and_only_empties_required(self):
-        container = {"optional": [], "kept": [1], "required": [1, 2]}
-        response_budget.apply_trim(container, remove=("optional", "kept"), empty=("required",))
-        assert "optional" not in container
+    def test_rung_zero_empties_only_the_blocks_it_names(self):
+        container = {"named": [1, 2], "kept": [1]}
+        response_budget.apply_trim(container, ("named",))
         assert container["kept"] == [1]
-        assert container["required"] == []
+        assert container["named"] == []
 
     def test_rung_zero_reports_only_what_it_emptied_of_content(self):
-        """A removed empty block carried nothing, so it is not reported as cut."""
-        container = {"optional": [], "required": [1, 2], "already": []}
-        emptied = response_budget.apply_trim(
-            container, remove=("optional",), empty=("required", "already")
-        )
-        assert emptied == ["required"]
-        assert response_budget.apply_trim(container, empty=("required",)) == []
+        """A block that was already empty carried nothing, so it is not reported as cut."""
+        container = {"named": [1, 2], "already": []}
+        emptied = response_budget.apply_trim(container, ("named", "already"))
+        assert emptied == ["named"]
+        assert response_budget.apply_trim(container, ("named",)) == []
 
     def test_a_trim_that_emptied_nothing_is_not_a_degraded_response(self):
         """The note says presentation was reduced; with nothing removed it
@@ -420,7 +413,7 @@ class TestAnalysisBudget:
         outside that hash is what lets these two calls be the same request."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         first = await _analysis(state_no_sim, raw, budget=900, include={"per_run": {"limit": 20}})
-        cursor = first["results"]["loop"]["per_run"]["next_cursor"]
+        cursor = first["results"]["loop"]["per_run"].get("next_cursor")
         assert cursor is not None
         resumed = await _analysis(
             state_no_sim, raw, include={"per_run": {"limit": 20, "cursor": cursor}}
@@ -452,10 +445,12 @@ class TestAnalysisBudget:
         assert data["coverage"]["runs_requested"] == 1
         assert data["coverage"]["runs_analyzed"] == 1
         assert _observation(data, "budget_truncated") is not None
-        # Required keys are emptied, never deleted — that is what keeps every
-        # rung inside the declared schema.
-        assert "source_hashes" in data
-        assert "next" in data and "cursor" in data
+        # The identity echo is emptied, so the reply leaves it out. Every
+        # recipe was evaluated, so there is nothing to continue: the reply has
+        # no continuation handle, and still names its result set.
+        assert "source_hashes" not in data
+        assert "next" not in data and "cursor" not in data
+        assert data["result_set_id"]
 
     async def test_a_response_over_its_budget_says_so(
         self, state_no_sim: SessionState, work_dir: Path
@@ -511,7 +506,7 @@ class TestAnalysisBudget:
         detail = _observation(data, "budget_truncated")["detail"]  # type: ignore[index]
         assert "rung 2 (shrink)" in detail
         # rung 0: required identity echo emptied, never removed.
-        assert data["source_hashes"] == []
+        assert "source_hashes" not in data
         # rung 1: the payload-growing opt-ins are revoked.
         assert "signals_available" not in data
         # rung 2: the page shrank, and it shrank before the cursor was minted —
@@ -549,7 +544,7 @@ class TestAnalysisBudget:
             assert rows, "a shrunk page must still carry at least one row"
             assert page["returned"] < 45, "this budget is supposed to shrink the page"
             seen.extend((row["source"], row["step_index"]) for row in rows)
-            cursor = page["next_cursor"]
+            cursor = page.get("next_cursor")
             if cursor is None:
                 break
         assert cursor is None, "the shrunk page chain never terminated"
@@ -599,7 +594,7 @@ class TestAnalysisBudget:
         plain = await _spec_analysis(state_no_sim, raw)
         wide = plain["results"]["vout"]["spec"]
         assert wide["fail_count"] > 4, "fixture stopped producing failing cases"
-        assert wide["fail_cases"]["truncated"] is False
+        assert "truncated" not in wide["fail_cases"]
 
         data = await _spec_analysis(state_no_sim, raw, budget=response_budget.BUDGET_MIN_TOKENS)
         spec = data["results"]["vout"]["spec"]
@@ -785,7 +780,7 @@ class TestServerDefaultBudget:
 
         # Rung 0's own allowlist, and the whole of what the default may do: the
         # identity echo emptied, the answer untouched.
-        assert trimmed["source_hashes"] == []
+        assert "source_hashes" not in trimmed
         assert trimmed["results"]["loop"]["values"]
         # No note claiming a budget the caller never set went unmet — the ladder
         # stopped at rung 0 by policy, which is the policy working.
@@ -863,7 +858,7 @@ def _inline_values(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _thinning_warnings(entry: dict[str, Any]) -> list[str]:
-    return [warning for warning in entry["warnings"] if "thinned" in warning]
+    return [warning for warning in entry.get("warnings", []) if "thinned" in warning]
 
 
 @pytest.mark.asyncio
@@ -1006,7 +1001,7 @@ class TestJobsBudget:
             assert rows
             assert page["returned"] < 50, "this budget is supposed to shrink the page"
             seen.extend(row["case_id"] for row in rows)
-            cursor = page["next_cursor"]
+            cursor = page.get("next_cursor")
             if cursor is None:
                 break
         assert cursor is None
@@ -1043,7 +1038,7 @@ class TestJobsBudget:
             job_id=job.job_id,
             budget=response_budget.BUDGET_MIN_TOKENS,
         )
-        assert data["failures"] == []
+        assert "failures" not in data
         assert data["job_id"] == job.job_id
         assert data["status"] == job.status
         assert _observation(data, "budget_truncated") is not None
@@ -1155,20 +1150,20 @@ class TestReceiptFloor:
         # runs there are; no row and no per-run echo is inline.
         assert large["completeness"]["expanded"] == large["runs"]["total"] == 64
         assert large["runs"]["returned"] == 0
-        assert large["analysis"]["result"]["source_hashes"] == []
+        assert "source_hashes" not in large["analysis"]["result"]
         assert large["analysis"]["result"]["coverage"]["runs_analyzed"] == 64
         assert _observation(large, "budget_truncated") is not None
         assert "jobs(runs)" in large["hint"]
 
         # The cursor is the route back to every row, in order.
         seen: list[str] = []
-        cursor = large["runs"]["next_cursor"]
+        cursor = large["runs"].get("next_cursor")
         while cursor is not None:
             page = await _jobs(
                 state_with_sim, action="runs", job_id=large["job_id"], cursor=cursor
             )
             seen.extend(row["case_id"] for row in page["items"])
-            cursor = page["next_cursor"]
+            cursor = page.get("next_cursor")
         assert seen == [f"dut-case-{index:04d}" for index in range(64)]
 
     async def test_a_recipe_failing_on_every_run_is_one_counted_row(
@@ -1268,7 +1263,7 @@ class TestReceiptFloor:
         data = await _grid_receipt(state_with_sim, grid_deck, 4, None, recipes=_GRID_RECIPES[:1])
 
         attached = data["analysis"]["result"]
-        assert attached["source_hashes"] == []
+        assert "source_hashes" not in attached
         # The default stops at rung 0: the rows the caller would read stand.
         assert len(attached["results"]["v_100u"]["values"]) == 4
         assert data["runs"]["returned"] == 4
@@ -1348,7 +1343,7 @@ def test_the_server_default_sends_no_caller_to_a_budget(
 
     for data in (wire, complete):
         assert _observation(data, "budget_truncated") is None
-        assert not [o for o in data["observations"] if "budget'" in o.get("detail", "")]
+        assert not [o for o in data.get("observations", []) if "budget'" in o.get("detail", "")]
 
 
 @pytest.mark.asyncio

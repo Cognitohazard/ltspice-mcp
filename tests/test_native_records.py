@@ -15,6 +15,7 @@ from ltspice_mcp.lib.pdk_native import (
     SimulatorFacts,
     ValidatedSample,
 )
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
 from tests.test_experiment_job import _job
 
@@ -79,7 +80,8 @@ async def test_failed_native_case_survives_reload_and_public_runs(
     )
     assert result.structured_content is not None
     rows = result.structured_content["items"]
-    assert rows[0]["native_statistics"] == restored.public()
+    # As a reply sends it: without the fields that say nothing.
+    assert rows[0]["native_statistics"] == as_sent(restored.public(), "jobs")
     assert rows[0]["assignments"] == {"R1": "1k"}
     if not prepared:
         assert "validated" not in rows[0]["native_statistics"]
@@ -96,7 +98,7 @@ async def test_failed_native_case_survives_reload_and_public_runs(
         )
         assert detail.structured_content is not None
         assert detail.structured_content["items"] == [
-            {"native_statistics": restored.public(detailed=True)}
+            {"native_statistics": as_sent(restored.public(detailed=True), "jobs")}
         ]
 
 

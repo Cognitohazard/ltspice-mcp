@@ -14,7 +14,9 @@
 # cannot: another switch, a setting, a run stopped part way.
 #
 # A behaviour with no input says why: `evidence` when the build's manifest
-# records it some other way, `unrecordable` when nothing can.
+# records it some other way, `unrecordable` when nothing can. A behaviour
+# whose inputs are written but not yet recorded says how to record them in
+# `pending`, which comes out with the recording.
 
 # ---------------------------------------------------------------- schematics
 
@@ -348,6 +350,15 @@ inputs = [
     "deck/save_omits_meas.cir",
 ]
 
+[behaviour.save-meas-node-pair]
+summary = "Whether a .meas of a node pair is taken when .save names both nodes but not the pair, whether .save accepts the pair itself and what the raw then holds, and whether a node measured against ground needs more than the node saved."
+model = ["lib/lint_rules.py", "lib/spice_validator.py"]
+inputs = [
+    "deck/save_pair_both_nodes.cir",
+    "deck/save_pair_as_pair.cir",
+    "deck/save_pair_to_ground.cir",
+]
+
 [behaviour.deck-semantics]
 summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
 model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py"]
@@ -437,6 +448,15 @@ summary = "An operating-point raw: one point, no axis; the Backannotation header
 model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
+[behaviour.mos-multiplier]
+summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line and of m={mult} set from it, which the server counts only under ngspice."
+model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
+# Each device's drain is fed through a 0 V source, so the operating-point raw
+# holds its current: one copy (V1) against m=4 on the card (V4), and in the
+# second deck one copy in a body against m=4 on the X line (VX) and against a
+# body whose device takes m={mult} from mult=4 on the X line (VP).
+inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir"]
+
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
 model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
@@ -507,6 +527,17 @@ inputs = ["log/meas_trig.cir"]
 summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
 model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
 inputs = ["log/meas_db.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-when-threshold]
+summary = "How a WHEN is printed when its threshold is not a plain number: a parameter, an expression, a braced expression and another measurement, in a transient and an AC analysis, alone and in the tables of a stepped run."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py"]
+inputs = [
+    "log/meas_when_threshold_tran.cir",
+    "log/meas_when_threshold_ac.cir",
+    "log/meas_when_threshold_tran_step.cir",
+    "log/meas_when_threshold_ac_step.cir",
+]
 keep = ["log"]
 
 [behaviour.log-meas-complex-format]
@@ -650,9 +681,9 @@ model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json, the facts noted after 'a results file that is not there', made by asking the frame of a window on a desktop of its own; manifest.json, sheet_commands. LTspice XVII is not recorded: it has no bridge to find the window through."
 
 [behaviour.sheet-closed-from-outside]
-summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file."
+summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file. One whose window copy differs from the file is asked about the same way, No closes it with the file as it was, and opened again the window holds the file."
 model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py", "tools/schematic_edit.py"]
-evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet with no results beside it', made by asking the frame of a window on a desktop of its own. LTspice XVII is not recorded: it has no bridge to find the window through."
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet with no results beside it', and those after the save of a write-protected sheet, made by asking the frame of a window on a desktop of its own. LTspice XVII is not recorded: it has no bridge to find the window through."
 
 [behaviour.sheet-saved-from-outside]
 summary = "What the sheet menu's Save, sent to a window from outside, does to a sheet the bridge handed new text: it writes the window's copy to the file, an older sheet with the first line LTspice 26 writes, asks nothing, and the sheet then closes without a question; and that for a write-protected file it writes nothing and shows a box with only OK, which Cancel closes, leaving the window's copy as it was."

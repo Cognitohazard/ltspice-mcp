@@ -150,7 +150,7 @@ class TestARouteThatIsRefused:
             {
                 "x": 200,
                 "y": 0,
-                "via": "endpoint",
+                "via": "tee",
                 "wire": {"from": {"x": 0, "y": 0}, "to": {"x": 400, "y": 0}},
             }
         ]

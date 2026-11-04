@@ -626,8 +626,8 @@ class TestCapabilitiesBuild:
         before = (await capabilities_report(state))["simulators"]["ltspice"]
         assert before["executable"] == str(program)
         assert before["executable_sha256"] == _sha256(program)
-        assert before["version"] is None
-        assert before["version_source"] is None
+        assert "version" not in before
+        assert "version_source" not in before
 
         deck = work_dir / "rc.cir"
         deck.write_text(_DECK)
@@ -652,7 +652,7 @@ class TestCapabilitiesBuild:
         caps = (await capabilities_report(state))["simulators"]["ltspice"]
 
         assert caps["executable_sha256"] == _sha256(program)
-        assert caps["version"] is None
+        assert "version" not in caps
 
     async def test_under_wine_the_executable_is_the_simulator(
         self, config: ServerConfig, work_dir: Path

@@ -187,7 +187,7 @@ async def _reply(state: SessionState, raw: Path, **selection: Any) -> dict[str, 
     )
     reply = (await handle_analyze_results(request, state)).structured_content
     assert reply is not None
-    assert reply["failures"] == [], reply["failures"]
+    assert reply.get("failures", []) == [], reply.get("failures", [])
     return reply["results"]["i"]
 
 

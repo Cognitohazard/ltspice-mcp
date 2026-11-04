@@ -45,6 +45,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_step_iterations,
     parse_temperatures,
     read_device_op_points,
+    read_log_text,
 )
 from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
@@ -247,6 +248,14 @@ class TestRawLayouts:
         assert values["v(in)"] == pytest.approx(5.0)
         assert values["v(out)"] == pytest.approx(4.0)
         assert values["i(r1)"] == pytest.approx(1e-3)
+
+    def test_a_card_with_m_is_that_many_copies_of_one_device(self, build: str, tmp_path: Path):
+        """``m=4`` on a MOSFET card draws four times one copy's current: the
+        parallel copies of one card that a mismatch draw's area of m·W·L
+        stands for."""
+        values = rec.operating_point(build, "raw/mos_multiplier", tmp_path)
+        assert values["i(v1)"] != 0.0
+        assert values["i(v4)"] == pytest.approx(4 * values["i(v1)"], rel=1e-6)
 
     def test_a_transfer_function_is_one_point_of_gain_and_two_impedances(
         self, build: str, tmp_path: Path
@@ -604,7 +613,7 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     )
     data = (await handle_analyze_results(request, state_no_sim)).structured_content
     assert data is not None
-    assert data["failures"] == []
+    assert "failures" not in data
     found = [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"]
     if gap is None:
         assert found == []
@@ -649,8 +658,10 @@ async def test_a_job_whose_deck_asked_for_wide_steps_is_not_reported_coarse(
     )
     data = (await handle_analyze_results(request, state_no_sim)).structured_content
     assert data is not None
-    assert data["failures"] == []
-    assert [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"] == []
+    assert "failures" not in data
+    assert [
+        o for o in data.get("observations", []) if o["code"] == "coarse_compressed_waveform"
+    ] == []
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -677,7 +688,7 @@ async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
             }
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
-        assert data is not None and data["failures"] == []
+        assert data is not None and "failures" not in data
         return data["results"]["v"]["per_run"]["items"]
 
     rows = await values({"job_id": job.job_id})
@@ -706,7 +717,7 @@ async def test_a_one_frequency_noise_is_read_a_step_at_a_time(
         }
     )
     data = (await handle_analyze_results(request, state_no_sim)).structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     rows = data["results"]["n"]["per_run"]["items"]
     assert [row["step_values"] for row in rows] == ONE_FREQUENCY_STEPS
     for row in rows:
@@ -757,7 +768,7 @@ async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
     )
     assert plot.structured_content is not None
     readers = {
-        "plot_waveform": plot.structured_content["observations"],
+        "plot_waveform": plot.structured_content.get("observations", []),
         "inspect": listed.get("observations", []),
     }
     for reader, observations in readers.items():
@@ -947,6 +958,129 @@ class TestMeasurements:
         flat, _, _, _ = aggregate_log_measurements(data, INPUTS / "log/meas_forms.cir")
         assert flat["m_when"][0] == pytest.approx(100e-6 * math.log(2), abs=3e-6)
         assert data["measurements"]["m_when"]["values"] == [0.5]
+
+    def printed(self, build: str, case_id: str) -> dict[str, str]:
+        """Each measurement's result line as the log prints it, by name, lower case."""
+        text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+        return {
+            name: rest.strip().lower()
+            for name, rest in re.findall(r"^([a-z][a-z0-9_]*): (.*)$", text, re.M)
+        }
+
+    def test_a_when_threshold_is_printed_as_written_with_the_crossing_at(self, build: str):
+        """After ``=`` LTspice prints a WHEN's threshold as the deck writes it: a
+        parameter, an expression or another measurement. XVII evaluates a
+        braced threshold; LTspice 26 prints the braces. The crossing follows
+        ``AT``, and the server reads it from there."""
+        case_id = "log/meas_when_threshold_tran"
+        printed = self.printed(build, case_id)
+        xvii = rec.generation(build) == "xvii"
+        written = {
+            name: line.rsplit(" at ", 1)[0] for name, line in printed.items() if name != "vmax"
+        }
+        assert written == {
+            "t_number": "v(out)=0.5",
+            "t_param": "v(out)=vth",
+            "t_expr": "v(out)=1/sqrt(4)",
+            "t_braced": "v(out)=0.5" if xvii else "v(out)={vth}",
+            "t_meas": "v(out)=vmax/2",
+        }
+        data = parse_measurements(rec.recorded(build, f"{case_id}.log"))
+        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        crossing, half_max = flat["t_number"][0], flat["t_meas"][0]
+        assert crossing is not None and half_max is not None
+        assert crossing == pytest.approx(100e-6 * math.log(2), abs=3e-6)
+        assert flat["t_param"][0] == flat["t_expr"][0] == crossing
+        assert crossing == float(printed["t_param"].rsplit(" at ", 1)[1])
+        # Half the maximum is just under 0.5, so it is crossed just before.
+        assert crossing - 1e-7 < half_max < crossing
+
+    @pytest.mark.parametrize(
+        "case_id", ["log/meas_when_threshold_tran", "log/meas_when_threshold_ac"]
+    )
+    def test_a_when_against_a_non_number_fails_the_measurements_in_the_server_only(
+        self, build: str, case_id: str, tmp_path: Path
+    ):
+        """LTspice prints a crossing for each WHEN of these runs (all but XVII's
+        ``f_param``, which it fails). The server's log decoder takes a WHEN's
+        printed threshold for its value and fails the whole measurements
+        section when the threshold is not a number. The same measurements
+        stepped print a table of crossings, which it reads."""
+        whens = {
+            name: line for name, line in self.printed(build, case_id).items() if name[1] == "_"
+        }
+        assert whens and all(" at " in line for line in whens.values())
+        plain = rec.decode_log(build, case_id, tmp_path / "plain").section("measurements")
+        assert plain["status"] == "error"
+        assert "is not numeric" in plain["error"]["message"]
+        stepped = rec.decode_log(build, f"{case_id}_step", tmp_path / "stepped")
+        assert stepped.section("measurements")["status"] == "parsed"
+
+    def test_a_threshold_printed_in_braces_is_left_out_by_the_server(self, build: str):
+        """LTspice 26 prints ``t_braced: V(out)={vth} AT ...`` and the server's
+        parser leaves that measurement out; XVII prints ``v(out)=0.5``, which
+        it reads."""
+        names = set(self.measured(build, "log/meas_when_threshold_tran")["measurements"])
+        assert ("t_braced" in names) == (rec.generation(build) == "xvii")
+        assert {"t_number", "t_param", "t_expr", "t_meas"} <= names
+
+    def test_only_xvii_fails_an_ac_when_against_a_parameter(self, build: str):
+        """``WHEN mag(V(out))=k`` with ``.param k=0.70710678``: XVII prints it
+        FAIL'ed, alone and stepped. LTspice 26 finds the 1 kHz corner, as for
+        the same number written out."""
+        xvii = rec.generation(build) == "xvii"
+        for case_id in ("log/meas_when_threshold_ac", "log/meas_when_threshold_ac_step"):
+            assert self.measured(build, case_id)["failed_measurements"] == (
+                ["f_param"] if xvii else []
+            )
+        case_id = "log/meas_when_threshold_ac"
+        flat, _, _, _ = aggregate_log_measurements(
+            parse_measurements(rec.recorded(build, f"{case_id}.log")), INPUTS / f"{case_id}.cir"
+        )
+        assert flat["f_number"][0] == pytest.approx(1000.0, rel=1e-3)
+        assert flat["f_param"] == ([None] if xvii else flat["f_number"])
+
+    @pytest.mark.parametrize("analysis", ["tran", "ac"])
+    def test_a_stepped_when_table_is_headed_by_the_threshold_as_written(
+        self, build: str, analysis: str
+    ):
+        """A stepped run prints a table per measurement. A WHEN's column is
+        headed by its threshold as written (XVII evaluates a braced one), and
+        its rows are each step's crossing, which the server reads."""
+        case_id = f"log/meas_when_threshold_{analysis}_step"
+        text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+        heads = {
+            name: head.strip().lower()
+            for name, head in re.findall(
+                r"^Measurement: (\S+)\r?\n\s*step\t([^\r\n]*)", text, re.M
+            )
+        }
+        xvii = rec.generation(build) == "xvii"
+        if analysis == "tran":
+            assert heads == {
+                "t_number": "v(out)=0.5",
+                "t_param": "v(out)=vth",
+                "t_expr": "v(out)=1/sqrt(4)",
+                "t_braced": "v(out)=0.5" if xvii else "v(out)={vth}",
+                "vmax": "max(v(out))\tfrom\tto",
+                "t_meas": "v(out)=vmax/2",
+            }
+            same = ("t_number", "t_param", "t_expr", "t_braced")
+            expected = pytest.approx([100e-6 * math.log(2), 200e-6 * math.log(2)], abs=3e-6)
+        else:
+            parameter = {} if xvii else {"f_param": "mag(v(out))=k"}
+            assert heads == {
+                "f_number": "mag(v(out))=0.70710678",
+                **parameter,
+                "f_expr": "mag(v(out))=1/sqrt(2)",
+                "g0": "mag(v(out))\tat",
+                "f_meas": "mag(v(out))=g0/sqrt(2)",
+            }
+            same = ("f_number", *parameter, "f_expr")
+            expected = pytest.approx([1000.0, 500.0], rel=1e-3)
+        entries = self.measured(build, case_id)["measurements"]
+        for name in same:
+            assert entries[name]["values"] == expected, name
 
     def test_a_failed_measurement_is_named_and_the_others_kept(self, build: str):
         data = self.measured(build, "log/meas_failed")
@@ -1517,7 +1651,7 @@ class TestDeviceOperatingPoints:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         (gm,) = data["results"]["gm"]["values"]
         assert gm["value"]["value"] == pytest.approx(5.86e-4)
         (observation,) = [
@@ -1677,7 +1811,7 @@ class TestSubcircuitDeviceNames:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         read = {key: data["results"][key]["values"][0]["value"] for key in names}
         if rec.generation(build) == "xvii":
             assert [v["signal"] for v in read.values()] == [
@@ -1708,7 +1842,7 @@ class TestSubcircuitDeviceNames:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         (value,) = data["results"]["mid"]["values"]
         expected = "V(a:in:mid)" if rec.generation(build) == "xvii" else "V(xa:xin:mid)"
         assert value["value"]["signal"] == expected
@@ -1729,7 +1863,7 @@ class TestSubcircuitDeviceNames:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         (bias,) = data["results"]["all"]["values"]
         names = bias["value"]["device_names"]
         # The resistors beside them have currents in the raw and no table entry.

@@ -14,7 +14,7 @@ and renderers live in ``tools/receipts``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
@@ -120,7 +120,7 @@ class JobsInput(ToolInput):
             "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
             "cases of a recoverable job; 'place_beside_sheet' copies a case's "
             "results beside its sheet. Each action takes only its own fields, "
-            "listed below."
+            "listed in the tool's description."
         ),
     )
     budget: int | None = Field(
@@ -159,7 +159,7 @@ class JobsInput(ToolInput):
 
     @classmethod
     def wire_input_schema(cls) -> dict[str, Any]:
-        """Advertise the actions as one discriminated union."""
+        """Advertise the actions as one flat object (``jobs_input_schema``)."""
         if cls is not JobsInput:
             return super().wire_input_schema()
         return jobs_input_schema()
@@ -348,54 +348,119 @@ JOBS_ACTIONS: tuple[str, ...] = tuple(
 )
 
 
-def jobs_input_schema() -> dict[str, Any]:
-    """The actions as one object schema, each action's shape its own branch.
+_NULL_SCHEMA: dict[str, Any] = {"type": "null"}
 
-    Three requirements shape this, and only one spelling meets all three.
 
-    MCP requires an object schema at the top level — a bare ``oneOf`` makes a
-    strict client reject the whole tool list — and a client that reads
-    ``properties`` and stops there must still see what every action shares, so
-    the two shared arguments are hoisted beside the branches exactly as
-    ``JOBS_OUTPUT_SCHEMA`` hoists the shared response keys. Every branch
-    declares them itself, so hoisting constrains nothing new.
+def _action_fields() -> Iterator[tuple[str, str, dict[str, Any], bool]]:
+    """Each action's own fields in advertised order: action, name, schema, required.
 
-    The branches are then applied through ``if``/``then`` on the discriminant
-    rather than pydantic's ``oneOf`` so that a client reading the published
-    schema can see which action takes which field: each pair names one action
-    and the constraints that come with it, where a ``oneOf`` list says only
-    that one of several shapes has to match and leaves the reader to work out
-    which fields belong to which. The error a bad call gets does not depend on
-    the choice — nothing validates a call against the published schema; the
-    message comes from ``JobsInput`` itself, through
-    ``errors.compact_validation_error`` over pydantic's report, and pydantic
-    enumerates the actions from the model either way.
-    ``discriminator.propertyName`` is kept beside the branches, saying that
-    they are alternatives chosen by ``action``; the branch table itself is
-    not, because each ``if``/``then`` pair already names an action and the
-    ``$defs`` entry it selects.
+    The fields ``JobsInput`` itself declares are every action's and are left
+    out. A field holding a nested model is refused, since one flat field
+    could not carry its definitions.
     """
-    union = _JOBS_ADAPTER.json_schema(ref_template="#/$defs/{model}")
+    shared = JobsInput.model_fields
+    for model, action in zip(JobsInput.VARIANTS, JOBS_ACTIONS, strict=True):
+        schema = model.model_json_schema()
+        if "$defs" in schema:
+            raise TypeError(
+                f"jobs action {action!r} has a nested model, which cannot be flattened"
+            )
+        required = set(schema.get("required", ()))
+        for name, field in schema["properties"].items():
+            if name not in shared:
+                yield action, name, field, name in required
+
+
+def jobs_input_schema() -> dict[str, Any]:
+    """The actions as one flat object: every field any action takes.
+
+    Claude's API refuses a tool whose input schema has ``oneOf``, ``allOf`` or
+    ``anyOf`` at its top level, and a client that cannot send such a tool to
+    the model drops it from the session, so the actions are not published as
+    branches. Which action takes which field, which a branch per action
+    showed, is in the tool's description (``jobs_fields_by_action``): a
+    compact listing drops every argument description, but keeps that one.
+
+    Nothing on the server validates a call against the published schema:
+    ``JobsInput`` routes on ``action`` and refuses a field that action does not
+    take, naming both. The schema only has to accept every call the model
+    accepts, so that a client checking a call before sending it never refuses
+    one the server would take.
+
+    Built from the action models, so a field added to an action is published
+    with it. A field two actions declare differently stops the build, because
+    one published field cannot carry both.
+    """
+    takers: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for action, name, field, _required in _action_fields():
+        takers.setdefault(name, []).append((action, field))
     shared = JobsInput.model_json_schema()["properties"]
-    mapping: dict[str, str] = union["discriminator"]["mapping"]
+    properties: dict[str, Any] = {
+        **shared,
+        "action": {
+            "type": "string",
+            "enum": list(JOBS_ACTIONS),
+            "description": shared["action"]["description"],
+        },
+    }
+    properties.update({name: _flat_jobs_field(name, entries) for name, entries in takers.items()})
     return {
         "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": list(JOBS_ACTIONS),
-                "description": shared["action"]["description"],
-            },
-            "budget": shared["budget"],
-        },
+        "properties": properties,
         "required": ["action"],
-        "discriminator": union["discriminator"],
-        "allOf": [
-            {"if": {"properties": {"action": {"const": action}}}, "then": {"$ref": ref}}
-            for action, ref in mapping.items()
-        ],
-        "$defs": union["$defs"],
+        "additionalProperties": False,
     }
+
+
+def jobs_fields_by_action() -> str:
+    """The sentence of the tool's description that lists each action's own fields.
+
+    A compact listing drops every argument description, so this is where a
+    client that is served one learns which action takes which field.
+    """
+    by_action: dict[str, list[str]] = {}
+    for action, name, _field, required in _action_fields():
+        by_action.setdefault(action, []).append(f"{name} (required)" if required else name)
+    listed = "; ".join(f"{action}: {', '.join(names)}" for action, names in by_action.items())
+    return f"Fields by action: {listed}."
+
+
+def _flat_jobs_field(name: str, entries: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """One published field for every action that takes ``name``.
+
+    It allows null where any action does, since a call may leave it out for
+    every action but one that requires it. Where the actions describe it
+    differently, its description gives each sentence after the actions it is
+    about.
+    """
+    fields = [field for _action, field in entries]
+    if any(_value_shape(field) != _value_shape(fields[0]) for field in fields[1:]):
+        actions = ", ".join(action for action, _field in entries)
+        raise TypeError(f"jobs field {name!r} is declared differently by the actions {actions}")
+    published = next(
+        (field for field in fields if _NULL_SCHEMA in field.get("anyOf", ())), fields[0]
+    )
+    by_description: dict[str, list[str]] = {}
+    for action, field in entries:
+        by_description.setdefault(field.get("description", ""), []).append(action)
+    if len(by_description) == 1:
+        description = next(iter(by_description))
+    else:
+        description = " ".join(
+            f"{', '.join(actions)}: {text}" for text, actions in by_description.items()
+        )
+    return {**published, "description": description}
+
+
+def _value_shape(field: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
+    """What an action accepts when given a value: its types and constraints, and
+    its default, leaving out null, a null default and prose."""
+    members = [member for member in field.get("anyOf", [field]) if member != _NULL_SCHEMA]
+    prose = ("description", "title", "default")
+    return (
+        [{key: value for key, value in member.items() if key not in prose} for member in members],
+        field.get("default"),
+    )
 
 
 _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
@@ -1622,7 +1687,7 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         " 'resume' creates a child of a terminal recoverable head, preserving "
         "produced cases; use a new resume_request_id for each retry. "
         "'place_beside_sheet' copies a case's results beside the .asc it ran, "
-        "where LTspice's window opens them."
+        "where LTspice's window opens them. " + jobs_fields_by_action()
     ),
     input_model=JobsInput,
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,

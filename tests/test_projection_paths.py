@@ -183,11 +183,11 @@ async def test_include_fields_read_the_same_on_analyze_results_and_the_attached_
     attached = await _attached_page(state_no_sim, raw, fields)
     rows = page["results"]["k"]["per_run"]["items"]
     assert attached["results"]["k"]["per_run"]["items"] == rows
-    assert attached["results"]["k"]["warnings"] == page["results"]["k"]["warnings"]
+    assert attached["results"]["k"].get("warnings", []) == page["results"]["k"].get("warnings", [])
     if case in {"bare name", "value path", "repeat"}:
         assert rows and all(set(row) == {"value"} and "rms" in row["value"] for row in rows)
     if case == "absent leaf":
-        (warning,) = page["results"]["k"]["warnings"]
+        (warning,) = page["results"]["k"].get("warnings", [])
         assert "'value.rmss' is absent" in warning and "rms" in warning
 
 
@@ -339,8 +339,8 @@ async def test_run_fields_read_the_same_on_run_experiments_and_jobs_runs(
     ).structured_content
     assert page is not None
     assert receipt["runs"]["items"] == page["items"] == [expected]
-    assert receipt["warnings"] == page["warnings"]
+    assert receipt.get("warnings", []) == page.get("warnings", [])
     if case == "absent leaf":
-        (warning,) = page["warnings"]
+        (warning,) = page.get("warnings", [])
         assert "run_fields path 'assignments.Rx' is absent" in warning
         assert "keys present at 'assignments': R" in warning

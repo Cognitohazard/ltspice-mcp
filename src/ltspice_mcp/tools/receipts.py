@@ -411,13 +411,13 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
 ReceiptBuilt = tuple[dict[str, Any], str]
 ReceiptBuild = Callable[[int, response_budget.Rung | None], ReceiptBuilt]
 
-# Rung 0's allowlist, shared by run_experiments and jobs status/wait because
-# both render the same receipt envelope. The attached analysis is that tool's
-# own envelope, trimmed by that tool's own allowlists (`analyze.trim_analysis`):
-# its `source_hashes` is one identity row per run, so a receipt that kept it
-# grew by every case it ran whatever the budget.
-_TRIM_REMOVE_RECEIPT: tuple[str, ...] = ("analysis",)
-# `source` is deliberately absent, and no other rung empties it either. It is
+# The receipt itself has no rung-0 allowlist: run_experiments and jobs
+# status/wait render the same receipt envelope, whose empty blocks every reply
+# leaves out anyway. The attached analysis is that tool's own envelope, trimmed
+# by that tool's own allowlist (`analyze.trim_analysis`): its `source_hashes`
+# is one identity row per run, so a receipt that kept it grew by every case it
+# ran whatever the budget.
+# `source` is deliberately not trimmed, and no other rung empties it either. It is
 # not an identity echo the way the analysis envelope's `source_hashes` is: with
 # `provenance` off it still carries the staging disclosures — the live,
 # unstaged or unexplained manifest entries `_source_payload` keeps precisely so
@@ -485,9 +485,6 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[s
     """
     emptied: list[str] = []
     if rung.trim:
-        # Removes an empty block only, so it never empties anything a note
-        # would have to name.
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT)
         result = _attached_result(data)
         if result is not None:
             emptied = [f"analysis.result.{key}" for key in analyze.trim_analysis(result)]
@@ -1168,7 +1165,7 @@ def render_jobs_receipt_snapshot(
             "action": action,
             "analysis_status": snapshot.analysis_status,
             # Only 'wait' reports whether it ran out of time; 'status' never waited.
-            **({"timed_out": timed_out} if timed_out is not None else {}),
+            "timed_out": timed_out,
         }
     )
     data["hint"] = _jobs_receipt_hint(snapshot, data)

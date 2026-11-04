@@ -62,7 +62,7 @@ def test_names_selects_the_measurement_in_any_case(
     state_no_sim: SessionState, log: Path, name: str
 ):
     reply = _analyze(state_no_sim, log, names=[name])
-    assert reply["failures"] == []
+    assert reply.get("failures", []) == []
     (row,) = reply["results"]["m"]["values"]
     assert row["value"]["measured"] == {"vout_max": _VALUE}
 
@@ -72,7 +72,7 @@ def test_a_spec_on_the_field_judges_the_measurement_in_any_case(
     state_no_sim: SessionState, log: Path, name: str
 ):
     reply = _analyze(state_no_sim, log, field=name, spec={"max": 2}, reduce=["max"])
-    assert reply["failures"] == []
+    assert reply.get("failures", []) == []
     result = reply["results"]["m"]
     spec = result["spec"]
     assert (spec["field"], spec["verdict"], spec["pass_count"], spec["no_value_count"]) == (
@@ -102,7 +102,7 @@ def test_a_name_the_log_does_not_hold_is_refused_with_the_ones_it_does(
     state_no_sim: SessionState, log: Path, names: list[str]
 ):
     reply = _analyze(state_no_sim, log, names=names)
-    (failure,) = reply["failures"]
+    (failure,) = reply.get("failures", [])
     assert "No measurement named 'vout_min' in the log. It holds: vout_max" in failure["message"]
 
 
@@ -110,7 +110,7 @@ def test_a_spec_on_a_field_the_log_does_not_hold_is_refused_with_the_ones_it_doe
     state_no_sim: SessionState, log: Path
 ):
     reply = _analyze(state_no_sim, log, field="vout_min", spec={"max": 2})
-    (failure,) = reply["failures"]
+    (failure,) = reply.get("failures", [])
     assert "No measurement named 'vout_min' in the log. It holds: vout_max" in failure["message"]
 
 

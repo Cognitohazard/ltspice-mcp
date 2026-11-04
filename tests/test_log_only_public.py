@@ -64,7 +64,7 @@ def test_existing_inspect_exposes_detached_native_rows(state_no_sim, work_dir, c
     if case == "pz_table":
         assert rows[0]["entry"]["label"] == "all"
         assert rows[0]["entry"]["real"] == -1000.0
-        assert rows[0]["entry"]["unit"] is None
+        assert "unit" not in rows[0]["entry"]
     rows[0].clear()
     fresh = api.inspect(queries=[{"kind": "results", "view": "native_tables", "path": str(log)}])
     assert fresh["results"][0]["data"]["native_tables"][0]
@@ -84,16 +84,17 @@ def test_analysis_measurements_no_raw_and_null_identity(state_no_sim, work_dir, 
         },
     )
     row = reply["results"]["meas"]["per_run"]["items"][0]
-    assert row["step_index"] is None and row["plot_index"] is None
-    assert row["step_values"] == {}
-    assert row["dialect"] is None
-    assert reply["signals_available"] == {"log:0": []}
+    assert "step_index" not in row and "plot_index" not in row
+    assert "step_values" not in row
+    assert "dialect" not in row
+    # The log holds no signal, and a reply leaves out what says nothing.
+    assert "signals_available" not in reply
     manifest = reply["source_hashes"][0]
-    assert manifest["raw_path"] is None and manifest["raw_sha256"] is None
+    assert "raw_path" not in manifest and "raw_sha256" not in manifest
     assert manifest["explicit_dialect"] == "ltspice"
-    assert manifest["producing_dialect"] is None
-    assert manifest["raw_present"] is False
-    assert manifest["log_present"] is True and manifest["console_present"] is False
+    assert "producing_dialect" not in manifest
+    assert "raw_present" not in manifest
+    assert manifest["log_present"] is True and "console_present" not in manifest
     assert any(
         observation["code"] == "path_without_deck_provenance"
         for observation in reply["observations"]
@@ -293,4 +294,4 @@ def test_raw_analysis_retains_decoded_dialect_without_import_hint(state_no_sim, 
     assert row["source"] == reply["source_hashes"][0]["label"]
     assert reply["source_hashes"][0]["snapshot_id"]
     # Capture-only manifest records caller/producer hints, not inferred evidence.
-    assert reply["source_hashes"][0]["dialect"] is None
+    assert "dialect" not in reply["source_hashes"][0]

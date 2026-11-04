@@ -299,6 +299,24 @@ class FakeFrame(LtspiceFrame):
         self._keep(world)
 
 
+class FrameWhoseSheetChangesAsItAsks(FakeFrame):
+    """A window someone changes the sheet in between its being read and its
+    being told to close: by the time LTspice asks, it holds ``text``."""
+
+    def __init__(self, world: Path, sheet: Path, text: str) -> None:
+        super().__init__(world)
+        self._sheet = str(sheet)
+        self._text = text
+
+    def close(self, pane: int) -> None:
+        super().close(pane)
+        changed = read_world(self._world)
+        for entry in changed["windows"]:
+            if entry.get("asking") == self._sheet:
+                entry["designs"][self._sheet] = self._text
+        self._keep(changed)
+
+
 def as_ltspice_reads(sheet: Path) -> str:
     return decode_windows_1252(sheet.read_bytes())
 

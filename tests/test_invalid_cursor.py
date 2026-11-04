@@ -101,7 +101,7 @@ class TestCallLevelCursors:
             await _call(state_no_sim, "jobs", {"action": "list", "cursor": GARBAGE})
         )
         assert data["error"]["stage"] == "pagination"
-        assert data["error"]["retryable"] is False
+        assert data["error"].get("retryable", False) is False
         assert "next_cursor" in data["hint"]
 
     async def test_jobs_runs_cursor(self, state_no_sim: SessionState) -> None:

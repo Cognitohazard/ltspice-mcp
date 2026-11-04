@@ -259,7 +259,7 @@ class TestRoundTrip:
         # The value at the corner is right only if the frequency axis was read
         # as QSPICE writes it: a plain double, not a complex pair.
         stage = receipt["analysis"]
-        assert stage["error"] is None, stage
+        assert "error" not in stage, stage
         (row,) = stage["result"]["results"]["corner"]["per_run"]["items"]
         assert row["value"]["actual_x"] == pytest.approx(1_000.0)
         assert row["value"]["magnitude_linear"] == pytest.approx(2**-0.5)
@@ -294,7 +294,7 @@ class TestRoundTrip:
         # Nothing in the raw names Xyce, so it parses only because the job's
         # recorded simulator supplies the dialect.
         stage = receipt["analysis"]
-        assert stage["error"] is None, stage
+        assert "error" not in stage, stage
         (row,) = stage["result"]["results"]["vout"]["per_run"]["items"]
         assert row["value"]["actual_x"] == pytest.approx(2e-3)
         assert row["value"]["value"] == pytest.approx(0.865)
@@ -461,7 +461,8 @@ class TestCapabilities:
         assert "only when this server itself runs on Windows" in simulators["qspice"]["refusal"]
         # Not detected: nothing to select.
         assert simulators["ngspice"]["available"] is False
-        assert simulators["ngspice"]["selectable"] is False
+        # Which available: false already says, so the reply does not repeat it.
+        assert "selectable" not in simulators["ngspice"]
 
     async def test_qspice_is_selectable_on_windows(
         self, config: ServerConfig, qspice: type, windows_host: None

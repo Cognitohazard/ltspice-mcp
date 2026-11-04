@@ -310,6 +310,15 @@ def _close_and_wait(frame: LtspiceFrame, pane: int, doing: str) -> None:
     _until(lambda: not frame.is_open(pane), doing)
 
 
+def _told_to_close(frame: LtspiceFrame, pid: int, sheet: Path) -> int:
+    """Tell ``sheet``'s pane to close, and wait for it to have gone or for
+    LTspice to ask whether to save it. Returns the pane."""
+    pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet's pane")
+    frame.close(pane)
+    _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+    return pane
+
+
 def _close_all(frame: LtspiceFrame, pid: int, title: str) -> None:
     """Close every pane titled ``title`` and wait for them all to go."""
     for pane in frame.panes_titled(pid, title):
@@ -568,11 +577,8 @@ def _sheet_close_facts(
         return _until(lambda: frame.pane(pid, sheet.name), "finding the sheet's pane")
 
     def told_to_close() -> int:
-        """Tell the sheet to close, and wait for it to have gone or LTspice to ask."""
-        pane = in_front()
-        frame.close(pane)
-        _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
-        return pane
+        in_front()
+        return _told_to_close(frame, pid, sheet)
 
     def asked() -> SaveQuestion:
         question = frame.save_question(pid)
@@ -812,9 +818,7 @@ def _save_facts(
     recording.fact(
         "Save asks nothing on the way", frame.takes_input(pid) and not frame.box_words(pid)
     )
-    pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet")
-    frame.close(pane)
-    _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+    pane = _told_to_close(frame, pid, sheet)
     recording.fact(
         "saved, it closes without a question",
         [not frame.is_open(pane), frame.save_question(pid) is None],
@@ -844,13 +848,48 @@ def _save_facts(
             ],
         )
         frame.dismiss_boxes(pid)
-        _until(lambda: frame.takes_input(pid), "closing the box")
+        # The frame takes input again before the box it answered is gone.
+        _until(lambda: frame.takes_input(pid) and not frame.box_words(pid), "closing the box")
         recording.fact(
             "Cancel closes that box, and the window still holds its copy",
             [not frame.box_words(pid), session.design_text(str(locked)) == changed],
         )
     finally:
         os.chmod(locked, stat.S_IREAD | stat.S_IWRITE)
+
+
+def _discard_facts(
+    recording: _Recording, session: BridgeSession, desktop: HiddenDesktop, pid: int, work: Path
+) -> None:
+    """What closing a sheet whose window copy differs from the file does when
+    LTspice's question is answered No, and what the window holds once the
+    sheet is opened again."""
+    frame = LtspiceFrame(desktop.windows)
+    sheet = work / "discarding.asc"
+    shutil.copyfile(INPUTS / f"{EDITED}.asc", sheet)
+    on_disk = sheet.read_bytes()
+    session.open_design(str(sheet))
+    changed = session.design_text(str(sheet)).replace("SYMATTR Value 1k", "SYMATTR Value 4.7k")
+    session.replace_design_text(str(sheet), changed)
+    session.bring_to_front(str(sheet))
+    pane = _told_to_close(frame, pid, sheet)
+    question = frame.save_question(pid)
+    recording.fact(
+        "a sheet whose window copy differs from the file is asked about before it closes",
+        question is not None and Path(question.path) == sheet,
+    )
+    if question is not None:
+        frame.answer(question, discard=True)
+    _until(lambda: not frame.is_open(pane), "taking No for an answer")
+    recording.fact(
+        "answered No, it closes and its file is as it was",
+        [not frame.is_open(pane), sheet.read_bytes() == on_disk],
+    )
+    session.open_design(str(sheet))
+    recording.fact(
+        "opened again, the window holds the file",
+        file_difference(on_disk, session.design_text(str(sheet))) is None,
+    )
 
 
 def reader_subjects() -> dict[str, list[str]]:
@@ -1082,6 +1121,7 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 _sheet_close_facts(recording, session, desktop, scrub, window.pid, work, results)
                 _tie_and_menu_facts(recording, session, desktop, build, window.pid, work, results)
                 _save_facts(recording, session, desktop, scrub, window.pid, work)
+                _discard_facts(recording, session, desktop, window.pid, work)
                 reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()

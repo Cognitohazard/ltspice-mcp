@@ -32,7 +32,13 @@ def compact_validation_error(
 
     def referral(field: str) -> str:
         if field in renamed:
-            return f" {field!r} is now {renamed[field]!r}."
+            # A client that checks a call against its own copy of the tool's
+            # arguments refuses the new name while that copy lists the old one.
+            return (
+                f" {field!r} is now {renamed[field]!r}. If your copy of this tool's "
+                f"arguments still lists {field!r}, it is out of date: reload the "
+                "tool's definition or reconnect this server."
+            )
         text = ""
         if nested.get(field):
             text += f" This tool takes {field!r} as {' or '.join(nested[field])}."

@@ -44,12 +44,13 @@ def _drop(raw: RawResult, step: int = 0) -> np.ndarray:
 
 
 def _value(data: dict[str, Any], key: str) -> dict[str, Any]:
-    assert data["failures"] == []
+    assert "failures" not in data
     return data["results"][key]["values"][0]["value"]
 
 
 def _failure_message(data: dict[str, Any]) -> str:
-    assert all(not result.get("values") for result in data["results"].values())
+    # A recipe that failed returns no rows, and a reply leaves out an empty map.
+    assert all(not result.get("values") for result in data.get("results", {}).values())
     assert len(data["failures"]) == 1
     return data["failures"][0]["message"]
 
@@ -152,7 +153,7 @@ class TestRecipes:
             all_steps=True,
             include={"per_run": {"limit": 10}},
         )
-        assert data["failures"] == []
+        assert "failures" not in data
         rows = data["results"]["v"]["per_run"]["items"]
         assert [row["step_index"] for row in rows] == [0, 1, 2]
         for row in rows:
@@ -477,7 +478,7 @@ async def test_a_node_pair_runs_on_every_signal_recipe(
     path = stage_recorded_fixture(work_dir, fixture_name)
     pair = _respell(fields, {"V(out)": "V(in,out)"})
     data = await _analyze(state_no_sim, path, [{"key": "pair", "metric": metric, **pair}])
-    assert data["failures"] == []
+    assert "failures" not in data
 
 
 @pytest.mark.asyncio

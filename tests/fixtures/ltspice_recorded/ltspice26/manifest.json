@@ -3460,6 +3460,108 @@
         ".raw"
       ]
     },
+    "deck/save_pair_as_pair": {
+      "behaviour": "save-meas-node-pair",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_pair_as_pair.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_pair_as_pair.cir": "58e13f3aebf911544547aa16275879442b07e5e75bbc97cc6e749e4dea54582f"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_pair_as_pair.log": {
+          "bytes": 397,
+          "sha256": "a0e486f0393572bed072f37a5fea96580805046a60dc95060a9f0d1c63ac47bd"
+        },
+        "deck/save_pair_as_pair.raw": {
+          "bytes": 1760,
+          "sha256": "32e264c9c777a31f7a8f2d0809f3dc6ff0bcb3792643d77c610cb4cb048eb281"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/save_pair_both_nodes": {
+      "behaviour": "save-meas-node-pair",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_pair_both_nodes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_pair_both_nodes.cir": "80ce29241a7a380b7e37dbffe2183302e7c32d8810a9c22184d0e8fd26b9e4cf"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_pair_both_nodes.log": {
+          "bytes": 403,
+          "sha256": "a86707f0afed3d2180c8bb30880570ac8953a3b84cf7a3c95c133a0d1e6ff6b4"
+        },
+        "deck/save_pair_both_nodes.raw": {
+          "bytes": 1766,
+          "sha256": "f94ffc463d12cbd0405421eda2e96e95ef0cdf5b65eae0c36e5b7448e7e12d89"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/save_pair_to_ground": {
+      "behaviour": "save-meas-node-pair",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_pair_to_ground.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_pair_to_ground.cir": "04bc66bc34c11fc9400a03dfb5ac54d96e8bf1025d1aab824491cf6f9ef0f077"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_pair_to_ground.log": {
+          "bytes": 490,
+          "sha256": "7f7bf9a69a3cea99f2d3b99d53f5a3b94144d595cc6417f39b7d68a1c7dac808"
+        },
+        "deck/save_pair_to_ground.raw": {
+          "bytes": 1446,
+          "sha256": "e93eee744ce84fedcbc0ccde393d707b4e8e6e2218d7091ae83be2e40bc0b677"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/section_sign_cp1252": {
       "behaviour": "deck-encoding",
       "command": [
@@ -6385,6 +6487,128 @@
         ".raw"
       ]
     },
+    "log/meas_when_threshold_ac": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_ac.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_ac.cir": "3ace212fc0db67640bcd1ce352cfc6d806971eef8880dcbf17e402147144f9a2"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_ac.log": {
+          "bytes": 598,
+          "sha256": "7c88dd1136c1a8b1528e6d12a1cfdf0923ad4fddbf4c8ef36e8f9afffb89ce21"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_ac_step": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_ac_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_ac_step.cir": "b02c6c3e268ac3ccdae7d068fd119d065485270496cf580a9d37f05870ff55af"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_ac_step.log": {
+          "bytes": 963,
+          "sha256": "074b0f91d27632b620825d0268e557c0c8dad9b6c49f12b673e8fcb40baf9d05"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_tran": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_tran.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_tran.cir": "4bc5d3e5c438cf9e8f8a6c46b5354caae2c987a55249214be801aa1d8f1f4284"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_tran.log": {
+          "bytes": 638,
+          "sha256": "2236d67b44be4cfe51eb9ab03d19b10a7c790152f20c1e65e2782f58902b80d1"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_tran_step": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_tran_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_tran_step.cir": "343c54cac31a95eab1293a332345ff09b4c189a981c84b124ef90bcf68db6f77"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_tran_step.log": {
+          "bytes": 1066,
+          "sha256": "2931b32836e086c26a8d563f8f5917885897b363ebdbabf2e9ef2ff037d22e01"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".db",
+        ".log",
+        ".log.raw",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "log/op_stepping": {
       "behaviour": "log-convergence",
       "command": [
@@ -7819,6 +8043,38 @@
         ".raw"
       ]
     },
+    "raw/mos_multiplier": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_multiplier.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/mos_multiplier.cir": "9aaa42a15bb1728b0b31b010f05dd0ba22bf7069788a67ef04020c6433ddc08e"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/mos_multiplier.log": {
+          "bytes": 620,
+          "sha256": "aea264783f8bba798e01a43e1d34628dd5a60402d2e83c32b73009617d339086"
+        },
+        "raw/mos_multiplier.raw": {
+          "bytes": 1312,
+          "sha256": "ade3560388b9d4691e11bbfa2b37509ae24649b694a3c618be88d79d8e69c290"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "raw/noise": {
       "behaviour": "raw-noise",
       "command": [
@@ -8534,6 +8790,38 @@
         ".log",
         ".log.raw",
         ".op.raw",
+        ".raw"
+      ]
+    },
+    "raw/subckt_multiplier": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_multiplier.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "raw/subckt_multiplier.cir": "7a739b38e130e35bce548da4cd0c7fbf276d9e4764f4eb9b72696c23405b3ee0"
+      },
+      "kind": "run",
+      "outputs": {
+        "raw/subckt_multiplier.log": {
+          "bytes": 782,
+          "sha256": "a24dc221c667d5869f77877cd698392895f3f9db99b6dc003a7f2e1ec8c691c2"
+        },
+        "raw/subckt_multiplier.raw": {
+          "bytes": 1654,
+          "sha256": "28c038a847343c60310263bdf09bae13dc4f57f7534d58653f30df954e24d17c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
         ".raw"
       ]
     },

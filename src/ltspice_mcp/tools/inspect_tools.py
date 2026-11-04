@@ -2116,8 +2116,9 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
     if any(row.get("differs_from_file") for row in rows):
         hints.append(
             "A sheet whose window differs from its file is refused by edit_schematic until "
-            "it is saved or closed in LTspice; a run or a check reads the file, not the "
-            "window. only_in_window and only_in_file list where the two differ."
+            "the user chooses which to keep and edit_schematic's open_window saves or drops "
+            "the window's copy; a run or a check reads the file, not the window. "
+            "only_in_window and only_in_file list where the two differ."
         )
     if any(not row["in_sandbox"] for row in rows):
         hints.append(
@@ -2599,7 +2600,7 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
 _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
     "section": {
         "type": ["string", "null"],
-        "description": "The section read; null for the core and its index.",
+        "description": "The section read; absent for the core and its index.",
     },
     "title": {"type": "string"},
     "text": {"type": "string", "description": "Markdown."},
@@ -2921,11 +2922,12 @@ def inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 # Rung 0's allowlist, declared as data rather than spelled inside the ``if``
 # that applies it: a rung that exempts content is the one place a checker can
-# silently lose coverage, so it has to be a list a test can read. Both keys are
-# optional on an item schema — pinned by tests/test_response_budget.py. They go
+# silently lose coverage, so it has to be a list a test can read. The key is
+# optional on an item schema — pinned by tests/test_response_budget.py. It goes
 # only from an item with nothing left to fetch, for which the paging block
-# restates counts the rows carry and a null cursor that leads nowhere.
-_TRIM_REMOVE_EXHAUSTED: tuple[str, ...] = ("page", "next_cursor")
+# restates counts the rows carry; such an item's null cursor is left out of
+# every reply anyway.
+_TRIM_REMOVE_EXHAUSTED: tuple[str, ...] = ("page",)
 
 
 def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:

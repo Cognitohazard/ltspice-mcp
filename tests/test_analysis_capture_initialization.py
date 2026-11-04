@@ -73,7 +73,7 @@ async def test_console_mutation_cannot_rebind_relay_to_new_manifest(
         and any(warning.startswith("No rows:") for warning in meas["warnings"])
     )
     assert any(failure["code"] == "source_drift" for failure in data["failures"])
-    failures = [item for item in data["observations"] if item["code"] == "solve_failure"]
+    failures = [item for item in data.get("observations", []) if item["code"] == "solve_failure"]
     assert bool(failures) == bool(before)
 
 
@@ -141,7 +141,7 @@ async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
     state_no_sim.config.analysis_budget_s = 60.0
     response = await analyze.handle_analyze_results(request, state_no_sim)
     data = response.structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     row = data["results"]["meas"]["per_run"]["items"][0]
     assert row["value"]["measured"]["vfinal"] == LTSPICE_TRAN_RC_VFINAL
 
@@ -195,7 +195,8 @@ async def test_optional_signal_inventory_does_not_start_after_call_budget(
     )
     response = await analyze.handle_analyze_results(continued, state_no_sim)
     data = response.structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     assert data["results"]["meas"]["per_run"]["items"]
     assert raw_reads == []
-    assert data["signals_available"] == {"log:0": []}
+    # The log holds no signal, and a reply leaves out what says nothing.
+    assert "signals_available" not in data

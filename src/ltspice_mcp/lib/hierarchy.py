@@ -264,6 +264,14 @@ def _assignments(card: SpiceCard, *, only: bool = False) -> dict[str, str]:
     return result
 
 
+def param_assignments(card: SpiceCard) -> dict[str, str]:
+    """A ``.param`` card's assignments by folded name, each expression whole.
+
+    Raises ``NetlistError`` for an assignment this reader does not support.
+    """
+    return _assignments(card, only=True)
+
+
 def parse_hierarchy_cards(content: bytes, *, root: bool) -> list[SpiceCard]:
     # Root decks begin with a title; included fragments begin with a card.
     # Explicit validation below handles active boundaries, including definitions

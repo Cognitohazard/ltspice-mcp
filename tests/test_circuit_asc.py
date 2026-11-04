@@ -1078,7 +1078,7 @@ class TestMirroredQuarterTurnsMatchLTspice:
             asc_state, path=str(sheet), checks=["symbols", "layout"], render=False
         )
         assert data["checks_run"] == ["symbols", "layout"]
-        assert data["findings"] == []
+        assert "findings" not in data
 
     async def test_post_op_warnings_find_no_floating_pin(
         self, asc_state: SessionState, sheet: Path
@@ -1751,7 +1751,7 @@ class TestInstancePrefix:
         data = await run_verify_circuit(
             asc_state, path=str(asc_file), checks=["quality"], render=False
         )
-        said = [f for f in data["findings"] if f["rule_id"] == "subcircuit_value_slot"]
+        said = [f for f in data.get("findings", []) if f["rule_id"] == "subcircuit_value_slot"]
         assert bool(said) is warned
 
 
@@ -1898,7 +1898,8 @@ class TestNamesThatDifferOnlyInCase:
         add_net_label(asc_state, asc, "VOUT", x=96, y=196)
         assert "warnings" not in add_net_label(asc_state, asc, "vout", x=288, y=196)
         data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "R1.1"})
-        assert (data["labels"], data["is_shorted"]) == (["VOUT", "vout"], False)
+        # Not shorted, so the reply leaves out the false flag.
+        assert (data["labels"], "is_shorted" in data) == (["VOUT", "vout"], False)
 
     async def test_a_net_name_finds_its_label_in_another_case(
         self, asc_state: SessionState, work_dir: Path
@@ -1942,7 +1943,7 @@ class TestAGroundLabelInAnyCase:
         )
         data = await inspect_one(asc_state, {"kind": "net", "path": str(asc), "at": "net:GND"})
         assert {f"{p['reference']}.{p['pin']}" for p in data["pins"]} == {"R1.2", "R2.2", "R3.1"}
-        assert (data["labels"], data["is_shorted"]) == (["0", "GND", "a", "gnd"], False)
+        assert (data["labels"], "is_shorted" in data) == (["0", "GND", "a", "gnd"], False)
 
     async def test_ground_by_name_on_a_named_net_is_no_second_name(
         self, asc_state: SessionState, work_dir: Path
@@ -2892,7 +2893,7 @@ class TestWirePinsTJunction:
             {
                 "x": 192,
                 "y": 96,
-                "via": "endpoint",
+                "via": "tee",
                 "wire": {"from": {"x": 96, "y": 96}, "to": {"x": 288, "y": 96}},
             }
         ]
@@ -2980,7 +2981,7 @@ class TestWirePinsTJunction:
             ],
         )
         assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
-        assert not [w for w in data["warnings"] if "(240,196)" in w]
+        assert not [w for w in data.get("warnings", []) if "(240,196)" in w]
 
     async def test_a_coordinate_endpoint_at_a_wire_end_is_a_plain_join(
         self, asc_state: SessionState, work_dir: Path
@@ -3166,7 +3167,7 @@ class TestTraceNet:
         assert sc["labels"] == ["in"]
         refs = {p["reference"] for p in sc["pins"]}
         assert refs == {"R1", "V1"}
-        assert sc["is_shorted"] is False
+        assert "is_shorted" not in sc
 
     async def test_trace_by_net_name(self, asc_state: SessionState, work_dir: Path):
         # net:in matches one FLAG per pin (V1.+ and R1.1) — resolve_pin would
@@ -3476,7 +3477,7 @@ class TestRepeatedLabels:
             ],
         )
         assert data["commit_state"] == "committed"
-        assert data["warnings"] == []
+        assert "warnings" not in data
 
 
 @pytest.mark.asyncio
@@ -3588,7 +3589,7 @@ class TestJudgedOnTheFinishedSheet:
             ops.append({"op": "add_net_label", "net": "VBX", "x": x, "y": 196})
         data = await apply_ops(asc_state, "relabel.asc", ops)
         assert data["commit_state"] == "committed"
-        assert data["warnings"] == []
+        assert "warnings" not in data
 
     async def test_a_label_put_on_a_crossing_is_said_by_the_sheet(
         self, asc_state: SessionState, work_dir: Path

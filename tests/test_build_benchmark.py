@@ -84,7 +84,7 @@ def _assert_built(built: Built, said: dict[str, Any]) -> None:
     for reply in built.replies:
         assert reply["outcome"] == "complete", reply
         assert reply["commit_state"] == "committed", reply
-        assert reply["failures"] == [], reply["failures"]
+        assert "failures" not in reply, reply["failures"]
         assert reply.get("error") is None, reply.get("error")
     equivalent = said["equivalence"]
     assert equivalent["equivalent"], equivalent

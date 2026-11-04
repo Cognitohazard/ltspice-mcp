@@ -44,6 +44,7 @@ from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments, inspect_tools
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
     evaluate_analysis_results,
@@ -133,7 +134,7 @@ async def test_declared_types_reach_every_analysis_reader(
             {"key": "scalar", "metric": "value", "expr": trace},
         ],
     )
-    assert data["failures"] == []
+    assert "failures" not in data
     values = {key: result["values"][0]["value"] for key, result in data["results"].items()}
     assert values["all"]["other"] == {trace: 2000}
     assert trace not in values["all"]["voltages"]
@@ -230,7 +231,7 @@ async def test_every_discriminant_executes_against_recorded_raw(
     # Every discriminant answers on its fixture, including the ones that find
     # no feature there (no resonance peak, no loop crossover): that is a
     # value, not a failure, so a metric that starts raising shows up here.
-    assert data["failures"] == []
+    assert "failures" not in data
     assert data["outcome"] == "complete"
     (row,) = data["results"][metric]["values"]
     assert row["run_index"] == 0
@@ -275,7 +276,7 @@ async def test_values_and_extrema_carry_outer_and_inner_identity(
     # An extremum names the run and step it came from; a mean belongs to none.
     assert reduced["min"]["value"] == record["value"]["value"]
     assert (reduced["min"]["run_index"], reduced["min"]["step_index"]) == (0, 0)
-    assert (reduced["mean"]["run_index"], reduced["mean"]["step_index"]) == (None, None)
+    assert "run_index" not in reduced["mean"] and "step_index" not in reduced["mean"]
 
 
 @pytest.mark.asyncio
@@ -484,7 +485,7 @@ async def test_oversized_artifact_defers_whole_after_progress_then_continues(
     assert artifact["sha256"]
     artifact_size = await asyncio.to_thread(lambda: Path(artifact["path"]).stat().st_size)
     assert artifact["bytes"] == artifact_size
-    assert resumed.structured_content["next"] is None
+    assert "next" not in resumed.structured_content
 
 
 class _NeutralWork(NamedTuple):
@@ -692,7 +693,7 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
         ],
     )
     assert any(failure["code"] == "artifact_too_large" for failure in data["failures"])
-    assert data["next"] is None
+    assert "next" not in data
 
 
 @pytest.mark.asyncio
@@ -1008,9 +1009,9 @@ async def test_a_call_that_hands_out_no_cursor_reads_no_source_for_a_digest(
         [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
     )
     assert hashed == []
-    assert data["failures"] == []
+    assert "failures" not in data
     assert data["results"]["v"]["values"]
-    assert data["next"] is None
+    assert "next" not in data
 
 
 @pytest.mark.asyncio
@@ -1413,12 +1414,12 @@ async def test_value_takes_the_input_noise_unit_from_the_decks_noise_source(
     result = await handle_analyze_results(args, state_no_sim)
     data = result.structured_content
     assert data is not None
-    assert data["failures"] == []
+    assert "failures" not in data
     density = data["results"]["density"]
     total = data["results"]["total"]
     assert density["values"][0]["value"]["unit"] == "A/√Hz"
     assert total["values"][0]["value"]["unit"] == "A"
-    assert not [w for w in density["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
+    assert not [w for w in density.get("warnings", []) if _UNVERIFIED_INOISE_UNIT in w]
 
 
 @pytest.mark.asyncio
@@ -1446,7 +1447,7 @@ async def test_value_says_when_the_input_noise_unit_is_unchecked(
             },
         ],
     )
-    assert data["failures"] == []
+    assert "failures" not in data
     results = data["results"]
     assert "unit" not in results["input"]["values"][0]["value"]
     loaded = await services.load_raw(services.source_for_raw_path(raw, state_no_sim), state_no_sim)
@@ -1460,7 +1461,7 @@ async def test_value_says_when_the_input_noise_unit_is_unchecked(
     (input_caveat,) = [w for w in results["input"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
     (integral_caveat,) = [w for w in results["total"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
     assert input_caveat == integral_caveat
-    assert not [w for w in results["output"]["warnings"] if _UNVERIFIED_INOISE_UNIT in w]
+    assert not [w for w in results["output"].get("warnings", []) if _UNVERIFIED_INOISE_UNIT in w]
 
 
 @pytest.mark.asyncio
@@ -1625,7 +1626,7 @@ _TONE_RECIPES: list[dict[str, Any]] = [
 
 
 def _assert_two_tone_answer(data: dict[str, Any]) -> None:
-    assert data["failures"] == []
+    assert "failures" not in data
     results = data["results"]
     (v_in,) = [row["value"] for row in results["in"]["values"]]
     (v_out,) = [row["value"] for row in results["out"]["values"]]
@@ -1921,8 +1922,8 @@ async def test_truncated_missing_cases_page_is_followable(
     rest = resumed.structured_content["coverage"]["missing_cases"]
     assert rest["returned"] == 20
     assert rest["items"][0]["run_index"] == 101
-    assert rest["truncated"] is False
-    assert rest["next_cursor"] is None
+    assert "truncated" not in rest
+    assert "next_cursor" not in rest
 
 
 @pytest.mark.asyncio
@@ -1980,7 +1981,7 @@ async def test_work_and_coverage_cursors_advance_independently(
     assert by_work.structured_content is not None
     carried = by_work.structured_content["coverage"]["missing_cases"]
     assert carried["items"][0]["run_index"] == 101
-    assert carried["truncated"] is False
+    assert "truncated" not in carried
 
 
 @pytest.mark.asyncio
@@ -2182,13 +2183,12 @@ async def test_projection_leaves_spec_attribution_rows_whole(
     entry = data["results"]["vout"]
     assert entry["values"] == [{"step_index": 0}]
     case = entry["spec"]["fail_cases"]["items"][0]
+    # A path source has no case_id, assignments or step values, so the row
+    # leaves them out; every other key is the row's whole.
     assert set(case) == {
         "value",
-        "case_id",
         "run_index",
         "step_index",
-        "step_values",
-        "assignments",
         "plot_index",
         "snapshot_id",
         "dialect",
@@ -2299,7 +2299,7 @@ async def test_projection_reaches_a_key_whose_own_name_contains_a_dot(
             }
         }
     ]
-    assert not entry["warnings"]
+    assert not entry.get("warnings")
 
 
 @pytest.mark.asyncio
@@ -2424,7 +2424,7 @@ async def test_a_caller_supplied_ngspice_raw_reads_without_a_job_to_name_it(
     data = result.structured_content
     assert data is not None
 
-    assert data["failures"] == []
+    assert "failures" not in data
     assert data["results"]["op"]["values"][0]["value"]["voltages"]["v(out)"] == pytest.approx(0.5)
     warnings = data["results"]["op"]["values"][0]["value"]["warnings"]
     assert any(".save all @m1[gm]" in warning for warning in warnings)
@@ -2488,7 +2488,7 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     assert result["ok"], result
     table = result["data"]
     assert table["analysis"] == "tf"
-    assert table["axis"] is None
+    assert "axis" not in table
     rows = {row["signal"]: row for row in table["table"]}
     assert set(rows) == {
         "v(Transfer_function)",
@@ -2496,7 +2496,7 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
         "v(output_impedance_at_V(out))",
     }
     assert rows["v(Transfer_function)"]["value"] == pytest.approx(0.5)
-    assert rows["v(Transfer_function)"]["unit"] is None
+    assert "unit" not in rows["v(Transfer_function)"]
     impedance = rows["v(v1#Input_impedance)"]
     assert impedance["value"] == pytest.approx(2000)
     assert impedance["unit"] == "Ω"
@@ -2697,14 +2697,17 @@ class TestSourceHashProvenance:
         lean = await _analyze(state_no_sim, raw, recipes)
         entry = lean["source_hashes"][0]
         assert entry["manifest_id"]
-        # Plot selection is identity even when file provenance is omitted.
-        assert set(entry) == {"manifest_id", "label", "plot_index", "dialect", "snapshot_id"}
+        # Plot selection is identity even when file provenance is omitted. A path
+        # source records no dialect unless the caller gave one.
+        assert set(entry) == {"manifest_id", "label", "plot_index", "snapshot_id"}
 
         full = await _analyze(state_no_sim, raw, recipes, include={"provenance": True})
         full_entry = full["source_hashes"][0]
         assert full_entry["raw_path"]
         assert full_entry["composite_sha256"] or full_entry["raw_sha256"]
-        assert "log_present" in full_entry and "job_id" in full_entry
+        assert full_entry["raw_present"] is True
+        # A path source has no job, and a fact that says nothing is left out.
+        assert "job_id" not in full_entry
         assert len(json.dumps(full)) > len(json.dumps(lean))
 
 
@@ -3217,7 +3220,9 @@ async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
         AnalyzeResultsInput.model_validate(request), state_no_sim
     )
     attached = analyze_mod.render_attached_analysis(stored, fields=None)
-    assert attached["results"]["m"]["per_run"]["items"] == rows
+    # As the receipt sends them: without the fields that say nothing.
+    sent = as_sent(attached["results"]["m"]["per_run"]["items"], "run_experiments")
+    assert sent == rows
 
 
 def test_the_python_api_reads_a_sweep_row_the_same_way(state_no_sim: SessionState):
@@ -3667,7 +3672,7 @@ class TestSignalStatsQuantiles:
                 },
             ],
         )
-        assert data["failures"] == []
+        assert "failures" not in data
         vin = data["results"]["vin"]["values"][0]["value"]
         vout = data["results"]["vout"]["values"][0]["value"]
 
@@ -3715,7 +3720,7 @@ class TestSignalStatsQuantiles:
                 },
             ],
         )
-        assert data["failures"] == []
+        assert "failures" not in data
         row = data["results"]["row"]["values"][0]["value"]
         (reduced,) = data["results"]["hi"]["reduced"]
         assert (reduced["field"], reduced["stat"]) == ("q99", "max")
