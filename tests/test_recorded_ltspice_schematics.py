@@ -21,6 +21,8 @@ from ltspice_mcp.lib import schematic_ops
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.connectivity import (
     label_folded_nets,
+    name_keys,
+    named_labels,
     same_instance_dropped_segments,
     signature,
 )
@@ -290,7 +292,7 @@ async def test_an_edit_compared_with_its_export_names_its_unlabelled_nets(
     exported = rec.export_instances(build, case_id)
     for (ref, name), pin in pins.items():
         node = exported[canon_ref(ref)].nodes[int(name) - 1]
-        if pin["net"] is None:
+        if "net" not in pin:
             assert pin["net_export"] == node, (ref, name)
         else:
             assert "net_export" not in pin
@@ -328,7 +330,7 @@ async def test_node_names_that_differ_only_in_case_are_one_node(
     )
     assert {(p["reference"], p["pin"]) for p in on_sheet["pins"]} == {("R1", "1"), ("R2", "1")}
     assert on_sheet["labels"] == ["OUT", "out"]
-    assert on_sheet["is_shorted"] is False
+    assert "is_shorted" not in on_sheet
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(CONNECTIVITY)))
@@ -392,6 +394,29 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
+def test_two_names_are_said_of_one_net_exactly_where_the_export_merges_them(
+    build: str, case_id: str, tmp_path: Path
+):
+    """LTspice gives a node one name, so of two or more names, one that no
+    node of the export carries was merged into another's node. Ground is no
+    name: a named net that is grounded carries one name. Each sheet labels R1's
+    pins, or a point on the wire between them, and the export drops that wire
+    or keeps it."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    flags = parse_asc(sheet.read_bytes()).flags
+    names = name_keys(named_labels(flag.name for flag in flags))
+    nodes = name_keys(
+        node for card in rec.export_instances(build, case_id).values() for node in card.nodes
+    )
+    merged = len(names) > 1 and not names <= nodes
+
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    assert bool(findings(sheet_view(scene), ["net_with_two_names"])) == merged
+    edited = sheet_findings(_editor(sheet))
+    assert any(one.rule == "net_with_two_names" for one in edited) == merged
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
 async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
     build: str, case_id: str, config, monkeypatch: pytest.MonkeyPatch, work_dir: Path
 ):
@@ -408,7 +433,7 @@ async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
     state = SessionState.create(config, available={"ltspice": FakeSim})
     data = await run_verify_circuit(state, path=str(staged), checks=["export"])
     assert data["export"]["ok"] is True
-    dropped = [f for f in data["findings"] if f["rule_id"] == "dropped_wire"]
+    dropped = [f for f in data.get("findings", []) if f["rule_id"] == "dropped_wire"]
     first, second = exported_card(build, case_id, "R1").nodes
     assert bool(dropped) == (first != second), dropped
 
@@ -469,7 +494,7 @@ async def test_verify_reports_a_reference_two_parts_share(
     """Without LTspice too: what the export would refuse is read off the sheet."""
     staged = rec.stage_sheet(build, case_id, work_dir)
     data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
-    (found,) = [f for f in data["findings"] if f["rule_id"] == "shared_reference"]
+    (found,) = [f for f in data.get("findings", []) if f["rule_id"] == "shared_reference"]
     assert found["severity"] == "error"
     assert found["evidence"]["coords"] == [[96, 96], [400, 96]]
 
@@ -505,7 +530,7 @@ async def test_a_rename_ends_a_reference_two_parts_share_in_another_case(
     names = [line for line in staged.read_text().splitlines() if "InstName" in line]
     assert names == ["SYMATTR InstName R1", "SYMATTR InstName R2"]
     checked = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
-    assert not [f for f in checked["findings"] if f["rule_id"] == "shared_reference"]
+    assert not [f for f in checked.get("findings", []) if f["rule_id"] == "shared_reference"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -836,7 +861,7 @@ class TestSheetRecords:
         assert rec.has(build, "export/bus_tap.net")
         staged = rec.stage_sheet(build, "export/bus_tap", work_dir)
         data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
-        (note,) = [o for o in data["observations"] if "BUSTAP" in o]
+        (note,) = [o for o in data.get("observations", []) if "BUSTAP" in o]
         assert note.startswith(
             "2 BUSTAP records, the first at line 11, which the drawing does not"
         )
@@ -866,7 +891,7 @@ class TestSheetRecords:
         assert rec.has(build, f"export/{sheet}.net")
         staged = rec.stage_sheet(build, f"export/{sheet}", work_dir)
         data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
-        assert [o for o in data["observations"] if "does not read" in o] == []
+        assert [o for o in data.get("observations", []) if "does not read" in o] == []
 
     async def test_verify_only_observes_a_keyword_that_stops_both_builds(
         self, build: str, state_no_sim, work_dir: Path
@@ -877,9 +902,9 @@ class TestSheetRecords:
         assert not rec.has(build, "export/unknown_record.net")
         staged = rec.stage_sheet(build, "export/unknown_record", work_dir)
         data = await run_verify_circuit(state_no_sim, path=str(staged), checks=["quality"])
-        (note,) = [o for o in data["observations"] if "NOSUCHRECORD" in o]
+        (note,) = [o for o in data.get("observations", []) if "NOSUCHRECORD" in o]
         assert note.startswith("line 5: a NOSUCHRECORD record, which the drawing does not read")
-        assert [f for f in data["findings"] if f["severity"] == "error"] == []
+        assert [f for f in data.get("findings", []) if f["severity"] == "error"] == []
 
 
 # --------------------------------------------------------------------------
@@ -1038,7 +1063,7 @@ class TestExportEncoding:
         )
         data = result.structured_content
         assert data is not None
-        findings = [f for f in data["findings"] if f["rule_id"] == "byte_order_mark"]
+        findings = [f for f in data.get("findings", []) if f["rule_id"] == "byte_order_mark"]
         assert [(f["severity"], f["at"]) for f in findings] == (
             [("error", {"file": data["path"], "line": 1})] if refused else []
         )
@@ -1126,7 +1151,9 @@ class TestExportEncoding:
         )
         data = result.structured_content
         assert data is not None
-        findings = [f for f in data["findings"] if f["rule_id"] == "value_suffix_micro_sign"]
+        findings = [
+            f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"
+        ]
         if rec.generation(build) != "xvii":
             # LTspice 26 re-encodes what it read as cp1252: one micro sign
             # stays one, and a UTF-8 one becomes the two mis-decoded characters.

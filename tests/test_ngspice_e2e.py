@@ -64,7 +64,7 @@ def _write(work_dir: Path, name: str, content: str) -> str:
 def _analysis(receipt: dict) -> dict:
     """The attached analysis payload from a terminal receipt."""
     stage = receipt["analysis"]
-    assert stage["error"] is None, stage["error"]
+    assert "error" not in stage, stage.get("error")
     assert stage["result"] is not None, stage
     return stage["result"]
 
@@ -166,7 +166,7 @@ async def test_sweep_full_stack_analytic_values(ngspice_state: SessionState, wor
     counts = receipt["completeness"]
     assert counts["expanded"] == counts["produced"] == 3
     assert counts["failed"] == counts["cancelled"] == counts["skipped"] == 0
-    assert receipt["failures"] == []
+    assert "failures" not in receipt
 
     # Reductions across the three real runs, attributed to the case that owns
     # each extreme — the aggregate view of the fan-out.
@@ -312,7 +312,7 @@ async def test_op_divider_full_stack(ngspice_state: SessionState, work_dir: Path
     assert any(s.lower() == "v(out)" for s in signals)
     # A clean divider trips no observation checks and no per-case failure.
     assert summary.get("observations", []) == []
-    assert receipt["failures"] == []
+    assert "failures" not in receipt
 
 
 async def test_each_run_records_the_ngspice_build_that_ran_it(
@@ -688,7 +688,7 @@ async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
     )
     assert receipt["status"] == "completed"
     assert receipt["completeness"]["produced"] == 1
-    assert receipt["failures"] == []
+    assert "failures" not in receipt
 
     (finding,) = receipt["lint"][0]["findings"]
     assert finding["rule_id"] == "meas-ngspice-batch"

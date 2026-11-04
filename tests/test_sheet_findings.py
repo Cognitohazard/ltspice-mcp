@@ -398,6 +398,19 @@ class TestWhatJoinsAndWhatDoesNot:
         (found,) = only(view, "joined_at_crossing")
         assert found.refs == ("R1",)
 
+    def test_a_label_that_keeps_a_wire_between_two_pins_of_one_part_joins_three_nets(
+        self,
+    ) -> None:
+        """Without the label LTspice drops the wire between R1's pins, which
+        leaves each pin and the crossing wire on a net of its own."""
+        view = SheetView(
+            parts=(Part("R1", pins=(("A", 32, 0), ("B", 32, 64))),),
+            wires=_CROSS,
+            labels=((32, 32, "x"),),
+        )
+        (found,) = only(view, "joined_at_crossing")
+        assert found.facts == {"wires": 2, "nets": 3}
+
     def test_wires_already_joined_elsewhere_are_not_joined_by_the_crossing(self) -> None:
         view = SheetView(
             wires=(*_CROSS, (64, 32, 64, 64), (32, 64, 64, 64)), labels=((32, 32, "x"),)

@@ -505,7 +505,7 @@ class TestSchematicTools:
             assert data["commit_state"] == "committed"
             assert (tmp_path / "divider.asc").exists()
             # Only a stage that did not complete is listed.
-            assert data["stages"] == []
+            assert "stages" not in data
             # The counts are in 'wiring'; the hint does not restate them.
             assert data["hint"].startswith("Committed.")
             assert "pins" not in data["hint"]
@@ -700,7 +700,7 @@ class TestSimulationDegraded:
             data = _data(result)
             assert data["action"] == "list"
             assert data["outcome"] == "complete"
-            assert data["items"] == []
+            assert "items" not in data
             assert data["total"] == 0
 
     async def test_jobs_status_nonexistent_returns_job_not_found(
@@ -713,7 +713,7 @@ class TestSimulationDegraded:
         data = _data(result)
         assert data["action"] == "status"
         assert data["error"]["code"] == "job_not_found"
-        assert data["error"]["retryable"] is False
+        assert "retryable" not in data["error"]
         assert "nonexistent-123" in data["hint"]
 
     async def test_jobs_cancel_nonexistent_returns_job_not_found(
@@ -789,21 +789,24 @@ class TestInspectCapabilities:
         assert caps["simulators"], "degraded state must still list known simulators"
         for name, info in caps["simulators"].items():
             assert info["available"] is False, name
-            assert info["selectable"] is False, name
+            # Not selectable either, which available: false already says.
+            assert "selectable" not in info, name
             assert info["remediation"]["config_key"] == "simulator.path"
             # A family this host cannot run says so in place of a restart.
             expected = info.get("refusal") or "restart"
             assert expected in info["remediation"]["action"], name
         assert caps["config_path"].endswith("ltspice-mcp.toml")
         assert caps["python"]["executable"]
-        assert caps["default_simulator"] is None
+        # No simulator was detected, so there is no default to name.
+        assert "default_simulator" not in caps
         assert caps["tool_profile"] == "consolidated"
         assert caps["python_api"]["open"] == f"Api(working_dir={str(shared_work_dir)!r})"
         assert caps["allowed_paths"] == [str(shared_work_dir)]
         assert caps["limits"]["max_parallel_sims"] == 1
         assert caps["limits"]["export_timeout_s"] == 10.0
-        # No [simulation] run_timeout: a case without its own bound is unbounded.
-        assert caps["limits"]["run_timeout_s"] is None
+        # No [simulation] run_timeout: a case without its own bound is unbounded,
+        # and the report names no bound.
+        assert "run_timeout_s" not in caps["limits"]
 
 
 # ---------------------------------------------------------------------------

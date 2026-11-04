@@ -53,7 +53,7 @@ async def test_repeated_hierarchy_values_ports_and_active_model(state_no_sim, hi
     assert left["value"]["value"] == 5000
     assert right["value"]["value"] == 4000
     assert rows[("XA", "Xleaf", "R2")]["value"]["value"] == 10000
-    assert left["nodes"][0]["scope"] == []
+    assert "scope" not in left["nodes"][0]
     assert left["nodes"][0]["name"] == "a"
     assert left["nodes"][1]["scope"] == ["XA", "Xleaf"]
     assert right["nodes"][1]["scope"] == ["XB", "Xleaf"]
@@ -63,7 +63,7 @@ async def test_repeated_hierarchy_values_ports_and_active_model(state_no_sim, hi
     assert mos["model"]["source"]["section"] == "tt"
     assert mos["source"]["definition"] == "leaf"
     assert mos["source"]["path"].endswith("leaf.inc")
-    assert mos["nodes"][1]["scope"] == []
+    assert "scope" not in mos["nodes"][1]
     assert mos["address"]["device"] == "m.xa.xleaf.m0"
 
 
@@ -141,10 +141,10 @@ async def test_non_node_references_and_ambiguous_mos_are_unknown(state_no_sim, w
     result = await _inspect(state_no_sim, path)
     assert result["ok"], result
     for row in result["data"]["instances"]:
-        assert row["nodes"] == []
+        assert "nodes" not in row
         assert row["connectivity_reason"]
-        assert row["model"]["source"] is None
-        assert row["address"]["device"] is None
+        assert "source" not in row["model"]
+        assert "device" not in row["address"]
         assert row["raw"]
 
 
@@ -161,7 +161,7 @@ async def test_unknown_numeric_facts_keep_structure(state_no_sim, work_dir, expr
     row = result["data"]["instances"][0]
     assert len(row["nodes"]) == 2
     assert row["value"]["status"] == "unresolved"
-    assert row["value"]["value"] is None
+    assert "value" not in row["value"]
     assert row["value"]["reason"]
 
 
@@ -173,9 +173,9 @@ async def test_step_invalidates_geometry_and_values(state_no_sim, hierarchy_deck
     result = await _inspect(state_no_sim, hierarchy_deck)
     assert result["ok"], result
     for row in result["data"]["instances"]:
-        assert row["value"]["value"] is None
-        for fact in row["geometry"].values():
-            assert fact["value"] is None
+        assert "value" not in row["value"]
+        for fact in row.get("geometry", {}).values():
+            assert "value" not in fact
             assert "context-dependent" in fact["reason"]
     assert result["data"]["profile"]["evaluation_context"] == "initial_deck"
 
@@ -204,7 +204,7 @@ async def test_content_cursor_rejects_same_size_dependency_rewrite(
     monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 1)
     first = await _inspect(state_no_sim, hierarchy_deck)
     assert first["ok"], first
-    cursor = first["next_cursor"]
+    cursor = first.get("next_cursor")
     leaf = hierarchy_deck.parent / "leaf.inc"
     stamp = leaf.stat()
     leaf.write_bytes(leaf.read_bytes().replace(b"R1", b"R9"))
@@ -458,7 +458,7 @@ async def test_discovery_to_real_device_operating_point(
             assert len(currents) == 1, op
             assert abs(next(iter(currents.values()))) == pytest.approx(1 / resistance, rel=1e-5)
             if scope == ("Rpower",) or (scope == ("XS", "R1") and backend == "ngspice"):
-                assert row["value"]["value"] is None
+                assert "value" not in row["value"]
                 assert row["value"]["reason"]
             else:
                 assert row["value"]["value"] == pytest.approx(resistance)
@@ -563,7 +563,7 @@ async def test_legal_punctuation_keeps_exact_identity_without_backend_guess(
     assert result["ok"], result
     rows = result["data"]["instances"]
     assert [r["instance"] for r in rows] == [["X.a"], ["X.a", "R1"]]
-    assert rows[1]["address"]["device"] is None
+    assert "device" not in rows[1]["address"]
     assert rows[1]["address"]["reason"]
 
 
@@ -630,7 +630,7 @@ async def test_numeric_arithmetic_scale_and_binned_model(state_no_sim, work_dir)
     mos, resistor = result["data"]["instances"]
     assert resistor["value"]["value"] == 7
     assert mos["parameters"]["w"]["value"] == 10
-    assert mos["geometry"]["w"]["value"] is None
+    assert "value" not in mos["geometry"]["w"]
     assert "missing" in mos["geometry"]["w"]["reason"]
     assert "binned" in mos["model"]["reason"]
 
@@ -661,7 +661,7 @@ async def test_ambiguous_existing_selector_is_unavailable(state_no_sim, work_dir
     result = await _inspect(state_no_sim, path, instance=["XA", "R1"])
     assert result["ok"], result
     row = result["data"]["instances"][0]
-    assert row["address"]["device"] is None
+    assert "device" not in row["address"]
     assert "also matches" in row["address"]["reason"]
 
 
@@ -727,7 +727,7 @@ async def test_sibling_override_is_unresolved_but_self_reference_survives(
     assert result["ok"], result
     rows = {tuple(row["instance"]): row for row in result["data"]["instances"]}
     fact = rows[("X1", "R1")]["value"]
-    assert fact["value"] is None
+    assert "value" not in fact
     assert "sibling" in fact["reason"]
     assert rows[("X2", "R2")]["value"]["value"] == 2000
 
@@ -751,7 +751,7 @@ async def test_ltspice_mos_needs_no_directive(state_no_sim, work_dir):
     path.write_text("* mos\nM1 d g 0 0 n w=20u l=2u\n.end\n", encoding="utf-8")
     result = await _inspect(state_no_sim, path)
     address = result["data"]["instances"][0]["address"]
-    assert address == {"device": "m1", "save": None, "reason": None}
+    assert address == {"device": "m1"}
 
 
 _NESTED_R = "* nested\nV1 a 0 1\nXa a stage\n.subckt stage p\nXin p inner\n.ends\n.subckt inner p\nRin p mid 1k\nRlo mid 0 1k\n.ends\n.end\n"
@@ -765,7 +765,10 @@ async def test_a_nested_name_is_spelled_for_the_sessions_ltspice(state_no_sim, w
 
     def spelled(result):
         rows = {"/".join(row["instance"]).casefold(): row for row in result["data"]["instances"]}
-        return rows["xa/xin/rin"]["address"]["save"], result["data"]["profile"]["xvii_names"]
+        # An absent flag reads as false.
+        return rows["xa/xin/rin"]["address"]["save"], result["data"]["profile"].get(
+            "xvii_names", False
+        )
 
     assert spelled(await _inspect(state_no_sim, path)) == (".save I(xa:xin:rin)", False)
     state_no_sim.available_simulators["ltspice"] = rec.launcher("ltspice17")
@@ -799,7 +802,7 @@ async def test_power_chain_is_explicitly_unresolved(state_no_sim, work_dir, expr
     path.write_text(f"* power\nR1 a 0 {{{expression}}}\n.end\n", encoding="utf-8")
     result = await _inspect(state_no_sim, path)
     fact = result["data"]["instances"][0]["value"]
-    assert fact["value"] is None
+    assert "value" not in fact
     assert "power" in fact["reason"] or "caret" in fact["reason"]
 
 
@@ -861,7 +864,7 @@ async def test_ltspice_caret_is_not_reported_as_power(state_no_sim, work_dir):
     path.write_text("* caret\nR1 a 0 {2^3}\n.end\n", encoding="utf-8")
     result = await _inspect(state_no_sim, path)
     fact = result["data"]["instances"][0]["value"]
-    assert fact["value"] is None
+    assert "value" not in fact
     assert "LTspice" in fact["reason"]
 
 
@@ -881,10 +884,7 @@ async def test_ngspice_ground_alias_precedes_scope_and_ports(state_no_sim, work_
     assert result["ok"], result
     grounds = [row["nodes"][1] for row in result["data"]["instances"]]
     assert len(grounds) == 4
-    assert all(
-        node == {"scope": [], "name": "0", "voltage_trace": "V(0)", "reason": None}
-        for node in grounds
-    )
+    assert all(node == {"name": "0", "voltage_trace": "V(0)"} for node in grounds)
 
 
 @pytest.mark.parametrize(

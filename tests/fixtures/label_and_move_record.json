@@ -1561,10 +1561,11 @@
     "sha256": "c5261a49cc099381968b1ffc9a4c6bc7f41ea5165daaad21d2e0b61b97686a59",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [ground; 0 at the point, 0 named]": 1,
      "placed [ground; 1 at the point, 1 named]": 7,
-     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 14,
+     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 10,
      "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 7
     }
    },
@@ -1692,10 +1693,11 @@
     "sha256": "668d3ff12d16e34fb8b101d4b8232080c8db832346eb41e8e35abace42d47535",
     "shapes": {
      "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
      "placed [a new name; 0 at the point, 0 named]": 1,
      "placed [ground; 0 at the point, 0 named]": 1,
      "placed [ground; 1 at the point, 1 named]": 5,
-     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 10,
+     "placed | sheet: net_with_two_names [a name already here; 1 at the point, 1 named]": 6,
      "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 5
     }
    },

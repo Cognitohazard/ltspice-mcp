@@ -130,6 +130,12 @@ api.edit_schematic(**args)
 api.verify_circuit(**args)
 ```
 
+**Fields left out.** A result leaves out the fields that say nothing (an
+empty list or object, a null, a false flag), by the same rule and with the
+same kept fields as the tool's reply (`docs/design/mcp_surface.md`, §2,
+"Fields left out"), so a script and a tool call read one shape. Read a field
+that may be empty with a default, such as `row.get("assignments", {})`.
+
 **Complete results.** Where an MCP tool pages or caps a result, the method
 returns all of it:
 
@@ -156,8 +162,8 @@ returns all of it:
   error and observations, all read at the same moment. `outcome` and `hint`
   are derived from that snapshot. Every row has the fields `run_fields`
   selects, or all fields when it is unset. The rows come in the same page
-  object as on MCP, with `returned == total`, `truncated == false` and
-  `next_cursor == null`.
+  object as on MCP, with `returned == total` and neither `truncated` nor
+  `next_cursor`, since there is no further page.
 - `jobs(list)` returns every circuit group. `jobs(cancel)` returns its kill
   receipts, which neither interface pages.
 
@@ -513,7 +519,7 @@ measured = api.analyze_results(
 The `measurements` inspect view pages measured values with their recorded
 range and `AT` metadata. `native_tables` pages literal scalar entries or
 printed frequency rows, keeping section boundaries, printed labels and
-real/imaginary components. A unit the log does not establish is null, and a
+real/imaginary components. A unit the log does not establish is left out, and a
 block's `analysis_extent`, whether its rows cover the whole analysis, is
 `"unknown"` unless the log establishes it. Rows carry no plot or step index. A
 `measurements` row's `value_index` counts the values printed for that `.meas`
@@ -555,7 +561,7 @@ appeared since the result set recorded it (the `analyze_results` section of
 cannot detect). Under `include.provenance`, each source reports
 `explicit_dialect`, the dialect the caller passed, separately from
 `producing_dialect`, the simulator the records show produced the files.
-In a whole-log row, the dialect of the producing simulator can be null.
+In a whole-log row, the dialect of the producing simulator can be absent.
 A log alone does not show that a simulator solve completed or that a case was
 produced; reads by job still check that the job is terminal and the case was
 produced.

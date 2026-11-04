@@ -8,6 +8,36 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Breaking
+
+- Every reply leaves out the fields that say nothing: an empty list or
+  object, a null, a false flag, and a sub-answer that the overall answer
+  beside it already gives (`structurally_equivalent` beside
+  `equivalent: true`, `selectable` beside `available: false`). A reply about
+  work that found nothing no longer spends tokens saying so; over the test
+  suite's replies this is about 9% of the characters the server sends. A missing
+  field means "checked, and nothing to report", never "not checked": what did
+  not run, was skipped or could not be read is still stated, by a
+  `checks_skipped` row, a failure, a `status` or a `reason`. One function
+  applies the rule to every tool's `structuredContent`, to the text block
+  under `[tools] text_channel = "json"`, and to the Python API's results, so
+  the API keeps the tools' shape; the summary text no longer states an empty
+  result either. Each tool keeps a short list of fields whose empty, null or
+  false value is the answer itself, such as a finding's `ok`, a comparison's
+  `equivalent` and a recipe's measured `value`
+  (`docs/design/mcp_surface.md`, "Fields left out"), and output schemas mark
+  every other field that may be absent as optional. Code that indexes a field
+  without checking breaks where the field said nothing: read
+  `reply.get("failures", [])`, and page until `next_cursor` is absent
+  (`page.get("next_cursor")`) rather than null. Pages leave out empty `items`
+  and a false `truncated`; run rows no longer keep every key whatever their
+  status, so a row that wrote no raw has no `raw`; an error's `retryable` is
+  present only when true; an unresolved hierarchy value is left out, with
+  its `status` and `reason`. The guide's examples read optional fields this
+  way. The budget ladder's trim rung no longer lists empty blocks to remove,
+  since every reply leaves them out, and `verify_circuit` now says, when it
+  skips the comparison for want of a netlist, whether the export ran.
+
 ### Added
 
 - At `INFO`, the server logs one structured record per tool call on the
@@ -43,6 +73,15 @@ tool-surface changes.
   being drawn as one copy. A refusal while drawing for a device one subcircuit
   level down now reaches the caller as a coded error rather than an uncoded
   one.
+- The `jobs` tool was missing from Claude Code sessions, though the server
+  listed it: its input schema put one branch per action under a top-level
+  `allOf`, which Claude's API refuses, so the client dropped the tool. Its
+  input schema is now one flat object, and the tool's description lists each
+  action's fields and marks the ones an action requires, so the compact
+  listing still says which action takes which field. The tool still refuses
+  a field the action does not take, naming both. The tool's definition is
+  also about 40% smaller. A test holds every tool's input schema to an
+  object with no `oneOf`, `allOf` or `anyOf` at its top level.
 - The read-the-guide reminder said the session had not read the guide when
   the server had only restarted, as after a reconnect, or when the guide was
   read through `api.guide()` inside `run_code`, neither of which the server
@@ -52,6 +91,12 @@ tool-surface changes.
   with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
   time limit also counted the wait for LTspice to close the pane or answer its
   question. That wait is now added to the limit.
+- `net_with_two_names` reported one net carrying two labels where a wire
+  running straight between two labelled pins of one part joined them on the
+  sheet. LTspice drops that wire and keeps the labels on separate nodes
+  (recorded: `connectivity/same_instance_wire`, exported as `R1 a b`), so the
+  finding is no longer given there. It and `joined_at_crossing` now read the
+  sheet's nets as LTspice netlists them.
 - `floating_pin` did not report the pins of a part joined only by a wire
   running straight between them. LTspice drops that wire and leaves both
   pins unconnected (recorded: `connectivity/same_instance_bare`), so
@@ -254,14 +299,16 @@ tool-surface changes.
   specification recommends for a client that passes only the text to the
   model; under the default, `"summary"`, such a model reads one summary line.
   `inspect(kind="capabilities")` reports the mode as `text_channel`.
-- `edit_schematic(save_open_window=true, ops=[])` has LTspice save the sheet
-  from the user's window, as Ctrl+S does, so the agent can keep the user's
-  unsaved changes once they agree instead of asking them to save by hand. Use
-  it after an edit is refused with `open_window_differs`, or after a plot
-  opens with `tied: false` because its sheet had unsaved changes. The reply
-  gives the file's new `sha256`, and the sheet is then read again before an
-  edit. A box LTspice shows instead of saving, such as for a write-protected
-  file, is quoted in `window_not_saved` and closed with Cancel.
+- `edit_schematic(open_window="save"|"discard", ops=[])` settles a sheet the
+  user changed in LTspice and did not save, once they choose, instead of
+  asking them to do it by hand. `"save"` has LTspice save the sheet from the
+  user's window, as Ctrl+S does, and the reply gives the file's new `sha256`.
+  `"discard"` closes the sheet there without saving and opens it again from
+  the file. Use it after an edit is refused with `open_window_differs`, or
+  after a plot opens with `tied: false` because its sheet had unsaved changes.
+  A box LTspice shows instead of saving, such as for a write-protected file,
+  is quoted in `window_not_saved` and closed with Cancel; a window whose copy
+  changes during a discard is left open, with `window_not_discarded`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the

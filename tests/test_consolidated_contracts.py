@@ -542,20 +542,24 @@ class TestErrorEnvelope:
                 found.append(err)
         return found
 
-    _FULL_ENVELOPE = frozenset({"code", "message", "stage", "retryable", "commit_state"})
+    _FULL_ENVELOPE = frozenset({"code", "message", "stage", "commit_state"})
 
     @pytest.mark.parametrize("name", ENVELOPE_TOOLS)
     def test_every_top_level_error_object_is_the_full_envelope(self, name: str):
         # Uniform failure-shape contract: wherever a tool declares a top-level
-        # error object it carries the full {code, message, stage, retryable,
-        # commit_state} envelope, so a caller can decide whether re-submission
-        # is safe (design section 2). Tools that route failures through findings
-        # or per-item channels declare no top-level error object and pass vacuously.
+        # error object it carries the full {code, message, stage, commit_state}
+        # envelope, so a caller can decide whether re-submission is safe
+        # (design section 2), and declares retryable, which a reply carries
+        # only when it is true, as it leaves out every false flag. Tools that
+        # route failures through findings or per-item channels declare no
+        # top-level error object and pass vacuously.
         for err in self._top_error_objects(name):
             required = set(err.get("required", []))
             assert required >= self._FULL_ENVELOPE, (
                 f"{name}: error envelope missing fields (has {sorted(required)})"
             )
+            assert "retryable" in err["properties"], f"{name}: error declares no retryable"
+            assert "retryable" not in required, f"{name}: a false retryable is left out"
 
     @pytest.mark.parametrize("name", ["run_experiments", "jobs", "edit_schematic"])
     def test_write_and_execute_planes_declare_a_full_error_envelope(self, name: str):
@@ -674,7 +678,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Resume adds selection, authority and dwell fields.
     # place_beside_sheet is a seventh action, a branch with one field of its
     # own (case_id), and a sentence in the description: measured 7,442.
-    "jobs": 7450,
+    # Published as one flat object since: Claude's API refuses a top-level
+    # allOf, and a client then drops the tool. Which action takes which field,
+    # which the branches used to show, is one generated sentence of the tool's
+    # description, which the compact listing keeps. Measured 4,583.
+    "jobs": 4600,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
@@ -792,7 +800,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # are a line each. Measured 14,768.
     # Raised by about 15 characters for minLength on path: an empty path names
     # no file. Measured 14,781.
-    "edit_schematic": 14980,
+    "edit_schematic": 15030,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
@@ -1062,7 +1070,7 @@ class TestCursorTamperOnEveryPaginatedInput:
 
     def test_shared_view_paginator_rejects_cross_binding(self):
         good = paginate_view([1, 2, 3, 4], "bind:a", cursor=None, limit=2)
-        cursor = good["next_cursor"]
+        cursor = good.get("next_cursor")
         assert cursor is not None
         with pytest.raises(PageCursorError):
             paginate_view([1, 2, 3, 4], "bind:b", cursor=cursor, limit=2)

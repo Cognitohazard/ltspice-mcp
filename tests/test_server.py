@@ -396,6 +396,16 @@ class TestServerDispatch:
             "reload the tool's definition or reconnect this server",
         )
 
+    async def test_save_open_window_names_open_window(self, state_no_sim: SessionState):
+        result = await call_tool(
+            fake_request_context(state_no_sim),
+            call_tool_params(
+                "edit_schematic", {"path": "sheet.asc", "ops": [], "save_open_window": True}
+            ),
+        )
+        assert result.is_error
+        assert "'save_open_window' is now 'open_window'." in tool_text(result)
+
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         result = await call_tool(
             fake_request_context(state_no_sim),

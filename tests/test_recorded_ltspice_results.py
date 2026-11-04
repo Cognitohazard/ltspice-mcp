@@ -583,7 +583,7 @@ async def test_analyze_results_reports_a_transient_compression_left_coarse(
     )
     data = (await handle_analyze_results(request, state_no_sim)).structured_content
     assert data is not None
-    assert data["failures"] == []
+    assert "failures" not in data
     found = [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"]
     if gap is None:
         assert found == []
@@ -628,8 +628,10 @@ async def test_a_job_whose_deck_asked_for_wide_steps_is_not_reported_coarse(
     )
     data = (await handle_analyze_results(request, state_no_sim)).structured_content
     assert data is not None
-    assert data["failures"] == []
-    assert [o for o in data["observations"] if o["code"] == "coarse_compressed_waveform"] == []
+    assert "failures" not in data
+    assert [
+        o for o in data.get("observations", []) if o["code"] == "coarse_compressed_waveform"
+    ] == []
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -656,7 +658,7 @@ async def test_a_one_frequency_ac_is_read_at_its_decks_frequency(
             }
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
-        assert data is not None and data["failures"] == []
+        assert data is not None and "failures" not in data
         return data["results"]["v"]["per_run"]["items"]
 
     rows = await values({"job_id": job.job_id})
@@ -685,7 +687,7 @@ async def test_a_one_frequency_noise_is_read_a_step_at_a_time(
         }
     )
     data = (await handle_analyze_results(request, state_no_sim)).structured_content
-    assert data is not None and data["failures"] == []
+    assert data is not None and "failures" not in data
     rows = data["results"]["n"]["per_run"]["items"]
     assert [row["step_values"] for row in rows] == ONE_FREQUENCY_STEPS
     for row in rows:
@@ -736,7 +738,7 @@ async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
     )
     assert plot.structured_content is not None
     readers = {
-        "plot_waveform": plot.structured_content["observations"],
+        "plot_waveform": plot.structured_content.get("observations", []),
         "inspect": listed.get("observations", []),
     }
     for reader, observations in readers.items():
@@ -1496,7 +1498,7 @@ class TestDeviceOperatingPoints:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         (gm,) = data["results"]["gm"]["values"]
         assert gm["value"]["value"] == pytest.approx(5.86e-4)
         (observation,) = [
@@ -1656,7 +1658,7 @@ class TestSubcircuitDeviceNames:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         read = {key: data["results"][key]["values"][0]["value"] for key in names}
         if rec.generation(build) == "xvii":
             assert [v["signal"] for v in read.values()] == [
@@ -1687,7 +1689,7 @@ class TestSubcircuitDeviceNames:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         (value,) = data["results"]["mid"]["values"]
         expected = "V(a:in:mid)" if rec.generation(build) == "xvii" else "V(xa:xin:mid)"
         assert value["value"]["signal"] == expected
@@ -1708,7 +1710,7 @@ class TestSubcircuitDeviceNames:
         )
         data = (await handle_analyze_results(request, state_no_sim)).structured_content
         assert data is not None
-        assert data["failures"] == []
+        assert "failures" not in data
         (bias,) = data["results"]["all"]["values"]
         names = bias["value"]["device_names"]
         # The resistors beside them have currents in the raw and no table entry.

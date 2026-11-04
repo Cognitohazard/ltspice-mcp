@@ -193,7 +193,7 @@ class TestAbortedTransaction:
         # warnings for a state that was never written would be misleading.
         assert data["outcome"] != "complete"
         assert data["commit_state"] != "committed"
-        assert data["warnings"] == []
+        assert "warnings" not in data
         assert (work_dir / "abort.asc").read_bytes() == before
 
     async def test_uncaught_exception_invalidates_the_cache_and_preserves_the_file(
