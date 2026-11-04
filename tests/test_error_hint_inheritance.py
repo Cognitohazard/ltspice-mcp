@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp import errors
-from ltspice_mcp.server import _ERROR_HINTS, _UNHINTED, _get_error_hint, _invoke
+from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint, _invoke
 from ltspice_mcp.state import SessionState
 
 
@@ -32,11 +32,37 @@ def _all_subclasses(base: type) -> set[type]:
     return found
 
 
+def _unhinted() -> set[type]:
+    """The package's error types that opt out of their family's hint."""
+    import ltspice_mcp.server  # noqa: F401  (imports every module that defines one)
+
+    return {
+        sub
+        for sub in _all_subclasses(errors.LTSpiceMCPError)
+        if sub.__dict__.get("takes_family_hint") is False
+    }
+
+
+_UNHINTED = _unhinted()
+
+
 class TestHintLookup:
     def test_a_subclass_without_its_own_entry_takes_its_familys_hint(
         self, family_member: type[errors.LTSpiceMCPError]
     ) -> None:
         assert _get_error_hint(family_member) == _ERROR_HINTS[errors.NetlistError]
+
+    def test_an_envelope_surface_gives_a_subclass_the_same_hint_as_a_raise(
+        self, family_member: type[errors.LTSpiceMCPError]
+    ) -> None:
+        """A failure carried in an envelope (a coverage row, a batch item, a
+        jobs error) is hinted by the same lookup as one a handler raises."""
+        assert errors.error_hint(family_member("R1 has no value")) == _get_error_hint(
+            family_member
+        )
+        assert errors.error_hint(family_member("R1 has no value")) == (
+            _ERROR_HINTS[errors.NetlistError]
+        )
 
     def test_an_own_entry_outranks_the_familys(self) -> None:
         assert _get_error_hint(errors.JobNotFoundError) == _ERROR_HINTS[errors.JobNotFoundError]

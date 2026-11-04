@@ -24,16 +24,8 @@ from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
-from ltspice_mcp.lib.experiment_runner import (
-    ExperimentCancellationError,
-    IdempotencyConflictError,
-    RequestGateBusy,
-    SubmissionCommitted,
-)
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.observability import configure_stderr_logging, emit_tool_event
-from ltspice_mcp.lib.recovery_records import RecoveryError
-from ltspice_mcp.lib.result_cache import ParserCleanupError
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
@@ -108,30 +100,6 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
 _ERROR_HINTS: dict[type[LTSpiceMCPError], str] = _err.ERROR_HINTS
 
 
-#: Subclasses that take no hint although an ancestor has one, because that
-#: ancestor's recovery would send the caller the wrong way. Each either says
-#: its own recovery in its message (a symbol path, a narrower request, the
-#: reader that does apply) or is not the failure its family's hint is about:
-#: a file of the wrong kind is no netlist to lint, a plot with no axis or a
-#: raw the run did not write is no unfinished run, and a recovery, request or
-#: cancellation refusal is no missing simulator.
-_UNHINTED: frozenset[type[LTSpiceMCPError]] = frozenset(
-    {
-        _err.UnsupportedFileError,
-        _err.SymbolResolutionError,
-        _err.OtherRawNotWritten,
-        _err.AnalysisDeadlineExceeded,
-        _err.NoAxisError,
-        ParserCleanupError,
-        RecoveryError,
-        IdempotencyConflictError,
-        RequestGateBusy,
-        SubmissionCommitted,
-        ExperimentCancellationError,
-    }
-)
-
-
 #: The recovery for an argument error: the tool's own argument table.
 _ARGUMENT_HINT = (
     'Correct the call and send it again; inspect(queries=[{{"kind": "reference", '
@@ -140,19 +108,9 @@ _ARGUMENT_HINT = (
 
 
 def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
-    """Get the error hint appended to a failed call's message, if any.
-
-    A type without an entry of its own takes its nearest ancestor's, so a
-    subclass added to a family gets that family's recovery unless it is listed
-    in :data:`_UNHINTED`.
-    """
-    for cls in err_type.__mro__:
-        if cls in _UNHINTED:
-            return None
-        hint = _ERROR_HINTS.get(cls)
-        if hint is not None:
-            return hint
-    return None
+    """Get the error hint appended to a failed call's message, if any: the
+    same lookup every envelope surface uses (:func:`errors.hint_for_type`)."""
+    return _err.hint_for_type(err_type)
 
 
 def _configure_server_logging(config: ServerConfig) -> None:

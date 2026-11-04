@@ -164,6 +164,7 @@ class IdempotencyConflictError(SimulationError):
     """A request id was reused for a different canonical payload."""
 
     code = "idempotency_conflict"
+    takes_family_hint = False
 
 
 def payload_conflict(request_id: str, job_id: str | None) -> IdempotencyConflictError:
@@ -223,6 +224,7 @@ class RequestGateBusy(SimulationError):
     """
 
     code = "request_gate_busy"
+    takes_family_hint = False
 
 
 class SubmissionCommitted(SimulationError):
@@ -235,6 +237,7 @@ class SubmissionCommitted(SimulationError):
     """
 
     code = "submission_committed"
+    takes_family_hint = False
 
     def __init__(
         self,
@@ -255,6 +258,7 @@ class ExperimentCancellationError(SimulationError):
     """An experiment could not be cancelled by this coordinator."""
 
     code = "cancel_failed"
+    takes_family_hint = False
 
 
 @contextlib.asynccontextmanager

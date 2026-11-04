@@ -43,6 +43,7 @@ class ParserCleanupError(ResultError):
     """Scratch remains because process exit or directory removal was unconfirmed."""
 
     code = "parser_cleanup_failed"
+    takes_family_hint = False
 
     def __init__(self, directory: Path, *, worker_pid: int | None = None) -> None:
         self.directory = directory

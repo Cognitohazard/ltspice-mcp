@@ -23,6 +23,7 @@ class RecoveryError(SimulationError):
     """A refused recovery contract with a stable reason and structured evidence."""
 
     code = "recovery_refused"
+    takes_family_hint = False
 
     def __init__(self, code: str, message: str, *, evidence: dict[str, Any] | None = None):
         super().__init__(message, show_hint=False)

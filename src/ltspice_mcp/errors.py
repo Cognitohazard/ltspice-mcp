@@ -1,7 +1,7 @@
 """Error hierarchy for ltspice-mcp server."""
 
 from collections.abc import Collection, Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
@@ -124,9 +124,15 @@ class LTSpiceMCPError(Exception):
 
     The set of codes is public: adding one is fine, renaming or removing one is
     a client-visible change. ``tests/test_error_codes.py`` pins the vocabulary.
+
+    ``takes_family_hint`` — False on a type whose family's recovery hint would
+    send the caller the wrong way: it says its own recovery in its message, or
+    it is not the failure its family's hint is about. :func:`hint_for_type`
+    stops at such a type.
     """
 
     code: str = "internal_error"
+    takes_family_hint: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -159,6 +165,7 @@ class UnsupportedFileError(NetlistError):
     circuit is needed."""
 
     code = "unsupported_file"
+    takes_family_hint = False
 
 
 class SymbolResolutionError(NetlistError):
@@ -172,6 +179,7 @@ class SymbolResolutionError(NetlistError):
     """
 
     code = "symbol_unresolved"
+    takes_family_hint = False
 
 
 class SimulationError(LTSpiceMCPError):
@@ -197,6 +205,7 @@ class OtherRawNotWritten(ResultError):
     transient's operating point) of a kind its run did not write."""
 
     code = "other_raw_not_written"
+    takes_family_hint = False
 
 
 class AnalysisDeadlineExceeded(ResultError):
@@ -210,6 +219,7 @@ class AnalysisDeadlineExceeded(ResultError):
     """
 
     code = "analysis_deadline"
+    takes_family_hint = False
 
 
 class NoAxisError(ResultError):
@@ -222,6 +232,7 @@ class NoAxisError(ResultError):
     """
 
     code = "no_axis"
+    takes_family_hint = False
 
 
 class LibraryError(LTSpiceMCPError):
@@ -297,18 +308,35 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
 }
 
 
+def hint_for_type(err_type: type[LTSpiceMCPError]) -> str | None:
+    """The recovery hint for an error type: its own entry in ``ERROR_HINTS``,
+    else its nearest ancestor's.
+
+    A subclass added to a family gets that family's recovery unless the
+    subclass, or an ancestor below the one with the entry, sets
+    ``takes_family_hint = False``.
+    """
+    for cls in err_type.__mro__:
+        if cls.__dict__.get("takes_family_hint") is False:
+            return None
+        hint = ERROR_HINTS.get(cls)
+        if hint is not None:
+            return hint
+    return None
+
+
 def error_hint(exc: BaseException) -> str | None:
-    """The recovery step for ``exc``: its type's entry in ``ERROR_HINTS``.
+    """The recovery step for ``exc``, by :func:`hint_for_type`.
 
     One answer for every surface that reports a failure, whether it raises it
     (``server._invoke``) or carries it in its own envelope (a coverage row, a
     batch item, a jobs error), so one kind of failure gets one hint everywhere.
-    None for a type with none, matched exactly, and for an error that carries
-    precise guidance of its own (``show_hint=False``).
+    None for a type with none, and for an error that carries precise guidance
+    of its own (``show_hint=False``).
     """
     if not isinstance(exc, LTSpiceMCPError) or not exc.show_hint:
         return None
-    return ERROR_HINTS.get(type(exc))
+    return hint_for_type(type(exc))
 
 
 def raise_site_code(exc: BaseException) -> str | None:
