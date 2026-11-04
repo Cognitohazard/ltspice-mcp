@@ -43,10 +43,12 @@ def _cases(raw: Path) -> dict[str, tuple[list[dict[str, Any]], list[dict[str, An
             [{"key": "k", "metric": "signal_stats", "signal": "V(out)"}],
             False,
         ),
+        # A source that names nothing is a coverage gap (missing_cases), not a
+        # recipe failure, whether it names a job or a file: no failure to point at.
         "only source a missing file": (
             [{"path": str(raw.with_name("nope.raw")), "label": "gone"}],
             [{"key": "k", "metric": "signal_stats", "signal": "V(out)"}],
-            True,
+            False,
         ),
         "partial failure": (
             path_source,

@@ -60,8 +60,9 @@ class TestHintLookup:
         assert errors.error_hint(family_member("R1 has no value")) == _get_error_hint(
             family_member
         )
-        assert errors.error_hint(family_member("R1 has no value")) == (
-            _ERROR_HINTS[errors.NetlistError]
+        assert (
+            errors.error_hint(family_member("R1 has no value"))
+            == (_ERROR_HINTS[errors.NetlistError])
         )
 
     def test_an_own_entry_outranks_the_familys(self) -> None:
