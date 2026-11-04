@@ -73,11 +73,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     step_rows = _positive(limits["step_rows"], "step_rows")
     metadata_bytes = _positive(limits["metadata_bytes"], "metadata_bytes")
     keys = request["existing_cache_keys"]
-    if (
-        not isinstance(keys, list)
-        or len(keys) > 32
-        or any(not is_sha256(key) for key in keys)
-    ):
+    if not isinstance(keys, list) or len(keys) > 32 or any(not is_sha256(key) for key in keys):
         raise ValueError("Parser cache keys must be bounded content identities")
     captured = capture_inputs(
         sources,

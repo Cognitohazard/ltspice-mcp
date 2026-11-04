@@ -125,7 +125,9 @@ async def test_the_job_this_process_runs_is_its_own_whatever_its_record_says(
 
     assert state_no_sim.job_registry.owns(job)
     assert state_no_sim.job_registry.refresh_foreign_job(job) is job
-    cancel = _assert_jobs_schema(await handle_jobs(_args("cancel", job_id=job.job_id), state_no_sim))
+    cancel = _assert_jobs_schema(
+        await handle_jobs(_args("cancel", job_id=job.job_id), state_no_sim)
+    )
     # No coordinator runs it here, which is what the refusal says; it is not
     # refused for want of a token.
     assert cancel["error"]["code"] == "cancel_unavailable"

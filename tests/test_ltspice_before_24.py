@@ -77,9 +77,7 @@ async def _answers(state: SessionState, simulator: type, deck: Path) -> dict[str
         state, [{"kind": "hierarchy", "path": str(deck), "simulator": "ltspice"}]
     )
     assert hierarchy["ok"], hierarchy
-    [resistor] = [
-        row for row in hierarchy["data"]["instances"] if row["instance"] == ["XA", "R1"]
-    ]
+    [resistor] = [row for row in hierarchy["data"]["instances"] if row["instance"] == ["XA", "R1"]]
     internal = resistor["nodes"][1]["voltage_trace"]
     assert internal in {"V(a:internal)", "V(xa:internal)"}, internal
     return {

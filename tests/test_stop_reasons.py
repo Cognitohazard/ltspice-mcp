@@ -69,7 +69,9 @@ async def test_a_shutdown_with_no_coordinator_leaves_a_case_a_default_resume_ret
     registry.reserve(job)
     registry.add_experiment_job(job, already_persisted=True)
 
-    await registry.cancel_running(SimpleNamespace(get_experiment_runner_for=lambda _job: None), None)
+    await registry.cancel_running(
+        SimpleNamespace(get_experiment_runner_for=lambda _job: None), None
+    )
 
     [case] = job.cases
     assert job.status == "cancelled"

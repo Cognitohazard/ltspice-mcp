@@ -37,9 +37,7 @@ def test_every_run_deck_suffix_names_a_case_s_run_deck(suffix: str):
 
 
 @pytest.mark.parametrize("simulator", [LTspice, NGspiceSimulator, Qspice, XyceSimulator])
-def test_a_recorded_job_s_raw_has_its_simulator_s_extension(
-    simulator: type, work_dir: Path
-):
+def test_a_recorded_job_s_raw_has_its_simulator_s_extension(simulator: type, work_dir: Path):
     """Where a case's raw is found from its run token, and where the runner
     looks to remove one, both read the simulator class's ``raw_extension``."""
     job = _experiment(work_dir, _circuit(work_dir), status="running")
@@ -56,7 +54,9 @@ def test_a_recorded_job_s_raw_has_its_simulator_s_extension(
 
 def test_identifiers_and_digests_are_checked_by_the_store_s_rules() -> None:
     assert is_store_name("exp_a1b2_case_0") and is_store_name("A.b-c_1")
-    assert not is_store_name("") and not is_store_name("../escape") and not is_store_name(".hidden")
+    assert (
+        not is_store_name("") and not is_store_name("../escape") and not is_store_name(".hidden")
+    )
     assert not is_store_name("a" * 129) and not is_store_name(7)
     assert is_sha256("0" * 64) and not is_sha256("0" * 63) and not is_sha256("A" * 64)
     assert not is_sha256(("0" * 64) + "\n") and not is_sha256(None)
@@ -91,8 +91,7 @@ def test_the_store_alone_spells_the_identifier_and_digest_patterns() -> None:
         for rule, pattern in _RULE_LITERALS.items()
         if pattern.search(node.value)
         and not (
-            rule == "sha256 digest"
-            and path.relative_to(_SRC).as_posix() in _PARSER_DIGEST_COPIES
+            rule == "sha256 digest" and path.relative_to(_SRC).as_posix() in _PARSER_DIGEST_COPIES
         )
     )
     assert not found, f"patterns spelled outside lib/store.py: {found}"

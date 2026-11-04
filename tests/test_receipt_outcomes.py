@@ -107,7 +107,9 @@ async def test_an_interrupted_job_whose_runs_were_written_reads_complete(
     job.owner_pid = _exited_pid()
     experiment_store.save_job(job)
 
-    status = _assert_jobs_schema(await handle_jobs(_args("status", job_id=job.job_id), state_no_sim))
+    status = _assert_jobs_schema(
+        await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+    )
     runs = _assert_jobs_schema(await handle_jobs(_args("runs", job_id=job.job_id), state_no_sim))
 
     assert status["status"] == runs["status"] == "interrupted"

@@ -746,5 +746,7 @@ class JobRegistry:
 
         # A job that finished during the cancels may have been evicted since.
         await _issue_cancels(
-            _cancel_tasks([self.live[job.job_id] for job in experiments if job.job_id in self.live])
+            _cancel_tasks(
+                [self.live[job.job_id] for job in experiments if job.job_id in self.live]
+            )
         )

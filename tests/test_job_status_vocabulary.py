@@ -52,7 +52,9 @@ def _set_literal_strings(node: ast.AST) -> set[str] | None:
         return None
     assert isinstance(node, ast.Set | ast.List | ast.Tuple)
     return {
-        elt.value for elt in node.elts if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+        elt.value
+        for elt in node.elts
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
     }
 
 
@@ -85,5 +87,7 @@ async def test_a_record_with_a_status_outside_the_vocabulary_is_refused(
 
     assert experiment_store.load_job(job.job_id, work_dir) is None
     for action in ("status", "wait", "runs"):
-        data = _assert_jobs_schema(await handle_jobs(_args(action, job_id=job.job_id), state_no_sim))
+        data = _assert_jobs_schema(
+            await handle_jobs(_args(action, job_id=job.job_id), state_no_sim)
+        )
         assert data["error"]["code"] == "job_not_found", (action, data)

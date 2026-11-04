@@ -125,9 +125,7 @@ def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
 
 async def resume_control_token(state: SessionState, job_id: str, control_token: str | None) -> str:
     """Authorize a private detached handoff from a fresh parent record."""
-    job = await asyncio.to_thread(
-        experiment_store.load_job, job_id, state.working_dir
-    )
+    job = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)
     if job is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
     return authorize_resume(job, control_token)
@@ -659,9 +657,7 @@ async def resume_experiment(
         raise RecoveryError(
             "recovery_persistence_required", "Resume requires durable job persistence"
         )
-    parent = await asyncio.to_thread(
-        experiment_store.load_job, job_id, state.working_dir
-    )
+    parent = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)
     if parent is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
     recovery = _required_recovery(parent)
