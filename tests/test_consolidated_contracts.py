@@ -28,7 +28,7 @@ from typing import Any
 import jsonschema
 import pytest
 
-from ltspice_mcp.errors import InvalidCursorError, SimulationError
+from ltspice_mcp.errors import InvalidCursorError, RecipeInvalidError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
@@ -203,7 +203,7 @@ class TestAttachedRecipeGrammar:
         submitted (the no-simulation half is pinned in test_run_experiments.py).
         """
         block = AttachedAnalysis.model_validate({"recipes": [recipe]})
-        with pytest.raises(SimulationError, match="attached analyze block"):
+        with pytest.raises(RecipeInvalidError, match="attached analyze block"):
             _validate_attached_analysis(block)
 
 

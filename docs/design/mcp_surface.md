@@ -399,7 +399,11 @@ analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                                         measurement and a standalone one read
                                         the same `.step` iterations. Every
                                         recipe is validated at SUBMISSION,
-                                        before a deck is staged.
+                                        before a deck is staged; an invalid
+                                        one fails the call with
+                                        `recipe_invalid`, stage `validate`,
+                                        not retryable, and a set
+                                        `include.per_run.cursor` is refused.
                                         The schema here lists the metric
                                         names; `analyze_results` documents
                                         each metric's fields.

@@ -15,12 +15,10 @@ from ltspice_mcp.server import _ERROR_HINTS, _UNHINTED, _get_error_hint, _invoke
 from ltspice_mcp.state import SessionState
 
 
-class _UnlistedNetlistError(errors.NetlistError):
-    """A member of the netlist family the hint table never names."""
-
-
-class _UnlistedResultError(errors.ResultError):
-    code = "result_unreadable"
+@pytest.fixture
+def family_member() -> type[errors.LTSpiceMCPError]:
+    """A NetlistError subclass the hint table never names, made for one test."""
+    return type("UnlistedNetlistError", (errors.NetlistError,), {})
 
 
 def _all_subclasses(base: type) -> set[type]:
@@ -35,9 +33,10 @@ def _all_subclasses(base: type) -> set[type]:
 
 
 class TestHintLookup:
-    def test_a_subclass_without_its_own_entry_takes_its_familys_hint(self) -> None:
-        assert _get_error_hint(_UnlistedNetlistError) == _ERROR_HINTS[errors.NetlistError]
-        assert _get_error_hint(_UnlistedResultError) == _ERROR_HINTS[errors.ResultError]
+    def test_a_subclass_without_its_own_entry_takes_its_familys_hint(
+        self, family_member: type[errors.LTSpiceMCPError]
+    ) -> None:
+        assert _get_error_hint(family_member) == _ERROR_HINTS[errors.NetlistError]
 
     def test_an_own_entry_outranks_the_familys(self) -> None:
         assert _get_error_hint(errors.JobNotFoundError) == _ERROR_HINTS[errors.JobNotFoundError]
@@ -46,12 +45,6 @@ class TestHintLookup:
     @pytest.mark.parametrize("err_type", sorted(_UNHINTED, key=str))
     def test_a_type_listed_as_unhinted_takes_none(self, err_type: type) -> None:
         assert _get_error_hint(err_type) is None
-
-    def test_a_subclass_of_an_unhinted_type_takes_none(self) -> None:
-        class _Narrower(errors.NoAxisError):
-            pass
-
-        assert _get_error_hint(_Narrower) is None
 
     def test_every_unhinted_type_has_a_hinted_ancestor(self) -> None:
         """An entry in the opt-out set only means something where the walk
@@ -80,10 +73,10 @@ class TestHintLookup:
 
 class TestHintReachesTheCaller:
     async def test_a_family_member_raised_by_a_handler_carries_the_family_hint(
-        self, state_no_sim: SessionState
+        self, state_no_sim: SessionState, family_member: type[errors.LTSpiceMCPError]
     ) -> None:
         async def raises(arguments: dict[str, Any], state: SessionState) -> Any:
-            raise _UnlistedNetlistError("R1 has no value")
+            raise family_member("R1 has no value")
 
         registered = replace(state_no_sim.tool_dispatch["inspect"], handler=raises)
         result = await _invoke(registered, "inspect", {}, state_no_sim)

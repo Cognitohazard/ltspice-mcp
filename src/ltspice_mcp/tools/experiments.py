@@ -23,6 +23,7 @@ from pydantic import (
 from ltspice_mcp.errors import (
     NetlistError,
     PathSecurityError,
+    RecipeInvalidError,
     ResultError,
     SimulationError,
     UnsupportedFileError,
@@ -285,10 +286,23 @@ class AnalysisPerRun(analyze.CappedPerRunLimit):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Nothing has been paged at submission time; leave it unset and page the "
+            "Refused when set: nothing has been paged at submission. Page the "
             "finished analysis with analyze_results."
         ),
     )
+
+    @field_validator("cursor")
+    @classmethod
+    def _nothing_paged_yet(cls, value: str | None) -> str | None:
+        # Refused here rather than after every run, when the analysis would
+        # decode it and fail: fixing the block then changes the request, so
+        # the retry would run every case again.
+        if value is not None:
+            raise ValueError(
+                "an attached analysis has no page to resume at submission; leave "
+                "cursor unset and page the finished analysis with analyze_results"
+            )
+        return value
 
 
 class AnalysisInclude(NotedModel):
@@ -900,6 +914,18 @@ async def handle_run_experiments(
             commit_state="not_started",
             budget=budget,
         )
+    except RecipeInvalidError as exc:
+        # As analyze_results reports the same recipe: the request is wrong, so
+        # sending it again unchanged fails the same way.
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="validate",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+        )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
             args.request_id,
@@ -1255,7 +1281,7 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
         for raw_recipe in request.get("recipes") or []:
             validate_recipe(raw_recipe)
     except (ValidationError, ValueError) as exc:
-        raise SimulationError(
+        raise RecipeInvalidError(
             "The attached analyze block is not a valid analyze_results request: "
             f"{validation_error_detail('analyze_results', exc)}"
         ) from exc

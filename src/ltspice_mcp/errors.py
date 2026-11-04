@@ -236,6 +236,20 @@ class BatchJobError(LTSpiceMCPError):
     code = "batch_job_error"
 
 
+class RecipeInvalidError(LTSpiceMCPError):
+    """An analysis recipe, or the request around it, that is not a valid
+    ``analyze_results`` request.
+
+    Raised where the whole call is refused for it: an analysis attached to
+    ``run_experiments`` is checked at submission, before anything runs.
+    ``analyze_results`` itself reports an invalid recipe as that recipe's
+    failure, under the same code, and runs the others. Resending the same
+    request fails the same way, so it is never retryable.
+    """
+
+    code = "recipe_invalid"
+
+
 class InvalidCursorError(LTSpiceMCPError):
     """A page cursor did not decode, failed its integrity check, or was minted
     for another listing, view, request or result set.
@@ -270,6 +284,10 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     LibraryError: (
         'Use inspect with a model query (mode:"search") to find the part in the '
         "simulator's own libraries, or add .lib/.include directives to the netlist."
+    ),
+    RecipeInvalidError: (
+        "Correct the recipe and send the call again; inspect(kind='reference', "
+        "query='<metric>') lists each recipe's fields."
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "

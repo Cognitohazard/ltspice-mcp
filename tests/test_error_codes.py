@@ -402,7 +402,10 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 
     def descend(cls: type[LTSpiceMCPError]):
         for sub in cls.__subclasses__():
-            yield sub
+            # A subclass a test defines to exercise the hierarchy is not one of
+            # the package's, however long it stays alive in this process.
+            if sub.__module__.startswith("ltspice_mcp."):
+                yield sub
             yield from descend(sub)
 
     return [LTSpiceMCPError, *descend(LTSpiceMCPError)]
