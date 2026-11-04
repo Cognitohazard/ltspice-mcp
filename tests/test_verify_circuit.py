@@ -821,6 +821,19 @@ async def test_reference_outside_sandbox_names_the_text_alternative(state_no_sim
     assert "netlist text itself" in finding["evidence"]["detail"]
 
 
+async def test_a_deck_the_lexer_has_to_guess_at_is_still_checked(state_no_sim, work_dir):
+    """The lexer reads any text into cards and says what it guessed, so a deck
+    with unclosed braces and quotes is checked, not refused as unreadable."""
+    deck = _write(
+        work_dir,
+        "guessed.cir",
+        '* t\nV1 in 0 5\nR1 in out {1k\n.model D1 D(IS="1e-14\n.op\n.end\n',
+    )
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax", "quality"])
+    assert data["checks_run"] == ["syntax", "quality"]
+    assert data["outcome"] != "failed", data
+
+
 async def test_a_refused_reference_is_filed_under_the_reference(state_no_sim, work_dir):
     # It was filed under the circuit, which was allowed and read.
     deck = _write(work_dir, "cand.cir", _BASE)

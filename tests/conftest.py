@@ -1682,7 +1682,6 @@ FILE_LEVEL_RULES: dict[str, str] = {
         "The file named by an argument was refused, so it was never read. A refused "
         "include is placed at its directive's line instead."
     ),
-    "lex_error": "The lexer's error names no line, though the card it stopped in has one.",
 }
 
 
