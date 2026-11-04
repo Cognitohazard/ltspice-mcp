@@ -2001,9 +2001,10 @@ async def test_truncated_fail_cases_names_the_route_to_the_rest(
         ],
         all_steps=True,
     )
-    entry = data["results"]["vout"]
-    assert entry["spec"]["fail_cases"]["truncated"] is True
-    assert any("include.per_run" in warning for warning in entry["warnings"])
+    fail_cases = data["results"]["vout"]["spec"]["fail_cases"]
+    assert fail_cases["truncated"] is True
+    # Beside the flag, where a caller holding the cut list looks for the rest.
+    assert "include.per_run" in fail_cases["hint"]
 
 
 # ---------------------------------------------------------------------------

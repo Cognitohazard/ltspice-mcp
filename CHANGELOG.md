@@ -435,6 +435,11 @@ tool-surface changes.
 
 ### Changed
 
+- `analyze_results`: a `spec.fail_cases` list cut short says how to read the
+  rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
+  said it. The list has no cursor of its own, and its schema no longer
+  declares one.
+
 - **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
   wire, a T, is listed under `junctions` with `via: "tee"`. It was
   `via: "endpoint"`, which read as the end of the existing wire, the opposite

@@ -82,6 +82,7 @@ from ltspice_mcp.lib.result_observations import (
 from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    HINT_SCHEMA,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
@@ -112,9 +113,9 @@ _GROUPS_OMITTED_WARNING = (
     "{omitted} of {total} group(s) omitted to fit the response budget; "
     "re-ask without 'budget' for every group."
 )
-_FAIL_CASES_OMITTED_WARNING = (
-    "{omitted} failing case(s) omitted from spec.fail_cases, which is not pageable; "
-    "request include.per_run for callable pagination over every attributed value."
+_FAIL_CASES_ROUTE = (
+    "{omitted} more failing case(s); this list has no cursor of its own: request "
+    "include.per_run for callable pagination over every attributed value."
 )
 _VALUES_OMITTED_WARNING = (
     "{omitted} value(s) omitted; request include.per_run for callable pagination."
@@ -748,6 +749,18 @@ class _ResolvedRun:
     job_id: str | None
 
 
+def _say_how_to_read_fail_cases(spec: dict[str, Any]) -> None:
+    """Put the route to the rest beside a cut ``spec.fail_cases``, and take it
+    away from one that is whole again (a budget can cut a page already cut)."""
+    fail_cases = spec["fail_cases"]
+    fail_cases.pop("next_cursor", None)
+    if fail_cases["truncated"]:
+        omitted = spec["fail_count"] - fail_cases["returned"]
+        fail_cases["hint"] = _FAIL_CASES_ROUTE.format(omitted=omitted)
+    else:
+        fail_cases.pop("hint", None)
+
+
 def _page(
     items: list[Any], offset: int = 0, limit: int = MAX_PAGE_SIZE
 ) -> tuple[dict[str, Any], int]:
@@ -756,7 +769,8 @@ def _page(
     ``next_cursor`` starts null: every resumable view here (per_run,
     coverage.missing_cases) needs a cursor carrying the work position too, so it
     is minted during assembly from the offset this returns. A view that cannot
-    be resumed at all — spec.fail_cases — says so in a warning instead.
+    be resumed at all — spec.fail_cases — says how to read the rest in a hint
+    beside its flag instead (``_say_how_to_read_fail_cases``).
 
     Slices rather than calling the guarded ``pagination.page``: the budget
     ladder legitimately shrinks a limit to zero (that rung shows no rows at
@@ -2663,16 +2677,7 @@ def _result_entry(
     )
     if spec is not None:
         entry["spec"] = spec
-        if spec["fail_cases"]["truncated"]:
-            # fail_cases is a projection of records computed in THIS call and
-            # never persisted, so it has no cursor of its own. Name the route
-            # that does page every attributed value instead of leaving the
-            # caller with a truncation flag and nowhere to go.
-            entry["warnings"].append(
-                _FAIL_CASES_OMITTED_WARNING.format(
-                    omitted=spec["fail_count"] - spec["fail_cases"]["returned"]
-                )
-            )
+        _say_how_to_read_fail_cases(spec)
     render = _row_renderer(fields, metric=recipe.metric)
 
     per_run_next = per_run_offset
@@ -2742,6 +2747,20 @@ def _page_of(item_schema: dict[str, Any]) -> dict[str, Any]:
 
 
 _PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"})
+
+#: spec.fail_cases: a page with no cursor, because it is worked out in the call
+#: that returns it and never stored. Cut short, its hint names the view that
+#: pages every failing value.
+_FAIL_CASES_SCHEMA: dict[str, Any] = {
+    **_PAGE_SCHEMA,
+    "properties": {
+        **{
+            key: value for key, value in _PAGE_SCHEMA["properties"].items() if key != "next_cursor"
+        },
+        "hint": HINT_SCHEMA,
+    },
+    "required": [key for key in _PAGE_SCHEMA["required"] if key != "next_cursor"],
+}
 
 
 # One per_run/values row. No ``required`` list: include.fields projects a row
@@ -2847,7 +2866,7 @@ _SPEC_SCHEMA: dict[str, Any] = {
                 "an earlier build stored with a job."
             ),
         },
-        "fail_cases": _PAGE_SCHEMA,
+        "fail_cases": _FAIL_CASES_SCHEMA,
         "verdict": {
             "type": "string",
             "enum": ["pass", "fail", "indeterminate"],
@@ -3555,18 +3574,8 @@ def render_attached_analysis(
                 )
             spec = entry.get("spec")
             if isinstance(spec, dict) and isinstance(spec.get("fail_cases"), dict):
-                fail_cases = spec["fail_cases"]
-                _shrink_snapshot_page(fail_cases, row_limit)
-                entry["warnings"] = _without_warnings(
-                    entry.get("warnings", []),
-                    " failing case(s) omitted from spec.fail_cases",
-                )
-                if fail_cases["truncated"]:
-                    entry["warnings"].append(
-                        _FAIL_CASES_OMITTED_WARNING.format(
-                            omitted=spec["fail_count"] - fail_cases["returned"]
-                        )
-                    )
+                _shrink_snapshot_page(spec["fail_cases"], row_limit)
+                _say_how_to_read_fail_cases(spec)
         if fields and rows_emitted:
             entry.setdefault("warnings", []).extend(
                 _projection_warnings([block["projection_presence"]], fields)
