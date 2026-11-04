@@ -920,6 +920,15 @@ def flatten_graph(graph: NetlistGraph) -> FlatNetlist:
     Raises :class:`NetlistGraphError` on a port-arity mismatch (instance node
     count vs. subcircuit port count) or a recursive subcircuit definition.
     """
+    return _flatten(graph, arity=None)[0]
+
+
+def _flatten(
+    graph: NetlistGraph, *, arity: list[ArityError] | None
+) -> tuple[FlatNetlist, list[ArityError]]:
+    """``flatten_graph``, or with ``arity`` a list, the lenient flattening
+    ``compare_graphs`` falls back to, which records each port-arity mismatch
+    there and keeps that instance as a black box (see ``_expand``)."""
     leaves: list[FlatComponent] = []
     unresolved: set[str] = set()
     for comp in graph.components:
@@ -931,13 +940,15 @@ def flatten_graph(graph: NetlistGraph) -> FlatNetlist:
             out=leaves,
             stack=(),
             unresolved=unresolved,
+            arity=arity,
         )
     nets = frozenset(net for leaf in leaves for net in leaf.nodes)
-    return FlatNetlist(
+    flat = FlatNetlist(
         components=tuple(leaves),
         nets=nets,
         unresolved_subckts=tuple(sorted(unresolved)),
     )
+    return flat, [] if arity is None else arity
 
 
 def _expand(
@@ -949,6 +960,7 @@ def _expand(
     out: list[FlatComponent],
     stack: tuple[str, ...],
     unresolved: set[str],
+    arity: list[ArityError] | None = None,
 ) -> None:
     """Recursively expand ``comp`` (in the namespace described by ``net_map``).
 
@@ -957,20 +969,54 @@ def _expand(
     is the chain of enclosing instance refs (for hierarchical naming and unique
     internal-net keys). ``unresolved`` collects the names of subcircuits an ``X``
     asked for but nothing defined.
+
+    With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`
+    and a recursive definition raises; with a list, the mismatch is recorded
+    there, and the instance, or one that recurses, is kept as a black-box leaf.
     """
 
     def resolve(net: str) -> str:
-        if net_map is None:
-            return net
-        return net_map.get(net, net)
+        return net if net_map is None else net_map.get(net, net)
 
     flat_nodes = tuple(resolve(n) for n in comp.nodes)
     model_key = comp.model.lower() if comp.model else None
-
     is_expandable = comp.type_letter == "X" and model_key is not None and model_key in subckts
+    # Recorded before the arity/recursion guards below can clear the flag: those
+    # black-box an instance whose definition DOES exist, which is not "unresolved".
+    if comp.type_letter == "X" and comp.model and not is_expandable:
+        unresolved.add(comp.model)
+
+    if is_expandable:
+        assert model_key is not None
+        sub = subckts[model_key]
+        if len(comp.nodes) != len(sub.ports):
+            if arity is None:
+                raise PortArityMismatch(
+                    "port-arity mismatch: "
+                    + _instance_port_detail(
+                        comp.ref, tuple(comp.nodes), sub.name, tuple(sub.ports)
+                    ),
+                    line=comp.line,
+                )
+            ref = ".".join((*path, comp.ref))
+            arity.append(
+                ArityError(
+                    ref=ref,
+                    reference_arity=len(comp.nodes),
+                    candidate_arity=len(sub.ports),
+                    detail=_instance_port_detail(
+                        ref, tuple(comp.nodes), comp.model or model_key, tuple(sub.ports)
+                    ),
+                )
+            )
+            is_expandable = False
+        elif model_key in stack:
+            if arity is None:
+                chain = " -> ".join((*stack, model_key))
+                raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
+            is_expandable = False
+
     if not is_expandable:
-        if comp.type_letter == "X" and comp.model:
-            unresolved.add(comp.model)
         out.append(
             FlatComponent(
                 ref=".".join((*path, comp.ref)),
@@ -985,19 +1031,8 @@ def _expand(
 
     assert model_key is not None
     sub = subckts[model_key]
-    if len(comp.nodes) != len(sub.ports):
-        raise PortArityMismatch(
-            "port-arity mismatch: "
-            + _instance_port_detail(comp.ref, tuple(comp.nodes), sub.name, tuple(sub.ports)),
-            line=comp.line,
-        )
-    if model_key in stack:
-        chain = " -> ".join((*stack, model_key))
-        raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
-
     child_path = (*path, comp.ref)
-    child_prefix = ".".join(child_path)
-    child_map = _build_child_net_map(sub, flat_nodes, child_prefix)
+    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path))
     for child in sub.components:
         _expand(
             child,
@@ -1007,6 +1042,7 @@ def _expand(
             out=out,
             stack=(*stack, model_key),
             unresolved=unresolved,
+            arity=arity,
         )
 
 
@@ -1250,7 +1286,7 @@ def _coerce_capturing_arity(src: NetlistGraph | str | Path) -> _FlattenOutcome:
         flat, arity = flatten_graph(graph), []
     except PortArityMismatch:
         # Re-flatten skipping the offending instances so the rest still compares.
-        flat, arity = _flatten_lenient(graph)
+        flat, arity = _flatten(graph, arity=[])
     return _FlattenOutcome(flat=_with_bjt_substrate(flat), arity_errors=arity, graph=graph)
 
 
@@ -1269,105 +1305,6 @@ def _with_bjt_substrate(flat: FlatNetlist) -> FlatNetlist:
         for c in flat.components
     )
     return replace(flat, components=components, nets=flat.nets | {_GROUND})
-
-
-def _flatten_lenient(graph: NetlistGraph) -> tuple[FlatNetlist, list[ArityError]]:
-    """Flatten, recording (not raising) port-arity mismatches as black boxes."""
-    leaves: list[FlatComponent] = []
-    arity: list[ArityError] = []
-    unresolved: set[str] = set()
-    for comp in graph.components:
-        _expand_lenient(
-            comp,
-            graph.subckts,
-            path=(),
-            net_map=None,
-            out=leaves,
-            stack=(),
-            arity=arity,
-            unresolved=unresolved,
-        )
-    nets = frozenset(net for leaf in leaves for net in leaf.nodes)
-    flat = FlatNetlist(
-        components=tuple(leaves),
-        nets=nets,
-        unresolved_subckts=tuple(sorted(unresolved)),
-    )
-    return flat, arity
-
-
-def _expand_lenient(
-    comp: Component,
-    subckts: dict[str, SubcktDef],
-    *,
-    path: tuple[str, ...],
-    net_map: dict[str, str] | None,
-    out: list[FlatComponent],
-    stack: tuple[str, ...],
-    arity: list[ArityError],
-    unresolved: set[str],
-) -> None:
-    """Like :func:`_expand` but records arity mismatches and keeps the instance
-    as a black-box leaf instead of raising."""
-
-    def resolve(net: str) -> str:
-        return net if net_map is None else net_map.get(net, net)
-
-    flat_nodes = tuple(resolve(n) for n in comp.nodes)
-    model_key = comp.model.lower() if comp.model else None
-    is_expandable = comp.type_letter == "X" and model_key is not None and model_key in subckts
-    # Recorded before the arity/recursion guards below can clear the flag: those
-    # black-box an instance whose definition DOES exist, which is not "unresolved".
-    if comp.type_letter == "X" and comp.model and not is_expandable:
-        unresolved.add(comp.model)
-
-    if is_expandable:
-        assert model_key is not None
-        sub = subckts[model_key]
-        if len(comp.nodes) != len(sub.ports):
-            ref = ".".join((*path, comp.ref))
-            arity.append(
-                ArityError(
-                    ref=ref,
-                    reference_arity=len(comp.nodes),
-                    candidate_arity=len(sub.ports),
-                    detail=_instance_port_detail(
-                        ref, tuple(comp.nodes), comp.model or model_key, tuple(sub.ports)
-                    ),
-                )
-            )
-            is_expandable = False
-        elif model_key in stack:
-            is_expandable = False
-
-    if not is_expandable:
-        out.append(
-            FlatComponent(
-                ref=".".join((*path, comp.ref)),
-                type_letter=comp.type_letter,
-                nodes=flat_nodes,
-                model=comp.model,
-                value=comp.value,
-                params=comp.params,
-            )
-        )
-        return
-
-    assert model_key is not None
-    sub = subckts[model_key]
-    child_path = (*path, comp.ref)
-    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path))
-    for child in sub.components:
-        _expand_lenient(
-            child,
-            subckts,
-            path=child_path,
-            net_map=child_map,
-            out=out,
-            stack=(*stack, model_key),
-            arity=arity,
-            unresolved=unresolved,
-        )
 
 
 def _describe(comp: FlatComponent) -> str:
