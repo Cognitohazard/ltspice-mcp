@@ -3243,6 +3243,151 @@
         ".raw"
       ]
     },
+    "deck/mos_delvto_bsim3": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_delvto_bsim3.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/mos_delvto_bsim3.cir": "14eafb32014ec326f06b05ccff62e3a807750b8664f541c6dd7ad7435ef63407"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_delvto_bsim3.log": {
+          "bytes": 376,
+          "sha256": "7e95a59bcb83b4f5543d6da65532edaef1e77445e08cadae0dbae013b643c6f9"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/mos_delvto_bsim4": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_delvto_bsim4.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_delvto_bsim4.cir": "343bdc54f9f11d5c72095093ef8a812a65cb082b4dfca9eaddc905de41ce4f6c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_delvto_bsim4.log": {
+          "bytes": 348,
+          "sha256": "509ab29717e21ce4dfed140e5c2da392e57c00805c26de645c4c21d4fe218c2d"
+        },
+        "deck/mos_delvto_bsim4.raw": {
+          "bytes": 3076,
+          "sha256": "cc0b576995d3e7244213db5e273c0e4e9ee5496f8d2c91af571331387feee62f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/mos_model_variants": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_model_variants.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_model_variants.cir": "6d69898c4c74cfb080a1826b0eb7b3eee75299fcea74ae395febbdd900facab9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_model_variants.log": {
+          "bytes": 544,
+          "sha256": "4b8a0f5ef26dd2d4909ce9489073f5d426dd6e6cd4821fcbf888b5a2a02b18d1"
+        },
+        "deck/mos_model_variants.raw": {
+          "bytes": 2274,
+          "sha256": "77d4b4811fe5a553dca4838792b9231318990506d6e0b229acd0efb6774fa8c4"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/mos_mulu0_bsim3": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_mulu0_bsim3.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/mos_mulu0_bsim3.cir": "65d7647bf533f375b546760ca67b7b489f7d1831d98b4f88c9e0c6230de88288"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_mulu0_bsim3.log": {
+          "bytes": 229,
+          "sha256": "d6f55a5d83195f5d41588909d706c64a4d51aa493338fec88811ff5604bf5fbe"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
+    "deck/mos_mulu0_bsim4": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_mulu0_bsim4.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 1,
+      "inputs": {
+        "deck/mos_mulu0_bsim4.cir": "aaad80d4ccd29fa062e71559bc5fb85cf63d094e5b3af4d42fde1b1ee3a14a2b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_mulu0_bsim4.log": {
+          "bytes": 229,
+          "sha256": "bcb02a7debccbfa96c86fa7967b610561effd9e22edb7a307ee7efd666552364"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log"
+      ]
+    },
     "deck/mos_three_node": {
       "behaviour": "three-node-transistors",
       "command": [
@@ -4001,6 +4146,70 @@
       "written": [
         ".log",
         ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/subckt_model_copy": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_model_copy.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/subckt_model_copy.cir": "f8709f58fe6c3886d279fec48fc105138e36f781b2a343416b0cad6d7f646657"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/subckt_model_copy.log": {
+          "bytes": 350,
+          "sha256": "859ed75a7c851328530abd89ad981eb3af35b10341d51228b7a480e255ba3c80"
+        },
+        "deck/subckt_model_copy.raw": {
+          "bytes": 1978,
+          "sha256": "bec904c7dbb822d391e386390366f35f6848190302c3496ce39441f7fc12bd8e"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/subckt_multiplier_nested": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_multiplier_nested.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/subckt_multiplier_nested.cir": "79a01268d4c7ff52a118eca2acf42a17ee6cfd7e5196f5a752fdd14e0605475a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/subckt_multiplier_nested.log": {
+          "bytes": 964,
+          "sha256": "566dd763e2e0e71d9c5e3fd0a7afbcf2cbc71fe779fed71df433a6dd6d5669b4"
+        },
+        "deck/subckt_multiplier_nested.raw": {
+          "bytes": 1992,
+          "sha256": "39b390206005bc94970255c44be9d9891605d601d28f0ee72decfa005d178870"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
         ".raw"
       ]
     },

@@ -256,6 +256,19 @@ class TestRawLayouts:
         assert values["i(v1)"] != 0.0
         assert values["i(v4)"] == pytest.approx(4 * values["i(v1)"], rel=1e-6)
 
+    def test_m_on_an_x_line_is_ignored_at_any_depth_and_m_mult_passes_down(
+        self, build: str, tmp_path: Path
+    ):
+        """Both builds build one copy for ``m=4`` on an X line one or two
+        levels above the device, where ngspice builds four, and four for an
+        inner ``m={mult}`` set from one or two levels up."""
+        one = rec.operating_point(build, "raw/subckt_multiplier", tmp_path / "one")
+        assert one["i(vx)"] == one["i(v1)"]
+        assert one["i(vp)"] == pytest.approx(4 * one["i(v1)"], rel=1e-6)
+        two = rec.operating_point(build, "deck/subckt_multiplier_nested", tmp_path / "two")
+        assert two["i(vo)"] == two["i(vi)"] == two["i(v1)"]
+        assert two["i(vp)"] == pytest.approx(4 * two["i(v1)"], rel=1e-6)
+
     def test_a_transfer_function_is_one_point_of_gain_and_two_impedances(
         self, build: str, tmp_path: Path
     ):

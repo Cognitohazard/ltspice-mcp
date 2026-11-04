@@ -3255,6 +3255,166 @@
         ".raw"
       ]
     },
+    "deck/mos_delvto_bsim3": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_delvto_bsim3.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_delvto_bsim3.cir": "14eafb32014ec326f06b05ccff62e3a807750b8664f541c6dd7ad7435ef63407"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_delvto_bsim3.log": {
+          "bytes": 3489,
+          "sha256": "5ce85c3f807627fb5a74b444ded060663de07acd64ba0b37e72789758dedd547"
+        },
+        "deck/mos_delvto_bsim3.raw": {
+          "bytes": 3172,
+          "sha256": "bc537b7f7caa0c7b359cc8005e2b2fbb55b9cf9996565b4de3eda8506cdb31e9"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/mos_delvto_bsim4": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_delvto_bsim4.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_delvto_bsim4.cir": "343bdc54f9f11d5c72095093ef8a812a65cb082b4dfca9eaddc905de41ce4f6c"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_delvto_bsim4.log": {
+          "bytes": 1744,
+          "sha256": "0a2d6754a4753dcd4265d5105b4c51431e4b18c02a5e2e6bc7d96cecdc523177"
+        },
+        "deck/mos_delvto_bsim4.raw": {
+          "bytes": 3172,
+          "sha256": "e6ce31a131ce974116914d34410c7eee0b6b72b9abe026584254b253e0bc5986"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/mos_model_variants": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_model_variants.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_model_variants.cir": "6d69898c4c74cfb080a1826b0eb7b3eee75299fcea74ae395febbdd900facab9"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_model_variants.log": {
+          "bytes": 2217,
+          "sha256": "64a8cc5e020e597682a12b527ff592cab193ee3afa57a084d57e1a837e65896b"
+        },
+        "deck/mos_model_variants.raw": {
+          "bytes": 2358,
+          "sha256": "78c4afc3246198d15b36aa335d633931c97264f47cccf56e42d375d158e86a44"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/mos_mulu0_bsim3": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_mulu0_bsim3.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_mulu0_bsim3.cir": "65d7647bf533f375b546760ca67b7b489f7d1831d98b4f88c9e0c6230de88288"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_mulu0_bsim3.log": {
+          "bytes": 1804,
+          "sha256": "0e82658b0a6b14d5246a325f3fe8c63d84f2d75a907e8307f9339122d049c86c"
+        },
+        "deck/mos_mulu0_bsim3.raw": {
+          "bytes": 1722,
+          "sha256": "df6dcf8f27e84691b39f216d7047f795f1640ba3013c1f8b927f4cdd7da3a07b"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/mos_mulu0_bsim4": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/mos_mulu0_bsim4.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/mos_mulu0_bsim4.cir": "aaad80d4ccd29fa062e71559bc5fb85cf63d094e5b3af4d42fde1b1ee3a14a2b"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/mos_mulu0_bsim4.log": {
+          "bytes": 1122,
+          "sha256": "21a21667e59da537c3778f0e56a2cc2b35b07978bf04e9655149a18e161ef99b"
+        },
+        "deck/mos_mulu0_bsim4.raw": {
+          "bytes": 1722,
+          "sha256": "3dc4a3b8200457edfd6ef42fc554f6a8e1374f44646fc5599ebf5c72e9145f6c"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/mos_three_node": {
       "behaviour": "three-node-transistors",
       "command": [
@@ -3979,6 +4139,70 @@
       "stopped": false,
       "written": [
         ".log"
+      ]
+    },
+    "deck/subckt_model_copy": {
+      "behaviour": "mos-instance-mismatch",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_model_copy.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/subckt_model_copy.cir": "f8709f58fe6c3886d279fec48fc105138e36f781b2a343416b0cad6d7f646657"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/subckt_model_copy.log": {
+          "bytes": 1236,
+          "sha256": "d833349eee545af9b86601f645c719a435c384ab44d0da48b443c3093ee3f5c7"
+        },
+        "deck/subckt_model_copy.raw": {
+          "bytes": 1908,
+          "sha256": "3c29a93d7bcbfbad771e6049d5f3102a8658c7434e9093e590a80244d9fc26de"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/subckt_multiplier_nested": {
+      "behaviour": "mos-multiplier",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/subckt_multiplier_nested.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/subckt_multiplier_nested.cir": "79a01268d4c7ff52a118eca2acf42a17ee6cfd7e5196f5a752fdd14e0605475a"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/subckt_multiplier_nested.log": {
+          "bytes": 1930,
+          "sha256": "bc928b8844eeafa67daa68de7db652fdfefe7375b0c01ebbd644a68a1229be09"
+        },
+        "deck/subckt_multiplier_nested.raw": {
+          "bytes": 1896,
+          "sha256": "33e833708e83162b66d10afdc4e50fdc5c26fe5448a1143820aaedb223aee8f4"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
       ]
     },
     "deck/subckt_param_precedence": {
