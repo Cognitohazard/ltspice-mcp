@@ -1893,9 +1893,8 @@ product of the device's own `m` and the `m` of every subcircuit instance
 above it (an inner `m={mult}` resolves in the scope its X line sets), because
 the simulator builds that many parallel copies from one card and they share
 the draw. An `m` that does not resolve to a positive number refuses the
-request with `mismatch_geometry_unresolved`, or `geometry_not_literal` for a
-device one subcircuit level down. Draws across circuits are independent;
-correlated Monte Carlo across decks is not supported.
+request with `mismatch_geometry_unresolved`. Draws across circuits are
+independent; correlated Monte Carlo across decks is not supported.
 
 ### A.2 Recipe
 

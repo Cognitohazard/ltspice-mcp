@@ -368,20 +368,10 @@ class TestCommittedRecordings:
         assert set(manifest["cases"]) == expected
 
     def test_every_behaviour_with_a_case_is_recorded_on_this_build(self, build: str):
-        recorded = {
-            entry["behaviour"] for entry in load_manifest(FIXTURES / build)["cases"].values()
-        }
-        expected = {
-            case.behaviour for case in CASES.cases if not CASES.behaviours[case.behaviour].pending
-        }
-        assert recorded == expected
-
-    def test_a_pending_behaviour_is_not_recorded_yet(self, build: str):
-        """Once a pending behaviour's cases are recorded, its ``pending`` key goes.
-
-        Left in place, it would excuse the behaviour from the checks above on
-        every later re-record, so a recording that went missing would pass.
-        """
+        """A pending behaviour is expected to have no recording. Once its cases
+        are recorded its ``pending`` key goes: left in place, it would excuse the
+        behaviour from these checks on every later re-record, so a recording that
+        went missing would pass."""
         recorded = {
             entry["behaviour"] for entry in load_manifest(FIXTURES / build)["cases"].values()
         }
@@ -389,6 +379,8 @@ class TestCommittedRecordings:
         assert not recorded & still_pending, (
             f"recorded on {build}, so remove `pending` from: {sorted(recorded & still_pending)}"
         )
+        expected = {case.behaviour for case in CASES.cases} - still_pending
+        assert recorded == expected
 
     def test_every_recorded_file_is_present_and_unchanged(self, build: str):
         directory = FIXTURES / build

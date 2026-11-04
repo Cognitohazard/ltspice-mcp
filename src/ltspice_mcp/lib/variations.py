@@ -34,6 +34,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
+from ltspice_mcp.lib.hierarchy_expr import multiplier_product
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
     SourceLineage,
@@ -2258,6 +2259,8 @@ def _apply_subckt_mismatch(
     """
     try:
         drawn = draw_mismatch(plan, [_engine_rule(rule) for rule in rules], sampler)
+        if drawn.values:
+            texts.update(render(files, plan, drawn.values))
     except MismatchPlanError as exc:
         raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
     draws: dict[str, float] = {}
@@ -2271,11 +2274,6 @@ def _apply_subckt_mismatch(
     draws["random:mismatch:skipped"] = float(len(plan.skips))
     for skip in plan.skips:
         draws[f"random:mismatch:{skip.x_ref}:{skip.code}"] = 1.0
-    if drawn.values:
-        try:
-            texts.update(render(files, plan, drawn.values))
-        except MismatchPlanError as exc:
-            raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
     return draws
 
 
@@ -2528,23 +2526,19 @@ def _path_multiplier(
     many times W·L. An ``m`` written but not resolvable to a positive number
     refuses the rule: drawn as one copy, the sigma would be too large.
     """
-    product = 1.0
-    for depth in range(1, len(row.instance) + 1):
-        holder = by_path.get(row.instance[:depth])
-        if holder is None:
-            continue
-        fact = dict(holder.parameters).get("m")
-        if fact is None:
-            continue
-        if fact.value is None or not fact.value > 0.0:
-            why = fact.reason or "not a positive number"
-            raise VariationError(
-                "mismatch_geometry_unresolved",
-                f"multiplier m={fact.expression} on {'.'.join(holder.instance)} is unresolved "
-                f"({why}), so the mismatch area of {'.'.join(row.instance)} is unknown",
-            )
-        product *= fact.value
-    return product
+    holders = (by_path.get(row.instance[:depth]) for depth in range(1, len(row.instance) + 1))
+    multiplier = multiplier_product(
+        (".".join(holder.instance), dict(holder.parameters).get("m"))
+        for holder in holders
+        if holder is not None
+    )
+    if multiplier.value is None:
+        raise VariationError(
+            "mismatch_geometry_unresolved",
+            f"multiplier {multiplier.reason}, so the mismatch area of "
+            f"{'.'.join(row.instance)} is unknown",
+        )
+    return multiplier.value
 
 
 def _nested_mismatch_edits(

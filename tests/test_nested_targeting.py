@@ -912,13 +912,15 @@ def test_profiled_flat_mismatch_retains_model_clone_engine(tmp_path, simulator):
 _FLAT_MISMATCH_SEED = 13
 
 
-def _flat_mismatch_case(tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=100u)"):
+def _flat_mismatch_case(
+    tmp_path, rule, models=".model n NMOS(level=1 vto=.5 kp=100u)", m1_params=""
+):
     from ltspice_mcp.lib.variations import CircuitDeck
 
     circuit = CircuitDeck(
         "bench",
         tmp_path / "flat.cir",
-        f"* flat\n{models}\nM1 a g 0 0 n w=2u l=1u\nM2 b g 0 0 n w=2u l=1u\n.end\n",
+        f"* flat\n{models}\nM1 a g 0 0 n w=2u l=1u{m1_params}\nM2 b g 0 0 n w=2u l=1u\n.end\n",
         semantic_profile=SemanticProfile("ngspice", "hsa"),
     )
     (case,) = materialize(
@@ -999,31 +1001,13 @@ def test_nested_mismatch_refuses_a_multiplier_it_cannot_resolve(tmp_path):
 
 
 def test_flat_mismatch_counts_the_device_multiplier(tmp_path):
-    from ltspice_mcp.lib.variations import CircuitDeck
+    from ltspice_mcp.lib.instance_targeting import canonical_target
 
-    def vto(directory, multiplier):
+    def vto(directory, m1_params):
         directory.mkdir()
-        circuit = CircuitDeck(
-            "bench",
-            directory / "flat.cir",
-            "* flat\n.model n NMOS(level=1 vto=.5 kp=100u)\n"
-            f"M1 a g 0 0 n w=2u l=1u{multiplier}\nM2 b g 0 0 n w=2u l=1u\n.end\n",
-            semantic_profile=SemanticProfile("ngspice", "hsa"),
+        case, _ = _flat_mismatch_case(
+            directory, {"prefix": "M1", "AVT": 0.003}, m1_params=m1_params
         )
-        (case,) = materialize(
-            circuit,
-            directory,
-            [
-                {
-                    "kind": "random",
-                    "runs": 1,
-                    "seed": _FLAT_MISMATCH_SEED,
-                    "rules": [{"rule": "mismatch", "prefix": "M1", "AVT": 0.003}],
-                }
-            ],
-        )
-        from ltspice_mcp.lib.instance_targeting import canonical_target
-
         return case.assignments[canonical_target(("M1",), "model_parameter", "VTO")] - 0.5
 
     one = vto(tmp_path / "one", "")

@@ -39,10 +39,10 @@ tool-surface changes.
   every subcircuit instance above it, including an inner `m={mult}` set from
   the X line, on a top-level `M` card, a device one subcircuit level down and
   a nested `instance` target alike. An `m` that does not resolve to a positive
-  number refuses the request (`mismatch_geometry_unresolved`, or
-  `geometry_not_literal` one subcircuit level down) instead of being drawn as
-  one copy. A refusal while drawing for a device one subcircuit level down
-  now reaches the caller as a coded error rather than an uncoded one.
+  number refuses the request with `mismatch_geometry_unresolved` instead of
+  being drawn as one copy. A refusal while drawing for a device one subcircuit
+  level down now reaches the caller as a coded error rather than an uncoded
+  one.
 - The read-the-guide reminder said the session had not read the guide when
   the server had only restarted, as after a reconnect, or when the guide was
   read through `api.guide()` inside `run_code`, neither of which the server
