@@ -101,6 +101,29 @@ def test_a_reference_is_looked_up_among_a_sheets_parts_in_one_place():
     assert found == []
 
 
+def test_whether_a_path_is_a_sheet_is_answered_by_is_asc():
+    """``asc_document.is_asc`` says whether a path names a sheet; a comparison
+    of a path's ``suffix.lower()`` with ``.asc`` written anywhere else is a
+    second answer."""
+    found = [
+        f"{module}:{node.lineno}"
+        for module, tree in _modules().items()
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef) and function.name != "is_asc"
+        for node in ast.walk(function)
+        if isinstance(node, ast.Compare)
+        and any(
+            isinstance(side, ast.Constant) and side.value == ".asc" for side in node.comparators
+        )
+        and isinstance(node.left, ast.Call)
+        and isinstance(node.left.func, ast.Attribute)
+        and node.left.func.attr == "lower"
+        and isinstance(node.left.func.value, ast.Attribute)
+        and node.left.func.value.attr == "suffix"
+    ]
+    assert found == []
+
+
 def test_no_text_is_matched_by_spicelibs_instruction_removers():
     """``remove_directive`` and ``move`` select texts by ``_text_matcher``.
     spicelib's removers match directives only, one by substring and the first

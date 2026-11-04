@@ -2090,7 +2090,7 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
         report["reason"] = str(error)
         return report
     report.update(shown_in_window(shown), already_open=shown.held is not None)
-    if shown.held is not None and path.suffix.lower() == ".asc":
+    if shown.held is not None and is_asc(path):
         report.update(window_difference(path.read_bytes(), shown.held))
     return report
 
@@ -2257,14 +2257,14 @@ async def evaluate_verify_circuit(
         return _error_evaluation(data, f"'{path}' does not exist or is not a file")
 
     suffix = path.suffix.lower()
-    if suffix != ".asc" and suffix not in NETLIST_SUFFIXES:
+    if not is_asc(path) and suffix not in NETLIST_SUFFIXES:
         return _error_evaluation(
             data,
             f"'{suffix}' is not a circuit file this tool can check; pass a .asc "
             f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
         )
 
-    kind = "asc" if suffix == ".asc" else "netlist"
+    kind = "asc" if is_asc(path) else "netlist"
     kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
     applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS

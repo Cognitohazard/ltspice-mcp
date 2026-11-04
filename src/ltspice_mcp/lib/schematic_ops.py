@@ -78,7 +78,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
-from ltspice_mcp.lib.asc_document import parse_asc
+from ltspice_mcp.lib.asc_document import is_asc, parse_asc
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
@@ -1151,7 +1151,7 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
     sub-sheet) is missing.
     """
     try:
-        if path.suffix.lower() != ".asc":
+        if not is_asc(path):
             return SpiceEditor(str(path))
         try:
             if symbols is None:
@@ -1195,10 +1195,6 @@ def get_asc_editor(path: Path, state: SessionState) -> AscEditor:
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
     # This request resolves symbols afresh, from the session's library.
     return attach_symbols(editor, state.symbols.for_sheet(path))
-
-
-def is_asc(path: Path) -> bool:
-    return path.suffix.lower() == ".asc"
 
 
 def require_asc(path: Path) -> None:

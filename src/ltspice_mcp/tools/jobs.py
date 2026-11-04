@@ -36,6 +36,7 @@ from ltspice_mcp.errors import (
     error_hint,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
@@ -925,7 +926,7 @@ async def _place_case_beside_sheet(
             f"{case.status}).",
             stage="resolution",
         )
-    if case.circuit_path.suffix.lower() != ".asc":
+    if not is_asc(case.circuit_path):
         raise _JobsActionError(
             "not_a_sheet",
             f"Case {case.case_id} ran {case.circuit_path.name}, a netlist. LTspice keeps "

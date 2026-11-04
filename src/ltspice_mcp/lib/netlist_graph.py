@@ -86,6 +86,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
@@ -607,7 +608,7 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
 
 
 def _cards_from_netlist_path(path: Path) -> LexResult:
-    if path.suffix.lower() == ".asc":
+    if is_asc(path):
         raise NetlistGraphError(
             f"{path.name} is an .asc schematic, not a netlist; compare its LTspice export"
         )

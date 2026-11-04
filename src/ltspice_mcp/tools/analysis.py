@@ -51,6 +51,7 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import si_prefix
@@ -1173,7 +1174,7 @@ def _sheet_to_tie(results: Path, circuit: Path | None, state: SessionState) -> P
     results and plot settings are written beside it.
     """
     candidate = circuit if circuit is not None else results.with_suffix(".asc")
-    if candidate.suffix.lower() != ".asc":
+    if not is_asc(candidate):
         return None
     sheet = sandboxed(str(candidate), state)
     return sheet if sheet is not None and sheet.is_file() else None

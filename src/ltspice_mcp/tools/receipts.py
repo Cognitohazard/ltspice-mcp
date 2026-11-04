@@ -23,6 +23,7 @@ from mcp import types
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
@@ -1064,7 +1065,7 @@ def snapshot_receipt(
         {
             case.circuit_path.name
             for case in job.cases
-            if case.status == "produced" and case.circuit_path.suffix.lower() == ".asc"
+            if case.status == "produced" and is_asc(case.circuit_path)
         }
     )
     if sheets and run_by_ltspice(job.simulator):

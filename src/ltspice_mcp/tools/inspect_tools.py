@@ -141,7 +141,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib import simulator as simulator_mod
-from ltspice_mcp.lib.asc_document import ROTATIONS
+from ltspice_mcp.lib.asc_document import ROTATIONS, is_asc
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
     GROUND,
@@ -1488,7 +1488,7 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     paths so their file routing and error text stay identical.
     """
     suffix = path.suffix.lower()
-    if suffix == ".asc":
+    if is_asc(path):
         return "asc"
     if suffix in NETLIST_SUFFIXES:
         return "netlist"
