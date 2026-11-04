@@ -24,6 +24,7 @@ from pydantic import (
     Field,
     TypeAdapter,
     ValidatorFunctionWrapHandler,
+    field_validator,
     model_validator,
 )
 
@@ -95,6 +96,7 @@ from ltspice_mcp.tools.receipts import (
     negotiate_receipt,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
+    resolve_run_fields,
     snapshot_receipt,
     snapshot_receipt_live,
 )
@@ -305,6 +307,11 @@ class JobsRunsInput(_AddressedJobsInput):
             "full coverage and artifact manifest; the default reports counts and digests."
         ),
     )
+
+    @field_validator("run_fields")
+    @classmethod
+    def _run_fields_name_run_keys(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else resolve_run_fields(value)
 
 
 class JobsPlaceBesideSheetInput(_AddressedJobsInput):

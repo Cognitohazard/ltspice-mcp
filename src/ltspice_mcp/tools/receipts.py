@@ -38,7 +38,12 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
-from ltspice_mcp.lib.projection import keep_plan, project_row
+from ltspice_mcp.lib.projection import (
+    absent_path_warnings,
+    keep_plan,
+    project_row,
+    resolve_field_paths,
+)
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.sheet_results import run_by_ltspice
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
@@ -214,6 +219,18 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
 }
 
 RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema({"type": "array", "items": RUN_RECORD_SCHEMA})
+
+#: Every top-level key a run row can carry, read off its schema: the roots a
+#: ``run_fields`` path may start at.
+RUN_ROW_KEYS: tuple[str, ...] = tuple(RUN_RECORD_SCHEMA["properties"])
+
+
+def resolve_run_fields(paths: list[str]) -> list[str]:
+    """``run_fields`` as the run-row projection reads them, on
+    ``run_experiments`` and ``jobs(runs)`` alike: rooted at a run row's own
+    keys, each read once. ``ValueError`` for a path no run row can carry."""
+    return list(dict.fromkeys(resolve_field_paths(paths, RUN_ROW_KEYS, argument="run_fields")))
+
 
 #: A receipt's own ``status``, which is the job's: a separate vocabulary from
 #: its run rows' case statuses.
@@ -665,10 +682,12 @@ def render_receipt_snapshot(
     never writes through them — the only row edits build or own their dicts —
     so the envelope shares them rather than copying them per render.
     """
+    run_warnings: list[str] = []
     runs = project_receipt_runs(
         snapshot,
         run_fields,
         limit=runs_cap,
+        warnings=run_warnings,
     )
     data: dict[str, Any] = {
         "job_id": snapshot.job_id,
@@ -686,7 +705,7 @@ def render_receipt_snapshot(
         "runs": runs,
         "failures": list(snapshot.rendered_failures),
         "observations": list(snapshot.observations),
-        "warnings": [],
+        "warnings": run_warnings,
         "artifacts": list(snapshot.artifacts),
         "hint": (
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
@@ -854,11 +873,13 @@ def _project_run_rows(
     run_fields: list[str] | None,
     *,
     native_by_key: dict[tuple[str, int], NativeCaseRecord],
+    warnings: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Render native evidence and project only the rows this page carries.
 
     With no ``run_fields`` every row keeps every key, whatever its status, so a
-    key read off a row is never missing because the run produced."""
+    key read off a row is never missing because the run produced. A path no
+    row on the page reaches is said in ``warnings``, naming the keys there."""
     plan = keep_plan(run_fields) if run_fields else None
     if plan is None or "native_statistics" in plan:
         for row in rows:
@@ -869,6 +890,12 @@ def _project_run_rows(
                     projection=plan.get("native_statistics") if plan is not None else None,
                 )
     if plan is not None:
+        if warnings is not None and run_fields:
+            warnings.extend(
+                absent_path_warnings(
+                    rows, run_fields, argument="run_fields", rows_name="run row on this page"
+                )
+            )
         return [project_row(row, plan) for row in rows]
     return rows
 
@@ -904,6 +931,7 @@ def project_receipt_runs(
     *,
     offset: int = 0,
     limit: int | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Purely apply one invocation's run projection to copied canonical rows.
 
@@ -923,6 +951,7 @@ def project_receipt_runs(
         [dict(row) for row in page["items"]],
         run_fields,
         native_by_key=snapshot.native_by_key,
+        warnings=warnings,
     )
     return page
 
@@ -1195,12 +1224,14 @@ def render_runs_envelope(
     truncation hint below collapse to the complete-page wording. ``offset`` is
     the caller's decoded cursor position.
     """
+    run_warnings: list[str] = []
     page = project_receipt_runs(
         snapshot,
         run_fields,
         offset=offset,
         # This page's cursor continues this page, so it never renders empty.
         limit=None if limit is None else max(1, limit),
+        warnings=run_warnings,
     )
     return {
         "action": "runs",
@@ -1211,7 +1242,7 @@ def render_runs_envelope(
         "dialect": snapshot.dialect,
         **page,
         "observations": [],
-        "warnings": [],
+        "warnings": run_warnings,
         "failures": [],
         "hint": (
             "Use next_cursor to continue the run page."

@@ -16,6 +16,7 @@ from pydantic import (
     SkipValidation,
     ValidationError,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -142,6 +143,7 @@ from ltspice_mcp.tools.receipts import (
     finalize_receipt,
     render_receipt_snapshot,
     render_run_receipt,
+    resolve_run_fields,
     runs_page,
     snapshot_receipt,
     snapshot_receipt_live,
@@ -327,7 +329,13 @@ class AnalysisInclude(NotedModel):
 
     @model_validator(mode="after")
     def _fields_read_once(self) -> AnalysisInclude:
+        # Read as analyze_results reads them, so the rows it renders are the
+        # rows analyze_results would: a bare name under 'value', an unknown
+        # root refused here rather than an empty row after the runs.
         if self.fields is not None:
+            resolved = analyze.resolve_row_fields(self.fields)
+            if resolved != self.fields:
+                object.__setattr__(self, "fields", resolved)  # not re-validated
             self.keep_first("fields")
         return self
 
@@ -590,6 +598,11 @@ class RunExperimentsInput(ToolInput):
         ge=response_budget.BUDGET_MIN_TOKENS,
         description=response_budget.BUDGET_DESCRIPTION,
     )
+
+    @field_validator("run_fields")
+    @classmethod
+    def _run_fields_name_run_keys(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else resolve_run_fields(value)
 
 
 @registry.tool(

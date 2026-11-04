@@ -52,11 +52,10 @@ from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
-    ABSENT,
-    escape_field_segment,
+    absent_path_warnings,
     keep_plan,
     project_row,
-    split_field_path,
+    resolve_field_paths,
 )
 from ltspice_mcp.lib.raw_parser import (
     get_step_count,
@@ -431,6 +430,13 @@ _ATTRIBUTION_KEYS: tuple[str, ...] = (*_IDENTITY_KEYS[:5], "plot_index", "dialec
 _ROW_KEYS: tuple[str, ...] = ("source", *_IDENTITY_KEYS, "value")
 
 
+def resolve_row_fields(paths: list[str]) -> list[str]:
+    """``include.fields`` as a projection reads them, on every surface that
+    takes the argument: rooted at a row's own keys, a bare name read under
+    ``value``. ``ValueError`` for a path no row can carry."""
+    return resolve_field_paths(paths, _ROW_KEYS, argument="include.fields", bare_root="value")
+
+
 def coerce_per_run_default(value: Any) -> Any:
     """Accept ``per_run=True`` for the default page, ``False`` for none.
 
@@ -540,21 +546,7 @@ class AnalyzeInclude(NotedModel):
         # rather than returning empty rows the caller has to explain.
         if self.fields is None:
             return self
-        resolved: list[str] = []
-        for path in self.fields:
-            segments = split_field_path(path)
-            if any(not segment for segment in segments):
-                raise ValueError(f"include.fields path {path!r} has an empty segment")
-            root = segments[0]
-            if root not in _ROW_KEYS:
-                if len(segments) != 1:
-                    raise ValueError(
-                        f"include.fields path {path!r} starts at unknown row key {root!r}; "
-                        f"choose one of: {', '.join(_ROW_KEYS)}"
-                    )
-                # A bare name is the number's own name, which lives under 'value'.
-                path = f"value.{path}"
-            resolved.append(path)
+        resolved = resolve_row_fields(self.fields)
         if resolved != self.fields:
             object.__setattr__(self, "fields", resolved)  # not re-validated
         # A path named twice, or once bare and once under 'value', keeps one copy.
@@ -792,16 +784,6 @@ def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: source[key] for key in keys}
 
 
-def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
-    """The value at ``segments``, or ``ABSENT`` when one of them is missing."""
-    node: Any = row
-    for segment in segments:
-        if not isinstance(node, dict) or segment not in node:
-            return ABSENT
-        node = node[segment]
-    return node
-
-
 #: Nested value blocks the lean row keeps anyway. The rule is narrow on
 #: purpose: a block belongs here only when the caller cannot get it back from
 #: anything else in the response. An artifact handle names a file already
@@ -884,44 +866,12 @@ def _row_renderer(
 def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> list[str]:
     """One warning per requested path that no row of this recipe carries.
 
-    Root keys are validated at input, so only a path reaching INTO a value dict
-    can miss — and it can miss legitimately, because ``include.fields`` is
-    call-global while each metric has its own value shape. Naming the keys that
-    are actually there turns a row missing the requested key from a silence into
-    the next call's argument.
+    It can miss legitimately, because ``include.fields`` is call-global while
+    each metric has its own value shape.
     """
-    warnings: list[str] = []
-    for path in fields:
-        segments = split_field_path(path)
-        if len(segments) == 1:
-            continue
-        if any(_at_segments(record, segments) is not ABSENT for record in records):
-            continue
-        parent_segments = segments[:-1]
-        parent = ".".join(escape_field_segment(segment) for segment in parent_segments)
-        present = sorted(
-            {
-                key
-                for record in records
-                for node in (_at_segments(record, parent_segments),)
-                if isinstance(node, dict)
-                for key in node
-            }
-        )
-        # Naming a dotted key as it must be SPELLED, not just as it reads, is
-        # the difference between a warning and a fix: the caller is one escape
-        # away from the value, and no amount of staring at the key says so.
-        addressable = ", ".join(escape_field_segment(key) for key in present)
-        warnings.append(
-            f"include.fields path {path!r} is absent from every row of this recipe; "
-            + (
-                f"keys present at {parent!r}: {addressable}"
-                if present
-                else f"no row reaches {parent!r} — a key whose own name contains a "
-                r"'.' is one segment, so address it with '\.' (e.g. 'value.v(x1\.out)')"
-            )
-        )
-    return warnings
+    return absent_path_warnings(
+        records, fields, argument="include.fields", rows_name="row of this recipe"
+    )
 
 
 def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -4259,6 +4209,19 @@ def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.Re
         )
 
 
+def _cursor_fields(cursor: str) -> list[str] | None:
+    """The row view a cursor was paged under, read as a request's
+    ``include.fields`` is, so a page continued from it projects what the page
+    that minted it did."""
+    fields = result_store.cursor_view(cursor)
+    if fields is None:
+        return None
+    try:
+        return list(dict.fromkeys(resolve_row_fields(fields)))
+    except ValueError as exc:
+        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
+
+
 async def _resolve_drive_start(
     args: AnalyzeResultsInput,
     state: SessionState,
@@ -4318,7 +4281,7 @@ async def _resolve_drive_start(
         )
         inherited_view = True
         resumed = True
-        cursor_fields = result_store.cursor_view(args.continuation.cursor)
+        cursor_fields = _cursor_fields(args.continuation.cursor)
     else:
         assert page_cursor is not None
         item = await asyncio.to_thread(
@@ -4328,7 +4291,7 @@ async def _resolve_drive_start(
         )
         inherited_view = True
         resumed = True
-        cursor_fields = result_store.cursor_view(page_cursor)
+        cursor_fields = _cursor_fields(page_cursor)
         if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
             raise InvalidCursorError(
                 "The per_run cursor carries a different include.fields view; replay "

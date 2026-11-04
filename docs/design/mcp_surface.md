@@ -978,9 +978,17 @@ continuation replays them.
 - `include.fields` paths root at one of `source`, `case_id`, `run_index`,
   `step_index`, `step_values`, `assignments`, `circuit`, `deck_sha256`,
   `plot_index`, `dialect`, `snapshot_id`, `value`; an unknown root is rejected
-  rather than returning empty rows. A dot inside a key's own name is escaped
+  rather than returning empty rows, and a bare name reads under `value`
+  (`rms` is `value.rms`). A dot inside a key's own name is escaped
   as `\.`, so a subcircuit node or a device parameter is spelled
   `value.voltages.v(x1\.out)` or `value.device_op_points.@m\.x1\.m1[gm]`.
+  The attached `analyze` block of `run_experiments` reads its
+  `include.fields` the same way, and `run_fields` on `run_experiments` and
+  `jobs(runs)` follows the same rules over a run row's keys (`case_id`,
+  `run_index`, `circuit`, `assignments`, `native_statistics`, `status`,
+  `raw`, `log`, `other_raws`, `simulator_version`, `attempt`), with no bare
+  names. A path that no row on the page reaches is reported in `warnings`
+  with the keys that are there.
 - `include.fields` changes only the row view. Every cursor records the
   `fields` view it was made for, and a continuation applies that view to the
   stored request. A `per_run` cursor is checked against the request without
