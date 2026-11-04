@@ -1,0 +1,10 @@
+* MOSFET instance multiplier: m=4 builds four parallel copies of one card
+Vdd vdd 0 1.8
+Vg g 0 1.5
+V1 vdd d1 0
+M1 d1 g 0 0 NM W=10u L=1u
+V4 vdd d4 0
+M4 d4 g 0 0 NM W=10u L=1u m=4
+.model NM NMOS(VTO=0.7 KP=100u)
+.op
+.end

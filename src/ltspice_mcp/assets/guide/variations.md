@@ -84,6 +84,13 @@ To set a target σ instead of a technology coefficient, invert the formula to
 `2.24e-2`. Each instance is drawn independently, so a differential pair's
 input-referred offset σ is √2 × the per-device figure.
 
+A device the simulator builds as m parallel copies from one card shares that
+card's one draw, so its area is `m·W·L`: m is the product of the device's own
+`m` and the `m` of every subcircuit instance above it, with an inner `m={mult}`
+taking the value its X line gives. A device written as 12 fingers of 1 µm
+(`W=1u m=12`) gets the σ of a 12 µm device. An `m` that does not resolve to a
+positive number refuses the request with `mismatch_geometry_unresolved`.
+
 MOSFETs defined by a `.model` card, which an `.asc` with plain `nmos`/`pmos`
 symbols exports, take the same rule with `prefix: "M"`, and the mismatch
 applies to the model card's `VTO`/`KP`:

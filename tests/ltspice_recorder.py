@@ -406,7 +406,11 @@ class Behaviour:
 
     ``model`` names the code that encodes the behaviour. A behaviour with no
     case says why in ``evidence`` (the manifest records it another way) or in
-    ``unrecordable`` (nothing can).
+    ``unrecordable`` (nothing can). ``pending`` says why a behaviour whose
+    cases are written has no recording yet (they were written where no
+    LTspice runs) and how to record them; the recorder runs them like any
+    other, and the tree checks fail once they are recorded until the key is
+    removed.
     """
 
     key: str
@@ -414,6 +418,7 @@ class Behaviour:
     model: tuple[str, ...]
     evidence: str = ""
     unrecordable: str = ""
+    pending: str = ""
 
 
 @dataclass(frozen=True)
@@ -448,6 +453,7 @@ def load_cases(inputs: Path = INPUTS) -> CaseFile:
             model=tuple(entry.get("model", ())),
             evidence=entry.get("evidence", ""),
             unrecordable=entry.get("unrecordable", ""),
+            pending=entry.get("pending", ""),
         )
         cases.extend(
             Case(
