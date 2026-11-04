@@ -149,7 +149,24 @@ class RawHeader:
 
 
 _DIALECTS = ("ltspice", "ngspice", "qspice", "xyce")
-_WRITER = re.compile(r"(?<![a-z0-9_])(ltspice|ngspice|qspice|xyce)(?![a-z0-9_])", re.I)
+# A writer's name opens a word of the Command field, and a build number or
+# word may follow it ("QSPICE64", "ngspice-46", "LTspice XVII").
+_WRITER = re.compile(r"(?<![a-z0-9_])(ltspice|ngspice|qspice|xyce)", re.I)
+
+
+def command_writer(command: str) -> str | None:
+    """The simulator a raw's ``Command`` field names, or None when it names
+    none. The one reading of the field, for every reader of a raw.
+
+    Raises:
+        RawDialectError: The field names more than one simulator.
+    """
+    writers = {name.lower() for name in _WRITER.findall(command)}
+    if len(writers) > 1:
+        raise RawDialectError("ambiguous header Command: names multiple writers")
+    return next(iter(writers), None)
+
+
 _INTEGER = re.compile(r"[0-9]+\Z")
 _NUMBER = re.compile(
     r"[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)\Z",
@@ -317,10 +334,10 @@ def _resolve_dialect(
     producing: str | None,
     previous: str | None,
 ) -> tuple[str, tuple[str, ...]]:
-    writers = set(_WRITER.findall(fields.get("command", "").lower()))
-    if len(writers) > 1:
-        raise scanner.error(RawDialectError, "ambiguous header Command: names multiple writers")
-    writer = next(iter(writers), None)
+    try:
+        writer = command_writer(fields.get("command", ""))
+    except RawDialectError as exc:
+        raise scanner.error(RawDialectError, str(exc)) from None
     facts = [
         ("explicit_dialect", explicit),
         ("producing_dialect", producing),

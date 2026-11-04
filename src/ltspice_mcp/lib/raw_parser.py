@@ -34,7 +34,7 @@ from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
-from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
+from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
 
@@ -1263,13 +1263,17 @@ def _int_field(fields: dict[str, str], key: str) -> int:
 
 
 def _raw_writer(fields: dict[str, str], width: int, dialect: str | None) -> str:
-    """The simulator that wrote a plot, from its header before any hint."""
-    command = fields.get("command", "").lower()
-    writer = None
-    # spicelib's order, where a later match wins.
-    for name in ("ltspice", "qspice", "ngspice", "xyce"):
-        if name in command:
-            writer = name
+    """The simulator that wrote a plot, from its header before any hint.
+
+    The ``Command`` field is read as the full reader reads it
+    (``raw_header.command_writer``). One that names no writer, or more than
+    one, leaves the hint and the file's encoding to decide, since a progress
+    read refuses nothing.
+    """
+    try:
+        writer = command_writer(fields.get("command", ""))
+    except RawDialectError:
+        writer = None
     if writer is not None:
         return writer
     if width == 2:
