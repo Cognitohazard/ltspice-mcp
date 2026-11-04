@@ -1648,6 +1648,46 @@ def unplaced_findings(value: typing.Any, path: tuple = ()) -> Iterator[tuple[tup
             yield from unplaced_findings(item, (*path, index))
 
 
+#: Fields that continue a cut list from where it stopped.
+CONTINUATIONS = frozenset({"next_cursor", "cursor", "continue", "next"})
+
+
+def _names_the_list(outer: dict, name: str) -> bool:
+    """Whether an object's ``hint`` or ``warnings`` says something of the list
+    ``name``: the prose way on for a list that has no cursor of its own."""
+    said = [outer.get("hint"), *(outer.get("warnings") or ())]
+    return any(isinstance(line, str) and name in line for line in said)
+
+
+def cut_without_continuation(
+    value: typing.Any, path: tuple = (), around: tuple[dict, ...] = ()
+) -> Iterator[tuple]:
+    """Every list a reply says it cut short (``truncated: true``) that gives no
+    way on: no cursor in it or around it within its reply item, no hint beside
+    the flag, and no hint or warning around it that names the list.
+
+    Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says
+    how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
+    holds the declared schemas to the same rule.
+    """
+    if isinstance(value, dict):
+        if value.get("truncated") is True:
+            scope = (*around, value)
+            name = str(path[-1]) if path else ""
+            if not (
+                "hint" in value
+                or any(outer.get(key) for outer in scope for key in CONTINUATIONS)
+                or (name and any(_names_the_list(outer, name) for outer in around))
+            ):
+                yield path
+        for key, item in value.items():
+            yield from cut_without_continuation(item, (*path, key), (*around, value))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            # A list's item is a reply item of its own.
+            yield from cut_without_continuation(item, (*path, index), ())
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
     """Validate every structuredContent emitted during the suite against the
@@ -1764,6 +1804,16 @@ def _enforce_output_schema_conformance():
                 f"where it is ({finding}). Give it a line, coordinates or a part reference."
             )
 
+    def _hold_cut_lists_to_a_way_on(sc, frame) -> None:
+        stranded = list(cut_without_continuation(sc))
+        if stranded:
+            named = ".".join(str(part) for part in stranded[0]) or "<root>"
+            raise AssertionError(
+                f"{_replying_tool(frame) or 'a reply'}: the list at {named} was cut short "
+                "and the reply gives no way to read the rest: a next_cursor, a hint "
+                "beside the flag, or a hint or warning around it that names the list."
+            )
+
     def _validate(result, data=None) -> None:
         sc = result.structured_content
         if sc is None:
@@ -1772,6 +1822,7 @@ def _enforce_output_schema_conformance():
         frame = sys._getframe(2)
         _hold_to_reply_rule(sc, data, frame)
         _hold_findings_to_a_place(sc, frame)
+        _hold_cut_lists_to_a_way_on(sc, frame)
         for _ in range(_FRAME_WINDOW):
             if frame is None:
                 return

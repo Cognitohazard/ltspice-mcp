@@ -102,6 +102,33 @@ async def test_hook_rejects_a_finding_that_says_nowhere_where_it_is(
         )
 
 
+async def test_hook_rejects_a_list_cut_short_with_no_way_to_read_the_rest(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A list a reply cuts short gives a cursor, or says how to read the rest.
+    spec.fail_cases has no cursor of its own, and its recipe's warning names
+    the route; with that warning made to name nothing, a real analysis of a
+    real raw emits a cut list with no way on, and the hook must refuse it."""
+    monkeypatch.setattr(analyze_mod, "_FAIL_CASE_PAGE_CAP", 1)
+    monkeypatch.setattr(analyze_mod, "_FAIL_CASES_OMITTED_WARNING", "{omitted} more failed.")
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    recipe = {
+        "key": "vout",
+        "metric": "value",
+        "expr": "V(out)",
+        "at": "900u",
+        "spec": {"max": -1.0},
+    }
+
+    with pytest.raises(AssertionError, match="was cut short"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {"sources": [{"path": str(raw)}], "recipes": [recipe], "all_steps": True}
+            ),
+            state_no_sim,
+        )
+
+
 def _scenario_tool_names() -> set[str]:
     """Tool names passed to ``session.call_tool(...)`` in the scenario script."""
     source = (Path(__file__).parent / "scenario_active_filter.py").read_text(encoding="utf-8")
