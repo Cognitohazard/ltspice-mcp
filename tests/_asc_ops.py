@@ -246,16 +246,28 @@ def add_net_label(state: SessionState, path: Path, net: str, **kw: Any) -> dict[
     return apply_one(state, path, {"op": "add_net_label", "net": net, **kw})
 
 
-async def inspect_one(state: SessionState, query: dict[str, Any]) -> dict[str, Any]:
-    """Run one ``inspect`` query and return its data, asserting it succeeded."""
+async def _inspect_item(state: SessionState, query: dict[str, Any]) -> dict[str, Any]:
+    """Run one ``inspect`` query and return its result item."""
     from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 
     result = await handle_inspect(InspectInput.model_validate({"queries": [query]}), state)
     data = result.structured_content
     assert data is not None
-    item = data["results"][0]
+    return data["results"][0]
+
+
+async def inspect_one(state: SessionState, query: dict[str, Any]) -> dict[str, Any]:
+    """Run one ``inspect`` query and return its data, asserting it succeeded."""
+    item = await _inspect_item(state, query)
     assert item["ok"], item
     return item["data"]
+
+
+async def inspect_refusal(state: SessionState, query: dict[str, Any]) -> str:
+    """Run one ``inspect`` query and return its error message, asserting it was refused."""
+    item = await _inspect_item(state, query)
+    assert not item["ok"], item
+    return item["error"]["message"]
 
 
 async def components_of(state: SessionState, path: Path, **kw: Any) -> dict[str, Any]:

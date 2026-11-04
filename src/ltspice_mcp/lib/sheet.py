@@ -14,13 +14,15 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
-from ltspice_mcp.lib.connectivity import NetPartition, partition
+from ltspice_mcp.lib.connectivity import nets_by_ltspice
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.nets import LabelAt, Nets, PinAt
 from ltspice_mcp.lib.symbol_geometry import (
     compute_placed_geometry,
     place_box,
@@ -161,7 +163,15 @@ def _numbered(document: AscDocument) -> Iterator[tuple[int, Record]]:
 def find_pin(
     pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
 ) -> Point:
-    """Where pin ``pin_name`` of part ``reference`` is.
+    """Where pin ``pin_name`` of part ``reference`` is (:func:`placed_pin`)."""
+    pin = placed_pin(pins, reference, symbol, pin_name, problem)
+    return pin.x, pin.y
+
+
+def placed_pin(
+    pins: Sequence[PlacedPin], reference: str, symbol: str, pin_name: str, problem: str = ""
+) -> PlacedPin:
+    """Pin ``pin_name`` of part ``reference``.
 
     The name is matched against the pin names first, case-insensitively. Only
     when no pin carries it, and it is all digits, is it read as the pin's
@@ -175,13 +185,13 @@ def find_pin(
         raise NetlistError(f"Cannot resolve pins for '{reference}': symbol '{symbol}' {problem}.")
     for pin in pins:
         if pin.name.upper() == pin_name.upper():
-            return pin.x, pin.y
+            return pin
     # A pin with no SpiceOrder line reads as order 0, which is no ordinal.
     ordinal = int(pin_name) if pin_name.isascii() and pin_name.isdigit() else 0
     if ordinal:
         for pin in pins:
             if pin.order == ordinal:
-                return pin.x, pin.y
+                return pin
     available = [f"{p.name} ({p.order})" if p.order else p.name for p in pins]
     raise NetlistError(
         f"Pin '{pin_name}' not found on {reference} ({symbol}). Available: "
@@ -196,11 +206,11 @@ class Sheet:
     document: AscDocument
     parts: tuple[SheetPart, ...]
 
-    @property
+    @cached_property
     def wires(self) -> tuple[tuple[int, int, int, int], ...]:
         return tuple((w.x1, w.y1, w.x2, w.y2) for w in self.document.wires)
 
-    @property
+    @cached_property
     def labels(self) -> tuple[tuple[int, int, str], ...]:
         """Each net label and ground flag as ``(x, y, name)``."""
         return tuple((f.x, f.y, f.name) for f in self.document.flags)
@@ -249,10 +259,11 @@ class Sheet:
         """Every part with instance name ``reference``; more than one when the sheet repeats it."""
         return tuple(part for part in self.parts if part.reference == reference)
 
-    def pin_at(self, spec: str) -> Point:
-        """Where the pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder) is, by ``find_pin``.
+    def net_pin(self, spec: str) -> PinAt:
+        """The pin ``spec`` (``'R1.A'``, or ``'X1.2'`` by SpiceOrder), as
+        :attr:`nets` reads it, by ``placed_pin``.
 
-        Raises ``NetlistError`` as ``find_pin`` does, for a part that is not
+        Raises ``NetlistError`` as ``placed_pin`` does, for a part that is not
         there, and for a reference two parts share, naming where each is.
         """
         if "." not in spec:
@@ -262,33 +273,70 @@ class Sheet:
                 "(e.g., 'net:VDD')."
             )
         reference, pin_name = spec.rsplit(".", 1)
-        named: list[SheetPart] = list(self.parts_named(reference))
+        named = [
+            (index, part) for index, part in enumerate(self.parts) if part.reference == reference
+        ]
         if not named:
             available = sorted({part.reference for part in self.parts if part.reference})
             raise NetlistError(
                 f"Component '{reference}' not found. Available: {', '.join(available)}"
             )
         if len(named) > 1:
-            places = ", ".join(f"({part.at[0]},{part.at[1]})" for part in named)
+            places = ", ".join(f"({part.at[0]},{part.at[1]})" for _index, part in named)
             raise NetlistError(
                 f"'{reference}' names {len(named)} parts, placed at {places}, so a pin of "
                 f"'{reference}' could be on either. Give the pin's coordinate instead."
             )
-        part = named[0]
+        ((index, part),) = named
         problem = "not found" if part.symbol is None else part.symbol.problem
-        return find_pin(part.pins, reference, part.symbol_name, pin_name, problem)
+        pin = placed_pin(part.pins, reference, part.symbol_name, pin_name, problem)
+        order = next(order for order, one in enumerate(part.pins) if one is pin)
+        return next(one for one in self.net_pins if (one.part, one.order) == (index, order))
 
-    def partition(self) -> NetPartition:
-        """The sheet's nets, grouped by ``connectivity.partition``."""
-        return partition(
-            [
-                ((pin.x, pin.y), (part.reference, pin.name))
-                for part in self.parts
-                for pin in part.pins
-            ],
-            [((x, y), name) for x, y, name in self.labels],
-            [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in self.wires],
+    @cached_property
+    def net_pins(self) -> tuple[PinAt, ...]:
+        """Every part's pins as :attr:`nets` reads them, in SpiceOrder, each
+        part told by its place in ``parts``."""
+        return tuple(
+            PinAt((pin.x, pin.y), index, order, part.reference, pin.name)
+            for index, part in enumerate(self.parts)
+            for order, pin in enumerate(part.pins)
         )
+
+    @cached_property
+    def net_labels(self) -> tuple[LabelAt, ...]:
+        """Every label and ground flag as :attr:`nets` reads them, each told by
+        its place in ``labels``."""
+        return tuple(
+            LabelAt((x, y), index, name) for index, (x, y, name) in enumerate(self.labels)
+        )
+
+    @cached_property
+    def nets(self) -> Nets:
+        """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
+        wires = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in self.wires]
+        return nets_by_ltspice(self.net_pins, self.net_labels, wires)
+
+    @cached_property
+    def drawn_points(self) -> frozenset[Point]:
+        """Every point a pin, a label or a wire's end is drawn at."""
+        return frozenset(
+            [pin.point for pin in self.net_pins]
+            + [label.point for label in self.net_labels]
+            + [end for x1, y1, x2, y2 in self.wires for end in ((x1, y1), (x2, y2))]
+        )
+
+    @cached_property
+    def net_points(self) -> dict[int, tuple[Point, ...]]:
+        """Each net's :attr:`drawn_points`, labels of one name as one net, by
+        its ``Nets.folded`` representative: a point is on every net that
+        ``Nets.nets_at`` finds there, so the inside of a dropped wire is on none."""
+        nets = self.nets
+        on: dict[int, set[Point]] = {}
+        for point in self.drawn_points:
+            for net in {nets.folded(one) for one in nets.nets_at(point)}:
+                on.setdefault(net, set()).add(point)
+        return {net: tuple(sorted(points)) for net, points in on.items()}
 
 
 def _placed(record: Symbol, found: FoundSymbol | None) -> SheetPart:
