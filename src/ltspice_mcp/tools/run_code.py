@@ -43,7 +43,7 @@ from ltspice_mcp.code_worker import (
 from ltspice_mcp.lib.proc_kill import kill_process_group
 from ltspice_mcp.lib.windows_job import WindowsJob, python_launch
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import ToolInput, format_response, registry
+from ltspice_mcp.tools._base import NotedModel, ToolInput, format_response, registry
 
 #: How long a worker gets to boot its engine before the call fails.
 BOOT_TIMEOUT_S = 60.0
@@ -64,7 +64,11 @@ _IN_SCOPE = (
 )
 
 
-class RunCodeInput(ToolInput):
+#: The longest a snippet runs; a larger timeout_s is served at it, not refused.
+RUN_CODE_TIMEOUT_CAP_S = 600.0
+
+
+class RunCodeInput(ToolInput, NotedModel):
     code: str = Field(
         default="",
         description=(
@@ -75,10 +79,9 @@ class RunCodeInput(ToolInput):
     timeout_s: float = Field(
         default=60.0,
         ge=1.0,
-        le=600.0,
         description=(
-            "Wall-clock bound in seconds; a wait on a run ends just before it, naming "
-            "the job, which keeps running. A run longer than this belongs to "
+            "Wall-clock bound in seconds, held to 600; a wait on a run ends just before "
+            "it, naming the job, which keeps running. A run longer than this belongs to "
             "api.run_experiments(wait=False) and jobs(wait)."
         ),
     )
@@ -89,6 +92,11 @@ class RunCodeInput(ToolInput):
             "fresh one; with empty code that is all the call does."
         ),
     )
+
+    @model_validator(mode="after")
+    def _hold_timeout(self) -> RunCodeInput:
+        self.hold_to_cap("timeout_s", RUN_CODE_TIMEOUT_CAP_S, "s")
+        return self
 
     @model_validator(mode="after")
     def _code_or_reset(self) -> RunCodeInput:
@@ -582,4 +590,9 @@ def worker_for(state: SessionState) -> CodeWorker:
 )
 async def handle_run_code(args: RunCodeInput, state: SessionState) -> types.CallToolResult:
     reply = await worker_for(state).run(args.code, args.timeout_s, args.reset)
+    held = args.argument_notes()
+    if held:
+        # Said in both channels, ahead of the reply's own recovery step.
+        reply["warnings"] = [*reply.get("warnings", []), *held]
+        reply["hint"] = " ".join([*held, *([reply["hint"]] if reply["hint"] else [])])
     return format_response(_render(reply), reply)

@@ -847,8 +847,13 @@ a failure; the response has `timed_out` set and the job keeps running.
 `list` `limit` above 50 and a `per_run.limit` above 100 are served at the cap
 instead of being refused. The response reports the cap as a warning on
 `run_experiments` and `jobs`, and in the `hint` on `analyze_results`, which
-has no top-level `warnings`. The schema declares no `maximum` for these
-fields.
+has no top-level `warnings`. The other tools hold their caps the same way: an
+`inspect` results `limit` above 100 or reference `limit` above 20 (in the
+item's `data.warnings`), a `plot_waveform` `max_points` above 2000000 (in
+`warnings`), a `run_code` `timeout_s` above 600 (in `warnings` and the
+`hint`), and a `waveform` recipe's `max_points` above the server's
+`[analysis] max_points` (in the recipe's `warnings`). The schema declares no
+`maximum` for these fields.
 
 Only the owning process or a caller with a valid control token can cancel;
 any other caller gets `cancel_not_authorized`. Once a cancel is acknowledged,
@@ -1978,7 +1983,7 @@ it, and reported when the caller names it.
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
 | `noise_integral` | noise | — | `signal?`, `from_hz?`, `to_hz?` |
 | `operating_point` | op | — | `device?` scopes the reply to one device, named by its path (`x1.m1`) on either LTspice build; `device_names` maps each device inside a subcircuit to its name in the log's table and in the raw |
-| `waveform` | any | `signals` | `max_points?` (default 2000), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared and the axis sent once as `x`; a budget may thin it further; `csv` returns an artifact handle |
+| `waveform` | any | `signals` | `max_points?` (default 2000, held to `[analysis] max_points`), `format: "inline"\|"csv"`, `window?`. Inline is bounded decimation only, with `points_returned` / `points_total` declared and the axis sent once as `x`; a budget may thin it further; `csv` returns an artifact handle |
 | `plot` | any | `signals` | `title?`, `log_x?`, `span?` — returns an artifact handle |
 
 A `signal`, `signals` entry or `expr` names one trace as the raw stores it, or

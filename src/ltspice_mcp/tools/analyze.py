@@ -64,6 +64,7 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import (
+    WAVEFORM_MAX_POINTS_CAP,
     KeyedRecipe,
     MeasurementsRecipe,
     MultiRecipe,
@@ -1854,20 +1855,21 @@ async def _waveform(
                 "This plot has no sampled axis; use inspect results table or CSV export."
             )
         signals = [services.resolve_signal(raw, requested) for requested in recipe.signals]
+        max_points, held = held_to_cap(
+            "max_points",
+            recipe.max_points,
+            min(WAVEFORM_MAX_POINTS_CAP, state.config.max_points_returned),
+        )
         # Decimating and writing every sample is CPU work proportional to the
         # points kept, so it runs off the event loop as the csv export does.
         inline = await asyncio.to_thread(
-            _inline_waveform,
-            raw,
-            signals,
-            step,
-            start,
-            end,
-            min(recipe.max_points, state.config.max_points_returned),
+            _inline_waveform, raw, signals, step, start, end, max_points
         )
         return (
             {
                 **inline,
+                # A record's warnings become its recipe's, with how many runs said it.
+                **({"warnings": [held]} if held is not None else {}),
                 **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
                     _IDENTITY_KEYS
                 ),

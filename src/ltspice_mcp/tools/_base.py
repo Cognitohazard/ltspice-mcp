@@ -595,10 +595,13 @@ def held_to_cap(
     """
     if requested <= cap:
         return requested, None
-    return (
-        cap,
-        f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used.",
-    )
+
+    def spelled(value: _Number) -> str:
+        # An integer is written out whole: 3000000, not 3e+06.
+        return f"{value:d}" if isinstance(value, int) else f"{value:g}"
+
+    asked, held = spelled(requested), spelled(cap)
+    return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
 
 
 def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
@@ -631,6 +634,23 @@ class NotedModel(StrictModel):
             object.__setattr__(self, name, kept)
             listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
             self._notes.append(f"{name} repeated {listed}; each is read once.")
+
+    def hold_to_cap(self, name: str, cap: float, unit: str = "") -> None:
+        """Hold numeric field ``name`` at ``cap`` rather than refuse it, and note it.
+
+        The rule of :func:`held_to_cap`: a cap bounds one call's cost, so a
+        larger value is served at the cap and said so. The model carries the
+        held value, so whatever reads it serves what the note says. An unset
+        (``None``) field is left alone.
+        """
+        value = getattr(self, name)
+        if value is None:
+            return
+        held, note = held_to_cap(name, value, type(value)(cap), unit)
+        if note is not None:
+            # Past validate_assignment, which would run the model's validators again.
+            object.__setattr__(self, name, held)
+            self._notes.append(note)
 
     def argument_notes(self) -> list[str]:
         notes = list(self._notes)

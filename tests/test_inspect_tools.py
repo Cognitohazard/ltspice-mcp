@@ -1336,18 +1336,24 @@ async def test_reference_says_so_when_nothing_matches(cap_state: SessionState):
     assert "inspect(kind='guide')" in data["hint"]
 
 
-async def test_reference_limit_above_the_cap_is_rejected_for_that_item_only(
+async def test_reference_limit_above_the_cap_is_held_for_that_item_only(
     cap_state: SessionState,
 ):
-    good, bad = await _run(
+    asked = insp.REFERENCE_LIMIT_CAP + 1
+    plain, held = await _run(
         cap_state,
         [
             {"kind": "reference", "query": "thd"},
-            {"kind": "reference", "query": "thd", "limit": insp.REFERENCE_LIMIT_CAP + 1},
+            {"kind": "reference", "query": "thd", "limit": asked},
         ],
     )
-    assert good["ok"] is True
-    assert bad["ok"] is False and bad["error"]["code"] == "invalid_query"
+    assert plain["ok"] is True and "warnings" not in plain["data"]
+    assert held["ok"] is True
+    assert held["data"]["returned"] <= insp.REFERENCE_LIMIT_CAP
+    assert held["data"]["warnings"] == [
+        f"limit={asked} is above its cap of {insp.REFERENCE_LIMIT_CAP}; "
+        f"{insp.REFERENCE_LIMIT_CAP} was used."
+    ]
 
 
 async def test_reference_is_advertised_as_a_supported_kind(cap_state: SessionState):

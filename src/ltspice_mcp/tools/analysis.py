@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired
 
 import numpy as np
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -93,6 +93,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
+    NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
     ToolInput,
@@ -976,7 +977,7 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
     return lines
 
 
-class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
+class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, NotedModel):
     path: str | None = Field(
         default=None,
         min_length=1,
@@ -1039,8 +1040,8 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
         ge=1,
         description=(
             "Per-series point budget before a min/max-preserving downsample engages "
-            f"(default {_DEFAULT_PLOT_MAX_POINTS}). Full fidelity below this; spikes "
-            "are preserved when it engages."
+            f"(default {_DEFAULT_PLOT_MAX_POINTS}, held to {PLOT_MAX_POINTS_CEILING}). "
+            "Full fidelity below it; spikes survive."
         ),
     )
     open: bool | None = Field(
@@ -1085,6 +1086,11 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput):
         default=None,
         description=FORMAT_DESCRIPTION,
     )
+
+    @model_validator(mode="after")
+    def _hold_max_points(self) -> "PlotWaveformInput":
+        self.hold_to_cap("max_points", PLOT_MAX_POINTS_CEILING)
+        return self
 
 
 _IMAGE_SCHEMA: dict[str, Any] = {
@@ -1628,7 +1634,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     ts = parse_time(args.t_start, "t_start")
     te = parse_time(args.t_end, "t_end")
 
-    max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, PLOT_MAX_POINTS_CEILING)
+    # Held to PLOT_MAX_POINTS_CEILING by the input model, which notes it.
+    max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
     # Asked for in LTspice, the chart is not also opened in a browser unless
     # that was asked for too.
     open_default = state.config.open_plot and not args.in_ltspice
@@ -1885,6 +1892,9 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # sliced from a list.
     if traces_total > len(traces):
         data["traces_truncated"] = traces_total
+    held = args.argument_notes()
+    if held:
+        data["warnings"] = held
     if image is not None:
         data["image"] = image.to_dict()
         data["image_path"] = str(png_path)
@@ -1906,6 +1916,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     lines.append(f"Traces ({len(traces)} of {traces_total}):")
     lines.extend(_summary_lines(traces, plan.x_unit))
     lines.extend(format_observations(observations))
+    lines.extend(data.get("warnings", []))
     result = format_response("\n".join(lines), data, fmt)
 
     if image is not None:

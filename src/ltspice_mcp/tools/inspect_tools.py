@@ -203,6 +203,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_WINDOW_PROPERTIES,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
+    NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
     ResponseBudget,
@@ -503,8 +504,11 @@ _CURSOR_DESCRIPTION = (
 
 #: Most matches one reference lookup will return. Each match carries a full
 #: field table, so the cap is what stops a vague query from answering with the
-#: whole vocabulary at full detail.
+#: whole vocabulary at full detail. A larger limit is served at it, not refused.
 REFERENCE_LIMIT_CAP = 20
+
+#: Most rows one results page carries; a larger limit is served at it.
+RESULTS_LIMIT_CAP = 100
 
 # The file-backed kinds bind the file itself, so the stronger claim holds there.
 _CURSOR_DESCRIPTION_FILE = (
@@ -735,7 +739,7 @@ class ModelQuery(StrictModel):
         return self
 
 
-class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
+class ResultsQuery(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     """RAW inventory or detached log facts with snapshot-bound pages."""
 
     kind: Literal["results"]
@@ -753,7 +757,14 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
         description="Literal signal, measurement or native quantity prefix; omitted lists all.",
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
-    limit: int = Field(default=100, ge=1, le=100)
+    limit: int = Field(
+        default=RESULTS_LIMIT_CAP, ge=1, description=f"Held to {RESULTS_LIMIT_CAP}."
+    )
+
+    @model_validator(mode="after")
+    def _hold_limit(self) -> ResultsQuery:
+        self.hold_to_cap("limit", RESULTS_LIMIT_CAP)
+        return self
 
     @model_validator(mode="after")
     def _source(self) -> ResultsQuery:
@@ -772,7 +783,7 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
         return self
 
 
-class ReferenceQuery(StrictModel):
+class ReferenceQuery(NotedModel):
     """Look up this server's tool vocabulary — each tool's own arguments, plus
     analysis recipes, schematic ops, variation kinds, query kinds, checks and
     job actions — with every field's type, default and units."""
@@ -789,9 +800,13 @@ class ReferenceQuery(StrictModel):
     limit: int = Field(
         default=5,
         ge=1,
-        le=REFERENCE_LIMIT_CAP,
-        description="How many matches to return with their full field tables.",
+        description=f"Matches to return with full field tables, held to {REFERENCE_LIMIT_CAP}.",
     )
+
+    @model_validator(mode="after")
+    def _hold_limit(self) -> ReferenceQuery:
+        self.hold_to_cap("limit", REFERENCE_LIMIT_CAP)
+        return self
 
 
 class GuideQuery(StrictModel):
@@ -2845,6 +2860,11 @@ async def _run_queries(
 
         item: dict[str, Any] = {"index": index, "kind": query.kind, "ok": True}
         item.update(outcome)
+        # A value served at its cap rather than as asked says so on its item.
+        held = query.argument_notes() if isinstance(query, NotedModel) else []
+        if held:
+            data = item.setdefault("data", {})
+            data["warnings"] = [*data.get("warnings", []), *held]
         results.append(item)
     return results
 

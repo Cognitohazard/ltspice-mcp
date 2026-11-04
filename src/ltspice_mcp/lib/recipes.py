@@ -724,10 +724,18 @@ class OperatingPointRecipe(KeyedRecipe):
     )
 
 
+#: The most points an inline waveform series carries, whatever the server's
+#: ``[analysis] max_points`` allows. A larger ``max_points`` is served at the
+#: lower of the two and said so, not refused.
+WAVEFORM_MAX_POINTS_CAP = 2_000_000
+
+
 class WaveformRecipe(VariableRecipe):
     metric: Literal["waveform"]
     signals: list[str] = Field(min_length=1, max_length=32)
-    max_points: int = Field(default=2000, ge=1, le=2_000_000)
+    max_points: int = Field(
+        default=2000, ge=1, description="Inline points per series, held to [analysis] max_points."
+    )
     format: Literal["inline", "csv"] = "inline"
     window: Window | None = None
 
