@@ -32,7 +32,6 @@ mid-simulation.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -67,7 +66,7 @@ from ltspice_mcp.lib.spice_lex import (
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end, rename_subckt
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
 
 logger = logging.getLogger(__name__)
 
@@ -472,7 +471,11 @@ def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
 
     A binned foundry model declares ``.model <name>.0``, ``.model <name>.1``,
     … and the instance names the unsuffixed base, so the lookup accepts both
-    spellings. Every bin of one device shares a level.
+    spellings. Every bin of one device shares a level. The level is the
+    card's own (``ModelCard.level``): a foundry deck sections a card's
+    parameters with full-line comments between its ``+`` lines, which the
+    lexer reads past as a simulator does, and a level such a comment names is
+    no part of the card.
     """
     folded = model_name.casefold()
     for index in indexes:
@@ -484,31 +487,13 @@ def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
                 continue
             if not index.is_active(card_index):
                 continue
-            match = _LEVEL_RE.search(_model_card_text(index, card_index))
-            if match is not None:
-                return float(match.group(1))
+            try:
+                level = ModelCard.from_card(card).level
+            except SpiceLexError:
+                continue
+            if level is not None:
+                return level
     return None
-
-
-_LEVEL_RE = re.compile(r"\blevel\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
-
-
-def _model_card_text(index: _FileIndex, card_index: int) -> str:
-    """A model card's own text, including continuations a comment interrupted.
-
-    Foundry model decks section their parameter blocks with full-line comments
-    between the ``+`` continuations. A simulator reads straight through those,
-    but the lexer ends a card at the comment and hands the rest back as loose
-    continuation lines, so the card alone holds only the model's name and type.
-    Re-joining the continuation run is what lets the level be read at all.
-    """
-    parts = list(index.cards[card_index].raw_lines)
-    for card in index.cards[card_index + 1 :]:
-        if card.kind not in ("comment", "blank"):
-            break
-        if card.raw_lines and card.raw_lines[0].lstrip().startswith("+"):
-            parts.extend(card.raw_lines)
-    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,6 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
-from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import (
     Environment,
     NumericFact,
@@ -460,17 +459,13 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     for item in body:
         if item.card.kind != "model":
             continue
-        params = _assignments(item.card)
+        _assignments(item.card)  # refuses a parameter the card gives twice
         model = ModelCard.from_card(item.card)
         key = model.name.casefold()
         if key in models:
             raise NetlistError(f"duplicate active model {model.name}")
-        try:
-            level = parse_spice_value(params["level"]) if "level" in params else None
-        except ValueError:
-            level = None
         models[key] = ModelDefinition(
-            model.name, replace(item.source, definition=enclosing), item.card.body, level
+            model.name, replace(item.source, definition=enclosing), item.card.body, model.level
         )
     return models
 

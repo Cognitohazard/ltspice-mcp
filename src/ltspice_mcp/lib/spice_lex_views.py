@@ -20,7 +20,7 @@ from typing import Literal
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
-from ltspice_mcp.lib.format import is_scaled_number
+from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     MEAS_ANALYSIS_TOKENS,
     SpiceCard,
@@ -176,12 +176,17 @@ class ModelCard:
     ``params`` carries the raw value tokens (``"0.7"``, ``"{vto_n}"``,
     ``"100u"``); callers parse to numeric as needed. Keys are stored
     case-preserved; matching against them folds case at lookup.
+
+    ``level`` is the card's ``LEVEL=`` as a number, None when it gives none
+    or gives an expression. It is the one reading of a model's level: the
+    card's own parameters, so a comment between its ``+`` lines that names
+    another level is no part of it.
     """
 
     card: SpiceCard
     name: str
     type: str
-    level: int | None
+    level: float | None
     _params: _Params = field(default_factory=_Params)
     #: The name's token, renamed in place while it is good.
     _name_token: Token | None = None
@@ -220,9 +225,9 @@ class ModelCard:
         for k, v in params.as_dict().items():
             if k.lower() == "level":
                 try:
-                    level = int(v)
+                    level = parse_spice_value(v)
                 except ValueError:
-                    level = None
+                    level = None  # an expression: no level is known here
                 break
         return cls(
             card=card,
