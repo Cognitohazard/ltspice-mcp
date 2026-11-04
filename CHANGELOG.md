@@ -15,7 +15,7 @@ tool-surface changes.
   beside it already gives (`structurally_equivalent` beside
   `equivalent: true`, `selectable` beside `available: false`). A reply about
   work that found nothing no longer spends tokens saying so; over the test
-  suite's replies this is about 10% of the characters the server sends. A missing
+  suite's replies this is about 9% of the characters the server sends. A missing
   field means "checked, and nothing to report", never "not checked": what did
   not run, was skipped or could not be read is still stated, by a
   `checks_skipped` row, a failure, a `status` or a `reason`. One function
