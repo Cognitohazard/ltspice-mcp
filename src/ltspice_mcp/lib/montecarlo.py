@@ -51,8 +51,6 @@ from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     ModelCard,
-    ParamCard,
-    find_model,
     instances_by_ref,
 )
 
@@ -61,12 +59,6 @@ logger = logging.getLogger(__name__)
 
 Distribution = Literal["uniform", "normal", "gaussian"]
 ToleranceKind = Literal["relative", "absolute"]
-
-
-# Component prefixes whose values can be perturbed without breaking
-# semantics. Sources, controlled sources, and switches are excluded —
-# their values often encode behavior, not magnitudes.
-_PERTURBABLE_PREFIXES: frozenset[str] = frozenset({"R", "C", "L"})
 
 
 @dataclass(frozen=True)
@@ -255,20 +247,6 @@ def _truncated_gauss(rng: random.Random, sigma: float, bound: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ModelTolerance:
-    """Process-variation rule for one ``.MODEL`` card.
-
-    Per Monte Carlo run, each parameter is sampled once and the perturbed
-    value is written back to the ``.MODEL`` line; every transistor instance
-    using this model inherits the same perturbation (foundry-correlated
-    process variation).
-    """
-
-    model_name: str
-    parameters: dict[str, ToleranceSpec]
-
-
 def sample_model_perturbation(
     sampler: MCSampler,
     model_name: str,
@@ -302,30 +280,6 @@ def sample_model_perturbation(
         delta = sampler.sample_offset(nominal, spec, stream=f"model:{model_name}.{param}")
         perturbed[param] = nominal + delta
     return perturbed
-
-
-def perturb_model_in_text(
-    netlist_text: str,
-    model_name: str,
-    perturbations: dict[str, float],
-) -> str:
-    """Rewrite the ``.MODEL <model_name> ...`` card to apply parameter overrides.
-
-    Existing ``param=value`` tokens are replaced in place; new params are
-    appended. Continuation lines and quoted/braced values are handled
-    correctly via the shared ``spice_lex`` parser.
-
-    Raises ``ValueError`` if ``model_name`` isn't found.
-    """
-    if not perturbations:
-        return netlist_text
-    result = lex(netlist_text)
-    view = find_model(result.cards, model_name)
-    if view is None:
-        raise ValueError(f".MODEL {model_name!r} not found in netlist")
-    for param, new_value in perturbations.items():
-        view.set_param(param, new_value)
-    return emit(result.cards)
 
 
 # ---------------------------------------------------------------------------
@@ -445,60 +399,6 @@ def render_variant_model_card(
     for param, new_value in overrides.items():
         view.set_param(param, new_value)
     return emit(cards)
-
-
-def extract_model_card(netlist_text: str, model_name: str) -> str | None:
-    """Return the merged text of a ``.MODEL`` card by name, or None.
-
-    The returned text is the original raw lines (continuation lines
-    intact, leading/trailing whitespace and the trailing newline
-    preserved).
-    """
-    target = model_name.lower()
-    result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "model" and c.name and c.name.lower() == target:
-            return "".join(c.raw_lines)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: .PARAM perturbation
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ParamTolerance:
-    """Perturbation rule for one ``.PARAM`` directive.
-
-    Sampled once per Monte Carlo run. The user is expected to wire the
-    ``.PARAM`` into model/component cards via ``{param}`` substitution
-    (e.g. ``.MODEL NMOS1 NMOS(VTO={vto_n})`` with ``.PARAM vto_n=0.7``);
-    we just rewrite the ``.PARAM`` value per run.
-    """
-
-    name: str
-    spec: ToleranceSpec
-
-
-def perturb_param_in_text(
-    netlist_text: str,
-    name: str,
-    new_value: float,
-) -> str:
-    """Rewrite ``.PARAM <name>=<value>`` in place.
-
-    Case-insensitive match on the param name. Raises ``ValueError`` if
-    no matching ``.PARAM`` is present.
-    """
-    target = name.lower()
-    result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "param" and c.name and c.name.lower() == target:
-            view = ParamCard.from_card(c)
-            view.set_value(new_value)
-            return emit(result.cards)
-    raise ValueError(f".PARAM {name!r} not found in netlist")
 
 
 # ---------------------------------------------------------------------------
@@ -642,62 +542,6 @@ def find_mismatch_rule(
         if matches_prefix(instance_ref, rule.prefix):
             return rule
     return None
-
-
-def parse_param_nominal(netlist_text: str, name: str) -> float | None:
-    """Read the nominal value from ``.PARAM <name>=<value>``.
-
-    Returns ``None`` when the param is absent or its value isn't a plain
-    number (e.g. expressions like ``{2*Rd}``). Phase 3 silently skips such
-    params — they're already user-side expressions.
-    """
-    target = name.lower()
-    result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "param" and c.name and c.name.lower() == target:
-            view = ParamCard.from_card(c)
-            return parse_value(view.value)
-    return None
-
-
-def expand_tolerances(
-    component_refs: list[str],
-    type_tolerances: dict[str, tuple[float, str]],
-    component_overrides: dict[str, tuple[float, str]],
-) -> dict[str, ToleranceSpec]:
-    """Resolve type-prefix and per-ref rules to a flat ref -> spec map.
-
-    Resolution order: ``component_overrides`` (specific ref) > matching
-    prefix in ``type_tolerances`` > skip. Refs whose prefix isn't in
-    ``_PERTURBABLE_PREFIXES`` are dropped (perturbing a voltage source
-    would change the stimulus). Drops are logged at debug level so a
-    user passing e.g. ``type_tolerances={"V": 0.05}`` can find them.
-    """
-    resolved: dict[str, ToleranceSpec] = {}
-    skipped: list[str] = []
-    for ref in component_refs:
-        prefix = ref[0].upper() if ref else ""
-        if prefix not in _PERTURBABLE_PREFIXES:
-            skipped.append(ref)
-            continue
-
-        if ref in component_overrides:
-            tol, dist = component_overrides[ref]
-        elif prefix in type_tolerances:
-            tol, dist = type_tolerances[prefix]
-        else:
-            continue
-        resolved[ref] = ToleranceSpec(
-            tolerance=tol,
-            distribution=dist,  # type: ignore[arg-type]
-        )
-    if skipped:
-        logger.debug(
-            "MC: skipped %d non-perturbable refs (prefix not in R/C/L): %s",
-            len(skipped),
-            ", ".join(skipped[:8]) + ("…" if len(skipped) > 8 else ""),
-        )
-    return resolved
 
 
 def parse_value(value: str | float) -> float | None:

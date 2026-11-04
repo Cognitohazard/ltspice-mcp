@@ -299,17 +299,6 @@ class TestInterop:
         assert result.warnings == []
         assert emit(result.cards) == text
 
-    def test_write_cards(self, tmp_path) -> None:
-        from ltspice_mcp.lib.spice_lex import cards_from_path, write_cards
-
-        text = ".PARAM Vdd=5\nR1 a b 1k\n"
-        cards = lex(text).cards
-        out = tmp_path / "out.cir"
-        write_cards(cards, out)
-        # Re-read and confirm round-trip via path-based interop.
-        assert cards_from_path(out).cards
-        assert out.read_text() == text
-
     def test_cards_from_path_handles_utf16_bom(self, tmp_path) -> None:
         from ltspice_mcp.lib.spice_lex import cards_from_path
 

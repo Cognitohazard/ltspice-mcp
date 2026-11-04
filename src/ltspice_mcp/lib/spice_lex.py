@@ -1235,14 +1235,6 @@ def cards_from_path(path: object) -> LexResult:
     return lex(read_spice_text(Path(path)))  # type: ignore[arg-type]
 
 
-def write_cards(cards: Sequence[SpiceCard], path: object) -> None:
-    """Render ``cards`` and write to ``path``. Encoding: UTF-8."""
-    from pathlib import Path
-
-    p = Path(path)  # type: ignore[arg-type]
-    p.write_text(emit(cards), encoding="utf-8")
-
-
 # ---------------------------------------------------------------------------
 # Iteration helpers
 # ---------------------------------------------------------------------------
