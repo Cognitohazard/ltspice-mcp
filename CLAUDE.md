@@ -100,6 +100,7 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
     ...
 ```
 
+- Hold a new tool, op or reply to the design principles in `docs/DESIGN.md`: validate before write and name the fix in every refusal; a check says what it did not look at; one call per intent; a short reply with the data behind an id; repeatable requests; LTspice's own tools as peers; evidence before assumption; fast enough to try. Say in the change which principle it keeps or restores.
 - `tools/__init__.py` imports every tool module to register it. Do not alphabetise the imports, because each module's dependencies load ahead of it. `ADVERTISED_ORDER` in the same file sets the order `tools/list` advertises, because clients cache the list and prompt caching depends on its exact bytes; a registered tool missing from it stops the server at startup.
 - Every tool declares a `title`.
 - Every input schema is an object with no `oneOf`, `allOf` or `anyOf` at its top level: Claude's API refuses such a tool, and a client then drops it from the session. A tool whose arguments are a union of actions publishes one flat object, lists each action's fields in its tool description, which the compact listing keeps (`jobs_input_schema`, `jobs_fields_by_action`), and validates each action in its input model. `tests/test_dispatch.py` checks every tool.
