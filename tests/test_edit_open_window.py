@@ -245,21 +245,32 @@ async def test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_go
     assert "SYMATTR Value 2.2k" in window.text(asc_file)
 
 
-async def test_nothing_is_saved_where_no_window_holds_a_different_sheet(
-    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+@pytest.mark.parametrize(
+    ("open_window", "done", "untouched"),
+    [("save", "saved", "commands"), ("discard", "dropped", "closed")],
+)
+async def test_nothing_is_done_where_no_window_holds_a_different_sheet(
+    asc_state: SessionState,
+    asc_file: Path,
+    window: Window,
+    tmp_path: Path,
+    open_window: str,
+    done: str,
+    untouched: str,
 ):
     before = file_bytes(asc_file)
     window.shows(asc_file, as_ltspice_reads(asc_file))
 
-    data = await save(asc_state, asc_file)
+    data = await edit(asc_state, asc_file, ops=[], open_window=open_window)
 
     assert data["outcome"] == "complete"
     assert data["commit_state"] == "not_committed"
+    assert "open_in_ltspice" not in data
     assert data["hint"] == (
-        "No LTspice window holds a sheet different from the file, so nothing was saved."
+        f"No LTspice window holds a sheet different from the file, so nothing was {done}."
     )
     assert file_bytes(asc_file) == before
-    assert "commands" not in read_world(tmp_path / "world.json")["windows"][0]
+    assert untouched not in read_world(tmp_path / "world.json")["windows"][0]
 
 
 async def test_a_stale_revision_saves_nothing(
@@ -349,18 +360,37 @@ async def test_with_the_users_agreement_the_window_is_closed_and_opened_from_the
     assert edited["commit_state"] == "committed"
 
 
-async def test_nothing_is_dropped_where_no_window_holds_a_different_sheet(
-    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+@pytest.mark.parametrize("meanwhile", ["quits LTspice", "closes the sheet"])
+async def test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop(
+    asc_state: SessionState,
+    asc_file: Path,
+    window: Window,
+    monkeypatch: pytest.MonkeyPatch,
+    meanwhile: str,
 ):
-    window.shows(asc_file, as_ltspice_reads(asc_file))
+    """The user's changes went with the window, or with the sheet they closed,
+    after the windows were read."""
+    window.shows(asc_file, a_change(asc_file))
+    windows = asc_state.open_windows
+    holding = windows.holding
+
+    def then_gone(sheet: Path) -> list[OpenSheet]:
+        held = holding(sheet)
+        if meanwhile == "quits LTspice":
+            window.closes()
+        else:
+            window.shows(None, "")
+        return held
+
+    monkeypatch.setattr(windows, "holding", then_gone)
 
     data = await discard(asc_state, asc_file)
 
-    assert data["commit_state"] == "not_committed"
+    assert data["commit_state"] == "not_committed", data
+    assert "open_in_ltspice" not in data
     assert data["hint"] == (
         "No LTspice window holds a sheet different from the file, so nothing was dropped."
     )
-    assert "closed" not in read_world(tmp_path / "world.json")["windows"][0]
 
 
 async def test_every_window_with_a_different_copy_is_closed_and_opened_from_the_file(

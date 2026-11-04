@@ -310,6 +310,15 @@ def _close_and_wait(frame: LtspiceFrame, pane: int, doing: str) -> None:
     _until(lambda: not frame.is_open(pane), doing)
 
 
+def _told_to_close(frame: LtspiceFrame, pid: int, sheet: Path) -> int:
+    """Tell ``sheet``'s pane to close, and wait for it to have gone or for
+    LTspice to ask whether to save it. Returns the pane."""
+    pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet's pane")
+    frame.close(pane)
+    _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+    return pane
+
+
 def _close_all(frame: LtspiceFrame, pid: int, title: str) -> None:
     """Close every pane titled ``title`` and wait for them all to go."""
     for pane in frame.panes_titled(pid, title):
@@ -568,11 +577,8 @@ def _sheet_close_facts(
         return _until(lambda: frame.pane(pid, sheet.name), "finding the sheet's pane")
 
     def told_to_close() -> int:
-        """Tell the sheet to close, and wait for it to have gone or LTspice to ask."""
-        pane = in_front()
-        frame.close(pane)
-        _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
-        return pane
+        in_front()
+        return _told_to_close(frame, pid, sheet)
 
     def asked() -> SaveQuestion:
         question = frame.save_question(pid)
@@ -812,9 +818,7 @@ def _save_facts(
     recording.fact(
         "Save asks nothing on the way", frame.takes_input(pid) and not frame.box_words(pid)
     )
-    pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet")
-    frame.close(pane)
-    _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+    pane = _told_to_close(frame, pid, sheet)
     recording.fact(
         "saved, it closes without a question",
         [not frame.is_open(pane), frame.save_question(pid) is None],
@@ -868,9 +872,7 @@ def _discard_facts(
     changed = session.design_text(str(sheet)).replace("SYMATTR Value 1k", "SYMATTR Value 4.7k")
     session.replace_design_text(str(sheet), changed)
     session.bring_to_front(str(sheet))
-    pane = _until(lambda: frame.pane(pid, sheet.name), "finding the sheet")
-    frame.close(pane)
-    _until(lambda: not frame.is_open(pane) or frame.save_question(pid), "closing or asking")
+    pane = _told_to_close(frame, pid, sheet)
     question = frame.save_question(pid)
     recording.fact(
         "a sheet whose window copy differs from the file is asked about before it closes",

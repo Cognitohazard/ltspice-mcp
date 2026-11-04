@@ -1327,29 +1327,44 @@ def _set_besides_open_window(args: EditSchematicInput) -> list[str]:
     )
 
 
-def _saved_reply(
-    target: Path, build_id: str, stages: list[dict], current: str, saved: Saved | None
+def _settled_reply(
+    target: Path,
+    build_id: str,
+    stages: list[dict],
+    current: str,
+    *,
+    open_window: Literal["save", "discard"],
+    saved: Saved | None = None,
+    discarded: Sequence[tuple[OpenSheet, WindowUpdate]] = (),
 ) -> EditSchematicEvaluation:
-    """The reply to open_window 'save' once LTspice saved the sheet, or once no
-    window held a copy different from the file."""
-    if saved is None:
-        hint = "No LTspice window holds a sheet different from the file, so nothing was saved."
-        sha256, rows = current, []
-    else:
+    """The reply to open_window once LTspice saved the sheet from a window or
+    dropped each window's different copy, or once no window held one."""
+    sha256 = current
+    if saved is not None:
+        others = [_window_row(*other) for other in saved.others]
         hint = " ".join(
             [
                 f"LTspice saved {target.name}: the file now holds the sheet as the window "
                 "had it. Read it again before editing it.",
-                *_window_notes([_window_row(*other) for other in saved.others]),
+                *_window_notes(others),
             ]
         )
         sha256 = hashlib.sha256(saved.data).hexdigest()
-        rows = [_window_row(saved.window, WindowUpdate(saved=True))]
-        rows += [_window_row(*other) for other in saved.others]
+        rows = [_window_row(saved.window, WindowUpdate(saved=True)), *others]
+    elif discarded:
+        hint = (
+            f"LTspice closed {target.name} without saving and opened it again from the "
+            "file, so the changes made in the window are gone."
+        )
+        rows = [_window_row(*each) for each in discarded]
+    else:
+        done = "saved" if open_window == "save" else "dropped"
+        hint = f"No LTspice window holds a sheet different from the file, so nothing was {done}."
+        rows = []
     return EditSchematicEvaluation(
         data=_envelope(
             delivered=True,
-            commit_state="not_committed" if saved is None else "committed",
+            commit_state="committed" if saved is not None else "not_committed",
             target=target,
             build_id=build_id,
             base="existing",
@@ -1357,38 +1372,6 @@ def _saved_reply(
             sha256=sha256,
             applied=0,
             open_in_ltspice=rows,
-            hint=hint,
-        ),
-        text=hint,
-    )
-
-
-def _discarded_reply(
-    target: Path,
-    build_id: str,
-    stages: list[dict],
-    current: str,
-    discarded: Sequence[tuple[OpenSheet, WindowUpdate]],
-) -> EditSchematicEvaluation:
-    """The reply to open_window 'discard' once each window that held a different
-    copy was closed without saving and opened again from the file."""
-    hint = (
-        f"LTspice closed {target.name} without saving and opened it again from the file, "
-        "so the changes made in the window are gone."
-        if discarded
-        else "No LTspice window holds a sheet different from the file, so nothing was dropped."
-    )
-    return EditSchematicEvaluation(
-        data=_envelope(
-            delivered=True,
-            commit_state="not_committed",
-            target=target,
-            build_id=build_id,
-            base="existing",
-            stages=stages,
-            sha256=current,
-            applied=0,
-            open_in_ltspice=[_window_row(*each) for each in discarded],
             hint=hint,
         ),
         text=hint,
@@ -1606,48 +1589,65 @@ async def _evaluate_edit_schematic(
                 f"({current}); a commit quoting it would return revision_conflict."
             )
 
-        if args.open_window is not None and (on_disk is None or current is None):
-            raise NetlistError(
-                f"{target.name} does not exist, so no window can hold a copy of it."
-            )
-        if args.open_window == "discard" and on_disk is not None and current is not None:
-            try:
-                discarded = await asyncio.to_thread(state.open_windows.discard, target, on_disk)
-            except BridgeError as exc:
-                left, discarded = [str(exc)], []
-            else:
-                left = [update.refusal for _sheet, update in discarded if update.refusal]
-            if left:
-                message = (
-                    f"LTspice did not drop the changes to {target.name}: {'; '.join(left)}. "
-                    "Read the sheet again before editing it."
+        if args.open_window is not None:
+            if on_disk is None or current is None:
+                raise NetlistError(
+                    f"{target.name} does not exist, so no window can hold a copy of it."
                 )
+
+            def unsettled(
+                *, code: str, stage: str, failure: str, said: str
+            ) -> EditSchematicEvaluation:
+                """The reply when LTspice did not settle the window as the user chose."""
+                message = f"{said}. Read the sheet again before editing it."
                 return refused(
-                    code="window_not_discarded",
-                    stage="window_discard",
-                    failure="; ".join(left),
+                    code=code,
+                    stage=stage,
+                    failure=failure,
                     message=message,
                     hint=message,
                     text=f"edit_schematic: {message}",
                 )
-            return finish(_discarded_reply(target, build_id, stages, current, discarded))
-        if args.open_window == "save" and on_disk is not None and current is not None:
+
+            if args.open_window == "discard":
+                try:
+                    discarded = await asyncio.to_thread(
+                        state.open_windows.discard, target, on_disk
+                    )
+                except BridgeError as exc:
+                    left, discarded = str(exc), []
+                else:
+                    left = "; ".join(update.refusal for _, update in discarded if update.refusal)
+                if left:
+                    said = f"LTspice did not drop the changes to {target.name}: {left}"
+                    return unsettled(
+                        code="window_not_discarded",
+                        stage="window_discard",
+                        failure=left,
+                        said=said,
+                    )
+                return finish(
+                    _settled_reply(
+                        target,
+                        build_id,
+                        stages,
+                        current,
+                        open_window="discard",
+                        discarded=discarded,
+                    )
+                )
             try:
                 saved = await asyncio.to_thread(state.open_windows.save, target, on_disk)
             except BridgeError as exc:
                 state.editors.invalidate(target)
-                message = f"{exc}. Read the sheet again before editing it."
-                return refused(
-                    code="window_not_saved",
-                    stage="window_save",
-                    failure=str(exc),
-                    message=message,
-                    hint=message,
-                    text=f"edit_schematic: {message}",
+                return unsettled(
+                    code="window_not_saved", stage="window_save", failure=str(exc), said=str(exc)
                 )
             if saved is not None:
                 state.editors.invalidate(target)
-            return finish(_saved_reply(target, build_id, stages, current, saved))
+            return finish(
+                _settled_reply(target, build_id, stages, current, open_window="save", saved=saved)
+            )
 
         use_template = args.base == "blank" or not exists
         # A batch of nothing but plot panes (or no ops at all) leaves an
@@ -1673,8 +1673,8 @@ async def _evaluate_edit_schematic(
             differs = _window_differs(on_disk, open_sheets)
             if differs is not None and dry_run:
                 window_notes.append(
-                    f"{differs} A commit is refused until the window's copy is saved "
-                    "(open_window, with the user's agreement) or the sheet is closed."
+                    f"{differs} A commit is refused until the window's copy is saved or "
+                    "dropped (open_window, with the user's answer) or the sheet is closed."
                 )
             elif differs is not None:
                 return refused(

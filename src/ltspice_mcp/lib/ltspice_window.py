@@ -62,6 +62,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
 from ltspice_mcp.lib.ltspice_bridge import (
@@ -314,6 +315,11 @@ class Saved:
     window: OpenSheet
     data: bytes
     others: list[tuple[OpenSheet, WindowUpdate]]
+
+
+def _differing(sheets: list[OpenSheet], on_disk: bytes) -> list[OpenSheet]:
+    """The windows of ``sheets`` whose copy differs from the file, ``on_disk``."""
+    return [each for each in sheets if file_difference(on_disk, each.text) is not None]
 
 
 def _reads_as(on_disk: bytes) -> Callable[[str], bool]:
@@ -803,7 +809,7 @@ class OpenWindows:
         when the file does not come to hold the window's copy in time.
         """
         holding = self.holding(sheet)
-        differing = [each for each in holding if file_difference(on_disk, each.text) is not None]
+        differing = _differing(holding, on_disk)
         if not differing:
             return None
         if len(differing) > 1:
@@ -857,43 +863,67 @@ class OpenWindows:
         """Close ``sheet`` without saving in each window whose copy differs from
         the file, ``on_disk``, and open it there again from the file. Blocks.
 
-        Returns each such window with what it shows then, which is empty when
-        no window holds a different copy. Only for a caller whose user agreed
-        to drop the changes made in those windows: a window whose copy changes
-        before LTspice has asked about it is left open, with the reason.
-        Raises ``BridgeError`` when the windows cannot be asked.
+        Returns each such window that still has the sheet open, with what it
+        shows then; none when no window holds a different copy. Only for a
+        caller whose user agreed to drop the changes made in those windows: a
+        window whose copy changes before LTspice has asked about it is left
+        open, with the reason. Raises ``BridgeError`` when the windows cannot
+        be asked.
         """
-        return [
-            (each, self._discarded(each))
-            for each in self.holding(sheet)
-            if file_difference(on_disk, each.text) is not None
+        updates = [
+            (each, self._discarded(each)) for each in _differing(self.holding(sheet), on_disk)
         ]
+        return [(each, update) for each, update in updates if update is not None]
 
-    def _discarded(self, sheet: OpenSheet) -> WindowUpdate:
+    def _discarded(self, sheet: OpenSheet) -> WindowUpdate | None:
         """Close ``sheet`` in its window without saving, if it still holds the
-        copy it held when read, and open it again from the file."""
-        path = Path(sheet.path)
+        copy it held when read, and open it again from the file. None where
+        the window no longer has it open, so holds nothing to drop."""
         try:
-            with self._session(waits=2 * _CLOSED_S) as session:
-                session.attach(sheet.pid)
-                spelled = self._spelling(session, path)
-                if spelled is None:
-                    return WindowUpdate("it no longer has the sheet open")
-                held = session.design_text(spelled)
-                unchanged = self._close_sheet(
-                    session,
-                    sheet.pid,
-                    path,
-                    spelled,
-                    held,
-                    may_lose=lambda text: content_difference(sheet.text, text) is None,
-                )
-                if unchanged is not None:
-                    return WindowUpdate("its copy changed after it was read, so it was left open")
-                self._sheet_in_front(session, path)
+            came = self._closed_and_opened(
+                sheet, lambda text: content_difference(sheet.text, text) is None
+            )
         except BridgeError as error:
             return WindowUpdate(f"it could not be closed and opened again: {error}")
+        if came == "gone":
+            return None
+        if came == "left open":
+            return WindowUpdate("its copy changed after it was read, so it was left open")
         return WindowUpdate(reopened=True)
+
+    def _closed_and_opened(
+        self,
+        sheet: OpenSheet,
+        may_lose: Callable[[str], bool],
+        *,
+        settled: Callable[[str], bool] = lambda _held: False,
+    ) -> Literal["gone", "settled", "left open", "reopened"]:
+        """Close ``sheet`` in its window as ``_close_sheet`` does, with
+        ``may_lose``, and open it there again from the file, in front.
+
+        Says what came of it: the window no longer has the sheet open, it
+        already holds what ``settled`` looks for, it was left open, or it was
+        closed and opened again. Raises ``BridgeError``.
+        """
+        path = Path(sheet.path)
+        with self._session(waits=2 * _CLOSED_S) as session:
+            try:
+                session.attach(sheet.pid)
+            except BridgeError:
+                return "gone"  # and its copy with it
+            spelled = self._spelling(session, path)
+            if spelled is None:
+                return "gone"
+            held = session.design_text(spelled)
+            if settled(held):
+                return "settled"
+            if (
+                self._close_sheet(session, sheet.pid, path, spelled, held, may_lose=may_lose)
+                is not None
+            ):
+                return "left open"
+            self._sheet_in_front(session, path)
+        return "reopened"
 
     def show(self, sheet: OpenSheet, text: str) -> None:
         """Replace what ``sheet``'s window shows with ``text``. Blocks; raises ``BridgeError``."""
@@ -933,30 +963,21 @@ class OpenWindows:
         open. A window that no longer has the sheet open shows no old copy and
         is left as it is.
         """
-        path = Path(sheet.path)
         try:
-            with self._session(waits=2 * _CLOSED_S) as session:
-                try:
-                    session.attach(sheet.pid)
-                except BridgeError:
-                    return WindowUpdate(str(error))  # gone, and its copy with it
-                spelled = self._spelling(session, path)
-                if spelled is None:
-                    return WindowUpdate(str(error))
-                held = session.design_text(spelled)
-                if content_difference(text, held) is None:
-                    return WindowUpdate()
-                if (
-                    self._close_sheet(
-                        session, sheet.pid, path, spelled, held, may_lose=_reads_as(was)
-                    )
-                    is not None
-                ):
-                    return WindowUpdate(
-                        f"{error}; it was not closed and opened again, because it holds "
-                        "changes made there since"
-                    )
-                self._sheet_in_front(session, path)
+            came = self._closed_and_opened(
+                sheet,
+                _reads_as(was),
+                settled=lambda held: content_difference(text, held) is None,
+            )
         except BridgeError as again:
             return WindowUpdate(f"{error}; closing it and opening it again failed too: {again}")
+        if came == "gone":
+            return WindowUpdate(str(error))
+        if came == "settled":
+            return WindowUpdate()
+        if came == "left open":
+            return WindowUpdate(
+                f"{error}; it was not closed and opened again, because it holds "
+                "changes made there since"
+            )
         return WindowUpdate(reopened=True)

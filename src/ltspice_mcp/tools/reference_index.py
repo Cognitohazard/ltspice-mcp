@@ -897,7 +897,7 @@ _REFERENCE_DESCRIPTION_CHARS = 160
 RENAMED_ARGUMENTS: dict[str, dict[str, str]] = {
     "plot_waveform": {"raw_file": "path"},
     "analyze_results": {"raw_path": "path", "log_path": "path"},
-    "edit_schematic": {"target": "path"},
+    "edit_schematic": {"target": "path", "save_open_window": "open_window"},
 }
 
 
