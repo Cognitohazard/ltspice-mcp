@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
 from typing import Any, Literal
 
@@ -191,6 +191,21 @@ class MeasurementEntry(_MeasurementMetadata):
     """
 
     values: list[float | None]
+
+
+def measurement_named(name: str, names: Iterable[str]) -> str | None:
+    """Which of a log's measurement ``names`` a caller's ``name`` refers to,
+    or None for none of them.
+
+    The log reader holds a measurement under the name lower-cased, whatever
+    case the deck gave it, so a name is matched ignoring case; one held
+    exactly as spelled is preferred.
+    """
+    held = list(names)
+    if name in held:
+        return name
+    folded = name.casefold()
+    return next((key for key in held if key.casefold() == folded), None)
 
 
 class MeasurementsOutput(TypedDict):

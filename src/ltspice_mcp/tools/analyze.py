@@ -48,6 +48,7 @@ from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
+from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
@@ -2125,6 +2126,14 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
+def _keyed_name(recipe: KeyedRecipe, name: str, flat: Mapping[str, Any]) -> str:
+    """The key of a row's flat map that a caller's ``name`` reads: a
+    measurement in any case, as the log's reader holds it lower-cased."""
+    if isinstance(recipe, MeasurementsRecipe):
+        return measurement_named(name, flat) or name
+    return name
+
+
 def _whole(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
@@ -2228,7 +2237,7 @@ def _tallies(recipe: Recipe, records: list[Record]) -> dict[str, _FieldTally]:
                 for name, candidate in flat.items():
                     tally(name, candidate, record)
             else:
-                tally(recipe.field, flat.get(recipe.field), record)
+                tally(recipe.field, flat.get(_keyed_name(recipe, recipe.field, flat)), record)
         # A key appears at most once in a row, so the rows with no number for
         # it, null or absent, are every row its samples do not account for.
         for entry in out.values():

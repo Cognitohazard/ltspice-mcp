@@ -20,6 +20,8 @@ from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 
+from ltspice_mcp.lib.log_types import measurement_named
+
 _LEVEL_EPSILON = 1e-12
 
 CrossingDirection = Literal["rising", "falling"]
@@ -2129,17 +2131,21 @@ def compute_measurement_stats(
     """Aggregate stats across all steps of a ``.MEAS`` result dict.
 
     ``None`` entries (failed measurements) are counted but excluded from stats.
-    If ``measurement`` is given, stats are computed for only that one.
+    If ``measurement`` is given, stats are computed for only that one, named
+    in any case (:func:`~ltspice_mcp.lib.log_types.measurement_named`).
     """
     if histogram_bins < 0:
         raise ValueError(f"histogram_bins must be >= 0, got {histogram_bins}")
 
-    names = [measurement] if measurement is not None else list(measurements.keys())
-    if measurement is not None and measurement not in measurements:
-        raise ValueError(
-            f"Measurement {measurement!r} not found. Available: "
-            f"{', '.join(measurements.keys()) or '<none>'}"
-        )
+    names = list(measurements.keys())
+    if measurement is not None:
+        named = measurement_named(measurement, names)
+        if named is None:
+            raise ValueError(
+                f"Measurement {measurement!r} not found. Available: "
+                f"{', '.join(measurements.keys()) or '<none>'}"
+            )
+        names = [named]
 
     result: dict[str, MeasurementStatsEntry] = {}
     for name in names:

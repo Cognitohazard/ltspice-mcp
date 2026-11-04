@@ -27,7 +27,7 @@ import asyncio
 import contextlib
 import math
 import re
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Collection, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
@@ -62,7 +62,7 @@ from ltspice_mcp.lib.device_names import (
 )
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
-from ltspice_mcp.lib.log_types import MeasurementsOutput
+from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -799,6 +799,20 @@ def aggregate_log_measurements(
     return flat_values, axis_map, steps_label, at_map
 
 
+def require_measurement(name: str, names: Collection[str]) -> str:
+    """The one of a log's measurement ``names`` that a caller's ``name``
+    refers to, in any case (:func:`measurement_named`); a name the log does
+    not hold is refused with the ones it does."""
+    named = measurement_named(name, names)
+    if named is None:
+        held = ", ".join(sorted(names)) or "none"
+        raise ResultError(
+            f"No measurement named {name!r} in the log. It holds: {held}. A name "
+            "is matched in any case."
+        )
+    return named
+
+
 def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> MeasurementsOutput:
     """One step's row of a log's measurement tables.
 
@@ -1107,8 +1121,11 @@ async def measurement_rows(
                 crossings = [a for a in at_map.get(name, []) if a is not None]
                 if crossings:
                     entry["at"] = crossings[0]
+        if recipe.field is not None:
+            require_measurement(recipe.field, stats)
         if recipe.names is not None:
-            stats = {name: entry for name, entry in stats.items() if name in recipe.names}
+            chosen = {require_measurement(name, stats) for name in recipe.names}
+            stats = {name: entry for name, entry in stats.items() if name in chosen}
         values.append({"stats": stats})
     zeros = await _zeros_a_failed_step_prints(source, whole, set(values[0]["stats"]))
     if zeros is not None:

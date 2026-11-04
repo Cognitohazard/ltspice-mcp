@@ -63,6 +63,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.spice_lex import extract_meas_name, lex
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 
@@ -520,21 +521,24 @@ def reconciliation_observations(
     """
     obs: list[Observation] = []
 
-    produced_meas = {m.lower() for m in (summary.get("measurements") or {})}
-    failed = {f.lower() for f in (summary.get("failed_measurements") or [])}
+    failed = list(summary.get("failed_measurements") or [])
     # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
     # in ``failed_measurements``). Without removing it here, the produced-check
     # below would treat it as produced and skip it — shadowing the "failed"
     # classification, so a failed measurement never surfaced as an observation.
-    produced_meas -= failed
+    produced_meas = [
+        name
+        for name in (summary.get("measurements") or {})
+        if measurement_named(name, failed) is None
+    ]
     warns = " ".join(summary.get("warnings") or []).lower()
     meas_batch_skipped = "batch mode" in warns and "meas" in warns
     four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
 
     for name in requested.get("meas", []):
-        if name.lower() in produced_meas:
+        if measurement_named(name, produced_meas) is not None:
             continue
-        if name.lower() in failed:
+        if measurement_named(name, failed) is not None:
             reason = "failed"
         elif meas_batch_skipped:
             reason = "skipped_in_batch_mode"

@@ -1926,7 +1926,7 @@ it, and reported when the caller names it.
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name. A run with one value per name also has `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
