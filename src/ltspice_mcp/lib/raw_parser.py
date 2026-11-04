@@ -34,6 +34,7 @@ from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
+from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
 
@@ -707,6 +708,25 @@ def _raw_node_data_is_finite(raw: RawData, trace_names: list[str], step: int) ->
 _SIGNALS_STRUCTURED_CAP = 100
 
 
+def _step_temperature(
+    raw: DecodedRaw | DecodedPlot, step: int, logs: DecodedLog
+) -> tuple[bool, float | None]:
+    """Whether the run steps its temperature, and the temperature of ``step``
+    when the run names it: from the step's own values, which the raw or the
+    log's ``.step`` lines hold."""
+    steps = raw.descriptor.steps
+    log_steps = logs.section("steps")["value"] or []
+    stepped = any(STEPPED_TEMPERATURE in dict(row.parameters) for row in steps) or any(
+        STEPPED_TEMPERATURE in row for row in log_steps
+    )
+    if not stepped or not 0 <= step < len(steps):
+        return stepped, None
+    value = dict(steps[step].parameters).get(STEPPED_TEMPERATURE)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return True, float(value)
+    return True, None
+
+
 def build_simulation_summary(
     raw: DecodedRaw | DecodedPlot,
     logs: DecodedLog | None,
@@ -831,6 +851,13 @@ def build_simulation_summary(
             for name in ("temp_c", "tnom_c"):
                 if temperatures[name] is not None:
                     summary[name] = temperatures[name]
+        stepped, temperature = _step_temperature(raw, step, logs)
+        if stepped:
+            # The header holds one step's temperature (parse_temperatures),
+            # never the step summarised here unless by chance.
+            summary.pop("temp_c", None)
+            if temperature is not None:
+                summary["temp_c"] = temperature
 
         meas_data = section_value("measurements", "measurements")
         if meas_data is not None:

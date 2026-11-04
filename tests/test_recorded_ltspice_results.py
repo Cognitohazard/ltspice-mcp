@@ -483,6 +483,34 @@ class TestSteppedRuns:
         assert summary["step_count"] == 3
         assert not any("Stepped .op" in warning for warning in summary.get("warnings", []))
 
+    @pytest.mark.parametrize("case_id", ["raw/step_temp", "raw/step_temp_op"])
+    def test_each_steps_summary_reports_that_steps_temperature(
+        self, build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The log's header names one step's temperature: LTspice 26 prints
+        the first step's before the run, XVII the last step's after it. Each
+        step's summary reports its own."""
+        header = parse_temperatures(rec.recorded(build, f"{case_id}.log"))[0]
+        assert header == (-40.0 if rec.generation(build) == "current" else 125.0)
+        raw = rec.stage_run(build, case_id, work_dir)
+        reply = SyncApi(state_no_sim).analyze_results(
+            sources=[{"path": str(raw), "label": "dut"}],
+            recipes=[{"key": "s", "metric": "summary"}],
+            all_steps=True,
+            include={"fields": ["step_values", "value.temp_c", "value.tnom_c"]},
+        )
+        rows = reply["results"]["s"]["values"]
+        assert [row["step_values"] for row in rows] == [
+            {"temp": -40.0},
+            {"temp": 27.0},
+            {"temp": 125.0},
+        ]
+        assert [row["value"] for row in rows] == [
+            {"temp_c": -40.0, "tnom_c": 27.0},
+            {"temp_c": 27.0, "tnom_c": 27.0},
+            {"temp_c": 125.0, "tnom_c": 27.0},
+        ]
+
 
 #: What each build stored of ``raw/compress_*``, an RC charge over 5 ms: the
 #: points, and for a run reported as coarse, its widest gap (from, to) in s.

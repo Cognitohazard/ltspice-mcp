@@ -469,8 +469,10 @@ def parse_temperatures(
     Reads the value both LTspice (``temp = 27`` / ``tnom = 27``) and ngspice
     (``Doing analysis at TEMP = 27.0 and TNOM = 27.0``) print by default;
     ``None`` for either value when the log doesn't carry it. On a stepped-
-    temperature run the header value is step 0's, which is still a truthful
-    fact about the header — no attempt is made to derive a per-step temp.
+    temperature run the header holds one step's temperature, not the run's:
+    LTspice 26 prints the first step's before the run and LTspice XVII the
+    last step's after it (the recorded ``raw/step_temp``). It is returned as
+    printed; a step's own temperature is in that step's values.
     """
     body = _resolve_log_text(log_path, text)
     ng = _RE_NG_TEMP.search(body)
