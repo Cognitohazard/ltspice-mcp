@@ -1210,7 +1210,8 @@ ops                 list[Op] — Appendix A.3
 compare             {reference, anchors?, rtol, mode?} — post-commit netlist
                     compare ("equivalence" | "structural_diff"), inside
                     the transaction; the exported netlist is returned
-                    only when the verdict is not a match
+                    only when the verdict is not a match. A dry run
+                    compares the sheet the batch would write
 dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend", "preexisting"],
                     default ["touched"]
@@ -1222,7 +1223,10 @@ view_limit          page size for the paginated views (default 100)
 ```
 
 `compare` takes the same object as `verify_circuit`'s `compare`, with the same
-field names.
+field names. On a dry run, an op-less read included, it compares the sheet the
+batch would write, from the same staged copy, and nothing is saved. When an op
+failed the batch would write nothing, so `verification.compare_error` says the
+sheet was not compared.
 
 **The exported netlist is returned only when the comparison did not match.**
 The compare stage exports the committed sheet to a netlist. It exports a copy,
@@ -2067,14 +2071,18 @@ of the same name inside a `.subckt` body is another device and is left as
 it is. A
 `rule: "mismatch"` can also select a MOS inside subcircuits by its exact
 instance list, or every MOS inside a subcircuit instance by that instance's
-list. Such a device gets its draw as `delvto` and `mulu0` instance
-parameters, which needs its model to resolve to an ngspice-compatible BSIM3
-or BSIM4 model, and the draw uses the device's W and L after `assign`
-variations are applied. The area a draw stands for is `m·W·L`, where m is the
-product of the device's own `m` and the `m` of every subcircuit instance
-above it (an inner `m={mult}` resolves in the scope its X line sets), because
-the simulator builds that many parallel copies from one card and they share
-the draw. An `m` that does not resolve to a positive number refuses the
+list. On ngspice such a device gets its draw as `delvto` and `mulu0` instance
+parameters, which needs its model to resolve to a BSIM3 or BSIM4 model.
+LTspice takes neither `mulu0` nor `delvto` on BSIM3, so there the device gets
+its own copy of its `.model` inside a private copy of its subcircuit, as a
+top-level device does, which needs a model with one definition; a binned
+model is refused with `model_missing`. The draw uses the device's W and L
+after `assign` variations are applied. The area a draw stands for is `m·W·L`,
+because the simulator builds m parallel copies from one card and they share
+the draw. On ngspice m is the product of the device's own `m` and the `m` of
+every subcircuit instance above it; LTspice ignores `m` on an X line, so
+there m is the device's own. An inner `m={mult}` resolves in the scope its X
+line sets. An `m` that does not resolve to a positive number refuses the
 request with `mismatch_geometry_unresolved`. Draws across circuits are
 independent; correlated Monte Carlo across decks is not supported.
 

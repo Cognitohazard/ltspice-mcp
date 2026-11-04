@@ -1568,8 +1568,12 @@ class TestMismatchThroughSubcircuits:
         ("xm1_params", "body"),
         [
             # ngspice builds m copies of every device in the body of an X line
-            # that carries m, all from the one patched card, so they share a draw.
-            pytest.param(" m=4", MINI_FET, id="m-on-the-x-line"),
+            # that carries m, all from the one patched card, so they share a
+            # draw. A deck with no semantic profile is drawn that way whatever
+            # the simulator. LTspice ignores such an m, and a profiled LTspice
+            # deck is drawn as one copy (test_nested_targeting.py,
+            # test_an_x_line_multiplier_counts_on_ngspice_and_not_on_ltspice).
+            pytest.param(" m=4", MINI_FET, id="x-line-m-counts-as-on-ngspice-without-a-profile"),
             # The foundry spelling: the body multiplies its device by a
             # parameter (m={mult}) and the X line sets that parameter.
             pytest.param(" mult=4", _MULT_FET, id="mult-set-from-the-x-line"),

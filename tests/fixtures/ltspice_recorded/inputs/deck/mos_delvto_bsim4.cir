@@ -1,0 +1,25 @@
+* delvto on BSIM4 devices against models with vth0 shifted by the same 0.1 V
+Vdd vdd 0 1.8
+Vgn gn 0 1.0
+Vgp gp 0 0.8
+VN0 vdd n0 0
+MN0 n0 gn 0 0 N W=1u L=1u
+VN1 vdd n1 0
+MN1 n1 gn 0 0 N W=1u L=1u delvto=0.1
+VN2 vdd n2 0
+MN2 n2 gn 0 0 NUP W=1u L=1u
+VP0 p0 0 0
+MP0 p0 gp vdd vdd P W=1u L=1u
+VP1 p1 0 0
+MP1 p1 gp vdd vdd P W=1u L=1u delvto=0.1
+VP2 p2 0 0
+MP2 p2 gp vdd vdd PSIGNED W=1u L=1u
+VP3 p3 0 0
+MP3 p3 gp vdd vdd PMAG W=1u L=1u
+.model N NMOS level=54 vth0=0.5
+.model NUP NMOS level=54 vth0=0.6
+.model P PMOS level=54 vth0=-0.5
+.model PSIGNED PMOS level=54 vth0=-0.4
+.model PMAG PMOS level=54 vth0=-0.6
+.op
+.end

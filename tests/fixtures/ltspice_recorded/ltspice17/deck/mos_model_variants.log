@@ -1,0 +1,70 @@
+Circuit: * Model cards with vth0 shifted or u0 scaled, on BSIM4 and BSIM3 devices
+
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Direct Newton iteration for .op point succeeded.
+Semiconductor Device Operating Points:
+                        --- BSIM3 MOSFETS ---
+Name:        me          md          mc
+Model:       n3u        n3up         n3
+Id:        2.59e-07    3.35e-08    2.13e-07
+Vgs:       1.00e+00    1.00e+00    1.00e+00
+Vds:       1.80e+00    1.80e+00    1.80e+00
+Vbs:       0.00e+00    0.00e+00    0.00e+00
+Vth:       9.29e-01    1.03e+00    9.29e-01
+Vdsat:     6.73e-02    3.86e-02    6.75e-02
+Gm:        4.02e-06    6.80e-07    3.32e-06
+Gds:       2.60e-08    3.86e-09    2.01e-08
+Gmb        2.75e-06    4.72e-07    2.27e-06
+Cbd:       0.00e+00    0.00e+00    0.00e+00
+Cbs:       0.00e+00    0.00e+00    0.00e+00
+Cgsov:     2.80e-16    2.80e-16    2.80e-16
+Cgdov:     2.80e-16    2.80e-16    2.80e-16
+Cgbov:     0.00e+00    0.00e+00    0.00e+00
+dQgdVgb:   2.29e-15    1.90e-15    2.29e-15
+dQgdVdb:  -2.80e-16   -2.80e-16   -2.80e-16
+dQgdVsb:  -1.37e-15   -6.89e-16   -1.37e-15
+dQddVgb:  -7.67e-16   -4.66e-16   -7.67e-16
+dQddVdb:   2.80e-16    2.80e-16    2.80e-16
+dQddVsb:   8.31e-16    3.19e-16    8.31e-16
+dQbdVgb:  -5.12e-16   -8.76e-16   -5.12e-16
+dQbdVdb:   4.41e-19    1.73e-19    4.41e-19
+dQbdVsb:  -9.91e-16   -3.90e-16   -9.91e-16
+
+                        --- BSIM4 MOSFETS ---
+Name:      mb          ma
+Model:     n4u         n4
+Id:      3.01e-05    2.53e-05
+Vgs:     1.00e+00    1.00e+00
+Vds:     1.80e+00    1.80e+00
+Vbs:     0.00e+00    0.00e+00
+Vth:     5.85e-01    5.85e-01
+Vdsat:   3.86e-01    3.91e-01
+Gm:      1.21e-04    1.03e-04
+Gds:     1.84e-06    1.54e-06
+Gmb      1.59e-05    1.34e-05
+Cbd:     7.12e-16    7.12e-16
+Cbs:     1.00e-15    1.00e-15
+
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 4
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 14
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
