@@ -1576,6 +1576,22 @@ not applicable, or no exported netlist to compare, which names whether the
 export ran) or a `failures` row at stage `compare` gives the error, so a
 reply without a comparison always says which.
 
+**Outcome.** `complete` means every check the caller asked for ran, with no
+failure, no finding at error or warning severity, and no comparison short of
+`equivalent: true`. A check asked for by name that did not run is a shortfall:
+one listed in `checks`, or, with the default list, the comparison asked for by
+supplying `compare`. Its `checks_skipped` row or `failures` row says why, and
+`hint` names it. The outcome is then `partial` when some check ran or the
+drawing was returned, and `failed` when no check ran and no drawing was
+returned, whether the checks were skipped or failed. `isError` stays unset in
+both cases, because the call was valid and the reply says why each check did
+not run. Skipping a check the caller did not ask for is not a shortfall: one
+left out of `checks`, one the default list leaves out because it does not
+apply to the file kind, and every check under `render.mode: "only"`. Neither
+is a check on the default list that this session cannot run, such as
+`export` without LTspice: its `checks_skipped` row says so, and naming it in
+`checks` makes its absence a shortfall.
+
 In the render block, `sha256` is the image's digest and `source_sha256` the
 digest of the sheet file this call drew. Rendering reads the file on disk, and
 another session sharing the working directory may commit between
