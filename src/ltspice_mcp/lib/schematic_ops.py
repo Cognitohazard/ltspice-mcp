@@ -1250,98 +1250,30 @@ def _append_asc_text(
     )
 
 
-def _remove_exact_directive(editor, instruction: str) -> bool:
-    """Remove one DIRECTIVE-type record matching ``instruction`` by FULL-TEXT
-    equality (not substring), returning whether one was removed.
-
-    spicelib's ``remove_instruction`` matches by substring and removes the first
-    hit, so an undo of ``.tran 1m`` could instead delete ``.tran 10m`` (or a
-    pre-existing duplicate) and silently corrupt the simulation setup. On an
-    AscEditor (``directives`` is a list of typed Text records) we filter by exact
-    text and drop a single record. Netlist editors (SpiceEditor — no
-    ``directives`` list) keep spicelib's substring matcher; the ``.cir``/``.net``
-    edit path is out of scope here.
-    """
-    directives = getattr(editor, "directives", None)
-    if directives is None:
-        return bool(editor.remove_instruction(instruction))
-    body = _text_record_body(instruction)
-    for idx, d in enumerate(directives):
-        dtype = getattr(d, "type", None)
-        dtext = getattr(d, "text", None)
-        if dtype == TextTypeEnum.DIRECTIVE and dtext == body:
-            del directives[idx]
-            return True
-    return False
-
-
-def _remove_directive_or_comment(editor, instruction: str) -> None:
-    """Remove a directive or comment matching ``instruction``.
-
-    The default path is an exact, literal match: a DIRECTIVE is removed only when
-    its full text equals ``instruction`` (see ``_remove_exact_directive``), and a
-    comment only when its body equals it. ``instruction`` is never treated as a
-    regex by default — common SPICE directives contain ``(`` and ``)`` (every
-    ``.meas``/``.four``/``.print`` referencing ``V(node)``) which would silently
-    turn into regex capture groups under any "metachar means regex" heuristic.
-    Pass an explicit ``regex:`` prefix to opt in to regex matching.
+def _remove_directive_or_comment(editor: AscEditor, instruction: str) -> None:
+    """Remove every directive and comment ``instruction`` names (``_text_matcher``).
 
     Raises NetlistError when nothing matched, so the user can't think they
     cleaned a directive that's still in the file.
     """
-    matcher = _text_matcher(instruction)
-    if isinstance(matcher, re.Pattern):
-        directive_hit = bool(editor.remove_Xinstruction(matcher.pattern))
-        comment_hit = _strip_matching_comments(editor, matcher)
-        if not (directive_hit or comment_hit):
-            raise NetlistError(
-                f"No directive or comment matched regex {matcher.pattern!r}. It is matched "
-                "against each TEXT line's text, where a line break is a \\n escape."
-            )
+    named = _text_matcher(instruction)
+    kept = [text for text in editor.directives if not named(text)]
+    if len(kept) < len(editor.directives):
+        editor.directives[:] = kept
         return
-
-    directive_hit = _remove_exact_directive(editor, instruction)
-    comment_hit = _strip_matching_comments(editor, instruction)
-    if not (directive_hit or comment_hit):
+    if instruction.startswith("regex:"):
         raise NetlistError(
-            f"No directive or comment matched {instruction!r} exactly. "
-            "Match is literal by default — pass 'regex:<pattern>' for regex "
-            "matching, or copy the text of the sheet's TEXT line, after its '!' "
-            "(directive) or ';' (comment); a line break may be given as a newline "
-            "or as the \\n escape the file holds."
+            f"No directive or comment matched regex {instruction[6:]!r}. It is searched "
+            "for in each TEXT line's text, in the case it is given, where a line break "
+            "is a \\n escape."
         )
-
-
-def _strip_matching_comments(editor, matcher) -> bool:
-    """Best-effort removal of TEXT-COMMENT entries whose body matches.
-
-    ``matcher`` is either a literal string (exact match) or a compiled
-    regex. ``editor.directives`` only exists on AscEditor — silently
-    no-op for netlist-mode editors. Returns True when at least one
-    comment was removed so the caller can decide whether the overall
-    remove operation hit anything.
-    """
-    directives = getattr(editor, "directives", None)
-    if directives is None:
-        return False
-    if isinstance(matcher, str):
-        matcher = _text_record_body(matcher.strip())
-    keep = []
-    for entry in directives:
-        body = getattr(entry, "text", None)
-        entry_kind = getattr(entry, "type", None)
-        if entry_kind == TextTypeEnum.COMMENT and isinstance(body, str):
-            if isinstance(matcher, str):
-                if body.strip() == matcher:
-                    continue
-            else:
-                if matcher.search(body):
-                    continue
-        keep.append(entry)
-    if len(keep) != len(directives):
-        directives[:] = keep
-        return True
-    return False
+    raise NetlistError(
+        f"No directive or comment matched {instruction!r} exactly. "
+        "Match is literal by default — pass 'regex:<pattern>' for regex "
+        "matching, or copy the text of the sheet's TEXT line, after its '!' "
+        "(directive) or ';' (comment); a line break may be given as a newline "
+        "or as the \\n escape the file holds."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1353,11 +1285,19 @@ def _xy(point: Point) -> tuple[int, int]:
     return int(point.X), int(point.Y)
 
 
-def _text_matcher(instruction: str) -> "str | re.Pattern[str]":
-    """How a directive or comment is named: ``regex:<pattern>`` compiled, to be
-    searched in each text, or else the literal text itself."""
+def _text_matcher(instruction: str) -> Callable[[Text], bool]:
+    """Whether a directive or comment is one ``instruction`` names: the one rule
+    ``remove_directive`` and ``move`` select texts by, for both kinds of text.
+
+    A literal names every text whose words equal it, space around either
+    ignored, a line break given as a newline or as the ``\\n`` escape a TEXT
+    record holds. ``regex:<pattern>`` names every text the pattern is found in
+    (``re.search``), in the case it is given: ``(?i)`` ignores case and ``^``
+    anchors it at the start of the text.
+    """
     if not instruction.startswith("regex:"):
-        return instruction
+        body = _text_record_body(instruction.strip())
+        return lambda text: text.text.strip() == body
     pattern = instruction[6:]
     if not pattern.strip():
         raise NetlistError(
@@ -1365,22 +1305,16 @@ def _text_matcher(instruction: str) -> "str | re.Pattern[str]":
             "provide an explicit regex after 'regex:'."
         )
     try:
-        return re.compile(pattern)
+        compiled = re.compile(pattern)
     except re.error as e:
         raise NetlistError(f"Invalid regex {pattern!r}: {e}") from e
+    return lambda text: compiled.search(text.text) is not None
 
 
 def _texts_matching(editor: AscEditor, wanted: str) -> list[int]:
-    """Indices of the directives and comments ``wanted`` names, for ``move``.
-
-    Exact text, compared as a TEXT record holds it (line breaks as ``\\n``,
-    surrounding space ignored), or ``regex:<pattern>`` searched in each text.
-    """
-    matcher = _text_matcher(wanted)
-    if isinstance(matcher, re.Pattern):
-        return [i for i, d in enumerate(editor.directives) if matcher.search(d.text)]
-    body = _text_record_body(matcher.strip())
-    return [i for i, d in enumerate(editor.directives) if d.text.strip() == body]
+    """Indices of the directives and comments ``wanted`` names, for ``move``."""
+    named = _text_matcher(wanted)
+    return [i for i, text in enumerate(editor.directives) if named(text)]
 
 
 class _MovePlan(NamedTuple):
@@ -2118,7 +2052,7 @@ class OpMove(StrictModel):
     wires: list[WireEnds] = Field(default_factory=list)
     texts: list[str] = Field(
         default_factory=list,
-        description="Directives and comments: exact text or 'regex:'; every match moves.",
+        description="Directives and comments, as remove_directive names them; each match moves.",
     )
     region: SheetRegion | None = Field(
         default=None,
@@ -2231,8 +2165,8 @@ class OpRemoveDirective(StrictModel):
     op: Literal["remove_directive"]
     instruction: str = Field(
         description=(
-            "Directive or comment text to remove, matched literally by default; "
-            "prefix with 'regex:' to match by pattern."
+            "Removes each directive and comment equal to this, outer space ignored; "
+            "with 'regex:', each a case-sensitive search finds."
         )
     )
 

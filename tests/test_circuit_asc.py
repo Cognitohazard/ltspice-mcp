@@ -2403,11 +2403,11 @@ class TestRemoveWireAndNetLabelOps:
         read = _sheet_facts(asc_state, "rm_substr.asc")
         assert any(".tran 10m" in d for d in read["directives"])
 
-    async def test_remove_directive_removes_one_of_duplicates(
+    async def test_remove_directive_removes_every_copy_and_names_each(
         self, asc_state: SessionState, work_dir: Path
     ):
-        # Inverse of a single add removes a single record: with two identical
-        # directives, one remove_directive leaves exactly one.
+        # A text names every record it matches, as move selects them, and the
+        # reply lists each record it took.
 
         blank_sheet_file(asc_state, "rm_dup")
         batch_view(
@@ -2426,8 +2426,63 @@ class TestRemoveWireAndNetLabelOps:
             stop_on_error=True,
         )
         assert res["saved"] is True
+        assert res["results"][0]["removed_texts"] == [
+            {"kind": "directive", "text": ".tran 1m", "x": 16, "y": 16},
+            {"kind": "directive", "text": ".tran 1m", "x": 16, "y": 32},
+        ]
         read = _sheet_facts(asc_state, "rm_dup.asc")
-        assert sum(1 for d in read["directives"] if d == ".tran 1m") == 1
+        assert ".tran 1m" not in read["directives"]
+
+
+#: A sheet's texts, each at a height of its own: two copies of one directive,
+#: the directive in capitals, and two comments.
+_TEXTS = (
+    "TEXT 16 16 Left 2 !.tran 1m",
+    "TEXT 16 48 Left 2 !.TRAN 1m",
+    "TEXT 16 80 Left 2 ;see TRAN note",
+    "TEXT 16 112 Left 2 !.tran 1m",
+    "TEXT 16 144 Left 2 ;note",
+)
+
+
+@pytest.mark.parametrize(
+    ("instruction", "heights"),
+    [
+        # A pattern is searched for anywhere in the text, in the case it is given.
+        ("regex:tran", [16, 112]),
+        ("regex:TRAN", [48, 80]),
+        (r"regex:\.TRAN", [48]),
+        (r"regex:(?i)\.tran", [16, 48, 112]),
+        ("regex:^note", [144]),
+        # A literal is the whole text, space around either ignored.
+        (".tran 1m", [16, 112]),
+        (" .tran 1m ", [16, 112]),
+        ("note", [144]),
+        (".TRAN 1M", []),
+    ],
+)
+def test_remove_directive_removes_the_texts_move_selects(
+    work_dir: Path, instruction: str, heights: list[int]
+):
+    """One rule says which directives and comments a text names, for both ops
+    and for both kinds of text. Each op is applied to a sheet of its own."""
+    from ltspice_mcp.lib.schematic_ops import OpMove, OpRemoveDirective, apply_op_inplace
+
+    sheet = _write_sheet(work_dir / "texts.asc", *_TEXTS)
+    remove = OpRemoveDirective(op="remove_directive", instruction=instruction)
+    move = OpMove(op="move", dx=1000, dy=0, texts=[instruction])
+    if not heights:
+        for op in (remove, move):
+            with pytest.raises(NetlistError, match="No directive or comment matched"):
+                apply_op_inplace(open_editor(sheet), op, sheet)
+        return
+
+    removed = apply_op_inplace(open_editor(sheet), remove, sheet)["removed_texts"]
+    assert isinstance(removed, list)
+    moving = open_editor(sheet)
+    apply_op_inplace(moving, move, sheet)
+    moved = [int(text.coord.Y) for text in moving.directives if int(text.coord.X) == 1016]
+    assert [text["y"] for text in removed] == moved == heights
 
 
 @pytest.mark.asyncio

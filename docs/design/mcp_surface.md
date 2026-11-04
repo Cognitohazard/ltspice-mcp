@@ -2051,8 +2051,13 @@ it.
 `remove_wire` removes an exact segment. `remove_component` takes
 `cleanup_wires` to also delete the wires its removal leaves dangling.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
-LTspice). Removals match text literally by default; a `regex:` prefix matches
-a pattern instead.
+LTspice). `remove_directive` and `move`'s `texts` name directives and comments
+by one rule. A literal names every text equal to it, space around either
+ignored, and a line break may be given as a newline or as the `\n` escape the
+file holds. A `regex:` prefix names every text the pattern is found in
+(`re.search`), case-sensitive: `(?i)` ignores case and `^` anchors the pattern
+at the start of the text. `remove_directive` removes every text it names and
+lists each in `removed_texts`.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,
