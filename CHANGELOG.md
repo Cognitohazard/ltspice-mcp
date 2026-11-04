@@ -73,6 +73,10 @@ tool-surface changes.
   being drawn as one copy. A refusal while drawing for a device one subcircuit
   level down now reaches the caller as a coded error rather than an uncoded
   one.
+- `run_experiments` reported a mismatch rule it refuses for a device inside a
+  subcircuit as `submission_failed`. An LTspice run now reports
+  `unsupported_backend`, and an ngspice run whose device is not a BSIM3 or
+  BSIM4 model reports `unsupported_model`.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its
