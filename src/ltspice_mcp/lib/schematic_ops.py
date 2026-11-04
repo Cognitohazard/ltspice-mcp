@@ -2195,8 +2195,8 @@ class OpRemoveWire(StrictModel):
     pin: str | None = Field(
         default=None,
         description=(
-            "Incident-point form: removes every segment touching this pin, including "
-            "wires belonging to other connections at a shared node."
+            "Incident-point form: removes each wire that ends on this pin, other "
+            "connections' too; one passing through stays."
         ),
     )
     x: int | None = Field(default=None, description="Incident-point form, as a coordinate.")
