@@ -37,6 +37,7 @@ import itertools
 import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any, Literal
 
 from ltspice_mcp.lib.connectivity import (
@@ -48,11 +49,12 @@ from ltspice_mcp.lib.connectivity import (
     is_ground,
     label_folded_nets,
     name_key,
+    nets_by_ltspice,
     partition,
     point_on_segment,
-    same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.geometry import BBox
+from ltspice_mcp.lib.nets import LabelAt, Nets, PinAt
 from ltspice_mcp.lib.spice_lex import copies_by_name, key_value_tokens
 
 Point = tuple[int, int]
@@ -164,10 +166,12 @@ _RULES = (
     ),
     Rule(
         "floating_pin",
-        "structural",
+        "electrical",
         "point",
-        "A pin with no wire, label or other pin on it.",
+        "A pin LTspice leaves connected to nothing: no other pin, label or wire it "
+        "keeps on the pin's net.",
         check="layout",
+        provenance="same-instance-wire",
     ),
     Rule(
         "dangling_wire_end",
@@ -366,6 +370,8 @@ class _Index:
     def __init__(self, view: SheetView) -> None:
         self.view = view
         every = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in view.wires]
+        #: Every wire, those of no length among them.
+        self.every_wire = every
         #: The wires that have a length. One of no length has no span to cross
         #: anything, no end to dangle, and connects nothing.
         self.wires = [(a, b) for a, b in every if a != b]
@@ -390,6 +396,23 @@ class _Index:
         self.sheet_texts = [
             ((x, y), text, _core(extent)) for x, y, text, extent in view.text_extents
         ]
+
+    @cached_property
+    def pins(self) -> list[PinAt]:
+        """Every part's pins in SpiceOrder, each part told by its place in the view."""
+        return [
+            PinAt((x, y), index, order, part.name, name)
+            for index, part in enumerate(self.view.parts)
+            for order, (name, x, y) in enumerate(part.pins)
+        ]
+
+    @cached_property
+    def nets(self) -> Nets:
+        """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
+        labels = [
+            LabelAt((x, y), index, text) for index, (x, y, text) in enumerate(self.view.labels)
+        ]
+        return nets_by_ltspice(self.pins, labels, self.every_wire)
 
 
 def _wired_nets(view: SheetView, without: Collection[Point] = ()) -> NetPartition:
@@ -498,28 +521,18 @@ def _shared_references(ix: _Index) -> list[Finding]:
 @_finds("dropped_wire")
 def _dropped_wires(ix: _Index) -> list[Finding]:
     # LTspice leaves out a run whose two ends both land on pins of one part,
-    # with nothing on it between them: the pins stay on separate nodes, so the
-    # sheet shows a tie the netlist does not have. A label or a ground flag on
-    # the run keeps it. A part is told from another by its place in the view,
-    # since two parts may carry one reference, or none.
-    owners: dict[Point, list[tuple[str, str]]] = {}
-    for index, part in enumerate(ix.view.parts):
-        for _name, x, y in part.pins:
-            owners.setdefault((x, y), []).append((str(index), ""))
-    found: list[Finding] = []
-    for drop in same_instance_dropped_segments(owners, list(ix.view.wires), ix.labelled):
-        x1, y1, x2, y2 = drop["segment"]
-        name = ix.view.parts[int(drop["ref"])].name
-        found.append(
-            Finding(
-                "dropped_wire",
-                f"Wire {_wire((x1, y1), (x2, y2))} joins two pins of the same instance "
-                f"{name} and is not exported",
-                refs=(name,),
-                points=((x1, y1), (x2, y2)),
-            )
+    # with nothing on it between them (``Nets.dropped``): the pins stay on
+    # separate nodes, so the sheet shows a tie the netlist does not have.
+    return [
+        Finding(
+            "dropped_wire",
+            f"Wire {_wire(*run.segment)} joins two pins of the same instance "
+            f"{run.ends[0].reference} and is not exported",
+            refs=(run.ends[0].reference,),
+            points=run.segment,
         )
-    return found
+        for run in ix.nets.dropped
+    ]
 
 
 @_finds("duplicate_parameter", placeless=True)
@@ -546,41 +559,6 @@ def _duplicate_parameters(ix: _Index) -> list[Finding]:
                 )
             )
     return found
-
-
-def _floating(ix: _Index) -> list[tuple[Part, tuple[str, int, int]]]:
-    # For each point, the last pin each part has there.
-    last: dict[Point, dict[int, int]] = {}
-    for index, part in enumerate(ix.view.parts):
-        for position, (_name, x, y) in enumerate(part.pins):
-            last.setdefault((x, y), {})[index] = position
-    floating: list[tuple[Part, tuple[str, int, int]]] = []
-    for index, part in enumerate(ix.view.parts):
-        for position, pin in enumerate(part.pins):
-            coord = (pin[1], pin[2])
-            if coord in ix.labelled or ix.on_a_wire(coord):
-                continue
-            here = last[coord]
-            if len(here) > 1 and here[index] == position:
-                continue
-            floating.append((part, pin))
-    return floating
-
-
-def floating_pins(view: SheetView) -> list[tuple[Part, tuple[str, int, int]]]:
-    """Each pin connected to nothing, with its part, in the sheet's own order.
-
-    A pin is connected by a label on its point, by a wire that touches its
-    point anywhere along the wire's length, or by another part's pin on its
-    point. It is not connected by another pin of its own part. And where a part
-    has several pins on one point with no wire or label there, only the last of
-    them in SpiceOrder touches another part's pin; the rest are on nothing, even
-    with that other pin on the same point. Both builds were recorded doing this
-    (the ``pins-of-one-part-on-one-point`` cases).
-
-    A wire of no length connects nothing.
-    """
-    return _floating(_Index(view))
 
 
 #: An opamp's complexity level as LTspice's symbol dialog names it.
@@ -729,16 +707,25 @@ def _diagonal_wires(ix: _Index) -> list[Finding]:
 
 @_finds("floating_pin", placeless=True)
 def _floating_pins(ix: _Index) -> list[Finding]:
+    # A pin with nothing else on its net as LTspice netlists the sheet
+    # (``Nets.unconnected``): a wire straight between two pins of one part
+    # joins nothing, and of one part's pins stacked on a point with nothing
+    # else there only the last in SpiceOrder touches anything.
     return [
         Finding(
             "floating_pin",
-            f"Floating pin: {f'{part.name}.{name}' if name else part.name} at {_at((x, y))}",
-            refs=(part.name,),
-            points=((x, y),),
-            facts={"pin": name},
+            f"Floating pin: {_pin_name(pin)} at {_at(pin.point)}",
+            refs=(pin.reference,),
+            points=(pin.point,),
+            facts={"pin": pin.name},
         )
-        for part, (name, x, y) in _floating(ix)
+        for pin in ix.pins
+        if ix.nets.unconnected(pin)
     ]
+
+
+def _pin_name(pin: PinAt) -> str:
+    return f"{pin.reference}.{pin.name}" if pin.name else pin.reference
 
 
 @_finds("dangling_wire_end")
@@ -1196,7 +1183,8 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``unjoined_crossing``: a horizontal and a vertical wire through each
       other at a point no wire ends at and nothing sits on.
     - ``diagonal_wire``: a wire neither horizontal nor vertical.
-    - ``floating_pin``: a pin connected to nothing (:func:`floating_pins`).
+    - ``floating_pin``: a pin LTspice leaves connected to nothing: no other
+      pin, label or wire it keeps on the pin's net (``Nets.unconnected``).
     - ``dangling_wire_end``: a wire end on no pin, no label and no other wire.
     - ``dangling_label``: a label that is on no wire and at no pin.
     - ``duplicate_wire``: two wires with the same two ends, in either order.

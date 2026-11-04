@@ -294,8 +294,9 @@ def _wiring_met(
                     )
                 )
             elif coord not in {wire[:2], wire[2:]}:
+                # The leg's end lands mid-way along the wire: a T.
                 said.junctions.append(
-                    {"x": coord[0], "y": coord[1], "via": "endpoint", "wire": segment_json(wire)}
+                    {"x": coord[0], "y": coord[1], "via": "tee", "wire": segment_json(wire)}
                 )
 
     # Contact. LTspice joins a wire wherever another wire's end, a pin or a

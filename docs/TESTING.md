@@ -165,9 +165,10 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   `inputs/cases.toml`. Each `[behaviour.<key>]` table names a behaviour, the
   code that models it, and the inputs that record it. A sheet is exported with
   `-netlist`; anything else is run with `-Run -b`. A `plot` case runs a sheet
-  in LTspice's window instead (*Plot settings* below), and a `save` case opens
-  a sheet there and saves it (*Saved sheets* below). A behaviour with no input
-  of its own names in an `evidence` key where it is recorded instead (a
+  in LTspice's window instead (*Plot settings* below), a `save` case opens a
+  sheet there and saves it (*Saved sheets* below), and a `draw` case opens one
+  there and has it write an image (*Drawn sheets* below). A behaviour with no
+  input of its own names in an `evidence` key where it is recorded instead (a
   manifest field, the files of other cases, or the bridge recordings), or
   gives in an `unrecordable` key the reason it cannot be recorded. A behaviour
   whose inputs were written where no LTspice runs carries a `pending` key
@@ -194,6 +195,7 @@ These tests run on any machine, without LTspice:
 |`test_recorded_ltspice_decks.py`|value suffixes, deck encodings, the title line and comments, the card forms that lint and arity checks accept or refuse, how a deck is interpreted where simulators differ, and how a three-node transistor card is read|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, a frequency response analysis's results file, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes on save (line endings, encoding, record order), and that `asc_document` reads it, writes it back byte-identical, and formats a record as the build does|
+|`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, and the text the scene leaves out|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
@@ -262,6 +264,11 @@ Command-line details:
   without running anything and XVII opens its window.
 - The settings copy is never empty. A build started on an empty one behaves as
   on first launch, and XVII then runs its updater.
+- `-ini` is ignored, with no error, when the deck's path holds the letters
+  `ini` in either case, in its name or in any folder above it. The build then
+  runs on the recording user's own settings, so the recorder refuses such a
+  path: rename the case, or pass `--work-dir` to record somewhere else. The
+  path to the executable does not count.
 - `-ascii` is ignored when a settings file is also named, and when the deck's
   file name contains "ascii". So the two cases that test it
   (`raw/tran_as_text`, `raw/ac_as_text`) run on the recording user's own
@@ -333,6 +340,38 @@ properties:
 - Neither build opens a sheet that starts with a byte order mark.
 
 They were recorded on Windows, so their manifest entries have no `host`.
+
+### Drawn sheets
+
+What a build draws for a sheet is in no file it writes for a run, an export or
+a save. A `draw` case has the sheet window write an image of the sheet
+(`ltspice_recorder.drive_draw`). The recorder starts the build with only the
+sheet, sets the frame to 1280x800, sends Zoom to Fit, sends Write image to .emf
+file by its menu command id, and fills in the Save As dialog. The case ends
+when the file has been written and stops changing. If the build stops on a
+message box, the box is recorded and nothing is kept.
+
+The frame has a fixed size because the numbers in an image depend on how far
+the sheet is zoomed, and a frame left at its opening size would make them depend
+on the recording display. The image itself is not kept, since its header names
+that display. `ltspice_recorder.read_emf` reads the strokes, ellipses and texts
+it draws, and `<case>.drawn` holds those as text, in the image's own units. A
+record of any other drawing type is counted under `other`.
+
+`test_recorded_ltspice_drawing.py` takes the scale to sheet units from the two
+longest wires of each sheet. Coordinates in an image are whole numbers, so a
+small sheet, which zooms further, gives finer numbers. A text's box is its cell,
+so the recordings give where a text lies and how long it is, but not how far
+its glyphs reach inside the cell.
+
+Both builds draw these sheets alike. At the default text size a ground flag is
+a triangle with its base through the flag's point, 18 units either side, and
+its apex 18 units away. `SchFontSize` scales both the text and the triangle, so
+it and the other two font settings are in `BEHAVIOUR_KEYS`.
+
+The sheets under `inputs/draw/` hold floating parts and flags laid out to be
+measured, so they are left out of the records below, as the screenshot sheets
+are.
 
 ### An open window and the bridge
 
@@ -549,7 +588,9 @@ To capture again, open each sheet in each build with the window at
 the drawing area as PNG without scaling, because the reader needs the exact
 colours. The fit leaves the outer crosses inside the picture. A sheet added
 here needs both builds' pictures, and a case whose texts are closer than an
-em apart cannot be read back.
+em apart cannot be read back. The `draw/part_text` recording (*Drawn sheets*
+above) holds a symbol's own text at the eight placements to within 2 units,
+with no capture by hand.
 
 ## Re-recording the suite's records
 

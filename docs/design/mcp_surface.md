@@ -1218,8 +1218,14 @@ a window's copy and does not check. For one that replaces the sheet:
   last changed, and committing would leave two sheets, each missing the
   other's changes. The call then fails with `open_window_differs` at stage
   `window_check`, naming a few of the differing entries, and writes nothing.
-  The user resolves it by saving the window to keep its version, or by
-  closing it without saving to keep the file's. A dry run reports the
+  If the user wants to keep the window's version, a call with
+  `save_open_window: true` and no ops has LTspice save the sheet from that
+  window, as Ctrl+S does, and the reply gives the file's new `sha256`. The
+  caller reads the sheet again before editing it, because it now holds the
+  user's changes. A box LTspice shows instead of saving fails the call with
+  `window_not_saved`, quoting the box, and the server closes the box with
+  Cancel, which leaves the window's copy as it was. To keep the file's version, the user
+  closes the sheet in LTspice without saving. A dry run reports the
   difference in `observations` and is not refused. The comparison is by
   content rather than text, because LTspice returns its own serialization of
   a sheet. That serialization differs from the file it read in the first
@@ -1229,7 +1235,10 @@ a window's copy and does not check. For one that replaces the sheet:
 - **After the commit**, the committed sheet replaces the window's copy;
   LTspice records this as one step in that window's undo history.
   `open_in_ltspice` has one entry per window, `{pid, version, shown,
-  reason?}`. A window that could not be updated (`shown: false`) does not fail
+  reopened?, reason?}`. A window that does not take the committed sheet is
+  closed and opened again from the file (`reopened: true`), if it still holds
+  the sheet as it was before the commit; its undo history goes with it. A
+  window that could not be updated either way (`shown: false`) does not fail
   the call, because the file is committed, but the entry and the `hint` warn
   that the window still shows the old sheet and that saving from it would
   overwrite the edit.
@@ -1273,7 +1282,7 @@ split. `wire_pins` accepts `{x, y}` for either endpoint. The point must touch a
 wire, a pin or a label; on a wire's interior the new segment ends there and the wire is
 left whole, so `remove_wire` of that segment restores the sheet. The op's
 `results` entry lists the T under `junctions` as
-`{x, y, via: "endpoint", wire}`, where `wire` is the segment joined. The new
+`{x, y, via: "tee", wire}`, where `wire` is the segment joined. The new
 segment must leave the wire at a right angle, and a point where wires of two
 nets cross is refused, because a wire ending there would join both.
 
@@ -1380,7 +1389,7 @@ render        {format: "png"|"svg", scale?, max_pixels?,
               nothing
 in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
-export_to     "sidecar" (default) | "managed"
+export_to     "managed" (default) | "sidecar"
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1398,18 +1407,20 @@ LTspice is started in view (`started: true`); with `[schematic]
 start_ltspice` off, the block reports that no window is open and the check
 results are still returned. `in_ltspice` never fails the call.
 
-`sidecar`, the default `export_to`, overwrites the schematic's `<name>.net`
-under lock and returns `{path, sha256, diff_vs_prior?}`. LTspice writes the
-same file beside a schematic it runs from its own window, so the default
-export writes nothing such a run would not; it does make the call
-destructive, as the annotation table shows. `run_experiments` exports a
-schematic the managed way and writes nothing beside it. `managed` leaves the
-caller's files alone. It copies the schematic and the project-local
-`.asy`/`.lib`/`.sub`/`.inc`/`.mod` files under its folder into a scratch
-directory in the store, exports there, and writes nothing beside the caller's
-file (the lock it takes while copying is in the per-user folder). A compare of
-that export resolves relative includes from the schematic's folder, not from
-the scratch copy.
+`managed`, the default `export_to`, leaves the caller's files alone. It
+copies the schematic and the project-local `.asy`/`.lib`/`.sub`/`.inc`/`.mod`
+files under its folder into a scratch directory in the store, exports there,
+and writes nothing beside the caller's file (the lock it takes while copying
+is in the per-user folder). A compare of that export resolves relative
+includes from the schematic's folder, not from the scratch copy.
+`run_experiments` exports a schematic the same way. `sidecar` overwrites the
+schematic's `<name>.net` under lock and returns `{path, sha256,
+diff_vs_prior?}`. LTspice writes the same file beside a schematic it runs from
+its own window; asking for it makes the call destructive, as the annotation
+table shows. Both modes report in `diff_vs_prior` what changed since the
+schematic's previous export: `sidecar` against the `.net` it replaces,
+`managed` against the previous managed export of the same schematic, which
+the store keeps.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
@@ -1667,9 +1678,11 @@ that cannot be answered fails rather than returning an empty list.
 
 **The guide.** `inspect(kind: "guide")`, `Api.guide()` and the
 `spice://guide` resources serve the same text. A read through `inspect` or a
-resource is recorded on the session; if a session has not read the guide, its
-first tool reply contains one reminder to read it, in the text and in the
-structured `hint`.
+resource is recorded on the server's session. A read through `Api.guide()`,
+inside `run_code` too, is not, and a restarted server starts with none. If no
+read has reached the server since it started, its first tool reply contains one
+reminder to read the guide, in the text and in the structured `hint`, worded
+for that: an agent that has read it carries on.
 
 ---
 
@@ -1683,7 +1696,7 @@ structured `hint`.
 | `jobs` | false | true (cancel) | true | false |
 | `analyze_results` | false (artifact writes) | false | true | false |
 | `edit_schematic` | false | true | false | false |
-| `verify_circuit` | false (render, export) | true (export_to: sidecar, the default) | true | false |
+| `verify_circuit` | false (render, export) | true (export_to: sidecar) | true | false |
 | `inspect` | true | false | true | false |
 
 **Ownership.** Any caller can read every persisted job; only the owning

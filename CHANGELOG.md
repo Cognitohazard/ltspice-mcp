@@ -43,6 +43,21 @@ tool-surface changes.
   `geometry_not_literal` one subcircuit level down) instead of being drawn as
   one copy. A refusal while drawing for a device one subcircuit level down
   now reaches the caller as a coded error rather than an uncoded one.
+- The read-the-guide reminder said the session had not read the guide when
+  the server had only restarted, as after a reconnect, or when the guide was
+  read through `api.guide()` inside `run_code`, neither of which the server
+  sees. It now says the server has not been asked for the guide since it
+  started, so an agent that has read it carries on.
+- Closing and reopening an LTspice plot or sheet could fail on a busy machine
+  with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
+  time limit also counted the wait for LTspice to close the pane or answer its
+  question. That wait is now added to the limit.
+- `floating_pin` did not report the pins of a part joined only by a wire
+  running straight between them. LTspice drops that wire and leaves both
+  pins unconnected (recorded: `connectivity/same_instance_bare`), so
+  `verify_circuit` and `edit_schematic` now report each pin as floating,
+  beside the `dropped_wire` finding for the wire. The rule now reads the
+  sheet's nets as LTspice netlists them.
 - `verify_circuit`'s syntax check validated a deck against LTspice's rules
   whenever the session's default simulator was anything but ngspice, so a
   QSPICE or Xyce session was told its deck broke rules LTspice has and those
@@ -239,6 +254,14 @@ tool-surface changes.
   specification recommends for a client that passes only the text to the
   model; under the default, `"summary"`, such a model reads one summary line.
   `inspect(kind="capabilities")` reports the mode as `text_channel`.
+- `edit_schematic(save_open_window=true, ops=[])` has LTspice save the sheet
+  from the user's window, as Ctrl+S does, so the agent can keep the user's
+  unsaved changes once they agree instead of asking them to save by hand. Use
+  it after an edit is refused with `open_window_differs`, or after a plot
+  opens with `tied: false` because its sheet had unsaved changes. The reply
+  gives the file's new `sha256`, and the sheet is then read again before an
+  edit. A box LTspice shows instead of saving, such as for a write-protected
+  file, is quoted in `window_not_saved` and closed with Cancel.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the
@@ -297,6 +320,29 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
+  wire, a T, is listed under `junctions` with `via: "tee"`. It was
+  `via: "endpoint"`, which read as the end of the existing wire, the opposite
+  of what happened.
+- **Breaking:** `verify_circuit`'s `export_to` defaults to `"managed"`: the
+  export check exports a copy in the server's own folder and writes nothing
+  next to the schematic. It used to overwrite `<name>.net` beside the sheet
+  unless asked not to, the one default left that wrote into the caller's
+  folder after `run_experiments` stopped. `export_to="sidecar"` still writes
+  that file. Both modes report what changed since the schematic's previous
+  export (`diff_vs_prior`): a sidecar export against the file it replaces, a
+  managed one against the previous managed export, which the server keeps.
+- A call that sends a renamed argument's old name is refused, as before,
+  and the refusal now also says that a copy of the tool's arguments still
+  listing the old name is out of date, and to reload the tool's definition or
+  reconnect the server. A client that checks a call against such a copy
+  refuses the new name, so the tool cannot be called at all until it does.
+- The server's instructions say that LTspice's own MCP server
+  (`set_design_content`, `start_simulation`) edits and runs only the copy
+  open in its window, and to edit sheets with `edit_schematic` and run them
+  with `run_experiments`. A client that connects both servers met that rule
+  only in the guide, while LTspice's server's own instructions send sheet
+  edits to `set_design_content`.
 - `group_by`'s description in `analyze_results` and in `run_experiments`'
   `analyze` block names a parameter varied by a variation or within a run,
   where it named a `.step` axis, a deck command not every simulator has.
@@ -310,6 +356,13 @@ tool-surface changes.
   row's `source` label has it, and `include.fields: ["snapshot_id"]` puts it
   back on the row. A `waveform` or `plot` value no longer repeats the run
   identity its row already carries.
+- When an LTspice window that has an edited sheet open does not take the
+  committed sheet, the server now closes the sheet there and opens it again
+  from the file, and the window's entry in `open_in_ltspice` says
+  `reopened: true`. Before, the reply told the user to do this by hand. It is
+  done only when the window still holds the sheet as it was before the edit,
+  so nothing the user changed there since is lost; otherwise the entry says
+  `shown: false` as before.
 - **Breaking:** every argument that names a file is `path`, as
   `run_experiments`, `verify_circuit` and `inspect` already spelled it.
   `plot_waveform` takes `path` for `raw_file`. An `analyze_results` source

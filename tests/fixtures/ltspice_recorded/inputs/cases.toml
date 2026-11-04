@@ -200,7 +200,7 @@ inputs = [
 extra = ["export/res.asy"]
 
 [behaviour.export-instance-names]
-summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own."
+summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own, and what a run's raw calls such a resistor's current."
 model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py"]
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
@@ -273,6 +273,13 @@ extra = ["connectivity/res.asy"]
 [behaviour.schematic-save-encoding]
 summary = "The bytes a build writes when it saves a sheet from its window: its encoding, its line endings, and the order and spelling of its records, for a sheet as the server writes one, the same sheet with its records in another order, the same sheet with CRLF line endings, and a sheet stored in each encoding."
 model = ["lib/asc_document.py", "lib/encoding.py", "lib/schematic_scene.py"]
+
+[behaviour.sheet-drawing]
+summary = "What a build draws for a sheet: the triangle of a ground flag in each orientation and alone, where a part's name and value land at each of the eight placements and how big they are, that a Value2 attribute is drawn only with a visible WINDOW 123 line, and that a value's u is drawn as a micro sign. The text and the triangle both follow the SchFontSize setting."
+model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_renderer.py"]
+# Each [[case]] of kind "draw" opens its sheet in the window and has the window
+# write an image of it; see drive_draw. Each sheet starts with the two longest
+# wires it holds, which give the scale from the image's units to sheet units.
 
 # ---------------------------------------------------------------- decks
 
@@ -374,6 +381,27 @@ inputs = [
     "deck/vdmos_bulk_elsewhere.cir",
 ]
 
+[behaviour.options-solver]
+summary = "What .options solver and the Solver setting do on each build: the solver line of the log, the raw's Command field, whether the samples change, and what a spelling the build does not take gets: a complaint and the Normal solver on LTspice 26, a fatal error on LTspice XVII, which has no such option. In the settings file, 0 or no key is Normal and 1 is Alternate on both builds, a word is Normal, 2 is Alternate on LTspice 26 and crashes LTspice XVII, and a deck's .options outranks the setting on LTspice 26."
+# No server code reads the solver yet. The recorder is what models it so far:
+# it takes the Solver setting out of every case as a key that changes a result.
+model = ["tests/ltspice_recorder.py"]
+# One transient, one spelling a deck. XVII's refusal of a word says it expected
+# a number, so solver_number is there to show that a number is refused too.
+inputs = [
+    "deck/solver_default.cir",
+    "deck/solver_norm.cir",
+    "deck/solver_alt.cir",
+    "deck/solver_alternate.cir",
+    "deck/solver_number.cir",
+    "deck/solver_unknown.cir",
+]
+
+[behaviour.settings-file-ignored]
+summary = "That a build ignores -ini, with no error, when the deck's path holds the letters ini, in either case, in the deck's name or in any folder above it, and runs on the settings file of the person recording. The path to the executable does not count."
+model = ["tests/ltspice_recorder.py"]
+unrecordable = "What such a run shows is the settings of the person recording, which a recording must not depend on. It was looked at on LTspice 26.1.1 and XVII 17.0.37, by running log/meas_trig.cir with RadianMeasure set in the settings copy: under the names x_ini0, ini, mini and MINI, and under a folder holding the letters, both builds ignored the copy, and under the name in_i both read it. On LTspice 26 the log of such a run was the log of a run on the user's own settings with no -ini at all. The server's own launch with -ini (lib/controlled_ltspice.py) also sets APPDATA to the folder of a file named LTspice.ini, which a build reads instead, so it is not affected: that launch was looked at on LTspice 26.1.1, on a deck named x_ini0."
+
 # ---------------------------------------------------------------- raw files
 
 [behaviour.raw-transient]
@@ -402,9 +430,9 @@ model = ["lib/raw_header.py", "lib/raw_parser.py"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
-summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step."
+summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step; the same frequency named by a list, plain here and stepped under raw-stepped."
 model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
-inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir"]
+inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir", "raw/noise_list_one_freq.cir"]
 
 [behaviour.raw-op]
 summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
@@ -421,9 +449,9 @@ model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
 inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir"]
 
 [behaviour.raw-stepped]
-summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, and a stepped .ac at one frequency, which stores no frequency and one point a step."
+summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
 model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
-inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir"]
+inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
@@ -467,9 +495,9 @@ model = ["lib/log_parser.py", "lib/log_decode.py", "lib/encoding.py", "resources
 evidence = "every recorded log; a stepped temperature writes the one non-ASCII character (log/step_temp)"
 
 [behaviour.log-meas]
-summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, and the tables of a stepped run."
-model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py"]
-inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir"]
+summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
+model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py", "tools/analyze.py"]
+inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
@@ -545,7 +573,7 @@ model = ["lib/log_parser.py", "lib/metrics.py"]
 inputs = ["log/device_op_numdgt.cir", "log/device_op_numdgt_off.cir", "raw/op_save_device.cir"]
 
 [behaviour.log-diagnostics]
-summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage."
+summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage, a model parameter the device does not know."
 model = ["lib/log_parser.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
 inputs = [
     "log/err_unknown_directive.cir",
@@ -562,6 +590,7 @@ inputs = [
     "log/err_zero_resistance.cir",
     "log/err_no_analysis.cir",
     "log/warn_curly.cir",
+    "log/unknown_model_param.cir",
 ]
 
 [behaviour.log-convergence]
@@ -633,8 +662,13 @@ evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json,
 
 [behaviour.sheet-closed-from-outside]
 summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file."
-model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
+model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py", "tools/schematic_edit.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet with no results beside it', made by asking the frame of a window on a desktop of its own. LTspice XVII is not recorded: it has no bridge to find the window through."
+
+[behaviour.sheet-saved-from-outside]
+summary = "What the sheet menu's Save, sent to a window from outside, does to a sheet the bridge handed new text: it writes the window's copy to the file, an older sheet with the first line LTspice 26 writes, asks nothing, and the sheet then closes without a question; and that for a write-protected file it writes nothing and shows a box with only OK, which Cancel closes, leaving the window's copy as it was."
+model = ["lib/ltspice_window.py", "lib/ltspice_frame.py", "tools/schematic_edit.py"]
+evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: the facts noted after 'open a sheet to save'; manifest.json, sheet_commands. LTspice XVII has no bridge to find the window through."
 
 [behaviour.plot-tied-to-sheet]
 summary = "That LTspice ties a plot to a sheet, so that clicking a net plots it, when the results are opened from the sheet (a run made in that window, or the sheet's Visible Traces command), and not when the bridge opens them, by the results file's path or by the sheet's; and that the command reads the results file as it is when the command is given."
@@ -1125,3 +1159,87 @@ behaviour = "raw-fra"
 source = "raw/fra_numdgt7.cir"
 keep = ["log", "raw", "fra_1.raw"]
 builds = ["current"]
+
+# The Solver setting, which every other case leaves out. The transient is
+# deck/solver_default, so its samples say which solver ran. solver_setting_alt
+# gives the setting a word .options takes, and solver_setting_over_norm a deck
+# that names the other solver. On LTspice XVII that deck stops at its .options
+# line, and a setting of 2 crashes the build, leaving an empty log.
+[[case]]
+id = "deck/solver_setting_0"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "0" }
+
+[[case]]
+id = "deck/solver_setting_1"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "1" }
+
+[[case]]
+id = "deck/solver_setting_2"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "2" }
+
+[[case]]
+id = "deck/solver_setting_alt"
+behaviour = "options-solver"
+source = "deck/solver_default.cir"
+ini = { Solver = "alt" }
+
+[[case]]
+id = "deck/solver_setting_over_norm"
+behaviour = "options-solver"
+source = "deck/solver_norm.cir"
+ini = { Solver = "1" }
+
+# A sheet opened in the build's window and written out as an image of itself:
+# what is kept is what the image draws, in the image's own units.
+[[case]]
+id = "draw/ground_flags"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/ground_flags.asc"
+
+[[case]]
+id = "draw/ground_flags_font_40"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/ground_flags.asc"
+ini = { SchFontSize = "40" }
+note = "The sheet at a larger text size, which the triangle follows."
+
+[[case]]
+id = "draw/part_text"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/part_text.asc"
+extra = ["export/res.asy"]
+
+[[case]]
+id = "draw/part_text_font_40"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/part_text.asc"
+extra = ["export/res.asy"]
+ini = { SchFontSize = "40" }
+note = "The sheet at a larger text size."
+
+[[case]]
+id = "draw/value2"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/value2.asc"
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+
+# A part named without its element letter, on a sheet that runs. The two
+# resistors differ, so each current in the raw says which part it is.
+[[case]]
+id = "export/load_name_op"
+behaviour = "export-instance-names"
+kind = "run"
+source = "export/load_name_op.asc"
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+keep = ["net", "raw"]

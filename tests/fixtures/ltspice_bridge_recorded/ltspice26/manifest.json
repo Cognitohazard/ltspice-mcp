@@ -43,7 +43,8 @@
   ]
  },
  "sheet_commands": {
-  "Visible Traces": 32791
+  "Visible Traces": 32791,
+  "Save": 57603
  },
  "reader": {
   "ltspice17": {
@@ -59,6 +60,7 @@
    "dc": "64bbd1fc4817c91a5647e2cd9af1a518be5f24b84e219849d91a42836d432623",
    "mos_multiplier": "bb7dfbbc799a0ba79e2c491dd2d9786ad733d28ab1c798cad4065775777c1f94",
    "noise": "ee95eefa142785e11138498624e2648b1aac704962ec15ff49f94bf8f7ab9d35",
+   "noise_list_one_freq": "b563ea322cf2a5f8acc1f50b04c3aca724a08f3e9f84d77d4e8d481eadb9ce0a",
    "noise_one_freq": "2103889595d44214677e74c7abf281b5eee3126a607cf543772ab281cb4269d9",
    "op": "b8c195d0b956670ae03038d7aff2d8d059f14f668dc5fd2d8a2ca7ec721f36e2",
    "op_one_subckt": "c6d806d030306c2bcbe9390d246a473cd48f1337ee7ab320eb87df592892ebe7",
@@ -70,6 +72,8 @@
    "step_ac_one_freq": "07de4caa3870c675e26f5250862afec948854d47426620ed91c21075c84c481a",
    "step_ac_one_freq_numdgt7": "2b15633148db65fa28c0f366efd1979083e51b4e9affb6ea1c33d4bceccc5179",
    "step_dc": "7dd766daa6cb8e8833a42dde5c3362ad2fa3f6bd270494c60a9ffe187b737c68",
+   "step_noise": "0712c3d8518c9ab1babbf89f2aab8cca6f7c57561ab3358c4f90cae787b2ad82",
+   "step_noise_list_one_freq": "51567a185da08e6a56d41c67ef8dfc056b7c8ec1b1990acac1c4aeb51031b4f9",
    "step_noise_one_freq": "dd84ac80bcb7f2c88f9119d9963b97e963e851d3d97a587bd1872e4ec289b6e7",
    "step_op": "e81ce61bafcc0a4ddb4879ca257f93902a36731843e678e2f18e472a6ac88db8",
    "step_temp": "b13699e810fa2169f42f6efb22b8f035e0fcae008f009e083766fcbf8140b8e4",
@@ -110,6 +114,7 @@
    "fra_step.fra_1": "e859c0b4b0aeb76e7f11ce0f13ecee7aed6ebf02fdf3eb8ebc9bd62056bebf70",
    "mos_multiplier": "ade3560388b9d4691e11bbfa2b37509ae24649b694a3c618be88d79d8e69c290",
    "noise": "6bde9aa50305d90b947248aa4b8e4eace90607f5232ddc96b078b6a0bd363864",
+   "noise_list_one_freq": "4ab0f513cf03f7aeb1bd70a41a72e6905e174f95c161bc6ee484d7ec0634c8bc",
    "noise_one_freq": "4fa7a85b05856f5df32a0e8a93b981b7d7aaa4669a7ba093a302721dcab9acf3",
    "op": "3f4c9a48f349a3be6400e88bdcc6d6f538837929d7f388c364d8575f0de9bdb9",
    "op_one_subckt": "836f07cbea918d46e611d7381940c9631a8aa7828ee85f45e9c022fd8beb012f",
@@ -121,6 +126,8 @@
    "step_ac_one_freq_numdgt7": "8ea37661cf5009f83ccf228114085cc96a9b4277fd12f67325d47e817846967a",
    "step_ac_op_raw.op": "9b07c24c848981cb61b44c53b3352c12c3890b99865822417658190e42470ec4",
    "step_dc": "3c12e783d23e7401b900f61e226c5d63c59a9a1280b07ddb29536e4071be94f8",
+   "step_noise": "7ef4ba48f93bd3411b711b6d3c4062147081a375e9347d0e7cb48305d246c6f6",
+   "step_noise_list_one_freq": "1ae2dc5e4f6326cdb9ec4583102248134e1aa9703d2ff312435de3aeae47dbfd",
    "step_noise_one_freq": "d79355ab80ea6629bf9717489a1b7ce93612d5aa9be67c0cc45a2dc7258f2470",
    "step_op": "837355db3736a6569317080b209c181db30965683476aa172dfea5137932a629",
    "step_temp": "5657a26cd4463a96369696689c28aa73ed39e04dccf6c5ff3a64f60ac43a7bcf",
@@ -145,7 +152,7 @@
   }
  },
  "files": {
-  "conversation.json": "b140a4d05bfd0fd82831356df78e42fa9ad34cf4c24ce1d33112cd60b72a6450",
+  "conversation.json": "7956076341569d6d8e41517d02909c3689099871c5c8e1ae7a354b2a03e04c33",
   "reader/ltspice17/ac.json": "509fc750a0699105a1dfff5c069959d29f3c841b5608d9692f9024debc2940da",
   "reader/ltspice17/ac_as_text.json": "fedb27dfb1f811c350ce2e86d421354cb0c0c686ebc940b754c8c3ae8ba981a1",
   "reader/ltspice17/ac_numdgt15.json": "567d413f8e366495ac43486228bd088d97f3ab7f1087e86a2d448daa4fc097df",
@@ -158,6 +165,7 @@
   "reader/ltspice17/dc.json": "835559799f089f050018981aabd7db8393e4295f9982e7516b24a7fde47c8745",
   "reader/ltspice17/mos_multiplier.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice17/noise.json": "b788b1eb8b48812bbfc8017a41a80dfe6bc85df1cfd7b2e77981a15b1be83ea8",
+  "reader/ltspice17/noise_list_one_freq.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice17/noise_one_freq.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice17/op.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice17/op_one_subckt.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
@@ -169,6 +177,8 @@
   "reader/ltspice17/step_ac_one_freq.json": "ab576ceb8447f5fec09bb161e37177c94b375a68f6d309dd1e48f321907fe551",
   "reader/ltspice17/step_ac_one_freq_numdgt7.json": "9f31dea0a42f6f3282c59be883b154bdd3ef483ba71599603f04c9c825159750",
   "reader/ltspice17/step_dc.json": "5151ef5cd940fd3324113fc2aaaae53f65361f36eca2d77fb17d504646e92f51",
+  "reader/ltspice17/step_noise.json": "e1a10405d019285b8d97ca05fe65741b5554afefb0ebb610f30d4129f37b2307",
+  "reader/ltspice17/step_noise_list_one_freq.json": "7f66fead362ab27ce5f76d6bb5ea50acc9fbf7be8a39c9fdd4eec1895aed7957",
   "reader/ltspice17/step_noise_one_freq.json": "913b7144d1bb276ce051a52bb207d3c51b37c3ed1d60dc02052784af23de303c",
   "reader/ltspice17/step_op.json": "894c185e86a330069fa7c148a94a70663d994382830d535a3574fcef68d2706c",
   "reader/ltspice17/step_temp.json": "e555fa75dc069012822c70313ec1e94fd47424f310f696e38a614cd05ea6dfe7",
@@ -207,6 +217,7 @@
   "reader/ltspice26/fra_step.json": "6d833a7c05ca6a6b53adc85a227b6b8e5295d06e5a18710ee789619fe7920f42",
   "reader/ltspice26/mos_multiplier.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice26/noise.json": "519a847c625819ff47d05eac558044eb97aa436e758ca865c22782c244c3059e",
+  "reader/ltspice26/noise_list_one_freq.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice26/noise_one_freq.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice26/op.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice26/op_one_subckt.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
@@ -218,6 +229,8 @@
   "reader/ltspice26/step_ac_one_freq_numdgt7.json": "b9e829752e050bddd881bcd0fb2d8340ea23f03345f1b68aab0d2155feed3596",
   "reader/ltspice26/step_ac_op_raw.op.json": "31ad727a5eb077943aff1bb7a0d1981fdaef6417da6587ebfe04d665fcdf7d56",
   "reader/ltspice26/step_dc.json": "1461b954ea95187d5441522dbea60397c5647238e227e60d0df51806dd19b89e",
+  "reader/ltspice26/step_noise.json": "164125f3f91598d14d62d6f479e9a39d1ec41bdc3f1ed572816f1b8778a6c2b4",
+  "reader/ltspice26/step_noise_list_one_freq.json": "c49875b0fcb66205ee7ca2ebcf819c8f99d834f461b6cf396bccd66186ec6e6d",
   "reader/ltspice26/step_noise_one_freq.json": "54cc74b22d179a277ab0bc930f5aab622d2f38f3b4489234a245d773f5953104",
   "reader/ltspice26/step_op.json": "35f7b7207783f57b4da3f9f179b43cd9b028ec43751ccbe858d8e9e08f7e016b",
   "reader/ltspice26/step_temp.json": "f24003da79d5744581398e8c35cf0190b8874c7c8990fcfe732b7286ee5d000c",

@@ -841,9 +841,13 @@ def test_a_log_is_eight_bit_unless_xvii_did_not_finish_the_run(build: str):
     seen: dict[str, int] = {}
     for case_id, entry in log_cases(build):
         data = rec.recorded(build, f"{case_id}.log").read_bytes()
+        finished = entry["exit_code"] == 0 and not entry["stopped"]
+        if not data:
+            # A build that crashed before its first line has no encoding to read.
+            assert not finished, case_id
+            continue
         _, encoding = decode_spice_bytes_with_encoding(data)
         seen[encoding] = seen.get(encoding, 0) + 1
-        finished = entry["exit_code"] == 0 and not entry["stopped"]
         if rec.generation(build) == "xvii":
             assert (encoding == "utf-16-le") == (not finished), case_id
         else:
