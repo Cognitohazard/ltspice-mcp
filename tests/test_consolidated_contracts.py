@@ -674,7 +674,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Resume adds selection, authority and dwell fields.
     # place_beside_sheet is a seventh action, a branch with one field of its
     # own (case_id), and a sentence in the description: measured 7,442.
-    "jobs": 7450,
+    # Published as one flat object since: Claude's API refuses a top-level
+    # allOf, and a client then drops the tool. Which action takes which field,
+    # which the branches used to show, is one generated sentence of the tool's
+    # description, which the compact listing keeps. Measured 4,583.
+    "jobs": 4600,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route

@@ -14,6 +14,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import analysis_snapshot, experiment_store, now, recent, store
 from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest, cancel_receipt_row
 from ltspice_mcp.lib.experiment_types import (
@@ -31,6 +32,7 @@ from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
@@ -162,18 +164,13 @@ def _args(action: str, **values) -> JobsInput:
     return JobsInput.model_validate({"action": action, **values})
 
 
-def _jobs_branch_ref(schema: dict, action: str) -> str:
-    """The ``$ref`` the jobs schema selects for one action.
-
-    Read off the ``if``/``then`` pairs, which are what the server SDK validates
-    against; the discriminator carries only ``propertyName``, because a branch
-    table would repeat these pairs.
-    """
-    return next(
-        entry["then"]["$ref"]
-        for entry in schema["allOf"]
-        if entry["if"]["properties"]["action"]["const"] == action
-    )
+def _fields_by_action(description: str) -> dict[str, list[str]]:
+    """The "Fields by action: a: x, y; b: z." sentence of the jobs description."""
+    listed = description.split("Fields by action: ", 1)[1].removesuffix(".")
+    return {
+        action: fields.split(", ")
+        for action, fields in (part.split(": ", 1) for part in listed.split("; "))
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -343,38 +340,58 @@ class TestAcceptedArgumentSpellings:
             assert action in message
 
 
-class TestAdvertisedActionBranches:
-    """What the published schema says each action takes.
+class TestAdvertisedActionFields:
+    """What the published definition says each action takes.
 
-    The argument shape used to be one flat list of nine optionals with the
-    per-action rules enforced only after validation, so a client reading the
-    schema could not tell which action took which field — and the SDK, which
-    validates arguments against this schema before dispatch, could not either.
+    The schema is one flat object, because Claude's API refuses a tool whose
+    input schema has a combinator at its top level and a client then drops
+    the tool. Which action takes which field, which a branch per action used
+    to show, is listed in the tool's description: the compact listing a
+    session is served by default drops every argument description, but keeps
+    that one. ``JobsInput`` refuses a field the action does not take.
     """
 
-    @pytest.mark.parametrize(
-        ("action", "expected"),
-        [
-            ("status", {"action", "job_id", "request_id", "budget"}),
-            ("wait", {"action", "job_id", "request_id", "timeout_s", "wait_for", "budget"}),
-            ("cancel", {"action", "job_id", "request_id", "control_token", "budget"}),
-            ("list", {"action", "circuit", "limit", "cursor", "budget"}),
-            ("runs", {"action", "job_id", "request_id", "cursor", "budget", "run_fields"}),
-        ],
-    )
-    def test_each_action_advertises_its_own_fields(self, action: str, expected: set[str]):
-        schema = build_input_schema(JobsInput)
-        branch = schema["$defs"][_jobs_branch_ref(schema, action).split("/")[-1]]
-        assert set(branch["properties"]) == expected
-        assert branch["additionalProperties"] is False
-        assert branch["properties"]["action"]["const"] == action
+    @pytest.mark.parametrize("model", JobsInput.VARIANTS, ids=JOBS_ACTIONS)
+    def test_the_compact_listing_names_each_actions_fields(self, model: type[JobsInput]):
+        defs, _ = get_tools(listing="compact")
+        description = next(d for d in defs if d.name == "jobs").description or ""
+        action = get_args(model.model_fields["action"].annotation)[0]
+        listed = _fields_by_action(description)[action]
+        assert {name.removesuffix(" (required)") for name in listed} == (
+            set(model.model_fields) - set(JobsInput.model_fields)
+        )
 
-    def test_shared_arguments_stay_at_the_top_level(self):
-        """A client that reads `properties` and stops there still sees them."""
+    def test_a_field_an_action_requires_is_marked(self):
+        resume = _fields_by_action(jobs_module.jobs_fields_by_action())["resume"]
+        assert resume[:2] == ["job_id (required)", "resume_request_id (required)"]
+
+    def test_a_field_actions_describe_differently_says_which_is_which(self):
+        description = build_input_schema(JobsInput)["properties"]["job_id"]["description"]
+        assert description.startswith("status, wait, cancel, runs, place_beside_sheet: ")
+        assert "resume: Terminal lineage head to resume." in description
+
+    def test_every_field_is_published_at_the_top_level(self):
+        """A client that reads `properties` and stops there sees every field."""
         schema = build_input_schema(JobsInput)
-        assert set(schema["properties"]) == {"action", "budget"}
+        every_field = {name for model in JobsInput.VARIANTS for name in model.model_fields}
+        assert set(schema["properties"]) == every_field
         assert schema["properties"]["action"]["enum"] == list(JOBS_ACTIONS)
         assert schema["required"] == ["action"]
+        assert schema["additionalProperties"] is False
+
+    @pytest.mark.parametrize(
+        "runs_field",
+        [{"type": "string"}, {"type": "integer", "default": 10}],
+        ids=["another-type", "another-default"],
+    )
+    def test_a_field_two_actions_declare_differently_stops_the_build(self, runs_field: dict):
+        """One published field cannot carry two types or two defaults, so the
+        build refuses it rather than publish one action's for both."""
+        with pytest.raises(TypeError, match="'limit'"):
+            jobs_module._flat_jobs_field(
+                "limit",
+                [("list", {"type": "integer", "default": 50}), ("runs", runs_field)],
+            )
 
     @pytest.mark.parametrize(
         ("payload", "expected"),
@@ -386,24 +403,22 @@ class TestAdvertisedActionBranches:
         payload: dict,
         expected: dict,
     ):
-        """The advertised schema may not be stricter than the tool: the SDK
-        validates against it first, so a call it rejects never reaches the
-        handler at all."""
+        """The advertised schema may not be stricter than the tool: a client
+        that checks a call against it before sending refuses what it rejects,
+        so such a call never reaches the server at all."""
         del expected
         jsonschema.Draft202012Validator(build_input_schema(JobsInput)).validate(payload)
 
-    def test_a_field_the_action_does_not_take_is_named_by_the_schema(self):
-        with pytest.raises(jsonschema.ValidationError) as excinfo:
-            jsonschema.validate(
-                instance={"action": "list", "job_id": "exp-1"},
-                schema=build_input_schema(JobsInput),
-            )
-        assert "job_id" in excinfo.value.message
+    def test_a_field_the_action_does_not_take_is_refused_naming_both(self):
+        """The flat schema lets the call through; the tool refuses it, and the
+        refusal names the action and the field."""
+        with pytest.raises(ValidationError) as excinfo:
+            JobsInput.model_validate({"action": "list", "job_id": "exp-1"})
+        assert "list.job_id" in compact_validation_error(excinfo.value)
 
-    def test_an_unknown_action_is_told_the_five_by_the_schema(self):
-        """Branches applied by if/then rather than oneOf, so the error the SDK
-        reports is this one instead of 'not valid under any of the given
-        schemas' — which names neither the actions nor the offending field."""
+    def test_an_unknown_action_is_told_every_action_by_the_schema(self):
+        """A client that checks the call itself names every action, rather
+        than saying only that the call matches none of several shapes."""
         with pytest.raises(jsonschema.ValidationError) as excinfo:
             jsonschema.validate(
                 instance={"action": "frobnicate"},
