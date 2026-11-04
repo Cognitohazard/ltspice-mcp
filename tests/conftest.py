@@ -1674,7 +1674,12 @@ def _enforce_output_schema_conformance():
     def _hold_to_reply_rule(sc, data, frame) -> None:
         tool = _replying_tool(frame)
         kept = ALL_KEPT if tool is None else ALWAYS_PRESENT[tool]
-        silent = list(silent_fields(sc, kept, allowed_nulls=frozenset(_nonfinite_paths(data))))
+        silent = list(silent_fields(sc, kept))
+        if silent:
+            # A null written for a number that is not finite is said in warnings;
+            # looked for only when there is a null to account for.
+            nonfinite = set(_nonfinite_paths(data))
+            silent = [at for at in silent if at not in nonfinite]
         if silent:
             named = ", ".join(".".join(str(part) for part in at) for at in silent[:5])
             raise AssertionError(

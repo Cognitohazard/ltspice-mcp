@@ -27,11 +27,10 @@ import pytest
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster, wsl
 from ltspice_mcp.lib.deck_staging import stage_deck
-from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, executable_identity
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools as insp
-from ltspice_mcp.tools._base import ALWAYS_PRESENT
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests.conftest import installed_simulator, needs_raster, symlink_or_skip
 
@@ -197,9 +196,9 @@ def _executables(state: SessionState) -> dict[str, SimulatorExecutable | None]:
 async def test_capabilities_without_fields_is_the_whole_report(cap_state: SessionState):
     (res,) = await _run(cap_state, [{"kind": "capabilities"}])
     # The whole report, as a reply sends it: without the fields that say nothing.
-    assert res["data"] == omit_silent(
+    assert res["data"] == as_sent(
         insp._do_capabilities(cap_state, raster.raster_support(), _executables(cap_state)),
-        ALWAYS_PRESENT["inspect"],
+        "inspect",
     )
 
 

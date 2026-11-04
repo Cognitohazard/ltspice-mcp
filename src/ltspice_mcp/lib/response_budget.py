@@ -127,7 +127,7 @@ class Rung:
         return self.budget - NOTE_RESERVE_TOKENS
 
 
-def estimate_tokens(payload: Any) -> int:
+def estimate_tokens(payload: Any, *, as_sent: bool = True) -> int:
     """Token estimate for ``payload`` — the serializer itself, measure-then-degrade.
 
     Serializes exactly as the transport does (compact separators, no ASCII
@@ -136,7 +136,8 @@ def estimate_tokens(payload: Any) -> int:
 
     The payload is measured as it is sent, without the fields that say
     nothing (``lib/reply_fields.py``), with the kept fields of the tool
-    replying now.
+    replying now. ``as_sent=False`` measures data that holds no fields, such
+    as an inline waveform's samples, as it is, without walking every sample.
 
     One thing it cannot see: the non-finite substitution note the response
     builder appends when a payload carries NaN/Inf. That note lives on the
@@ -144,47 +145,38 @@ def estimate_tokens(payload: Any) -> int:
     budget would not cut anyway — so a degenerate result is a few tens of
     tokens heavier than measured here.
     """
-    kept = reply_fields.active_kept()
-    sent = payload if kept is None else reply_fields.omit_silent(payload, kept)
+    sent = reply_fields.omit_silent(payload, reply_fields.active_kept()) if as_sent else payload
     text = json.dumps(sent, separators=(",", ":"), default=str)
     return len(text) // CHARS_PER_TOKEN
 
 
 # --------------------------------------------------------------------------
-# Rung 0 primitive — empty a presentation block
+# Rung 0 primitive — empty presentation blocks
 # --------------------------------------------------------------------------
 
 
-def empty_block(container: dict[str, Any], key: str) -> bool:
-    """Empty a presentation block in place, which the reply then leaves out.
+def apply_trim(container: dict[str, Any], keys: Sequence[str]) -> list[str]:
+    """Rung 0 over one container: empty, in place, the presentation blocks a
+    tool's declared key list names, which the reply then leaves out.
 
-    Returns whether the block held anything before.
-    """
-    value = container.get(key)
-    if isinstance(value, list):
-        container[key] = []
-    elif isinstance(value, dict):
-        container[key] = {}
-    else:
-        return False
-    return bool(value)
-
-
-def apply_trim(container: dict[str, Any], *, empty: Sequence[str] = ()) -> list[str]:
-    """Rung 0 over one container, from a tool's declared key list.
-
-    ``empty`` names the presentation blocks the rung empties. The list is
-    declared as module-level data by each tool rather than spelled inline
-    here: a rung that exempts content is the one place a checker can silently
-    lose coverage, so the allowlist has to be something a test can read. A
-    block that was already empty needs no rung: every reply leaves it out.
+    The list is declared as module-level data by each tool rather than spelled
+    inline here: a rung that exempts content is the one place a checker can
+    silently lose coverage, so the allowlist has to be something a test can
+    read. A block that was already empty needs no rung: every reply leaves it
+    out.
 
     Returns the keys it emptied of content, which a renderer adds to its
     rung's ``cut``.
 
     Idempotent, so the ladder may re-apply it to an already-trimmed envelope.
     """
-    return [key for key in empty if empty_block(container, key)]
+    emptied = []
+    for key in keys:
+        value = container.get(key)
+        if isinstance(value, (list, dict)) and value:
+            container[key] = type(value)()
+            emptied.append(key)
+    return emptied
 
 
 # --------------------------------------------------------------------------

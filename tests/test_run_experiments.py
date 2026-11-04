@@ -29,14 +29,13 @@ from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
-from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools import receipts as receipts_mod
-from ltspice_mcp.tools._base import ALWAYS_PRESENT
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import (
@@ -1133,7 +1132,7 @@ class TestLeanReceipt:
         (snapshot,) = captured
         expected = receipts_mod.project_receipt_runs(snapshot, run_fields)
         # The same page, as a reply sends it: without the fields that say nothing.
-        assert data["runs"] == omit_silent(expected, ALWAYS_PRESENT["run_experiments"])
+        assert data["runs"] == as_sent(expected, "run_experiments")
 
     async def test_a_row_that_wrote_nothing_names_no_artifact(
         self,

@@ -3688,8 +3688,9 @@ def trim_analysis(data: dict[str, Any], *, keep_provenance: bool = False) -> lis
     Idempotent, so the ladder may re-apply it to an envelope it already
     degraded on the way down.
     """
-    empty = () if keep_provenance else _TRIM_EMPTY_ENVELOPE
-    return response_budget.apply_trim(data, empty=empty)
+    if keep_provenance:
+        return []
+    return response_budget.apply_trim(data, _TRIM_EMPTY_ENVELOPE)
 
 
 #: The fewest points a budget thins an inline series to: sixteen buckets, each
@@ -3806,7 +3807,9 @@ def fit_waveform_samples(
         tuple(
             (
                 len(samples.x),
-                response_budget.estimate_tokens([samples.value["x"], samples.value["series"]]),
+                response_budget.estimate_tokens(
+                    [samples.value["x"], samples.value["series"]], as_sent=False
+                ),
             )
             for samples in stored
         ),

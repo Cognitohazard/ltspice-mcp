@@ -39,12 +39,11 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.recipes import RECIPE_MODELS
-from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments, inspect_tools
-from ltspice_mcp.tools._base import ALWAYS_PRESENT
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
     evaluate_analysis_results,
@@ -3215,9 +3214,7 @@ async def test_a_case_that_measured_each_meas_once_reads_as_name_and_value(
     )
     attached = analyze_mod.render_attached_analysis(stored, fields=None)
     # As the receipt sends them: without the fields that say nothing.
-    sent = omit_silent(
-        attached["results"]["m"]["per_run"]["items"], ALWAYS_PRESENT["run_experiments"]
-    )
+    sent = as_sent(attached["results"]["m"]["per_run"]["items"], "run_experiments")
     assert sent == rows
 
 

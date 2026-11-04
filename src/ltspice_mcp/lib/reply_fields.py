@@ -25,8 +25,9 @@ The rule applies to the fields of objects, never to the items of a list: an
 item's position is part of what it says, so a null sample in a series stays.
 
 The tools layer names the replying tool's kept fields with
-:func:`replying_with` for the length of each call, and every reply builder, the
-response-budget measurement among them, reads them through
+:func:`replying_with` for the length of each call, and every tool's together for
+a reply built outside one (:func:`keep_when_no_tool_replies`). Every reply
+builder, the response-budget measurement among them, reads them through
 :func:`active_kept`.
 """
 
@@ -73,6 +74,17 @@ _ACTIVE: contextvars.ContextVar[Mapping[str, Kept] | None] = contextvars.Context
     "reply_fields_kept", default=None
 )
 
+#: The kept fields of a reply built while no tool is replying: every tool's
+#: together, named once by the tools layer (:func:`keep_when_no_tool_replies`),
+#: so a field kept by any tool is never lost there.
+_FALLBACK: Mapping[str, Kept] = {}
+
+
+def keep_when_no_tool_replies(kept: Mapping[str, Kept]) -> None:
+    """Name the kept fields of a reply built outside any tool's call."""
+    global _FALLBACK
+    _FALLBACK = kept
+
 
 @contextlib.contextmanager
 def replying_with(kept: Mapping[str, Kept]) -> Iterator[None]:
@@ -84,9 +96,25 @@ def replying_with(kept: Mapping[str, Kept]) -> Iterator[None]:
         _ACTIVE.reset(token)
 
 
-def active_kept() -> Mapping[str, Kept] | None:
-    """The kept fields named by the innermost :func:`replying_with`, or None."""
-    return _ACTIVE.get()
+def active_kept() -> Mapping[str, Kept]:
+    """The kept fields of the tool replying now (the innermost
+    :func:`replying_with`), or of every tool when none is."""
+    active = _ACTIVE.get()
+    return _FALLBACK if active is None else active
+
+
+def _rule(key: Any, kept: Mapping[str, Kept]) -> Kept | None:
+    """The kept-field rule for one key, if the replying tool has one."""
+    return kept.get(key) if isinstance(key, str) else None
+
+
+def _implied(obj: Mapping[Any, Any]) -> list[str]:
+    """The sub-answers in ``obj`` that the overall answer beside them gives."""
+    return [
+        field
+        for field, (overall, value) in IMPLIED.items()
+        if field in obj and overall in obj and obj[overall] is value
+    ]
 
 
 def omit_silent(value: Any, kept: Mapping[str, Kept]) -> Any:
@@ -108,7 +136,7 @@ def _omit_in_object(obj: dict[Any, Any], kept: Mapping[str, Kept]) -> dict[Any, 
     out: dict[Any, Any] = {}
     changed = False
     for key, item in obj.items():
-        rule = kept.get(key) if isinstance(key, str) else None
+        rule = _rule(key, kept)
         if rule is not None and rule.data:
             out[key] = item
             continue
@@ -118,10 +146,9 @@ def _omit_in_object(obj: dict[Any, Any], kept: Mapping[str, Kept]) -> dict[Any, 
             continue
         changed = changed or lean is not item
         out[key] = lean
-    for field, (overall, value) in IMPLIED.items():
-        if field in out and overall in out and out[overall] is value:
-            del out[field]
-            changed = True
+    for field in _implied(out):
+        del out[field]
+        changed = True
     return out if changed else obj
 
 
@@ -139,34 +166,24 @@ def _omit_in_list(items: list[Any] | tuple[Any, ...], kept: Mapping[str, Kept]) 
 
 
 def silent_fields(
-    value: Any,
-    kept: Mapping[str, Kept],
-    *,
-    allowed_nulls: frozenset[tuple[Any, ...]] = frozenset(),
-    path: tuple[Any, ...] = (),
+    value: Any, kept: Mapping[str, Kept], path: tuple[Any, ...] = ()
 ) -> Iterator[tuple[Any, ...]]:
-    """The path of every field in ``value`` that :func:`omit_silent` leaves out.
-
-    Empty for a reply that passed through it. ``allowed_nulls`` names the
-    paths where a null stands for a number that is not finite: the reply
-    builder writes those after the rule ran and says so in ``warnings``.
-    """
+    """The path of every field in ``value`` that :func:`omit_silent` leaves out,
+    by the same per-field rule; empty for a reply that passed through it."""
     if isinstance(value, dict):
         for key, item in value.items():
-            rule = kept.get(key) if isinstance(key, str) else None
-            at = (*path, key)
+            rule = _rule(key, kept)
             if rule is not None and rule.data:
                 continue
-            if rule is None and says_nothing(item) and at not in allowed_nulls:
-                yield at
-                continue
-            yield from silent_fields(item, kept, allowed_nulls=allowed_nulls, path=at)
-        for field, (overall, implied) in IMPLIED.items():
-            if field in value and value.get(overall) is implied:
-                yield (*path, field)
+            if rule is None and says_nothing(item):
+                yield (*path, key)
+            else:
+                yield from silent_fields(item, kept, (*path, key))
+        for field in _implied(value):
+            yield (*path, field)
     elif isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
-            yield from silent_fields(item, kept, allowed_nulls=allowed_nulls, path=(*path, index))
+            yield from silent_fields(item, kept, (*path, index))
 
 
 def may_say_nothing(schema: Any, kept: Mapping[str, Kept]) -> bool:
@@ -192,13 +209,16 @@ def may_say_nothing(schema: Any, kept: Mapping[str, Kept]) -> bool:
     if "array" in types and schema.get("minItems", 0) < 1:
         return True
     if "object" in types:
-        properties = schema.get("properties")
-        properties = properties if isinstance(properties, Mapping) else {}
-        return not any(
-            name in kept or (name in properties and not may_say_nothing(properties[name], kept))
-            for name in schema.get("required", ())
-        )
+        return not any(_always_present(schema, name, kept) for name in schema.get("required", ()))
     return False
+
+
+def _always_present(schema: Mapping[str, Any], name: str, kept: Mapping[str, Kept]) -> bool:
+    """Whether a reply always carries property ``name`` of an object ``schema``:
+    the tool keeps it, or its schema never lets it say nothing."""
+    properties = schema.get("properties")
+    properties = properties if isinstance(properties, Mapping) else {}
+    return name in kept or (name in properties and not may_say_nothing(properties[name], kept))
 
 
 def relax_required(schema: Any, kept: Mapping[str, Kept]) -> Any:
@@ -221,15 +241,9 @@ def relax_required(schema: Any, kept: Mapping[str, Kept]) -> Any:
                     relax_required(sub, kept)
             else:
                 relax_required(item, kept)
-        properties = schema.get("properties")
         required = schema.get("required")
-        if isinstance(properties, dict) and isinstance(required, list):
-            schema["required"] = [
-                name
-                for name in required
-                if name in kept
-                or (name in properties and not may_say_nothing(properties[name], kept))
-            ]
+        if isinstance(schema.get("properties"), dict) and isinstance(required, list):
+            schema["required"] = [name for name in required if _always_present(schema, name, kept)]
     elif isinstance(schema, list):
         for item in schema:
             relax_required(item, kept)

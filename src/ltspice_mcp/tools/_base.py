@@ -31,6 +31,7 @@ from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.lib.reply_fields import (
     Kept,
     active_kept,
+    keep_when_no_tool_replies,
     omit_silent,
     relax_required,
     replying_with,
@@ -170,19 +171,16 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
     return scrubbed
 
 
-def reply_payload(
-    data: Mapping[str, Any], kept: Mapping[str, Kept] | None = None
-) -> dict[str, Any]:
-    """``data`` as a reply sends it: the fields that say nothing left out, and
-    any number that is not finite replaced with null and reported.
+def reply_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` as a reply sends it: the fields that say nothing left out, with
+    the kept fields of the tool replying now, and any number that is not finite
+    replaced with null and reported.
 
     The one place the rule of ``lib/reply_fields.py`` is applied to a reply.
-    ``kept`` defaults to the fields of the tool replying now
-    (:func:`reply_kept`). The rule runs first, so a null written for a number
-    that is not finite stays, named in ``warnings``. ``data`` is not changed.
+    The rule runs first, so a null written for a number that is not finite
+    stays, named in ``warnings``. ``data`` is not changed.
     """
-    payload: dict[str, Any] = dict(data) if not isinstance(data, dict) else data
-    return sanitize_payload(omit_silent(payload, reply_kept() if kept is None else kept))
+    return sanitize_payload(omit_silent(data, active_kept()))
 
 
 def json_response(data: Any) -> types.CallToolResult:
@@ -721,14 +719,16 @@ ALWAYS_PRESENT: dict[str, dict[str, Kept]] = {
 ALL_KEPT: dict[str, Kept] = {
     name: kept for fields in ALWAYS_PRESENT.values() for name, kept in fields.items()
 }
+keep_when_no_tool_replies(ALL_KEPT)
+
+_Sent = TypeVar("_Sent")
 
 
-def reply_kept(tool: str | None = None) -> Mapping[str, Kept]:
-    """The fields kept by ``tool``'s replies, or by the tool replying now."""
-    if tool is not None:
-        return ALWAYS_PRESENT[tool]
-    active = active_kept()
-    return ALL_KEPT if active is None else active
+def as_sent(value: _Sent, tool: str) -> _Sent:
+    """``value`` as ``tool``'s reply sends it: without the fields that say
+    nothing. The Python API's results are passed through it, so they keep the
+    tool's shape."""
+    return omit_silent(value, ALWAYS_PRESENT[tool])
 
 
 @contextlib.contextmanager
@@ -1214,13 +1214,12 @@ class ToolRegistry:
                     f"Tool {name!r} has no entry in ALWAYS_PRESENT: list the fields its "
                     "replies keep when empty, null or false (an empty dict for none)"
                 )
-            if output_model is not None:
+            schema = (
+                schema_from_typeddict(output_model) if output_model is not None else output_schema
+            )
+            if schema is not None:
                 definition_kwargs["output_schema"] = _declare_reply_schema(
-                    schema_from_typeddict(output_model), ALWAYS_PRESENT[name]
-                )
-            elif output_schema is not None:
-                definition_kwargs["output_schema"] = _declare_reply_schema(
-                    output_schema, ALWAYS_PRESENT[name]
+                    schema, ALWAYS_PRESENT[name]
                 )
 
             definition = types.Tool(**definition_kwargs)

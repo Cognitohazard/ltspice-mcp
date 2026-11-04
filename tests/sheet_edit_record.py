@@ -56,7 +56,7 @@ from ltspice_mcp.errors import LTSpiceMCPError
 from ltspice_mcp.lib import asc_document
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.tools import schematic_edit
-from ltspice_mcp.tools._base import ALWAYS_PRESENT, reply_payload, safe_path
+from ltspice_mcp.tools._base import as_sent, safe_path
 from tests._proposal_record import write_record
 from tests._schematic_fixtures import TESTS
 from tests.ltspice_recorder import path_pattern
@@ -269,10 +269,7 @@ async def _recorded_evaluate(args: Any, state: Any, *, present_mcp_views: bool =
         _observe(key, {"raised": type(exc).__name__, "message": message})
         raise
     # The complete reply as it is sent: without the fields that say nothing.
-    data = reply_payload(
-        schematic_edit.complete_edit_schematic_data(evaluation, args),
-        ALWAYS_PRESENT["edit_schematic"],
-    )
+    data = as_sent(schematic_edit.complete_edit_schematic_data(evaluation, args), "edit_schematic")
     sheet = None
     if data.get("commit_state") == "committed":
         after = target.read_bytes()

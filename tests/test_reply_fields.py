@@ -19,6 +19,7 @@ import pytest
 from ltspice_mcp.lib.reply_fields import (
     IMPLIED,
     Kept,
+    active_kept,
     may_say_nothing,
     omit_silent,
     relax_required,
@@ -26,9 +27,10 @@ from ltspice_mcp.lib.reply_fields import (
     silent_fields,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import ALL_KEPT, ALWAYS_PRESENT, registry, reply_payload
+from ltspice_mcp.tools import get_tools
+from ltspice_mcp.tools._base import ALL_KEPT, ALWAYS_PRESENT, reply_payload
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
-from tests.conftest import SyncApi
+from tests.conftest import REGISTERED_TOOLS, SyncApi
 
 NONE: dict[str, Kept] = {}
 
@@ -88,23 +90,18 @@ class TestTheRule:
         reply = {"a": None, "b": {"c": [], "d": 1}, "e": [{"f": False}]}
         assert sorted(silent_fields(reply, NONE)) == [("a",), ("b", "c"), ("e", 0, "f")]
         assert list(silent_fields(omit_silent(reply, NONE), NONE)) == []
-        assert list(silent_fields(reply, NONE, allowed_nulls=frozenset({("a",)}))) == [
-            ("b", "c"),
-            ("e", 0, "f"),
-        ]
 
     def test_a_null_written_for_a_number_that_is_not_finite_is_kept_and_said(self):
         """The rule runs first, so the substitution stays visible where it was made."""
-        sent = reply_payload({"min": float("nan"), "note": None}, NONE)
+        sent = reply_payload({"min": float("nan"), "note": None})
         assert sent["min"] is None
         assert "note" not in sent
         assert any("min" in warning for warning in sent["warnings"])
 
 
 class TestTheKeptFields:
-    def test_every_registered_tool_lists_its_kept_fields(self):
-        names = {rt.definition.name for rt in registry._registered}
-        assert names <= set(ALWAYS_PRESENT)
+    def test_a_reply_built_while_no_tool_replies_keeps_every_tools_fields(self):
+        assert active_kept() is ALL_KEPT
 
     def test_every_kept_field_says_why(self):
         for tool, fields in ALWAYS_PRESENT.items():
@@ -113,11 +110,10 @@ class TestTheKeptFields:
 
 
 class TestTheSchemas:
-    @pytest.mark.parametrize("name", sorted(ALWAYS_PRESENT))
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_no_output_schema_requires_a_field_a_reply_may_leave_out(self, name: str):
         """A reply leaves a silent field out, so its tool's schema may not require it."""
-        (registered,) = [rt for rt in registry._registered if rt.definition.name == name]
-        schema = registered.definition.output_schema
+        schema = get_tools()[1][name].definition.output_schema
         assert schema is not None
         assert relax_required(copy.deepcopy(schema), ALWAYS_PRESENT[name]) == schema
 

@@ -29,7 +29,6 @@ from spicelib import AscEditor
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
-from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.lib.schematic_ops import (
     KEEPS_WIRING,
     OP_RESULT_FACTS,
@@ -39,7 +38,7 @@ from ltspice_mcp.lib.schematic_ops import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
-from ltspice_mcp.tools._base import ALWAYS_PRESENT
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import (
     EditSchematicInput,
@@ -765,9 +764,7 @@ async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, wor
     mcp = _assert_schema(await handle_edit_schematic(args, asc_state))
     page = mcp["views"]["pin_legend"]
     # The same rows, as a reply sends them: without the fields that say nothing.
-    assert page["items"] == omit_silent(
-        list(neutral.views.pin_legend[:2]), ALWAYS_PRESENT["edit_schematic"]
-    )
+    assert page["items"] == as_sent(list(neutral.views.pin_legend[:2]), "edit_schematic")
     assert (page["total"], page["returned"], page["truncated"]) == (5, 2, True)
     assert page["total"] - page["returned"] == len(neutral.views.pin_legend) - 2
 

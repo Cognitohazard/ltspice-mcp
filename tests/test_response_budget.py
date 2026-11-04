@@ -287,16 +287,16 @@ class TestLadderPrimitives:
 
     def test_rung_zero_empties_only_the_blocks_it_names(self):
         container = {"named": [1, 2], "kept": [1]}
-        response_budget.apply_trim(container, empty=("named",))
+        response_budget.apply_trim(container, ("named",))
         assert container["kept"] == [1]
         assert container["named"] == []
 
     def test_rung_zero_reports_only_what_it_emptied_of_content(self):
         """A block that was already empty carried nothing, so it is not reported as cut."""
         container = {"named": [1, 2], "already": []}
-        emptied = response_budget.apply_trim(container, empty=("named", "already"))
+        emptied = response_budget.apply_trim(container, ("named", "already"))
         assert emptied == ["named"]
-        assert response_budget.apply_trim(container, empty=("named",)) == []
+        assert response_budget.apply_trim(container, ("named",)) == []
 
     def test_a_trim_that_emptied_nothing_is_not_a_degraded_response(self):
         """The note says presentation was reduced; with nothing removed it

@@ -28,12 +28,11 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.projection import keep_plan, project_row
-from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import jobs as jobs_module
-from ltspice_mcp.tools._base import ALWAYS_PRESENT
+from ltspice_mcp.tools._base import as_sent
 from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import (
     JOBS_WAIT_CAP_S,
@@ -805,7 +804,7 @@ class TestReceiptSnapshotCoherence:
         assert data["returned"] == 1 and data["total"] == 201
         assert "next_cursor" not in data
         # The row as a reply sends it: without the fields that say nothing.
-        lean = omit_silent(expected, ALWAYS_PRESENT["jobs"])
+        lean = as_sent(expected, "jobs")
         assert all(data["items"][0][key] == value for key, value in lean.items())
         assert len(calls) == (0 if fields == ["case_id"] else 1)
 

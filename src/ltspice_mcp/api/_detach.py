@@ -181,7 +181,7 @@ def _failure(
             evaluation,
             error=replace(evaluation.error, retryable=True, commit_state="unknown"),
         )
-        return ApiCallError(detail, payload=_as_sent("jobs", jobs.complete_jobs_data(evaluation)))
+        return ApiCallError(detail, payload=jobs.complete_jobs_data(evaluation))
     payload = experiments.submission_error_payload(
         request_id,
         code=code,
@@ -193,16 +193,7 @@ def _failure(
         # would tell the caller a job that may exist does not.
         commit_state="unknown",
     )
-    return ApiCallError(detail, payload=_as_sent("run_experiments", payload))
-
-
-def _as_sent(tool: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """An error payload as ``tool``'s reply sends it, without the fields that
-    say nothing (``lib/reply_fields.py``)."""
-    from ltspice_mcp.lib.reply_fields import omit_silent
-    from ltspice_mcp.tools._base import reply_kept
-
-    return dict(omit_silent(payload, reply_kept(tool)))
+    return ApiCallError(detail, payload=payload)
 
 
 def _read_report(path: Path) -> dict[str, Any] | None:
@@ -315,10 +306,7 @@ def submit(
         code = error.get("code") if isinstance(error, Mapping) else None
         payload = error.get("payload") if isinstance(error, Mapping) else None
         if isinstance(payload, Mapping):
-            raise ApiCallError(
-                str(message or "The detached operation failed"),
-                payload=_as_sent("jobs" if operation == "resume" else "run_experiments", payload),
-            )
+            raise ApiCallError(str(message or "The detached operation failed"), payload=payload)
         raise _failure(
             request_id,
             str(code or "detached_submission_failed"),

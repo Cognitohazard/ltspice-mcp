@@ -220,46 +220,19 @@ async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
         return await coroutine
 
 
-async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
-    """Run one automatic-mode coroutine with the interface marked for the handlers.
+async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _T:
+    """Run one automatic-mode coroutine with the interface marked for the handlers,
+    and with ``tool``'s reply fields named, as its MCP replies name them.
 
     Marked inside the coroutine, not around the ``_call`` that marshals it: the
-    handlers read the flag from the engine loop's task context, and a set on the
+    handlers read both from the engine loop's task context, and a set on the
     calling thread would never reach it.
     """
-    from ltspice_mcp.tools._base import automatic_door  # deferred with the tool modules
+    # Deferred with the tool modules.
+    from ltspice_mcp.tools._base import automatic_door, replying_as
 
-    with automatic_door():
+    with automatic_door(), replying_as(tool):
         return await coroutine
-
-
-async def _replying_as(tool: str, coroutine: Coroutine[Any, Any, _T]) -> _T:
-    """Run one complete-mode coroutine with ``tool``'s reply fields named.
-
-    The replies built inside, and the response budget's measurement of them,
-    keep that tool's fields as its MCP replies do. Named inside the coroutine
-    for the reason the automatic-mode flag is.
-    """
-    from ltspice_mcp.tools._base import replying_as  # deferred with the tool modules
-
-    with replying_as(tool):
-        return await coroutine
-
-
-def _api_reply(tool: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """A complete result as ``tool``'s reply sends it: the fields that say
-    nothing left out, by the same rule and the same kept fields as the MCP
-    reply (``lib/reply_fields.py``), so the two have one shape."""
-    from ltspice_mcp.lib.reply_fields import omit_silent
-    from ltspice_mcp.tools._base import reply_kept  # deferred with the tool modules
-
-    return dict(omit_silent(payload, reply_kept(tool)))
-
-
-def _lean_error(tool: str, exc: ApiCallError) -> ApiCallError:
-    """``exc`` with its payload as ``tool``'s reply sends it."""
-    exc.payload = _api_reply(tool, exc.payload)
-    return exc
 
 
 def _payload_message(payload: Mapping[str, Any]) -> str | None:
@@ -697,7 +670,20 @@ class _CataloguedMethod:
         return self if instance is None else MethodType(self, instance)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.__func__(*args, **kwargs)
+        """Run the operation and return its result, or raise its error, as the
+        tool's reply sends it: without the fields that say nothing
+        (``lib/reply_fields.py``), so a script and a tool call read one shape.
+        This is the one place the API applies the rule; a raw page already is a
+        sent reply."""
+        if kwargs.get("raw_page"):
+            return self.__func__(*args, **kwargs)
+        from ltspice_mcp.tools._base import as_sent  # an operation call pays the import anyway
+
+        try:
+            return as_sent(self.__func__(*args, **kwargs), self.__name__)
+        except ApiCallError as exc:
+            exc.payload = as_sent(exc.payload, self.__name__)
+            raise
 
     @property
     def __signature__(self) -> inspect.Signature:  # type: ignore[override]
@@ -847,18 +833,14 @@ class ApiMethodsMixin(ABC):
         coroutine = (
             _handler_page(handler, request, self._state)
             if raw_page
-            else _through_auto_door(_replying_as(name, collector(request, self._state)))
+            else _through_auto_door(collector(request, self._state), name)
         )
-        try:
-            payload = self._marshal(
-                coroutine,
-                cancelable=_resolve_cancel(cancelable, request),
-                cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
-            )
-        except ApiCallError as exc:
-            _lean_error(name, exc)
-            raise
-        return _with_warnings(_api_reply(name, payload), dropped)
+        payload = self._marshal(
+            coroutine,
+            cancelable=_resolve_cancel(cancelable, request),
+            cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
+        )
+        return _with_warnings(payload, dropped)
 
     @catalogued
     def run_experiments(
@@ -914,7 +896,8 @@ class ApiMethodsMixin(ABC):
         )
         receipt = self._marshal(
             _through_auto_door(
-                _handler_page(experiments.handle_run_experiments, request, self._state)
+                _handler_page(experiments.handle_run_experiments, request, self._state),
+                "run_experiments",
             ),
             preserve_interrupt=True,
         )
@@ -930,15 +913,10 @@ class ApiMethodsMixin(ABC):
         try:
             if waited_job is not None:
                 self.wait(waited_job)
-            complete = _api_reply(
-                "run_experiments",
-                self._marshal(
-                    _through_auto_door(
-                        _replying_as(
-                            "run_experiments", _complete_run_receipt(receipt, request, self._state)
-                        )
-                    )
-                ),
+            complete = self._marshal(
+                _through_auto_door(
+                    _complete_run_receipt(receipt, request, self._state), "run_experiments"
+                )
             )
             return _with_warnings(complete if wait else _note_process_owned_job(complete), dropped)
         except KeyboardInterrupt as exc:
@@ -980,7 +958,7 @@ class ApiMethodsMixin(ABC):
             raise _collector_error(handoff.receipt, exc) from exc
         return _with_warnings(
             _note_detached_owner(
-                _api_reply("run_experiments", handoff.receipt),
+                handoff.receipt,
                 owner_pid=owner_pid if owner_pid is not None else handoff.supervisor_pid,
                 log_file=handoff.log_file,
             ),
@@ -1037,9 +1015,7 @@ class ApiMethodsMixin(ABC):
                 )
             except Exception as exc:
                 evaluation = jobs.failed_jobs_evaluation(request, exc, self._state)
-                raise ApiCallError(
-                    str(exc), payload=_api_reply("jobs", jobs.complete_jobs_data(evaluation))
-                ) from exc
+                raise ApiCallError(str(exc), payload=jobs.complete_jobs_data(evaluation)) from exc
 
         payload["control_token"] = self._marshal(authorize())
         handoff = _detach.submit(
@@ -1078,9 +1054,9 @@ class ApiMethodsMixin(ABC):
                     self._state,
                     prior=prior,
                 )
-                data = _api_reply("jobs", jobs.complete_jobs_data(evaluation))
+                data = jobs.complete_jobs_data(evaluation)
                 raise ApiCallError(data["error"]["message"], payload=data) from exc
-        return _with_warnings(_api_reply("jobs", handoff.receipt), dropped)
+        return _with_warnings(handoff.receipt, dropped)
 
     def wait(
         self,
