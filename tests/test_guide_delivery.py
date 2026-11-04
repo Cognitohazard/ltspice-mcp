@@ -32,7 +32,7 @@ from ltspice_mcp.server import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
-from tests._text import names, section
+from tests._text import names, says, section
 from tests.conftest import call_tool_params, fake_request_context
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -410,6 +410,14 @@ class TestTheDoorsAgree:
 
 
 class TestTheReadTheGuideReminder:
+    def test_it_says_only_what_the_server_knows(self):
+        """A server sends it when no guide read has reached it since it
+        started, which is also so after a restart that forgot one, or when the
+        guide was read inside run_code. It says that, not that the session
+        never read the guide."""
+        assert says(GUIDE_REMINDER, "since it started", "If you have not read it")
+        assert not says(GUIDE_REMINDER, "This session has not read the guide")
+
     async def test_the_first_reply_of_a_session_that_skipped_the_guide_carries_it(
         self, work_dir: Path
     ):

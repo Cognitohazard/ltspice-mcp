@@ -7,7 +7,9 @@ install. ``SUITE_SHEETS`` and ``SUITE_SYMBOLS`` are the other kind: every sheet
 and symbol file the suite holds, which the document, symbol, connectivity and
 finding tests are each run over. The sheets behind LTspice's screenshots are
 left out: they mark points with crosses for the drawing to be read back
-(``test_ltspice_screenshots.py``), and are not circuits.
+(``test_ltspice_screenshots.py``), and are not circuits. So are the sheets a
+draw case has a build draw (``test_recorded_ltspice_drawing.py``), which hold
+floating parts and flags laid out to be measured.
 """
 
 from __future__ import annotations
@@ -32,8 +34,9 @@ def suite_name(path: Path) -> str:
 # path's own order ignores case on Windows and not elsewhere, and a record that
 # keeps the first sheet to show something would keep a different one.
 SCREENSHOT_SHEETS = TESTS / "fixtures" / "ltspice_screenshots"
+_NOT_CIRCUITS = (SCREENSHOT_SHEETS, TESTS / "fixtures" / "ltspice_recorded" / "inputs" / "draw")
 SUITE_SHEETS = sorted(
-    (path for path in TESTS.rglob("*.asc") if SCREENSHOT_SHEETS not in path.parents),
+    (path for path in TESTS.rglob("*.asc") if path.parent not in _NOT_CIRCUITS),
     key=suite_name,
 )
 SUITE_SYMBOLS = sorted(TESTS.rglob("*.asy"), key=suite_name)

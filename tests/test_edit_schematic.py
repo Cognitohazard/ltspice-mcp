@@ -167,7 +167,7 @@ _FACT_RESULTS: list[dict] = [
     {
         "index": 5,
         "op": "wire_pins",
-        "junctions": [{"x": 550, "y": 200, "via": "endpoint", "wire": _RAIL}],
+        "junctions": [{"x": 550, "y": 200, "via": "tee", "wire": _RAIL}],
     },
     {"index": 7, "op": "wire_pins", "already_present": [_BOTTOM]},
 ]

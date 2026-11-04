@@ -1,0 +1,26 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\unknown_model_param.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\unknown_model_param.cir(5): Ignoring unknown model parameter. This may or may not be a problem.
+.model DX D(Is=1e-14 Bogus=3)
+                     ^^^^^^^
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Direct Newton iteration succeeded in finding operating point.
+C:\recording\unknown_model_param.cir(5): Ignoring unknown model parameter. This may or may not be a problem.
+.model DX D(Is=1e-14 Bogus=3)
+                     ^^^^^^^
+Direct Newton iteration succeeded in finding operating point.
+C:\recording\unknown_model_param.cir(5): Ignoring unknown model parameter. This may or may not be a problem.
+.model DX D(Is=1e-14 Bogus=3)
+                     ^^^^^^^
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 6
+
+Files loaded:
+C:\recording\unknown_model_param.cir
+

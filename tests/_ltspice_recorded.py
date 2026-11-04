@@ -78,6 +78,11 @@ def recorded(build: str, name: str) -> Path:
     return FIXTURES / build / name
 
 
+def drawing(build: str, case_id: str) -> dict[str, Any]:
+    """What a draw case's sheet draws, as ``ltspice_recorder.read_emf`` read it."""
+    return json.loads(recorded(build, f"{case_id}.drawn").read_text(encoding="ascii"))
+
+
 def header_fields(build: str, case_id: str) -> dict[str, list[str]]:
     """A recorded raw's header as the build wrote it: field name to every value it has."""
     fields: dict[str, list[str]] = {}

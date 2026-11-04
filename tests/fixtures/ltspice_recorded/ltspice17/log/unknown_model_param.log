@@ -1,0 +1,32 @@
+Circuit: * a model card with a parameter the device does not know, over three steps
+
+Error on line 5 : .model dx d(is=1e-14 bogus=3)
+	* Unrecognized parameter "bogus" -- ignored
+Direct Newton iteration for .op point succeeded.
+Semiconductor Device Operating Points:
+                        --- Diodes ---
+Name:      d1
+Model:     dx
+Id:      3.71e-04
+Vd:      6.29e-01
+Req:     6.98e+01
+CAP:     0.00e+00
+
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 6
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
