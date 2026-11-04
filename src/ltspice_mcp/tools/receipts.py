@@ -928,11 +928,17 @@ def project_receipt_runs(
 def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     """An experiment receipt's outcome, read off its own status and counters.
 
+    The one outcome every job receipt reports, whichever action renders it:
+    ``run_experiments``, ``jobs`` status and wait through
+    ``ReceiptSnapshot.outcome``, and ``jobs`` runs.
+
     ``delivered=False``: an experiment that failed produced nothing to read, so
     a failure here IS the call's outcome rather than one item among many. A
     cancelled experiment is partial whatever the counters say — a cancel
     landing after every run but before the analysis leaves them fully
-    reconciled, and one landing before expansion leaves them all at zero.
+    reconciled, and one landing before expansion leaves them all at zero. An
+    interrupted one is read off its counters: the cases whose runs wrote their
+    results before the server stopped count as produced, and are read by job.
     """
     return outcome_of(
         snapshot.status == "failed",
@@ -980,36 +986,6 @@ def _recovery_routes(snapshot: ReceiptSnapshot) -> list[str]:
     if snapshot.failures:
         routes.append("Inspect failures and lint findings before retrying omitted cases.")
     return routes
-
-
-#: Statuses on which a job delivered nothing at all, so the whole call failed.
-_FAILED_JOB_STATUSES = frozenset({"failed", "timeout", "interrupted"})
-
-
-def _jobs_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
-    """A jobs receipt's outcome — the same rule, read off the job's status.
-
-    What differs from ``_terminal_outcome`` is which statuses count. The
-    ``jobs`` control plane reports a wider set as outright failure (a timeout
-    and an interrupt deliver nothing either), and it takes terminality from the
-    lifecycle's live-status set rather than the experiment status list.
-
-    ``completed_with_failures`` is the one status that has to consult the
-    counters: the coordinator sets it when an attached analysis fails even
-    though every run landed, so an experiment's shortfall is read off its own
-    run counters instead. Only this status — a cancelled experiment is partial
-    no matter how the counters read, including the cancel that lands before
-    expansion and leaves them all at zero.
-    """
-    shortfall = snapshot.status == "cancelled" or (
-        snapshot.status == "completed_with_failures" and snapshot.completeness.fell_short
-    )
-    return outcome_of(
-        snapshot.status in _FAILED_JOB_STATUSES,
-        partial=shortfall,
-        in_progress=snapshot.status in NON_TERMINAL_LIVE_STATUSES,
-        delivered=False,
-    )
 
 
 def snapshot_receipt(
@@ -1224,7 +1200,7 @@ def render_runs_envelope(
     )
     return {
         "action": "runs",
-        "outcome": _jobs_outcome(snapshot),
+        "outcome": snapshot.outcome,
         "job_id": snapshot.job_id,
         "request_id": snapshot.request_id,
         "status": snapshot.status,
