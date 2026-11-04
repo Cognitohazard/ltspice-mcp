@@ -63,9 +63,9 @@ accept. Relevant considerations:
   `run_experiments` reads a `.raw` or `.log` for a `job_id`, the path comes
   from the server's own job record rather than from the caller, so it is not
   re-checked against `allowed_paths`. Those files are artifacts this server
-  produced. A result named by path instead (`raw_path` or `log_path` in
-  `analyze_results`, `raw_file` in `plot_waveform`, `path` in `inspect`) goes
-  through the `allowed_paths` check when a sandbox is set.
+  produced. A result named by `path` instead (in an `analyze_results`
+  source, `plot_waveform` or `inspect`) goes through the `allowed_paths`
+  check when a sandbox is set.
 - **Simulation artifacts can be stored outside `allowed_paths`** — staged
   decks, `.raw` and `.log` files are normally stored under the working
   directory's `.ltspice-mcp/runs/`; on WSL with LTspice they are written to a
@@ -100,11 +100,13 @@ accept. Relevant considerations:
   directory elsewhere, `LTSPICE_MCP_HOME` to override) holding the
   recent-circuits index and one lock file per circuit ever edited, named by a
   digest of its path. Beside a circuit, the server writes only the files a
-  caller asks for (an edited sheet; a `verify_circuit` `sidecar` export; a
-  `plot_waveform` `out_dir`; the `<name>.raw`, `<name>.log` and `<name>.plt`
-  that `plot_waveform` with `in_ltspice` places beside a schematic) and the
-  `<name>.net` that LTspice's own exporter writes beside a schematic it is
-  asked to run.
+  caller asks for: an edited sheet; the `<name>.net` of a `verify_circuit`
+  export with `export_to="sidecar"`; a `plot_waveform` `out_dir`; the
+  `<name>.raw`, `<name>.log` and `<name>.plt` that `plot_waveform` with
+  `in_ltspice` places beside a schematic; and the results that
+  `jobs(action="place_beside_sheet")` copies beside the schematic a case ran.
+  `run_experiments` exports a schematic from a copy in the store, so it
+  writes nothing beside it.
 - **`plot_waveform` opens a local window by default** — where the client
   cannot render the chart in-chat, the tool writes an HTML file and, with
   `open` (default `[analysis] open_plot`, which is `true`), spawns a detached

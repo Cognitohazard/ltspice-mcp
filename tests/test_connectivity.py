@@ -493,9 +493,32 @@ class TestNetsOverTerminals:
         assert [run.ends for run in nets.dropped] == [(TIE_A, TIE_B)]
         assert nets.unconnected(TIE_A) and nets.unconnected(TIE_B)
 
-    def test_a_point_on_a_dropped_run_is_on_the_nets_of_both_its_pins(self) -> None:
+    def test_a_point_inside_a_dropped_run_is_on_no_net_and_inside_the_run(self) -> None:
+        """The run's in-line vertex too, which merging takes away."""
         nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 48)), ((0, 48), (0, 96))])
-        assert set(nets.nets_at((0, 48))) == {nets.of_pin(TIE_A), nets.of_pin(TIE_B)}
+        assert nets.nets_at((0, 48)) == ()
+        assert nets.dropped_at((0, 48)) == nets.dropped
+        assert nets.dropped_at(TIE_A.point) == ()
+
+    def test_a_wire_across_a_dropped_run_is_the_only_net_inside_it(self) -> None:
+        nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 96)), ((-48, 48), (48, 48))])
+        (net,) = nets.nets_at((0, 48))
+        assert net not in (nets.of_pin(TIE_A), nets.of_pin(TIE_B))
+        assert nets.dropped_at((0, 48)) == nets.dropped
+
+    def test_a_dropped_runs_end_is_on_its_own_pins_net_alone(self) -> None:
+        """A label at a tie's pin joins nothing: ``same_instance_wire`` labels
+        both pins and exports ``R1 a b``."""
+        nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 96))])
+        assert nets.nets_at(TIE_A.point) == (nets.of_pin(TIE_A),)
+        assert nets.nets_at(TIE_B.point) == (nets.of_pin(TIE_B),)
+
+    def test_the_pins_and_labels_on_a_net_are_those_of_every_net_folded_with_it(self) -> None:
+        one, two = LabelAt((0, 0), 0, "out"), LabelAt((0, 96), 1, "OUT")
+        nets = nets_by_ltspice([TIE_A, TIE_B], [one, two], [])
+        assert nets.of_pin(TIE_A) != nets.of_pin(TIE_B)
+        assert set(nets.pins_on(nets.of_pin(TIE_A))) == {TIE_A, TIE_B}
+        assert set(nets.labels_on(nets.of_pin(TIE_B))) == {one, two}
 
     def test_a_label_on_the_run_keeps_it(self) -> None:
         nets = nets_by_ltspice([TIE_A, TIE_B], [LabelAt((0, 48), 0, "m")], [((0, 0), (0, 96))])

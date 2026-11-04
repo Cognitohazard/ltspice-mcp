@@ -520,6 +520,56 @@ def test_the_stand_in_discards_a_changed_sheet_as_ltspice_was_recorded_discardin
 
 
 @pytest.mark.parametrize("build", BUILDS)
+def test_the_stand_in_keeps_two_windows_copies_apart_as_ltspice_was_recorded(
+    build: str, tmp_path: Path
+):
+    facts = observed(build)
+    sheet = tmp_path / "twice.asc"
+    shutil.copyfile(INPUTS / "older_version.asc", sheet)
+    held = (FIXTURES / build / "sheets" / "older_version.asc").read_text(encoding="utf-8")
+    world = tmp_path / "world.json"
+    second = PID + 1
+    write_world(world, [a_window({str(sheet): held}), a_window({str(sheet): held}, pid=second)])
+    frame = FakeFrame(world)
+
+    with BridgeSession(fake_command(world), timeout=LIVENESS_S) as session:
+        windows = sorted(each.pid for each in session.instances() if each.mode == "gui")
+
+        def has_it(window: int) -> bool:
+            session.attach(window)
+            return str(sheet) in session.open_designs()
+
+        assert [windows == [PID, second], has_it(PID), has_it(second)] == facts[
+            "a second LTspice started with a sheet the first has open is a window of its "
+            "own, and both have the sheet open"
+        ]
+        copies = {
+            window: held.replace("SYMATTR Value 1k", f"SYMATTR Value {value}")
+            for window, value in ((PID, "4.7k"), (second, "2.2k"))
+        }
+        for window, copy in copies.items():
+            session.attach(window)
+            session.replace_design_text(str(sheet), copy)
+
+        def holds(window: int) -> str:
+            session.attach(window)
+            return session.design_text(str(sheet))
+
+        assert [holds(window) == copy for window, copy in copies.items()] == facts[
+            "each window holds the copy it was handed"
+        ]
+        session.attach(second)
+        session.bring_to_front(str(sheet))
+        frame.send(second, SAVE)
+        assert [
+            file_difference(sheet.read_bytes(), copies[second]) is None,
+            holds(PID) == copies[PID],
+        ] == facts[
+            "Save in the second writes its copy to the file, and the first still holds its own"
+        ]
+
+
+@pytest.mark.parametrize("build", BUILDS)
 def test_the_stand_in_answers_a_save_it_cannot_make_as_ltspice_was_recorded(
     build: str, tmp_path: Path
 ):

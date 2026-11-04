@@ -650,6 +650,11 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
     found: list[Finding] = []
     for point, count in sorted(crossings.items()):
         nets = {apart.folded(net) for net in apart.nets_at(point)}
+        # A pin or a label inside a run LTspice drops keeps the run, which
+        # then joins the pins at its ends (same_instance_label_inside).
+        nets |= {
+            apart.folded(apart.of_pin(end)) for run in apart.dropped_at(point) for end in run.ends
+        }
         if len(nets) < 2:
             continue
         what = ", ".join(on[point])
@@ -705,7 +710,7 @@ def _floating_pins(ix: _Index) -> list[Finding]:
     return [
         Finding(
             "floating_pin",
-            f"Floating pin: {_pin_name(pin)} at {_at(pin.point)}",
+            f"Floating pin: {pin.qualified_name} at {_at(pin.point)}",
             refs=(pin.reference,),
             points=(pin.point,),
             facts={"pin": pin.name},
@@ -713,10 +718,6 @@ def _floating_pins(ix: _Index) -> list[Finding]:
         for pin in ix.pins
         if ix.nets.unconnected(pin)
     ]
-
-
-def _pin_name(pin: PinAt) -> str:
-    return f"{pin.reference}.{pin.name}" if pin.name else pin.reference
 
 
 @_finds("dangling_wire_end")

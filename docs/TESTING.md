@@ -42,7 +42,9 @@ machine inherits the WSL kernel signature, so `is_wsl()` is true there and
 every WSL branch runs.
 
 The release gate, `scripts/release_gate.sh`, runs the suite locally before a
-push in each configuration the CI runners and the users have:
+push in each configuration the CI runners and the users have. Before tagging
+a release, also review the source as *Code paths that answer one question*
+below describes; the script does not do that.
 
 | configuration | reason |
 |-|-|
@@ -146,6 +148,38 @@ The upload step has no local check. To test trusted publishing and the
 metadata check without a release tag, dispatch the publish workflow by hand
 against TestPyPI with an explicit version.
 
+## Code paths that answer one question
+
+A question about a circuit or a run, such as which cards of a deck LTspice
+reads, which points of a sheet are one net, or whether a job's runs are done,
+is often answered in more than one place: by two tools or ops, by a recipe and
+the analysis attached to `run_experiments`, by the Python API and a resource.
+A fix to one answer leaves the others as they were, and a test of one path
+does not notice. `CLAUDE.md` ("Working practice") says how a fix avoids this.
+Before a release, review the source for the cases that slipped through:
+
+1. List every regular expression in `src/` and where each named pattern is
+   used, and the functions in more than one module that read, parse, resolve
+   or decide the same thing (`read_`, `parse_`, `resolve_`, `find_`, `is_`,
+   `normalize`).
+2. List the fields that more than one input model takes (a `ToolInput` and
+   every model it contains) whose type, default, bounds or strictness differ,
+   and every message that refers the caller to another tool, checked against
+   that tool's arguments.
+3. Search for the simulator conventions every reader must agree on: ground
+   names, the `§` in an instance name, the element letter, and the hierarchy
+   separators `.` and `:`.
+4. For each question answered in more than one place, run one input through
+   every answer, using a recording from `tests/fixtures/ltspice_recorded/`
+   where one exists.
+
+Confirm a finding by running both paths on its input before acting on it,
+preferably by someone given the code locations and the input but not the
+conclusion. A difference documented as intended is not a finding. Fix each
+finding where the question is decided. When a replaced function keeps
+callers for a while, ban its name as `CLAUDE.md` describes;
+`tests/test_banned_api.py` keeps the list of files still using it current.
+
 ## Recorded LTspice behaviour
 
 Development and CI run on Linux, where there is no LTspice, so the suite checks
@@ -170,7 +204,11 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   there and has it write an image (*Drawn sheets* below). A behaviour with no
   input of its own names in an `evidence` key where it is recorded instead (a
   manifest field, the files of other cases, or the bridge recordings), or
-  gives in an `unrecordable` key the reason it cannot be recorded.
+  gives in an `unrecordable` key the reason it cannot be recorded. A behaviour
+  whose inputs were written where no LTspice runs carries a `pending` key
+  saying how to record them. The tree checks excuse it from having a
+  recording and fail once it has one, so the key comes out with the
+  recording, and a test that reads the recording skips while it is pending.
 - `ltspice26/` and `ltspice17/` hold each build's output, one file per output,
   and a `manifest.json` with the executable's digest, size and version; the
   build name its own output reports; the build's defaults for the settings the

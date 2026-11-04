@@ -36,10 +36,16 @@ detects WSL.
 
 |simulator|platform|
 |-|-|
-|LTspice|Windows native; Linux and macOS through Wine; WSL through Windows interop|
-|ngspice|Linux, macOS and Windows native|
+|LTspice|Windows native; Linux through Wine; WSL through Windows interop|
+|ngspice|Linux and Windows native|
 |QSPICE|Windows native only (runs are refused under WSL or Wine)|
-|Xyce|Linux, macOS and Windows native|
+|Xyce|Linux and Windows native|
+
+macOS is not supported yet. The server reads every `.raw` and `.log` file in
+a parser process with a hard memory limit and cleans up that process and any
+it started (`lib/parser_process.py`). Neither has been validated on macOS, so
+the server refuses every result read there with `unsupported_platform`.
+[docs/TESTING.md](TESTING.md) lists the tests that supporting it needs.
 
 A schematic (`.asc`) runs through the netlist LTspice exports from it, which
 is in LTspice's own dialect. The server prepares that netlist for ngspice

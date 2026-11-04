@@ -8,7 +8,8 @@ It leaves out a field whose value is
 - a null,
 - a false flag, or
 - a sub-answer that the overall answer beside it already gives
-  (:data:`IMPLIED`): ``structurally_equivalent`` beside ``equivalent: true``.
+  (:data:`IMPLIED`): ``structurally_equivalent`` and ``directives_equivalent``
+  beside ``equivalent: true``.
 
 So an absent field means "checked, and nothing to report", and a reply about
 work that found nothing costs no tokens for saying so. An absent list reads as
@@ -55,8 +56,10 @@ class Kept:
 #: answer has any other value, every sub-answer is kept, so the caller sees
 #: which part held and which did not.
 IMPLIED: Mapping[str, tuple[str, object]] = {
-    # A circuit that is equivalent is structurally equivalent too.
+    # A circuit that is equivalent is structurally equivalent too, and has the
+    # same directives.
     "structurally_equivalent": ("equivalent", True),
+    "directives_equivalent": ("equivalent", True),
     # A simulator that is not available cannot be selected either; its
     # remediation or refusal says why.
     "selectable": ("available", False),

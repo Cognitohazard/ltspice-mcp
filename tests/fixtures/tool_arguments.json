@@ -114,6 +114,7 @@
       "view_cursors",
       "view_limit",
       "waypoints",
+      "window_pid",
       "wires",
       "x",
       "x1",

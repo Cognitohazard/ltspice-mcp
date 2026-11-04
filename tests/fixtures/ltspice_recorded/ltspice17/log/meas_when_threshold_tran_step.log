@@ -1,0 +1,55 @@
+Circuit: * WHEN against a number, a parameter, expressions and another measurement (transient, stepped)
+
+.OP point found by inspection.
+.step rv=1000
+.step rv=2000
+
+
+Measurement: t_number
+  step	v(out)=0.5
+     1	6.98893e-005
+     2	0.000139536
+
+Measurement: t_param
+  step	v(out)=vth
+     1	6.98893e-005
+     2	0.000139536
+
+Measurement: t_expr
+  step	v(out)=1/sqrt(4)
+     1	6.98893e-005
+     2	0.000139536
+
+Measurement: t_braced
+  step	v(out)=0.5
+     1	6.98893e-005
+     2	0.000139536
+
+Measurement: vmax
+  step	MAX(v(out))	FROM	TO
+     1	0.999954	0	0.001
+     2	0.993245	0	0.001
+
+Measurement: t_meas
+  step	v(out)=vmax/2
+     1	6.9885e-005
+     2	0.000138146
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2042
+traniter = 2042
+tranpoints = 1022
+accept = 1022
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

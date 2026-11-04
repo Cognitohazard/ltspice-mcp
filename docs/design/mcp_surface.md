@@ -193,7 +193,8 @@ left out when its value is
 - a null,
 - a false flag, or
 - a sub-answer the overall answer beside it already gives: in a comparison,
-  `structurally_equivalent` beside `equivalent: true`, and in the capabilities
+  `structurally_equivalent` and `directives_equivalent` beside
+  `equivalent: true`, and in the capabilities
   report, `selectable` beside `available: false`. Beside any other overall
   answer every sub-answer is kept, so the caller sees which part held.
 
@@ -231,7 +232,7 @@ wherever they appear in its reply, and is the whole exemption:
 | | `in_sandbox` (`open_in_ltspice`) | false says the document is outside the sandbox |
 | `edit_schematic`, `verify_circuit` | `ok` (findings, stages, `export`) | false is what the finding or stage reports |
 | | `equivalent` | false is a mismatch and null is no verdict |
-| | `structurally_equivalent` | kept beside an `equivalent` that is false or null |
+| | `structurally_equivalent`, `directives_equivalent` | kept beside an `equivalent` that is false or null |
 | | `shown` (`open_in_ltspice`, `ltspice`) | false says LTspice does not show what was asked, with the reason |
 | `plot_waveform` | `shown`, `tied` (`ltspice`) | false says the window does not show the plot, or a click on the sheet does not plot |
 | `run_code` | `status` | the snippet's outcome |
@@ -1286,9 +1287,14 @@ a window's copy and does not check. For one that replaces the sheet:
   `window_check`, naming a few of the differing entries, and writes nothing.
   A call with no ops and `open_window` set to the user's choice settles it.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
-  and the reply gives the file's new `sha256`. A box LTspice shows instead of
-  saving fails the call with `window_not_saved`, quoting the box, and the
-  server closes the box with Cancel, which leaves the window's copy as it was.
+  and the reply gives the file's new `sha256`. Where more than one window
+  holds a different copy, `window_pid` names the process whose copy the user
+  chose, the other windows are handed the saved sheet, and a call without it,
+  or with a process that holds no different copy, fails with
+  `window_not_chosen`, listing each window's difference. A box
+  LTspice shows instead of saving fails the call with `window_not_saved`,
+  quoting the box, and the server closes the box with Cancel, which leaves the
+  window's copy as it was.
   With `"discard"`, the server closes the sheet in each window that differs
   without saving and opens it again from the file, which is unchanged; a
   window whose copy changes meanwhile is left open and fails the call with
@@ -1393,9 +1399,13 @@ is refused, as a named label or a pin there is. Where at most one of the two
 wires has a name, the label is placed and the sheet reports the join
 (`joined_at_crossing`), as it does for a pin. Grounding a named net is not
 such a join, because it is what the flag requests, and a second named net may
-be grounded after the first. `inspect(kind: "net")` at a point on a wire's
-interior traces that wire's net and names the wire under `snapped_to_wire`; a
-point where two nets' wires cross is refused as ambiguous.
+be grounded after the first. `inspect(kind: "net")` follows the nets as
+LTspice netlists them: a wire straight between two pins of one part joins
+nothing, and a trace from one of a part's pins stacked on one point answers
+that pin's own net. At a point on a wire's interior it traces that wire's net
+and names the wire under `snapped_to_wire`. A point on two nets is refused,
+saying why: two nets' wires cross there, it is inside a wire LTspice drops, or
+it holds a part's stacked pins.
 
 **Waveform panes.** `set_plot_panes{analysis, panes}` writes the plot
 settings file that LTspice's waveform window reads when the sheet runs, which
@@ -1513,9 +1523,20 @@ because the caller asked for nothing the server could not do.
 component set, values, normalized parameters, which pins share a node
 (matched by the wiring, not by node names), the number of terminals, and
 `anchors`, the named nets (ports, rails, outputs) that must also match by
-name; ground always must. `structural_diff` reports the added, removed and
-changed components and directives. The modes differ on a deck they cannot
-read.
+name; ground always must. It also compares the directives outside subcircuit
+definitions, read as `structural_diff` reads them (below), so the two modes
+agree about every directive. A subcircuit definition is compared as wiring
+wherever it is defined, inline or in an included file, so its `.subckt` line,
+its `PARAMS:` defaults and the directives in its body are not compared. An
+`.include` or `.lib` line is a directive, so moving a definition into an
+included file shows as that line added. `equivalent` is true only when the wiring, the parts and values
+and the directives all match. Beside a false one, `structurally_equivalent`
+says whether the wiring matched and `directives_equivalent` whether the
+directives did, and `directives_added` and `directives_removed` list the
+directives only this circuit has and those only the reference has.
+`structural_diff` reports the added, removed and changed components and
+directives, and does not compare nodes. The modes differ on a deck they
+cannot read.
 `equivalence` returns a compare failure with no `comparison` block, while
 `structural_diff` diffs the deck as empty, so the delta is still returned,
 `equivalent` is null, and a warning names the deck that failed. In both cases
@@ -1963,8 +1984,13 @@ instance list, or every MOS inside a subcircuit instance by that instance's
 list. Such a device gets its draw as `delvto` and `mulu0` instance
 parameters, which needs its model to resolve to an ngspice-compatible BSIM3
 or BSIM4 model, and the draw uses the device's W and L after `assign`
-variations are applied. Draws across circuits are independent; correlated
-Monte Carlo across decks is not supported.
+variations are applied. The area a draw stands for is `m·W·L`, where m is the
+product of the device's own `m` and the `m` of every subcircuit instance
+above it (an inner `m={mult}` resolves in the scope its X line sets), because
+the simulator builds that many parallel copies from one card and they share
+the draw. An `m` that does not resolve to a positive number refuses the
+request with `mismatch_geometry_unresolved`. Draws across circuits are
+independent; correlated Monte Carlo across decks is not supported.
 
 ### A.2 Recipe
 

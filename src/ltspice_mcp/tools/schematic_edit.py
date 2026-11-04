@@ -51,7 +51,15 @@ from ltspice_mcp.lib.deck_prep import export_netlist_text, stage_sheet
 from ltspice_mcp.lib.encoding import leading_byte_order_mark
 from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
-from ltspice_mcp.lib.ltspice_window import OpenSheet, Saved, WindowUpdate, file_difference
+from ltspice_mcp.lib.ltspice_window import (
+    ChooseWindow,
+    Difference,
+    OpenSheet,
+    Saved,
+    WindowUpdate,
+    copies_by_process,
+    differing_copies,
+)
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
     build_pin_legend,
@@ -206,6 +214,13 @@ class EditSchematicInput(ToolInput):
             "of the sheet, 'discard' drops it. Guide section 'schematics'."
         ),
     )
+    window_pid: int | None = Field(
+        default=None,
+        description=(
+            "With open_window='save': the process of the LTspice window whose copy the "
+            "user keeps, where several differ."
+        ),
+    )
     ops: list[ConsolidatedOp] = Field(
         description=(
             "Typed edit ops, each tagged by its 'op' field, applied in order "
@@ -354,6 +369,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "reference": {"type": "string"},
                 "equivalent": {"type": ["boolean", "null"]},
                 "structurally_equivalent": {"type": ["boolean", "null"]},
+                "directives_equivalent": {"type": ["boolean", "null"]},
                 "export_error": {"type": ["string", "null"]},
                 "compare_error": {"type": ["string", "null"]},
                 "comparison": COMPARISON_SCHEMA,
@@ -1145,7 +1161,10 @@ async def _run_reference_stage(
             return verification
         assert payload is not None  # a compare without a failure carries its payload
         verification["equivalent"] = payload.get("equivalent")
-        verification["structurally_equivalent"] = payload.get("structurally_equivalent")
+        # The partial verdicts only the equivalence mode gives.
+        for partial in ("structurally_equivalent", "directives_equivalent"):
+            if partial in payload:
+                verification[partial] = payload[partial]
         verification["comparison"] = payload
         return verification
     finally:
@@ -1294,17 +1313,19 @@ def _envelope(
     return data
 
 
-def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> str | None:
-    """Which LTspice window holds a different sheet from the file, and how, or None."""
-    for sheet in sheets:
-        difference = file_difference(on_disk, sheet.text)
-        if difference is not None:
-            return (
-                f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
-                f"a different one from the file ({difference.summary()}): either it has changes "
-                "nobody saved, or the file changed after it was opened."
-            )
-    return None
+def _window_differs(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
+    """Which LTspice windows hold a different sheet from the file, and how."""
+    if len(differing) > 1:
+        return (
+            f"{len(differing)} LTspice windows have this sheet open and each holds a "
+            f"different one from the file ({copies_by_process(differing)})."
+        )
+    ((sheet, difference),) = differing
+    return (
+        f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
+        f"a different one from the file ({difference.summary()}): either it has changes "
+        "nobody saved, or the file changed after it was opened."
+    )
 
 
 _WINDOW_REMEDY = (
@@ -1312,9 +1333,16 @@ _WINDOW_REMEDY = (
     "edit_schematic with ops=[], this expected_sha256 and open_window='save' to keep "
     "them or open_window='discard' to drop them, read the sheet again, and resubmit."
 )
+_WINDOWS_REMEDY = (
+    "Ask the user which window's copy to keep; inspect(kind='open_in_ltspice') lists "
+    "where each differs from the file. Then call edit_schematic with ops=[], "
+    "this expected_sha256, open_window='save' and window_pid set to that window's "
+    "process, or open_window='discard' to drop every copy, read the sheet again, and "
+    "resubmit."
+)
 
 
-_WINDOW_ARGUMENTS = frozenset({"path", "expected_sha256", "open_window", "ops"})
+_WINDOW_ARGUMENTS = frozenset({"path", "expected_sha256", "open_window", "window_pid", "ops"})
 
 
 def _set_besides_open_window(args: EditSchematicInput) -> list[str]:
@@ -1463,6 +1491,11 @@ async def _evaluate_edit_schematic(
         raise NetlistError(
             "open_window takes only path and expected_sha256, with ops=[]: settle the "
             "window, read the sheet again, then edit it in another call."
+        )
+    if args.window_pid is not None and args.open_window != "save":
+        raise NetlistError(
+            "window_pid goes with open_window='save': it names the window whose copy "
+            "the user keeps."
         )
     # An op-less batch is a read: nothing to commit, so it runs as a dry run.
     dry_run = args.dry_run or not (args.ops or args.open_window)
@@ -1637,7 +1670,19 @@ async def _evaluate_edit_schematic(
                     )
                 )
             try:
-                saved = await asyncio.to_thread(state.open_windows.save, target, on_disk)
+                saved = await asyncio.to_thread(
+                    state.open_windows.save, target, on_disk, args.window_pid
+                )
+            except ChooseWindow as exc:
+                message = f"Nothing was saved: {exc}."
+                return refused(
+                    code="window_not_chosen",
+                    stage="window_save",
+                    failure=str(exc),
+                    message=message,
+                    hint=_WINDOWS_REMEDY,
+                    text=f"edit_schematic: {message} {_WINDOWS_REMEDY}",
+                )
             except BridgeError as exc:
                 state.editors.invalidate(target)
                 return unsettled(
@@ -1670,7 +1715,9 @@ async def _evaluate_edit_schematic(
                     f"LTspice could not be asked whether {target.name} is open in a window "
                     f"({exc}); one that has it open still shows the sheet as it was."
                 )
-            differs = _window_differs(on_disk, open_sheets)
+            differing = differing_copies(open_sheets, on_disk)
+            differs = _window_differs(differing) if differing else None
+            remedy = _WINDOW_REMEDY if len(differing) == 1 else _WINDOWS_REMEDY
             if differs is not None and dry_run:
                 window_notes.append(
                     f"{differs} A commit is refused until the window's copy is saved or "
@@ -1682,10 +1729,10 @@ async def _evaluate_edit_schematic(
                     stage="window_check",
                     failure="the open LTspice window differs from the file",
                     message=f"{differs} Nothing was written.",
-                    hint=_WINDOW_REMEDY,
+                    hint=remedy,
                     text=(
                         f"edit_schematic: {target.name} is open in an LTspice window that "
-                        f"holds a different sheet. Nothing was written. {_WINDOW_REMEDY}"
+                        f"holds a different sheet. Nothing was written. {remedy}"
                     ),
                 )
 
@@ -1898,7 +1945,7 @@ async def _evaluate_edit_schematic(
                 post_commit_stage = "open_window"
                 assert on_disk is not None  # a window is asked only about a sheet on disk
                 updates = await asyncio.to_thread(
-                    state.open_windows.show_each, open_sheets, committed_text, on_disk
+                    state.open_windows.show_each, open_sheets, committed_text
                 )
                 shown = [
                     _window_row(sheet, update)

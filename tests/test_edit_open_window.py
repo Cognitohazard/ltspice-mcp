@@ -393,18 +393,29 @@ async def test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_t
     )
 
 
+def two_windows(tmp_path: Path, sheet: Path) -> str:
+    """Two LTspice windows with ``sheet`` open, each holding a copy of its own;
+    returns the second window's copy."""
+    second = a_change(sheet).replace("5k", "6k")
+    write_world(
+        tmp_path / "world.json",
+        [a_window({str(sheet): a_change(sheet)}), a_window({str(sheet): second}, pid=PID + 1)],
+    )
+    return second
+
+
+# A part is named by its first line, so the copies read alike here; the
+# open_in_ltspice listing gives each entry whole.
+CHANGED_R1 = "only in the window: SYMBOL res 128 112 R90. only in the file: SYMBOL res 128 112 R90"
+TWO_COPIES = f"process {PID}: {CHANGED_R1}; process {PID + 1}: {CHANGED_R1}"
+
+
 async def test_every_window_with_a_different_copy_is_closed_and_opened_from_the_file(
     asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
 ):
     """Unlike a save, a discard leaves no choice between copies: the file's is kept."""
     world = tmp_path / "world.json"
-    write_world(
-        world,
-        [
-            a_window({str(asc_file): a_change(asc_file)}),
-            a_window({str(asc_file): a_change(asc_file).replace("5k", "6k")}, pid=PID + 1),
-        ],
-    )
+    two_windows(tmp_path, asc_file)
 
     data = await discard(asc_state, asc_file)
 
@@ -444,27 +455,117 @@ async def test_a_window_changed_while_ltspice_asks_is_left_open(
     assert entry["designs"][str(asc_file)] == later
 
 
-async def test_two_windows_with_different_copies_save_nothing(
+async def test_two_windows_with_different_copies_save_nothing_until_one_is_chosen(
     asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
 ):
     """Which copy to keep is the user's choice."""
     before = file_bytes(asc_file)
-    world = tmp_path / "world.json"
-    write_world(
-        world,
-        [
-            a_window({str(asc_file): a_change(asc_file)}),
-            a_window({str(asc_file): a_change(asc_file).replace("5k", "6k")}, pid=PID + 1),
-        ],
-    )
+    two_windows(tmp_path, asc_file)
 
     data = await save(asc_state, asc_file)
 
-    assert data["error"]["code"] == "window_not_saved"
-    assert data["error"]["message"].startswith(
-        f"LTspice processes {PID} and {PID + 1} each hold a copy of {asc_file.name}"
+    assert data["error"]["code"] == "window_not_chosen"
+    assert data["error"]["message"] == (
+        f"Nothing was saved: 2 LTspice windows hold different copies ({TWO_COPIES})."
+    )
+    assert "window_pid set to that window's process" in data["hint"]
+    assert file_bytes(asc_file) == before
+    assert all("commands" not in entry for entry in read_world(tmp_path / "world.json")["windows"])
+
+
+async def test_the_copy_the_user_chose_is_saved_and_the_other_window_is_handed_it(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    second = two_windows(tmp_path, asc_file)
+
+    data = await save(asc_state, asc_file, window_pid=PID + 1)
+
+    assert data["commit_state"] == "committed", data
+    assert data["sha256"] == digest(asc_file)
+    assert decode_windows_1252(file_bytes(asc_file)) == second
+    assert data["open_in_ltspice"] == [
+        {"pid": PID + 1, "version": "26.1.1", "shown": True, "saved": True},
+        {"pid": PID, "version": "26.1.1", "shown": True},
+    ]
+    held = [
+        entry["designs"][str(asc_file)] for entry in read_world(tmp_path / "world.json")["windows"]
+    ]
+    assert held == [second, second]
+
+
+@pytest.mark.parametrize(
+    ("chosen", "reason"),
+    [(PID + 7, "does not have the sheet open"), (PID + 1, "holds the file's copy")],
+)
+async def test_a_window_pid_without_a_different_copy_saves_nothing(
+    asc_state: SessionState,
+    asc_file: Path,
+    window: Window,
+    tmp_path: Path,
+    chosen: int,
+    reason: str,
+):
+    before = file_bytes(asc_file)
+    write_world(
+        tmp_path / "world.json",
+        [
+            a_window({str(asc_file): a_change(asc_file)}),
+            a_window({str(asc_file): as_ltspice_reads(asc_file)}, pid=PID + 1),
+        ],
+    )
+
+    data = await save(asc_state, asc_file, window_pid=chosen)
+
+    assert data["error"]["code"] == "window_not_chosen"
+    assert data["error"]["message"] == (
+        f"Nothing was saved: LTspice process {chosen} {reason}, and one LTspice window "
+        f"holds a different copy (process {PID}: {CHANGED_R1})."
     )
     assert file_bytes(asc_file) == before
+
+
+async def test_a_window_that_does_not_take_the_chosen_copy_is_opened_again_from_the_file(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """The user chose to drop that window's copy, so it is closed and opened
+    again from the saved file, though it never held the file's sheet."""
+    second = two_windows(tmp_path, asc_file)
+    asc_state.open_windows = _DoesNotTakeIt(tmp_path / "world.json")
+
+    data = await save(asc_state, asc_file, window_pid=PID + 1)
+
+    assert data["commit_state"] == "committed", data
+    assert data["open_in_ltspice"][1] == {
+        "pid": PID,
+        "version": "26.1.1",
+        "shown": True,
+        "reopened": True,
+    }
+    assert window.text(asc_file) == as_ltspice_reads(asc_file)
+    assert decode_windows_1252(file_bytes(asc_file)) == second
+
+
+@pytest.mark.parametrize("open_window", [None, "discard"])
+async def test_window_pid_goes_with_a_save(
+    asc_state: SessionState, asc_file: Path, window: Window, open_window: str | None
+):
+    with pytest.raises(NetlistError, match="window_pid goes with open_window='save'"):
+        await edit(asc_state, asc_file, ops=[], open_window=open_window, window_pid=PID)
+
+
+async def test_an_edit_under_two_different_windows_names_both_and_asks_which_to_keep(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    two_windows(tmp_path, asc_file)
+
+    data = await edit(asc_state, asc_file)
+
+    assert data["error"]["code"] == "open_window_differs"
+    assert data["error"]["message"] == (
+        f"2 LTspice windows have this sheet open and each holds a different one from the "
+        f"file ({TWO_COPIES}). Nothing was written."
+    )
+    assert data["hint"] == se._WINDOWS_REMEDY
 
 
 async def test_the_box_ltspice_shows_instead_of_saving_is_quoted_and_cancelled(

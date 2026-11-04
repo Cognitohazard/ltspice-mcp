@@ -528,6 +528,41 @@ class TestRandomExpansion:
                 MismatchRule(rule="mismatch", min_wl_um2=bad)
         assert MismatchRule(rule="mismatch", min_wl_um2=1e-2).min_wl_um2 == 1e-2
 
+    def _vto_offset(self, directory: Path, multiplier: str) -> float:
+        """M1's drawn VTO offset; the stream is keyed by circuit, case and instance."""
+        directory.mkdir()
+        circuit = _closure(
+            directory,
+            includes={},
+            root_body=f".model NM NMOS(VTO=0.7 KP=100u)\nM1 d g 0 0 NM W=10u L=1u{multiplier}\n",
+        )
+        variation = _random_rule({"rule": "mismatch", "prefix": "M", "AVT": 3e-3})
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), directory / "out"
+        )
+        return cases[0].assignments["random:mismatch:M1.VTO"] - 0.7
+
+    def test_mismatch_sigma_counts_the_instance_multiplier(self, tmp_path: Path):
+        """``m=4`` is four devices in parallel, so its mismatch sigma is half of one's.
+
+        Pelgrom's sigma scales as 1/sqrt(area), and a device written with a
+        multiplier ``m`` has m times the gate area of one copy. The draw's
+        stream is keyed by circuit, case and instance, not by the deck's text,
+        so the two decks below draw the same normal deviate and their offsets
+        differ only by the sigma each was given.
+        """
+        single = self._vto_offset(tmp_path / "single", "")
+        four = self._vto_offset(tmp_path / "four", " m=4")
+
+        assert single != 0.0
+        assert four == pytest.approx(single / 2, rel=1e-9)
+
+    def test_mismatch_refuses_a_multiplier_it_cannot_read(self, tmp_path: Path):
+        # Drawn as one copy, a device of several copies would get too large a sigma.
+        with pytest.raises(VariationError) as exc:
+            self._vto_offset(tmp_path / "unknown", " m={k}")
+        assert exc.value.code == "mismatch_geometry_unresolved"
+
 
 _CORE = ".subckt core in out\nR1 in out 1k\n.ends\n"
 
@@ -1346,6 +1381,17 @@ PDK_DECK = (
 )
 
 
+_XM1 = "XM1 out1 gate 0 0 minifet W=1 L=0.15"
+# The device multiplied by a body parameter (m={mult}), the foundry spelling.
+_MULT_FET = MINI_FET.replace(".param w = 1 l = 0.15", ".param w = 1 l = 0.15 mult = 1").replace(
+    "w = {w} l = {l}", "w = {w} l = {l} m = {mult}"
+)
+# The same parameter computed in an unbraced, spaced expression: four copies.
+_SPACED_MULT_FET = MINI_FET.replace(
+    ".param w = 1 l = 0.15", ".param w = 1 l = 0.15 nf = 2\n.param mult = 2 * nf"
+).replace("w = {w} l = {l}", "w = {w} l = {l} m = {mult}")
+
+
 def _pdk_deck(path: Path, text: str = PDK_DECK, circuit_id: str = "pdk") -> CircuitDeck:
     path.write_text(text)
     return CircuitDeck(circuit_id, path, text)
@@ -1505,6 +1551,44 @@ class TestMismatchThroughSubcircuits:
         )
         assert "NM__M1" in cases[0].text
         assert "mcpatch" not in cases[0].text
+
+    def _xm1_shift(self, directory: Path, xm1_params: str = "", body: str = MINI_FET) -> float:
+        """XM1's drawn threshold shift; the stream is keyed by circuit and instance."""
+        directory.mkdir()
+        text = PDK_DECK.replace(MINI_FET, body).replace(_XM1, _XM1 + xm1_params)
+        circuit = _pdk_deck(directory / "pdk.cir", text)
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [self._variation()]), directory / "out"
+        )
+        return cases[0].assignments["random:mismatch:XM1.m0.delvto"]
+
+    @pytest.mark.parametrize(
+        ("xm1_params", "body"),
+        [
+            # ngspice builds m copies of every device in the body of an X line
+            # that carries m, all from the one patched card, so they share a draw.
+            pytest.param(" m=4", MINI_FET, id="m-on-the-x-line"),
+            # The foundry spelling: the body multiplies its device by a
+            # parameter (m={mult}) and the X line sets that parameter.
+            pytest.param(" mult=4", _MULT_FET, id="mult-set-from-the-x-line"),
+            # The body computes that parameter in an unbraced, spaced
+            # expression, which is read whole.
+            pytest.param("", _SPACED_MULT_FET, id="mult-from-a-spaced-param"),
+        ],
+    )
+    def test_four_copies_draw_half_the_shift_of_one(
+        self, tmp_path: Path, xm1_params: str, body: str
+    ):
+        one = self._xm1_shift(tmp_path / "one")
+        four = self._xm1_shift(tmp_path / "four", xm1_params, body)
+        assert one != 0.0
+        assert four == pytest.approx(one / 2, rel=1e-9)
+
+    def test_an_unreadable_multiplier_is_refused_not_drawn_as_one_copy(self, tmp_path: Path):
+        with pytest.raises(VariationError) as exc:
+            self._xm1_shift(tmp_path / "unknown", " m={k}")
+        assert exc.value.code == "mismatch_geometry_unresolved"
+        assert "m={k}" in str(exc.value)
 
 
 class TestMismatchAcrossIncludedFiles:

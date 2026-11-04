@@ -259,8 +259,8 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("verify_circuit", "compare"): (
         "Compare against a reference netlist or schematic: 'equivalence' "
-        "graph-compares connectivity, 'structural_diff' reports the added, removed "
-        "and changed delta. Needs the 'compare' argument."
+        "graph-compares connectivity and compares the directives, 'structural_diff' "
+        "reports the added, removed and changed delta. Needs the 'compare' argument."
     ),
 }
 

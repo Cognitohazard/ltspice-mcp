@@ -37,6 +37,22 @@ tool-surface changes.
   way. The budget ladder's trim rung no longer lists empty blocks to remove,
   since every reply leaves them out, and `verify_circuit` now says, when it
   skips the comparison for want of a netlist, whether the export ran.
+- The `equivalence` compare of `verify_circuit` and of `edit_schematic`'s
+  reference check also compares the directives, so `equivalent` is true only
+  when the wiring, the parts and values, and the directives all match.
+  Before, it read no directive but the includes it followed for subcircuit
+  definitions, so a changed `.param` that every part still read as `{rv}`
+  came back `equivalent: true`. The directives are read as `structural_diff`
+  reads them, so spelling is not a difference, LTspice's export boilerplate
+  is left out, and the two modes list a directive change the same way. Beside
+  a false verdict, `directives_equivalent` says whether the directives
+  matched, as `structurally_equivalent` does for the wiring, and
+  `directives_added` and `directives_removed` list the difference. A
+  subcircuit definition is compared as wiring wherever it is defined, so its
+  `.subckt` line, `PARAMS:` defaults and body directives are not compared,
+  and moving a definition into an included file shows as the `.include` line
+  added. The `mode` and tool descriptions now say what each mode compares,
+  and that `structural_diff` does not compare nodes.
 
 ### Added
 
@@ -74,6 +90,22 @@ tool-surface changes.
   `.lib` that names it, in the deck or in the included file that holds it,
   where it gave the deck alone. A refused `compare.reference` is filed under
   the reference, where it was filed under the circuit, which had been read.
+- A Pelgrom `mismatch` rule ignored a device's multiplier `m`. The simulator
+  builds m parallel copies from one card and they share its one draw, so
+  their area is `m·W·L`, but the draw took the area of a single copy: a device
+  written as `W=1u m=12` got a threshold spread √12 (about 3.5×) too large,
+  with no warning. The area now counts the device's own `m` and the `m` of
+  every subcircuit instance above it, including an inner `m={mult}` set from
+  the X line, on a top-level `M` card, a device one subcircuit level down and
+  a nested `instance` target alike. An `m` that does not resolve to a positive
+  number refuses the request with `mismatch_geometry_unresolved` instead of
+  being drawn as one copy. A refusal while drawing for a device one subcircuit
+  level down now reaches the caller as a coded error rather than an uncoded
+  one.
+- `run_experiments` reported a mismatch rule it refuses for a device inside a
+  subcircuit as `submission_failed`. An LTspice run now reports
+  `unsupported_backend`, and an ngspice run whose device is not a BSIM3 or
+  BSIM4 model reports `unsupported_model`.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its
@@ -92,6 +124,13 @@ tool-surface changes.
   with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
   time limit also counted the wait for LTspice to close the pane or answer its
   question. That wait is now added to the limit.
+- `inspect(kind="net")` put two pins of one part on one net where LTspice
+  leaves them apart. One case is a wire running straight between the two
+  pins, which LTspice drops (recorded: `connectivity/same_instance_wire`). The
+  other is the part's pins stacked on one point with nothing else there
+  (`connectivity/pins_of_one_part_on_one_point`). A trace now follows the nets
+  as LTspice netlists them. A trace from inside such a wire, or from a point
+  holding stacked pins, is refused and names the pins to trace instead.
 - `net_with_two_names` reported one net carrying two labels where a wire
   running straight between two labelled pins of one part joined them on the
   sheet. LTspice drops that wire and keeps the labels on separate nodes
@@ -287,6 +326,28 @@ tool-surface changes.
 - The refusal for a missing `raster` extra named ways to install the server
   with the extra, none of which reaches a server run from a source checkout.
   It now also names `uv sync --extra raster` for that case.
+- The documentation and package metadata no longer claim that the server
+  runs on macOS. It refuses every `.raw` and `.log` read there, because the
+  memory limit of the process that reads results and the cleanup of that
+  process and its children have not been validated on macOS. Yet the README
+  said it found a simulator on macOS, the PyPI classifiers listed macOS, and
+  the Claude Desktop extension offered itself on macOS. The extension's
+  manifest now lists Windows and Linux only, and the README, `docs/DESIGN.md`
+  and the extension's README say that macOS is not supported yet.
+- The Claude Code plugin and Desktop-extension manifests still said 0.6.1
+  after the 0.7.0 release, because the 0.7.0 tag was cut without
+  `scripts/release.sh`, which stamps them. They now say 0.7.0, and the
+  publish workflow refuses a tag whose manifests name another version.
+- `SECURITY.md` named the retired file arguments `raw_path`, `log_path` and
+  `raw_file` where the tools now take `path`. It also listed the
+  `<name>.net` beside a schematic that `run_experiments` no longer writes,
+  and left out the results `jobs(action="place_beside_sheet")` copies beside
+  a sheet.
+- The README described the SPICEAssistant study (arXiv:2507.10639) as
+  comparing scalar results with raw output. Its o3 solve rates of 25.4% and
+  84.9% compare no simulation with simulation feedback from tools that
+  return values read from each run as text (section 4.3, Table 2), and the
+  README now says so.
 
 ### Added
 
@@ -309,7 +370,11 @@ tool-surface changes.
   after a plot opens with `tied: false` because its sheet had unsaved changes.
   A box LTspice shows instead of saving, such as for a write-protected file,
   is quoted in `window_not_saved` and closed with Cancel; a window whose copy
-  changes during a discard is left open, with `window_not_discarded`.
+  changes during a discard is left open, with `window_not_discarded`. When
+  the sheet is open in more than one LTspice and each holds a different copy,
+  `window_pid` names the one the user chose to save, the other windows are
+  handed the saved sheet, and a save without it, or with a process that
+  holds no different copy, fails with `window_not_chosen`.
   `open_window="save"` replaces `save_open_window=true`, added earlier in
   this release; a call that still sends `save_open_window` is told so.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a

@@ -9,6 +9,7 @@ lint and arity rules read the same card and have to reach the same answer.
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
+from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.netlist_graph import compare_graphs
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
 from ltspice_mcp.lib.spice_lex import lex
@@ -642,6 +645,64 @@ def test_the_functions_the_directive_check_allows_all_measure(build: str):
     for name in ("g_mag", "g_ph", "g_re", "g_im", "g_db"):
         assert f"{name}:" in log
     assert "FAIL" not in log
+
+
+# --------------------------------------------------------------------------
+# A .meas of a node pair, against what .save names
+# --------------------------------------------------------------------------
+
+#: V(in,mid) at 0.9 ms: C1 charges through 2k (tau 200 us), and R1 drops half.
+PAIR_VOLTS = math.exp(-4.5) / 2
+
+
+def pair_run(build: str, case_id: str, tmp_path: Path) -> tuple[list[str], MeasurementsOutput]:
+    """The traces a recorded pair run's raw holds, and its log's measurements."""
+    traces = rec.decode(build, case_id, tmp_path).raw.get_trace_names()
+    return traces, parse_measurements(rec.recorded(build, f"{case_id}.log"))
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_pair_measured_from_its_two_saved_nodes_is_refused_by_the_lint(
+    build: str, tmp_path: Path
+):
+    """``.save V(in) V(mid)`` with ``FIND V(in,mid)``: both builds take the
+    measurement from the two nodes, the only voltages the raw holds, and
+    ``save-meas-coverage`` refuses the deck for want of the pair."""
+    traces, data = pair_run(build, "deck/save_pair_both_nodes", tmp_path)
+    assert traces == ["time", "V(in)", "V(mid)"]
+    assert data["measurements"]["vpair"]["values"][0] == pytest.approx(PAIR_VOLTS, abs=5e-4)
+    assert refusals("deck/save_pair_both_nodes") == {"save-meas-coverage"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_saving_a_pair_saves_its_two_nodes(build: str, tmp_path: Path):
+    """``.save V(in,mid)`` is accepted: the raw holds V(in) and V(mid), not the
+    pair, the pair is measured from them as when both are saved, and the
+    checks accept the deck."""
+    traces, data = pair_run(build, "deck/save_pair_as_pair", tmp_path)
+    assert traces == ["time", "V(in)", "V(mid)"]
+    _, both = pair_run(build, "deck/save_pair_both_nodes", tmp_path)
+    assert data["measurements"]["vpair"]["values"] == both["measurements"]["vpair"]["values"]
+    assert refusals("deck/save_pair_as_pair") == set()
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_node_against_ground_is_not_measured_with_only_the_node_saved(
+    build: str, tmp_path: Path
+):
+    """``.save V(mid)`` with ``FIND V(mid,0)``: neither build takes the
+    measurement. LTspice 26 stops it with "Voltage not found." and XVII prints
+    it FAIL'ed. The raw holds V(mid) alone, and ``save-meas-coverage`` refuses
+    the deck."""
+    traces, data = pair_run(build, "deck/save_pair_to_ground", tmp_path)
+    assert traces == ["time", "V(mid)"]
+    if rec.generation(build) == "xvii":
+        assert data["failed_measurements"] == ["vground"]
+    else:
+        assert "vground" not in data["measurements"]
+        log = read_spice_text(rec.recorded(build, "deck/save_pair_to_ground.log"))
+        assert "Voltage not found." in log
+    assert refusals("deck/save_pair_to_ground") == {"save-meas-coverage"}
 
 
 # --------------------------------------------------------------------------

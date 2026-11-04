@@ -91,6 +91,7 @@ from ltspice_mcp.lib.simulator import (
 )
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
@@ -1480,7 +1481,7 @@ def _append_terminal_cases(
 
 
 def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
-    if isinstance(exc, (VariationError, DeckStagingError)):
+    if isinstance(exc, (VariationError, DeckStagingError, MismatchPlanError)):
         return exc.code, str(exc)
     if source_path.suffix.casefold() == ".asc" and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)
