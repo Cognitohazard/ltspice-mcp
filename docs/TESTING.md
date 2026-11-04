@@ -670,7 +670,7 @@ LTSPICE_MCP_RECORD_SHEET_FINDINGS=1 uv run pytest tests/test_sheet_findings_snap
 |`LTSPICE_MCP_RECORD_LABELS_AND_MOVES`|`tests/test_label_and_move_record.py`|`tests/fixtures/label_and_move_record.json`: the `add_net_label` and `move_component` results for a fixed set of proposals on every sheet|
 |`LTSPICE_MCP_RECORD_INSPECT_SHEETS`|`tests/test_inspect_sheet_record.py`|`tests/fixtures/inspect_sheet_record.json`: the `inspect(kind="net")` and `inspect(kind="components")` replies for every sheet|
 |`LTSPICE_MCP_RECORD_BUILD_BENCHMARK`|`tests/test_build_benchmark.py`|`tests/fixtures/build_benchmark_record.json` and the built sheets (below)|
-|`LTSPICE_MCP_RECORD_TOOL_ARGUMENTS`|`tests/test_argument_names_are_kept.py`|`tests/fixtures/tool_arguments.json`: every argument name each tool takes, at any depth, and each name a tool retired with the one that replaced it. A name that disappears must be in the tool's `RENAMED_ARGUMENTS` entry and named in the changelog; recording refuses one that is not|
+|`LTSPICE_MCP_RECORD_TOOL_ARGUMENTS`|`tests/test_argument_names_are_kept.py`|`tests/fixtures/tool_arguments.json`: every place a caller writes an argument name in each tool (`circuits[].path`, `ops[].dx`), and each place a tool retired a name with the one that replaced it. A place that stops taking its name, even one the tool still takes elsewhere, must be in the tool's `RENAMED_ARGUMENTS` entry, which refers a call sending the old name there, and named in the changelog; recording refuses one that is not|
 
 `tests/fixtures/sheet_edit_record.json` holds, for every `edit_schematic` call
 the suite makes, the committed sheet (read as records) and the reply.
