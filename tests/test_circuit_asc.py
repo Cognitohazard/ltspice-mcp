@@ -2782,7 +2782,7 @@ class TestWirePinsTJunction:
             {
                 "x": 192,
                 "y": 96,
-                "via": "endpoint",
+                "via": "tee",
                 "wire": {"from": {"x": 96, "y": 96}, "to": {"x": 288, "y": 96}},
             }
         ]

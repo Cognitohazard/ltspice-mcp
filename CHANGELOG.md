@@ -338,6 +338,23 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
+  wire, a T, is listed under `junctions` with `via: "tee"`. It was
+  `via: "endpoint"`, which read as the end of the existing wire, the opposite
+  of what happened.
+- **Breaking:** `verify_circuit`'s `export_to` defaults to `"managed"`: the
+  export check exports a copy in the server's own folder and writes nothing
+  next to the schematic. It used to overwrite `<name>.net` beside the sheet
+  unless asked not to, the one default left that wrote into the caller's
+  folder after `run_experiments` stopped. `export_to="sidecar"` still writes
+  that file. Both modes report what changed since the schematic's previous
+  export (`diff_vs_prior`): a sidecar export against the file it replaces, a
+  managed one against the previous managed export, which the server keeps.
+- A call that sends a renamed argument's old name is refused, as before,
+  and the refusal now also says that a copy of the tool's arguments still
+  listing the old name is out of date, and to reload the tool's definition or
+  reconnect the server. A client that checks a call against such a copy
+  refuses the new name, so the tool cannot be called at all until it does.
 - The server's instructions say that LTspice's own MCP server
   (`set_design_content`, `start_simulation`) edits and runs only the copy
   open in its window, and to edit sheets with `edit_schematic` and run them
