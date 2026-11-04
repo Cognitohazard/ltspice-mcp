@@ -1107,6 +1107,14 @@ per_run?: Page, warnings}}, observations[],
 failures[] {code, stage, where, message, wheres?, count?}, signals_available?,
 source_hashes, result_set_id?, hint`.
 
+`results` has an entry for every recipe the page reached, in the order they
+were asked for, whether or not it produced rows. A recipe that produced none
+because it failed, whether it was invalid, its source could not be read or it
+failed on every run, has empty rows and a warning `No rows: ...` naming
+the `failures` places that explain it; one whose source named an unknown job
+has empty rows and the gap in `coverage.missing_cases`. The Python API and an
+attached analysis give the same entries.
+
 ### 3.4 `edit_schematic` — transactional sheet mutation
 
 `edit_schematic` applies a batch of typed ops to a sheet. Creating a file and

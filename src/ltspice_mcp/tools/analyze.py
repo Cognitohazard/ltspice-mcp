@@ -110,6 +110,20 @@ MAX_PAGE_SIZE = 100
 _FAIL_CASE_PAGE_CAP = 100
 _FAILURE_CAP = 100
 
+_NO_ROWS_WARNING = "No rows: this recipe failed wherever it was read; see failures at {places}."
+"""Said on the entry of a recipe that produced no rows because it failed, so
+the entry points at the failures that explain it."""
+
+
+def _no_rows_warning(failures: Sequence[Failure]) -> str:
+    places = list(dict.fromkeys(failure.where for failure in failures))
+    shown = ", ".join(places[:_FAILURE_WHERE_CAP])
+    more = (
+        f" and {len(places) - _FAILURE_WHERE_CAP} more" if len(places) > _FAILURE_WHERE_CAP else ""
+    )
+    return _NO_ROWS_WARNING.format(places=shown + more)
+
+
 _GROUPS_OMITTED_WARNING = (
     "{omitted} of {total} group(s) omitted to fit the response budget; "
     "re-ask without 'budget' for every group."
@@ -3170,7 +3184,36 @@ def _assemble(
         if observation not in observations:
             observations.append(observation)
     results: dict[str, Any] = {}
+    # Where each entry's recipe sits in the work list, so the entries keep the
+    # order the recipes were asked in, failed ones included.
+    entry_at: dict[str, int] = {}
+    # The entries that answered: rows, or no failure to explain their absence.
+    delivered: list[str] = []
     analyzed_identities: set[tuple[Any, Any, Any]] = set()
+
+    for at, failure in a.skipped:
+        if at >= position:
+            continue
+        # A recipe refused before it ran keeps an entry under the key it
+        # asked for, so reading results[key] says what happened instead of
+        # raising: one entry per recipe, whatever the reason it has no rows.
+        work_item = item.work[at]
+        raw_recipe = work_item["recipe"]
+        key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
+        if key in results:
+            continue
+        empty_rows: dict[str, Any] = (
+            {"per_run": pagination.page_of([], offset=0, total=0)}
+            if limits.per_run is not None
+            else {"values": []}
+        )
+        results[key] = {
+            "metric": str(raw_recipe.get("metric") or ""),
+            "reduced": [],
+            "warnings": [_no_rows_warning([failure])],
+            **empty_rows,
+        }
+        entry_at[key] = at
 
     for index, unit in enumerate(units):
         failures.extend(unit.failures)
@@ -3194,7 +3237,11 @@ def _assemble(
             groups_limit=limits.groups,
         )
         if unit.records or not unit.failures:
-            results[unit.key] = entry
+            delivered.append(unit.key)
+        else:
+            entry["warnings"].append(_no_rows_warning(unit.failures))
+        results[unit.key] = entry
+        entry_at[unit.key] = unit.position
         for record in unit.records:
             analyzed_identities.add(
                 (record.source, record.identity.case_id, record.identity.run_index)
@@ -3213,6 +3260,7 @@ def _assemble(
                 view_fields=a.include.fields,
             )
 
+    results = {key: results[key] for key in sorted(results, key=entry_at.__getitem__)}
     next_value: dict[str, str] | None = None
     if position < len(item.work):
         next_value = {
@@ -3256,7 +3304,7 @@ def _assemble(
     outcome = outcome_of(
         failures,
         partial=bool(a.missing) or next_value is not None,
-        delivered=bool(results) or next_value is not None,
+        delivered=bool(delivered) or next_value is not None,
     )
     if missing_page["truncated"]:
         # Carries the live work position, not the end of the work list: this
@@ -3309,7 +3357,7 @@ def _assemble(
     if hints:
         data["hint"] = " ".join(hints)
     text = (
-        f"analyze_results: {outcome}; {len(results)} recipe result(s), "
+        f"analyze_results: {outcome}; {len(delivered)} recipe result(s), "
         f"{len(failures)} failure(s), "
         f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
     )
@@ -3354,27 +3402,29 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     )
     results: dict[str, Any] = {}
     for key, requested_entry in requested_results.items():
-        unit = units[key]
+        # A recipe refused before it ran has an entry and no unit: no rows.
+        unit = units.get(key)
         entry = requested_entry
         per_run = entry.pop("per_run", None)
         had_values = "values" in entry
         entry.pop("values", None)
-        rows = [record.wire() for record in unit.records]
-        answer_rows = rows[:MAX_PAGE_SIZE] if not getattr(unit.recipe, "reduce", []) else []
+        rows = [record.wire() for record in unit.records] if unit is not None else []
+        reduces = unit is not None and getattr(unit.recipe, "reduce", [])
+        answer_rows = rows[:MAX_PAGE_SIZE] if not reduces else []
         block: dict[str, Any] = {
             "facts": entry,
             "answer_rows": answer_rows,
-            "answer_total": len(unit.records),
+            "answer_total": len(rows),
             "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
             "projection_presence": _projection_presence(rows),
         }
         if per_run is not None:
             block["per_run"] = per_run
-            block["per_run_offset"] = unit.per_run_offset
+            block["per_run_offset"] = unit.per_run_offset if unit is not None else 0
             block["per_run_cursor_base"] = result_store.encode_cursor(
                 a.item,
-                unit.position,
-                intra_item=unit.per_run_offset,
+                unit.position if unit is not None else a.natural_position,
+                intra_item=unit.per_run_offset if unit is not None else 0,
                 missing_offset=missing_next,
                 view_fields=wide_include.fields,
             )

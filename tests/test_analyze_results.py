@@ -66,6 +66,12 @@ def _source(raw: Path, label: str = "dut") -> dict[str, Any]:
     return {"path": str(raw), "label": label}
 
 
+def _answered_nothing(entry: dict[str, Any]) -> bool:
+    """A recipe that failed keeps its entry, with no rows and a pointer to why."""
+    rows = entry.get("values", []) + entry.get("per_run", {}).get("items", [])
+    return not rows and any(warning.startswith("No rows:") for warning in entry["warnings"])
+
+
 def _args(raw: Path, recipes: list[dict[str, Any]], **extra: Any) -> AnalyzeResultsInput:
     return AnalyzeResultsInput.model_validate(
         {"sources": [_source(raw)], "recipes": recipes, **extra}
@@ -976,7 +982,7 @@ async def test_mutation_during_adapter_read_is_caught_by_postcheck(
         raw,
         [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
     )
-    assert "v" not in data["results"]
+    assert _answered_nothing(data["results"]["v"])
     assert any(failure["code"] == "source_drift" for failure in data["failures"])
 
 
@@ -2458,10 +2464,10 @@ async def test_an_analysis_that_solves_no_bias_point_is_refused_by_name(
     bias_refusal = next(message for message in refusals if "Transfer Function" in message)
     assert "inspect(kind='results', view='table')" in bias_refusal
     assert "value recipe" not in bias_refusal
-    assert "op" not in data["results"]
+    assert _answered_nothing(data["results"]["op"])
     assert {failure["where"] for failure in data["failures"]} == {"dut:0"}
-    assert "gain" not in data["results"]
-    assert "impedance" not in data["results"]
+    assert _answered_nothing(data["results"]["gain"])
+    assert _answered_nothing(data["results"]["impedance"])
     # The two value recipes fail on the one run for one reason: one row, counted.
     assert (
         sum(
@@ -2945,7 +2951,7 @@ class TestCallLevelStepSelection:
                 }
             ],
         )
-        assert "v" not in data["results"]
+        assert _answered_nothing(data["results"]["v"])
         assert any("step" in failure["message"] for failure in data["failures"])
 
     def test_step_and_all_steps_are_exclusive_on_the_call(self, work_dir: Path):
@@ -3002,7 +3008,7 @@ async def test_a_spec_no_longer_names_a_field_of_its_own(
             }
         ],
     )
-    assert "loop" not in data["results"]
+    assert _answered_nothing(data["results"]["loop"])
     assert any("field" in failure["message"] for failure in data["failures"])
 
 

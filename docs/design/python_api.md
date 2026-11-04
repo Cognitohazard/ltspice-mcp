@@ -141,7 +141,10 @@ returns all of it:
   the sources and recording their content hashes and log diagnostics does not
   finish within the first pass, the call raises `AnalysisDeadlineExceeded` and
   creates no result set or cursor; retry the original request with fewer
-  sources or a larger `analysis_budget_s`.
+  sources or a larger `analysis_budget_s`. `result["results"]` has an entry
+  for every recipe, so `result["results"][key]` never raises for a recipe
+  that failed: its rows are empty and a `No rows:` warning names the
+  `failures` places that explain it.
 - `verify_circuit` returns every finding for each rule. The MCP tool caps the
   findings per rule and reports the truncation.
 - `edit_schematic` applies the batch once and returns its views whole. The

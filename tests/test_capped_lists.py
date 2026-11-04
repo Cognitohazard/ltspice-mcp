@@ -34,6 +34,7 @@ _ALLOWED: dict[str, str] = {
     "lib/raw_parser.py:_ascii_last_point": "bounds how much of an ASCII raw is scanned",
     "lib/runner_manager.py:_get_or_create": "bounds a cache, not a reply",
     "tools/analyze.py:_collapse_failures": "a row's sample of places; its count is the total",
+    "tools/analyze.py:_no_rows_warning": "a sample of places, ending in 'and N more'",
     "tools/analyze.py:_relay_solve_failures": "a sample of runs; run_count is the total",
     "tools/analyze.py:_log_precision_observations": "a sample of runs; run_count is the total",
     "tools/inspect_tools.py:_do_reference": "names the cap in the hint's lever; slices nothing",
