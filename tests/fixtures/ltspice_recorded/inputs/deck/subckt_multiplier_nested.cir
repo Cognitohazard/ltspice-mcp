@@ -1,0 +1,29 @@
+* m on an X line two levels above a device, on the inner X line, and m={mult} passed down two levels
+Vdd vdd 0 1.8
+Vg g 0 1.5
+V1 vdd d1 0
+X1 d1 g 0 outer
+VO vdd dO 0
+XO dO g 0 outer m=4
+VI vdd dI 0
+XI dI g 0 outer4
+VP vdd dP 0
+XP dP g 0 pouter mult=4
+.subckt outer d g s
+X0 d g s cell
+.ends outer
+.subckt outer4 d g s
+X0 d g s cell m=4
+.ends outer4
+.subckt pouter d g s params: mult=1
+X0 d g s pcell mult={mult}
+.ends pouter
+.subckt cell d g s
+M0 d g s s NM W=10u L=1u
+.ends cell
+.subckt pcell d g s params: mult=1
+M0 d g s s NM W=10u L=1u m={mult}
+.ends pcell
+.model NM NMOS(VTO=0.7 KP=100u)
+.op
+.end

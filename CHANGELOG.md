@@ -74,6 +74,15 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- A `mismatch` rule reaches a MOSFET inside a subcircuit on LTspice. LTspice
+  takes neither `mulu0` nor `delvto` on a BSIM3 device, so the device gets its
+  own copy of its `.model` card inside a private copy of its subcircuit, with
+  the drawn shift and scale applied to the rule's `vth_param` and `k_param`,
+  as a top-level device does. Any model level works if the model has one
+  definition; a binned model is refused with `model_missing`. LTspice ignores
+  `m` on an X line, so the draw's area counts only the device's own `m`.
+  Such a rule used to be refused with `unsupported_backend`, a code the server
+  no longer returns.
 - CI: a `checks / check-macos` job runs the suite on a native macOS runner,
   with ngspice and Cairo from Homebrew. Reading results is still refused on
   macOS, so a test that fails only because of that refusal is reported as
@@ -83,6 +92,17 @@ tool-surface changes.
 
 ### Fixed
 
+- An `edit_schematic` dry run with `compare` returned no `verification`, so a
+  batch could be checked against its reference only by committing it. The
+  reference check exports a staged copy of the sheet the batch would write,
+  so it now runs on a dry run too, an op-less read included, and reports the
+  same block, the exported netlist on a mismatch and a `partial` outcome, with
+  nothing saved. When an op failed the batch would write nothing, so
+  `verification.compare_error` says the sheet was not compared.
+- In the Python API, `r.steps[0]["Rv"]` raised `KeyError` for a parameter
+  the deck steps as `Rv`, since LTspice logs it as `rv`. Each entry of
+  `RawResult.steps` now finds a name as a step selector does, whatever its
+  case, and keeps the keys as the run wrote them.
 - An argument refusal names the fix for a field it does not know: an unknown
   field is answered with the names its place takes, the closest first ("Did
   you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
@@ -100,18 +120,17 @@ tool-surface changes.
   builds m parallel copies from one card and they share its one draw, so
   their area is `m·W·L`, but the draw took the area of a single copy: a device
   written as `W=1u m=12` got a threshold spread √12 (about 3.5×) too large,
-  with no warning. The area now counts the device's own `m` and the `m` of
-  every subcircuit instance above it, including an inner `m={mult}` set from
-  the X line, on a top-level `M` card, a device one subcircuit level down and
-  a nested `instance` target alike. An `m` that does not resolve to a positive
-  number refuses the request with `mismatch_geometry_unresolved` instead of
-  being drawn as one copy. A refusal while drawing for a device one subcircuit
-  level down now reaches the caller as a coded error rather than an uncoded
-  one.
+  with no warning. The area now counts the device's own `m`, including an
+  inner `m={mult}` set from the X line, and under ngspice the `m` of every
+  subcircuit instance above it, on a top-level `M` card, a device one
+  subcircuit level down and a nested `instance` target alike. An `m` that does
+  not resolve to a positive number refuses the request with
+  `mismatch_geometry_unresolved` instead of being drawn as one copy. A refusal
+  while drawing for a device one subcircuit level down now reaches the caller
+  as a coded error rather than an uncoded one.
 - `run_experiments` reported a mismatch rule it refuses for a device inside a
-  subcircuit as `submission_failed`. An LTspice run now reports
-  `unsupported_backend`, and an ngspice run whose device is not a BSIM3 or
-  BSIM4 model reports `unsupported_model`.
+  subcircuit as `submission_failed`. An ngspice run whose device is not a
+  BSIM3 or BSIM4 model now reports `unsupported_model`.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its

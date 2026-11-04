@@ -1,0 +1,9 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\mos_delvto_bsim3.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\mos_delvto_bsim3.cir(8): Unknown parameter
+MN1 n1 gn 0 0 N W=1u L=1u delvto=0.1
+                          ^^^^^^^^^^
+C:\recording\mos_delvto_bsim3.cir(14): Unknown parameter
+MP1 p1 gp vdd vdd P W=1u L=1u delvto=0.1
+                              ^^^^^^^^^^

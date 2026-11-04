@@ -1,0 +1,20 @@
+* Model cards with vth0 shifted or u0 scaled, on BSIM4 and BSIM3 devices
+Vdd vdd 0 1.8
+Vg g 0 1.0
+VA vdd da 0
+MA da g 0 0 N4 W=1u L=1u
+VB vdd db 0
+MB db g 0 0 N4U W=1u L=1u
+VC vdd dc 0
+MC dc g 0 0 N3 W=1u L=1u
+VD vdd dd 0
+MD dd g 0 0 N3UP W=1u L=1u
+VE vdd de 0
+ME de g 0 0 N3U W=1u L=1u
+.model N4 NMOS level=54 vth0=0.5 u0=0.04
+.model N4U NMOS level=54 vth0=0.5 u0=0.048
+.model N3 NMOS level=8 vth0=0.5 u0=400
+.model N3UP NMOS level=8 vth0=0.6 u0=400
+.model N3U NMOS level=8 vth0=0.5 u0=480
+.op
+.end

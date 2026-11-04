@@ -647,7 +647,6 @@ FROZEN_ERROR_CODES = (
     "unmet_request",
     "unpersisted_runs_recovered",
     "unplanned_instance",
-    "unsupported_backend",
     "unsupported_file",
     "unsupported_model",
     "unsupported_variant",

@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\mos_mulu0_bsim4.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\mos_mulu0_bsim4.cir(7): Unknown parameter
+M1 d1 g 0 0 N W=1u L=1u mulu0=1.2
+                        ^^^^^^^^^
