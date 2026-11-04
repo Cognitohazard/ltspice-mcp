@@ -2058,8 +2058,9 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
     if any(row.get("differs_from_file") for row in rows):
         hints.append(
             "A sheet whose window differs from its file is refused by edit_schematic until "
-            "it is saved or closed in LTspice; a run or a check reads the file, not the "
-            "window. only_in_window and only_in_file list where the two differ."
+            "the user chooses which to keep and edit_schematic's open_window saves or drops "
+            "the window's copy; a run or a check reads the file, not the window. "
+            "only_in_window and only_in_file list where the two differ."
         )
     if any(not row["in_sandbox"] for row in rows):
         hints.append(

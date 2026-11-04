@@ -775,6 +775,21 @@
   ]
  },
  {
+  "note": "a sheet whose window copy differs from the file is asked about before it closes",
+  "observed": true
+ },
+ {
+  "note": "answered No, it closes and its file is as it was",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "opened again, the window holds the file",
+  "observed": true
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},

@@ -257,14 +257,16 @@ tool-surface changes.
   specification recommends for a client that passes only the text to the
   model; under the default, `"summary"`, such a model reads one summary line.
   `inspect(kind="capabilities")` reports the mode as `text_channel`.
-- `edit_schematic(save_open_window=true, ops=[])` has LTspice save the sheet
-  from the user's window, as Ctrl+S does, so the agent can keep the user's
-  unsaved changes once they agree instead of asking them to save by hand. Use
-  it after an edit is refused with `open_window_differs`, or after a plot
-  opens with `tied: false` because its sheet had unsaved changes. The reply
-  gives the file's new `sha256`, and the sheet is then read again before an
-  edit. A box LTspice shows instead of saving, such as for a write-protected
-  file, is quoted in `window_not_saved` and closed with Cancel.
+- `edit_schematic(open_window="save"|"discard", ops=[])` settles a sheet the
+  user changed in LTspice and did not save, once they choose, instead of
+  asking them to do it by hand. `"save"` has LTspice save the sheet from the
+  user's window, as Ctrl+S does, and the reply gives the file's new `sha256`.
+  `"discard"` closes the sheet there without saving and opens it again from
+  the file. Use it after an edit is refused with `open_window_differs`, or
+  after a plot opens with `tied: false` because its sheet had unsaved changes.
+  A box LTspice shows instead of saving, such as for a write-protected file,
+  is quoted in `window_not_saved` and closed with Cancel; a window whose copy
+  changes during a discard is left open, with `window_not_discarded`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the

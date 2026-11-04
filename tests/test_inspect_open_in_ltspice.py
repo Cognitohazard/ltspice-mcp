@@ -148,7 +148,10 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
             "in_sandbox": False,
         },
     ]
-    assert "refused by edit_schematic until it is saved or closed" in data["hint"]
+    assert (
+        "refused by edit_schematic until the user chooses which to keep and "
+        "edit_schematic's open_window saves or drops the window's copy"
+    ) in data["hint"]
     assert "outside the sandbox is listed and not read" in data["hint"]
 
 
