@@ -513,10 +513,11 @@ class TestTheFormatThePresentEngineWrites:
 #: A directive this module reads, spaced as LTspice does not save one: two
 #: spaces after the keyword, a tab after it, or two spaces before the size.
 #: spicelib's editor, through which an edit is committed, reads none of them.
+#: Each says another time, so the three sheets are three sheets as records.
 SPACED_TEXT = (
     "TEXT  16 16 Left 2 !.tran 1m",
-    "TEXT\t16 16 Left 2 !.tran 1m",
-    "TEXT 16 16 Left  2 !.tran 1m",
+    "TEXT\t16 16 Left 2 !.tran 2m",
+    "TEXT 16 16 Left  2 !.tran 3m",
 )
 
 
@@ -564,7 +565,7 @@ class TestTheEditorHoldsWhatTheSheetHolds:
         sheet = work_dir / "spaced.asc"
         sheet.write_text(f"Version 4\nSHEET 1 880 680\n{line}\n", encoding="utf-8", newline="\n")
         before = sheet.read_bytes()
-        assert [text.body for text in parse_asc(before).texts] == [".tran 1m"]
+        assert [text.body for text in parse_asc(before).texts] == [line.split("!")[1]]
         with pytest.raises(NetlistError, match=r"line 3 \('TEXT.*the schematic editor skips"):
             await apply_ops(
                 state_no_sim,
