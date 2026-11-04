@@ -367,7 +367,7 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
 
 
 async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, work_dir):
-    """60 values spelled with µ are 25 findings and a note counting the rest."""
+    """60 values spelled with µ are 25 findings and an entry counting the rest."""
     state = SessionState.create(config, available={"ltspice": FakeXVII})
     cards = "".join(f"C{i} n{i} 0 {i + 1}µ\n" for i in range(60))
     deck = work_dir / "many.net"
@@ -377,10 +377,8 @@ async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, 
 
     shown = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert len(shown) == vc.FINDING_RULE_CAP
-    assert (
-        f"value_suffix_micro_sign: showing {vc.FINDING_RULE_CAP} of 60 findings"
-        in (data["observations"])
-    )
+    omitted = data["findings_omitted"]["value_suffix_micro_sign"]
+    assert (omitted["omitted"], omitted["total"]) == (60 - vc.FINDING_RULE_CAP, 60)
 
 
 async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir):
@@ -782,7 +780,7 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     neutral = await evaluate_verify_circuit(args, state_no_sim)
     full = [f for f in neutral.data["findings"] if f["rule_id"] == "floating_pin"]
     assert len(full) == vc.FINDING_RULE_CAP + 7
-    assert not any("showing" in note for note in neutral.data["observations"])
+    assert "findings_omitted" not in neutral.data
     assert neutral.data["rules_run"]["floating_pin"] == vc.FINDING_RULE_CAP + 7
 
     mcp = await handle_verify_circuit(args, state_no_sim)
@@ -792,10 +790,8 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     assert len(full) - len(shown) == 7
     # The count of a rule is of what it found, not of what the reply shows.
     assert data["rules_run"]["floating_pin"] == len(full)
-    assert any(
-        note == (f"floating_pin: showing {vc.FINDING_RULE_CAP} of {len(full)} findings")
-        for note in data["observations"]
-    )
+    omitted = data["findings_omitted"]["floating_pin"]
+    assert (omitted["omitted"], omitted["total"]) == (7, len(full))
 
 
 # ---------------------------------------------------------------------------

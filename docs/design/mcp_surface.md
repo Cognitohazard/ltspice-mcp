@@ -100,6 +100,7 @@ Codes by kind of failure:
 |-|-|
 | `path_denied` | a sandbox (`allowed_paths`) is set and the path resolves outside it, or the path cannot be resolved; a `hint` describes the change to make (for a sandbox, the config file and key that widen it), returned as an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal |
 | `invalid_arguments` | the call's arguments failed validation before the tool ran |
+| `invalid_cursor` | a cursor cannot continue this call: it was returned for another file or query, or for this one before its source changed; the message names the call that lists from the start |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
 | `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
@@ -132,6 +133,8 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
+`verify_circuit`'s `findings` is one list with a cap per rule instead: a rule
+cut at the cap has a `findings_omitted` entry with its own cursor (§3.5).
 
 When one page contains several collections (an `inspect` net view pages pins
 and wire coordinates together), `total` and `returned` are sums over all of
@@ -1468,6 +1471,9 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
 export_to     "managed" (default) | "sidecar"
+findings_cursor
+              a findings_omitted entry's next_cursor: lists that rule's next
+              25 findings in place of its first
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1565,10 +1571,10 @@ component's signature is its model or value plus its instance parameters,
 without nodes (`equivalence` is the mode that compares wiring); a parameter
 given twice contributes both copies, so a second copy counts as a change.
 
-Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled,
-returned_inline, svg?, note, …}`, a scene summary, `outcome` and
-`hint`.
+Output: findings in the shared shape, `findings_omitted` for the rules cut
+at the cap (below), a comparison block per mode, a render block `{path,
+sha256, source_sha256, width, height, downscaled, returned_inline, svg?,
+note, …}`, a scene summary, `outcome` and `hint`.
 
 `comparison` is present exactly when `compare` is in `checks_run`. When it is
 not, a `checks_skipped` row says why (no reference supplied, not requested,
@@ -1598,17 +1604,34 @@ move the part or the item its text crosses. `wire_through_symbol` and `text_in_s
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
-A cap of 25 findings per rule applies to the layout and quality rules, to the
-value-suffix rules (`value_suffix_micro_sign`, `value_suffix_mojibake`,
-`value_suffix_nonascii`) and to `dropped_wire`. A capped rule other than
-`dropped_wire` adds an observation `<rule>: showing 25 of <n> findings`;
-`dropped_wire` adds none, and `rules_run` gives its full count.
+A reply lists at most 25 findings of each layout and quality rule, of each
+value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
+`value_suffix_nonascii`) and of `dropped_wire`. A rule with more has an entry
+in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
+next_cursor}`, where `omitted` counts its findings after the ones listed and
+`total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
+that rule's next 25 findings in place of its first, with the other rules
+listed and counted as before; the entry in that reply carries the cursor for
+the page after, and the last page has none. The `hint` names each rule cut
+short, and on a cursor's page which findings it lists. The rest of the reply
+is the same as without the cursor, so narrow `checks` to the one that reports
+the rule to skip the others.
+
+A cursor is bound to the file's path and content, read before the checks run.
+It is refused with `invalid_cursor` when the file has changed since, or is
+another file; when `checks` leaves out the check that reports its rule, or
+`render.mode` is `"only"`, which the refusal names; and when the call finds
+fewer findings of the rule than the cursor resumes at, as when the export it
+needs did not run. A malformed cursor is refused as an argument
+(`invalid_arguments`). `rules_run` gives each sheet rule's full count
+whichever page is listed. `api.verify_circuit` returns every finding and
+takes no `findings_cursor` unless called with `raw_page=True`.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
-which include `rule_id`, `at` and `subject`. Diff the findings
-`api.verify_circuit` returns (through `run_code` or the Python API), which are
-complete and never capped; capped lists do not diff reliably.
+which include `rule_id`, `at` and `subject`. Diff complete lists: follow each
+`findings_omitted` cursor to the end, or diff the findings
+`api.verify_circuit` returns, which are never capped.
 
 ### 3.6 `inspect` — pure read
 

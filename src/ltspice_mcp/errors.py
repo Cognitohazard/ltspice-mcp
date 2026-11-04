@@ -331,6 +331,14 @@ class BatchJobError(LTSpiceMCPError):
     code = "batch_job_error"
 
 
+class InvalidCursorError(LTSpiceMCPError):
+    """A continuation cursor that cannot continue this call: it was returned for
+    another file, or for this one before it changed, or for a list this call
+    does not produce. The message names the way round."""
+
+    code = "invalid_cursor"
+
+
 def raise_site_code(exc: BaseException) -> str | None:
     """Return the code an exception named at its own raise site, if any.
 

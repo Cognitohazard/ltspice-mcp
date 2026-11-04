@@ -274,6 +274,7 @@
       "compare",
       "delivery",
       "export_to",
+      "findings_cursor",
       "format",
       "in_ltspice",
       "max_pixels",

@@ -824,7 +824,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # showed it. Named for the reason the others are. Measured 5,223.
     # Raised by about 15 characters for minLength on path: an empty path names
     # no file. Measured 5,238.
-    "verify_circuit": 5245,
+    # Raised by about 110 characters for findings_cursor, which lists a rule's
+    # findings past the cap of 25 a reply lists: a list cut short says how to
+    # read the rest, through the tool and without run_code. Measured 5,357.
+    "verify_circuit": 5360,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

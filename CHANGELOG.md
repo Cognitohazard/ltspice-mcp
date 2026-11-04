@@ -74,6 +74,16 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- `verify_circuit` says how to read the findings past its cap of 25 a rule.
+  A rule with more has a `findings_omitted` entry, `{omitted, total,
+  next_cursor}`, and the new `findings_cursor` argument takes the cursor back
+  to list that rule's next 25 findings, so every finding can be read through
+  the tool, without `run_code`. The cursor is bound to the file's content and
+  is refused with `invalid_cursor` once the file changes, or when the call
+  leaves out the check that reports the rule. The entry replaces the
+  `<rule>: showing 25 of <n> findings` observation, and `dropped_wire`, which
+  was cut at the cap with no word, now has one too. The hint names each rule
+  cut short.
 
 ### Fixed
 
