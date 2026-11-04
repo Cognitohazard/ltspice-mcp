@@ -166,6 +166,20 @@ class TestItemLevelCursors:
         assert item["ok"] is False
         assert item["error"]["code"] == "invalid_cursor"
 
+    async def test_inspect_open_in_ltspice_cursor(self, state_no_sim: SessionState) -> None:
+        # Refused before LTspice is asked anything, so no window is needed.
+        result = await _call(
+            state_no_sim,
+            "inspect",
+            {"queries": [{"kind": "open_in_ltspice", "cursor": GARBAGE}]},
+        )
+        data = result.structured_content
+        assert data is not None
+        (item,) = data["results"]
+        assert item["ok"] is False
+        assert item["error"]["code"] == "invalid_cursor"
+        assert "next_cursor" in item["error"]["message"]
+
 
 class TestDecoders:
     """Every decoder of an analysis cursor raises the one type."""

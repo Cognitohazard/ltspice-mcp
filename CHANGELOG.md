@@ -85,6 +85,14 @@ tool-surface changes.
   observation, which sent the caller to `api.verify_circuit` for the rest,
   and `dropped_wire`, which was cut at the cap with no word, now has one too.
   The hint names each rule cut short.
+- `inspect(kind="open_in_ltspice")` lists all of where a sheet's window
+  differs from its file. A row cut at 25 entries a side has a `next_cursor`
+  beside `difference_omitted`, and the query's new `cursor` takes it back to
+  list that sheet's next entries, with the other rows listed as before. The
+  cursor is bound to the document, its window and both contents, and fails
+  as `invalid_cursor` once either changes or the sheet is closed. The Python
+  API's `inspect` lists every entry, where it stopped at 25 a side as the
+  tool did.
 
 ### Fixed
 

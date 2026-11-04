@@ -1838,7 +1838,7 @@ cursors where listed:
     headings and paged by section. An unknown name fails as `unknown_document`,
     listing the names; an install with none fails as
     `simulator_docs_unavailable`
-{kind: "open_in_ltspice"}
+{kind: "open_in_ltspice", cursor?}
     the documents open in the LTspice windows on this machine: `windows`
     (how many are running), `total`, and `designs`, each {path, kind:
     "schematic"|"netlist"|"other", active (the one in front in its window),
@@ -1847,7 +1847,14 @@ cursors where listed:
     `difference` names a few entries in a sentence, and `only_in_window` and
     `only_in_file` list the differing entries (a symbol with its
     attributes, or one other line), up to 25 a side, with
-    `difference_omitted` counting the rest. Fails as
+    `difference_omitted` counting the entries after them and `next_cursor`
+    continuing. Sent back as `cursor`, a row's `next_cursor` lists that
+    sheet's next entries, up to 25 a side, with every other row listed as
+    without it; `difference` still describes the whole difference. The
+    cursor is bound to the document, its window and both contents, so it
+    fails as `invalid_cursor` once the window's copy or the file changes or
+    the sheet is closed, as does a cursor this query did not return.
+    `api.inspect` lists every entry. Fails as
     `open_windows_unavailable` where there is no bridge to ask (not
     Windows, LTspice before 26.1, the setting off) and as
     `open_windows_unreachable` when the bridge does not answer

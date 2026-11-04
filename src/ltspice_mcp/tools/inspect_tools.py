@@ -78,7 +78,9 @@ than a hunt.
   circuit" starts when no path was given. A sheet the server may read comes
   with its ``sha256`` and with whether the window's copy differs from the file
   (unsaved changes, or a file that changed after it was opened), which is what
-  ``edit_schematic`` refuses on. A document outside the sandbox, when one is
+  ``edit_schematic`` refuses on, and where they differ, up to 25 entries a
+  side; a row cut there has a ``next_cursor`` that the query's ``cursor``
+  takes back for the rest. A document outside the sandbox, when one is
   set, is listed and not read. It is asked of LTspice itself, through the bridge it ships from
   26.1; where that cannot be reached the query fails, saying why, since
   "nothing is open" would be a different answer.
@@ -101,6 +103,7 @@ read once per call, however many of its queries ask about it
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import hashlib
 import sys
@@ -150,7 +153,7 @@ from ltspice_mcp.lib.connectivity import (
     name_keys,
     named_labels,
 )
-from ltspice_mcp.lib.cursor_codec import canonical_hash
+from ltspice_mcp.lib.cursor_codec import CursorError, canonical_hash, decode_cursor
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
@@ -165,7 +168,13 @@ from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import OpenDesign, WindowsUnavailable
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
-from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
+from ltspice_mcp.lib.pin_legend import (
+    PageCursorError,
+    decode_pair_cursor,
+    encode_pair_cursor,
+    paginate_pair,
+    paginate_view,
+)
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, segment_text, wires_through
 from ltspice_mcp.lib.schematic_ops import (
@@ -206,6 +215,7 @@ from ltspice_mcp.tools._base import (
     ResponseBudget,
     StrictModel,
     ToolInput,
+    collecting_whole,
     declare_output_schema,
     format_response,
     outcome_of,
@@ -874,6 +884,10 @@ class OpenInLtspiceQuery(StrictModel):
     """List the sheets and netlists open in LTspice windows, and which one is in front."""
 
     kind: Literal["open_in_ltspice"]
+    cursor: str | None = Field(
+        default=None,
+        description="A designs row's next_cursor: lists the rest of where that sheet differs.",
+    )
 
 
 Query: TypeAlias = Annotated[
@@ -2061,10 +2075,34 @@ def _design_kind(spelled: str) -> str:
     return "netlist" if path.suffix.lower() in NETLIST_SUFFIXES else "other"
 
 
-def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
-    """One open document as the reply lists it; ``resolved`` is its path where
-    the server may read it, None outside the sandbox. Reads the file: call off
-    the loop."""
+def _difference_binding(design: OpenDesign, window_text: str, file_sha256: str) -> str:
+    """The view a row's ``next_cursor`` is bound to: this document in this
+    window, and both of its contents, so the cursor resumes only the difference
+    it was counted against."""
+    window_sha256 = hashlib.sha256(window_text.encode("utf-8", "surrogatepass")).hexdigest()
+    return _binding(
+        "open_in_ltspice",
+        {"path": design.path, "pid": design.pid},
+        (),
+        revision=canonical_hash([file_sha256, window_sha256]),
+    )
+
+
+def _design_row(
+    design: OpenDesign,
+    resolved: Path | None,
+    *,
+    entries: int | None,
+    cursor: str | None,
+) -> tuple[dict[str, Any], bool]:
+    """One open document as the reply lists it, and whether ``cursor`` was its own.
+
+    ``resolved`` is its path where the server may read it, None outside the
+    sandbox. A sheet that differs from its file lists up to ``entries`` of
+    where, a side (every one for None); its own ``cursor`` starts the lists
+    where that cursor's reply stopped, and a ``next_cursor`` continues lists
+    that stop short. Reads the file: call off the loop.
+    """
     row: dict[str, Any] = {
         "path": design.path,
         "kind": _design_kind(design.path),
@@ -2074,22 +2112,51 @@ def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
         "in_sandbox": resolved is not None,
     }
     if resolved is None or design.text is None or not resolved.is_file():
-        return row
+        return row, False
     on_disk = resolved.read_bytes()
     row["sha256"] = hashlib.sha256(on_disk).hexdigest()
-    row.update(window_difference(on_disk, design.text, entries=_DIFFERENCE_ENTRIES_LIMIT))
-    return row
+    binding = _difference_binding(design, design.text, row["sha256"])
+    start, resumed = (0, 0), False
+    if cursor is not None:
+        with contextlib.suppress(PageCursorError):
+            start, resumed = decode_pair_cursor(cursor, binding), True
+    row.update(window_difference(on_disk, design.text, entries=entries, start=start))
+    if row.get("difference_omitted"):
+        row["next_cursor"] = encode_pair_cursor(
+            binding,
+            (start[0] + len(row["only_in_window"]), start[1] + len(row["only_in_file"])),
+        )
+    return row, resumed
 
 
-async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
+def _is_difference_cursor(cursor: str) -> bool:
+    """Whether ``cursor`` is one a designs row returns, whatever row it was for."""
+    try:
+        body = decode_cursor(cursor)
+    except CursorError:
+        return False
+    return str(body.get("kind", "")).startswith("open_in_ltspice:") and "offsets" in body
+
+
+async def _do_open_in_ltspice(query: OpenInLtspiceQuery, state: SessionState) -> dict[str, Any]:
     """What LTspice has open, asked of LTspice (``OpenWindows.designs``).
 
     A sheet's copy in the window is read only for a file the sandbox admits,
     and compared with that file by content. Both the bridge and the files are
-    read off the loop.
+    read off the loop. ``query.cursor`` continues the one sheet it was returned
+    for; every other row is listed as without it. The Python API's automatic
+    mode lists every differing entry.
     """
+    cursor = query.cursor
+    if cursor is not None and not _is_difference_cursor(cursor):
+        raise _QueryError(
+            "invalid_cursor",
+            "cursor is not one this query returned: send back a designs row's "
+            "next_cursor unchanged, or ask without cursor.",
+        )
+    entries = None if collecting_whole() else _DIFFERENCE_ENTRIES_LIMIT
 
-    def read() -> tuple[int, int, list[dict[str, Any]]]:
+    def read() -> tuple[int, int, list[dict[str, Any]], bool]:
         # Where the sandbox admits each document, decided once: it says which
         # copies a window is asked for and which files are then read.
         admitted: dict[str, Path | None] = {}
@@ -2099,11 +2166,15 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
             return admitted[spelled] is not None and _design_kind(spelled) == "schematic"
 
         count, designs = state.open_windows.designs(is_readable_sheet)
-        listed = designs[:_OPEN_DESIGNS_LIMIT]
-        return count, len(designs), [_design_row(d, admitted[d.path]) for d in listed]
+        listed = [
+            _design_row(d, admitted[d.path], entries=entries, cursor=cursor)
+            for d in designs[:_OPEN_DESIGNS_LIMIT]
+        ]
+        resumed = any(own for _row, own in listed)
+        return count, len(designs), [row for row, _own in listed], resumed
 
     try:
-        count, total, rows = await asyncio.to_thread(read)
+        count, total, rows, resumed = await asyncio.to_thread(read)
     except WindowsUnavailable as exc:
         raise _QueryError(
             "open_windows_unavailable",
@@ -2113,6 +2184,13 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
         raise _QueryError(
             "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
         ) from exc
+    if cursor is not None and not resumed:
+        raise _QueryError(
+            "invalid_cursor",
+            "cursor was returned for a sheet that is no longer open, or whose window "
+            "copy or file has changed since. Ask without cursor to list where it "
+            "differs from the first entry.",
+        )
     data: dict[str, Any] = {"windows": count, "designs": rows, "total": total}
     hints: list[str] = []
     if any(row.get("differs_from_file") for row in rows):
@@ -2121,6 +2199,11 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
             "the user chooses which to keep and edit_schematic's open_window saves or drops "
             "the window's copy; a run or a check reads the file, not the window. "
             "only_in_window and only_in_file list where the two differ."
+        )
+    if any("next_cursor" in row for row in rows):
+        hints.append(
+            "A row with difference_omitted lists the rest when its next_cursor is sent "
+            "back as this query's cursor."
         )
     if any(not row["in_sandbox"] for row in rows):
         hints.append(
@@ -2505,7 +2588,7 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
     if isinstance(query, SimulatorDocsQuery):
         return await asyncio.to_thread(_simulator_docs_page, query, state, view)
     if isinstance(query, OpenInLtspiceQuery):
-        return await _do_open_in_ltspice(state)
+        return await _do_open_in_ltspice(query, state)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -2673,6 +2756,13 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
                 },
                 "difference": {"type": "string"},
                 **LTSPICE_DIFFERENCE_ENTRIES,
+                "next_cursor": {
+                    "type": "string",
+                    "description": (
+                        "Send back as this query's cursor to list the entries "
+                        "difference_omitted counts."
+                    ),
+                },
             },
             "required": ["path", "kind", "active", "pid", "version", "in_sandbox"],
         },

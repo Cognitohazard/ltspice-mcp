@@ -367,28 +367,46 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
     },
     "difference_omitted": {
         "type": "integer",
-        "description": "How many more entries differ than the two lists hold.",
+        "description": "How many entries differ after the ones the two lists hold.",
     },
 }
 
 
-def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> dict[str, Any]:
+def window_difference(
+    on_disk: bytes,
+    window_text: str,
+    *,
+    entries: int | None = 0,
+    start: tuple[int, int] = (0, 0),
+) -> dict[str, Any]:
     """Whether an LTspice window's copy of a sheet is the file's, as a reply says it:
     ``differs_from_file``, and ``difference`` when it does.
 
-    With ``entries``, where they differ is listed too, up to that many entries
-    from each side, and the rest are counted (``LTSPICE_DIFFERENCE_ENTRIES``).
+    With ``entries``, where they differ is listed too: up to that many entries
+    from each side (every one for ``None``), from the offsets ``start`` gives
+    into the window's side and the file's, and the entries after them are
+    counted (``LTSPICE_DIFFERENCE_ENTRIES``). ``difference`` is about the
+    whole difference, wherever the lists start.
     """
     difference = file_difference(on_disk, window_text)
     if difference is None:
         return {"differs_from_file": False}
     said: dict[str, Any] = {"differs_from_file": True, "difference": difference.summary()}
-    if entries:
-        sides = (difference.only_in_window, difference.only_in_file)
-        said["only_in_window"], said["only_in_file"] = (list(side[:entries]) for side in sides)
-        omitted = sum(max(0, len(side) - entries) for side in sides)
-        if omitted:
-            said["difference_omitted"] = omitted
+    if entries == 0:
+        return said
+    sides = (difference.only_in_window, difference.only_in_file)
+    firsts = [min(max(first, 0), len(side)) for side, first in zip(sides, start, strict=True)]
+    listed = [
+        list(side[first:] if entries is None else side[first : first + entries])
+        for side, first in zip(sides, firsts, strict=True)
+    ]
+    said["only_in_window"], said["only_in_file"] = listed
+    omitted = sum(
+        len(side) - first - len(shown)
+        for side, first, shown in zip(sides, firsts, listed, strict=True)
+    )
+    if omitted:
+        said["difference_omitted"] = omitted
     return said
 
 
@@ -1405,6 +1423,13 @@ _AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+def collecting_whole() -> bool:
+    """Whether this handler call is collected whole, by the Python API's
+    automatic mode, which returns all of a result: a cap that bounds what one
+    reply costs is not applied to it, and nothing is left to page."""
+    return _AUTOMATIC_DOOR.get()
+
+
 @contextlib.contextmanager
 def automatic_door() -> Iterator[None]:
     """Mark the handler calls inside as arriving through the API's automatic mode.
@@ -1442,7 +1467,7 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     """
     if explicit is not None:
         return ResponseBudget(explicit)
-    if _AUTOMATIC_DOOR.get():
+    if collecting_whole():
         return ResponseBudget(None)
     default = state.config.default_budget
     if default <= 0:

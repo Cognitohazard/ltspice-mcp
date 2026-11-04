@@ -13,7 +13,8 @@ object around it within the same reply item, or a ``hint`` beside it that says
 what to do instead (``run_code``, whose dropped output cannot be paged).
 
 ``NO_WAY_ON_YET`` names the fields that declare no way on yet, each with the
-reason. A test fails once one of them gains a way on, so the list only shrinks.
+reason. It is empty today. A test fails once one of them gains a way on, so the
+list only shrinks.
 """
 
 from __future__ import annotations
@@ -25,13 +26,9 @@ from ltspice_mcp.tools._base import page_schema
 from tests.conftest import CONTINUATIONS, declared_output_schemas
 
 #: Cut lists with no way to read the rest yet, by ``(handler, path)``, each
-#: with the reason. Remove an entry when its list gains a way on.
-NO_WAY_ON_YET: dict[tuple[str, str], str] = {
-    ("inspect_tools.handle_inspect", "results[].data.designs[].difference_omitted"): (
-        "an open LTspice window's sheet lists where it differs from the file up to "
-        "a number of entries and counts the rest; no call lists the rest"
-    ),
-}
+#: with the reason. Empty today: a new entry needs its reason, and is removed
+#: when its list gains a way on.
+NO_WAY_ON_YET: dict[tuple[str, str], str] = {}
 
 
 def _declared_schemas() -> dict[str, dict[str, Any]]:
@@ -109,6 +106,7 @@ def test_the_walk_finds_the_cut_lists():
         # Counts of omitted items.
         ("verify.handle_verify_circuit", "findings_omitted.*.omitted"),
         ("analysis.handle_plot_waveform", "traces_truncated"),
+        ("inspect_tools.handle_inspect", "results[].data.designs[].difference_omitted"),
         *NO_WAY_ON_YET,
     ):
         assert expected in found, sorted(found)
