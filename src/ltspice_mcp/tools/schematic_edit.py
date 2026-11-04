@@ -53,10 +53,12 @@ from ltspice_mcp.lib.export_nets import exported_pin_nodes
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
     ChooseWindow,
+    Difference,
     OpenSheet,
     Saved,
     WindowUpdate,
-    file_difference,
+    copies_by_process,
+    differing_copies,
 )
 from ltspice_mcp.lib.pin_legend import (
     PageCursorError,
@@ -1307,31 +1309,19 @@ def _envelope(
     return data
 
 
-def _window_differs(on_disk: bytes, sheets: Sequence[OpenSheet]) -> tuple[str, str] | None:
-    """Which LTspice windows hold a different sheet from the file, and how,
-    with what to do about it; None where none does."""
-    differing = [
-        (sheet, difference)
-        for sheet in sheets
-        if (difference := file_difference(on_disk, sheet.text)) is not None
-    ]
+def _window_differs(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
+    """Which LTspice windows hold a different sheet from the file, and how."""
     if len(differing) > 1:
-        copies = "; ".join(
-            f"process {sheet.pid}: {difference.summary()}" for sheet, difference in differing
-        )
         return (
             f"{len(differing)} LTspice windows have this sheet open and each holds a "
-            f"different one from the file ({copies}).",
-            _WINDOWS_REMEDY,
+            f"different one from the file ({copies_by_process(differing)})."
         )
-    for sheet, difference in differing:
-        return (
-            f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
-            f"a different one from the file ({difference.summary()}): either it has changes "
-            "nobody saved, or the file changed after it was opened.",
-            _WINDOW_REMEDY,
-        )
-    return None
+    ((sheet, difference),) = differing
+    return (
+        f"LTspice {sheet.version} (process {sheet.pid}) has this sheet open and holds "
+        f"a different one from the file ({difference.summary()}): either it has changes "
+        "nobody saved, or the file changed after it was opened."
+    )
 
 
 _WINDOW_REMEDY = (
@@ -1721,14 +1711,15 @@ async def _evaluate_edit_schematic(
                     f"LTspice could not be asked whether {target.name} is open in a window "
                     f"({exc}); one that has it open still shows the sheet as it was."
                 )
-            found = _window_differs(on_disk, open_sheets)
-            if found is not None and dry_run:
+            differing = differing_copies(open_sheets, on_disk)
+            differs = _window_differs(differing) if differing else None
+            remedy = _WINDOW_REMEDY if len(differing) == 1 else _WINDOWS_REMEDY
+            if differs is not None and dry_run:
                 window_notes.append(
-                    f"{found[0]} A commit is refused until the window's copy is saved or "
+                    f"{differs} A commit is refused until the window's copy is saved or "
                     "dropped (open_window, with the user's answer) or the sheet is closed."
                 )
-            elif found is not None:
-                differs, remedy = found
+            elif differs is not None:
                 return refused(
                     code="open_window_differs",
                     stage="window_check",
@@ -1950,7 +1941,7 @@ async def _evaluate_edit_schematic(
                 post_commit_stage = "open_window"
                 assert on_disk is not None  # a window is asked only about a sheet on disk
                 updates = await asyncio.to_thread(
-                    state.open_windows.show_each, open_sheets, committed_text, on_disk
+                    state.open_windows.show_each, open_sheets, committed_text
                 )
                 shown = [
                     _window_row(sheet, update)

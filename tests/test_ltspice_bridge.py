@@ -632,7 +632,7 @@ class TestOpenWindows:
         world = tmp_path / "world.json"
         write_world(world, [{"pid": 8, "version": "26.1.1", "designs": {str(sheet): "B\n"}}])
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
-        assert windows.show_each(windows.holding(sheet), "C\n", b"B\n") == [WindowUpdate()]
+        assert windows.show_each(windows.holding(sheet), "C\n") == [WindowUpdate()]
         assert read_world(world)["windows"][0]["designs"][str(sheet)] == "C\n"
 
     def test_a_window_that_closed_in_between_is_an_answer_not_an_error(self, tmp_path: Path):
@@ -642,7 +642,7 @@ class TestOpenWindows:
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
         held = windows.holding(sheet)
         write_world(world, [])
-        assert windows.show_each(held, "C\n", b"B\n") == [
+        assert windows.show_each(held, "C\n") == [
             WindowUpdate("no live LTspice instance with that pid")
         ]
 

@@ -1137,7 +1137,8 @@ class TestSheetOpenInAWindow:
             return result.structured_content["ltspice"]
 
         shown = await show(another)
-        assert (shown["shown"], shown["pid"], shown["already_open"]) == (True, pid, False), shown
+        assert (shown["shown"], shown["pid"]) == (True, pid), shown
+        assert "already_open" not in shown
         front, designs = await asyncio.to_thread(in_front)
         assert Path(front) == another
         assert {Path(design) for design in designs} == {already_open, another}
@@ -1354,7 +1355,8 @@ class TestSheetOpenInAWindow:
         assert dropped["commit_state"] == "not_committed", dropped
         shown = await self._plot(ltspice_state, job_id, "V(filtered)")
 
-        assert (shown["shown"], shown["tied"], shown["differs_from_file"]) == (True, True, False)
+        assert (shown["shown"], shown["tied"]) == (True, True), shown
+        assert "differs_from_file" not in shown
         # The discard opened the sheet with its results beside it, which ties it.
         assert "sheet_reopened" not in shown
         await self._window_settled(ltspice_state, pid)
