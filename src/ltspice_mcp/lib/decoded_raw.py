@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, overload
 
 import numpy as np
 from numpy.typing import NDArray
@@ -33,6 +33,43 @@ if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
 
 StepValue = str | int | float
+_T = TypeVar("_T")
+
+
+class StepValues(dict[str, StepValue]):
+    """One step's parameter values, by name, found whatever the case of the name.
+
+    SPICE names are case-blind, and LTspice writes a ``.step`` parameter in its
+    log in lower case whatever the deck's spelling: both builds write
+    ``.step rv=1000`` for ``.step param Rv`` (recorded:
+    ``log/meas_when_threshold_tran_step``). So a lookup by the deck's spelling
+    must find it. Every reader that takes a step parameter's name from a caller
+    looks it up through this type; the keys stay as the run wrote them.
+    """
+
+    def _key(self, name: str) -> str:
+        """The key ``name`` stands for: itself, or the key equal to it but for case."""
+        if dict.__contains__(self, name):
+            return name
+        folded = name.casefold()
+        return next((key for key in self if key.casefold() == folded), name)
+
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and dict.__contains__(self, self._key(name))
+
+    def __getitem__(self, name: str) -> StepValue:
+        return dict.__getitem__(self, self._key(name))
+
+    @overload
+    def get(self, name: str, default: None = None, /) -> StepValue | None: ...
+    @overload
+    def get(self, name: str, default: StepValue, /) -> StepValue: ...
+    @overload
+    def get(self, name: str, default: _T, /) -> StepValue | _T: ...
+    def get(self, name: str, default: object = None, /) -> object:
+        return dict.get(self, self._key(name), default)
+
+
 Representation = Literal["real", "complex"]
 StepStatus = Literal["unstepped", "matched", "unresolved", "mismatch"]
 Monotonicity = Literal["nondecreasing", "nonincreasing", "constant", "nonmonotonic", "unknown"]
@@ -107,6 +144,11 @@ class AxisDescriptor:
 class StepDescriptor:
     index: int
     parameters: tuple[tuple[str, StepValue], ...]
+
+    @property
+    def values(self) -> StepValues:
+        """The parameters by name, found whatever the case of the name."""
+        return StepValues(self.parameters)
 
 
 @dataclass(frozen=True)
@@ -461,11 +503,7 @@ class DecodedPlot:
 
     @property
     def steps(self) -> list[dict[str, StepValue]] | None:
-        return (
-            [dict(s.parameters) for s in self.descriptor.steps]
-            if self._has_step_metadata
-            else None
-        )
+        return [s.values for s in self.descriptor.steps] if self._has_step_metadata else None
 
     def get_raw_property(
         self, property_name: str | None = None
@@ -507,7 +545,7 @@ class DecodedPlot:
             raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
         indices = []
         for step in self.descriptor.steps:
-            parameters = dict(step.parameters)
+            parameters = step.values
             if all(
                 key in parameters and parameters[key] == value for key, value in kwargs.items()
             ):

@@ -43,7 +43,7 @@ from ltspice_mcp.lib import (
     services,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor, StepValues
 from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
 from ltspice_mcp.lib.format import format_spice_value, unique_name
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -1621,7 +1621,7 @@ async def _build_step_plan(
     state: SessionState,
 ) -> _RawStepPlan:
     raw = await services.load_raw(source, state)
-    step_values = [dict(step.parameters) for step in raw.descriptor.steps]
+    step_values = [step.values for step in raw.descriptor.steps]
     return _RawStepPlan(steps.plan(get_step_count(raw), step_values), raw.descriptor)
 
 
@@ -1883,7 +1883,7 @@ async def _waveform(
         pending,
         lambda: time.monotonic() >= item_deadline,
         export_steps,
-        [dict(step.parameters) for step in raw.descriptor.steps],
+        [step.values for step in raw.descriptor.steps],
     )
     return (
         {
@@ -1945,7 +1945,7 @@ async def _plot(
         split_by_unit=True,
         netlist=run.source.netlist,
         steps=[step for step, _ in steps],
-        step_dicts=[dict(step.parameters) for step in raw.descriptor.steps],
+        step_dicts=[step.values for step in raw.descriptor.steps],
         analysis_type=analysis_type,
         x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
         ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
@@ -2335,6 +2335,17 @@ def _spec(
     return result
 
 
+def _dimension_value(identity: RowIdentity, dimension: str) -> Any:
+    """A row's value along a ``group_by`` dimension that names a parameter: the
+    value a variation gave it, else the run's step value, by name whatever its
+    case (:class:`StepValues`). None when the row has neither."""
+    for values in (identity.assignments, identity.step_values):
+        named = StepValues(values)
+        if dimension in named:
+            return named[dimension]
+    return None
+
+
 def _group_values(
     recipe: Recipe, records: list[Record], dimensions: list[str], limit: int | None = None
 ) -> tuple[list[dict[str, Any]], int]:
@@ -2353,7 +2364,7 @@ def _group_values(
             if dimension == "circuit":
                 value = identity.circuit
             else:
-                value = identity.assignments.get(dimension, identity.step_values.get(dimension))
+                value = _dimension_value(identity, dimension)
             values.append((dimension, value))
         grouped.setdefault(tuple(values), []).append(record)
     kept = list(grouped.items())[:limit]

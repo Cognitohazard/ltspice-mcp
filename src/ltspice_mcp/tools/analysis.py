@@ -1617,7 +1617,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         raise ResultError("No signal traces to plot (the result has only an axis).")
 
     n_steps = get_step_count(raw)
-    step_dicts = [dict(step.parameters) for step in raw.descriptor.steps]
+    step_dicts: list[dict[str, Any]] = [step.values for step in raw.descriptor.steps]
     if isinstance(args.step, StepSelector):
         steps_to_plot = [args.step.pick(step_dicts)]
     elif args.step is not None:

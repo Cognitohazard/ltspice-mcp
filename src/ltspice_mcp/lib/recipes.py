@@ -20,7 +20,8 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.decoded_raw import StepValues
+from ltspice_mcp.lib.format import parse_plain_value
 from ltspice_mcp.lib.models import StrictModel
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
@@ -216,27 +217,35 @@ class StepSelector(StrictModel):
     value: float | str
 
     def pick(self, step_values: Sequence[Mapping[str, Any]]) -> int:
-        """The index of the step whose ``axis`` is nearest ``value``, or for a
-        value that is not a number, the first equal to it as text."""
+        """The index of the step whose ``axis`` is nearest ``value``, read as a
+        SPICE number (``2k``), or for a value that is not one, the first equal
+        to it as text. The axis is found whatever its case (:class:`StepValues`).
+        Refused, naming what the steps hold, when no step has the axis or no
+        step's value equals a value that is not a number."""
         candidates = [
-            (index, values) for index, values in enumerate(step_values) if self.axis in values
+            (index, values)
+            for index, values in enumerate(map(StepValues, step_values))
+            if self.axis in values
         ]
         if not candidates:
+            names = sorted({name for values in step_values for name in values}, key=str.casefold)
+            carried = f"; the steps carry {', '.join(names)}" if names else ""
             raise ResultError(
-                f"step axis {self.axis!r} is not present in the captured step metadata"
+                f"step axis {self.axis!r} is not present in the captured step metadata{carried}"
             )
         try:
-            target = float(format_spice_value(self.value))
+            target = (
+                float(self.value)
+                if isinstance(self.value, (int, float))
+                else parse_plain_value(self.value)
+            )
             return min(candidates, key=lambda pair: abs(float(pair[1][self.axis]) - target))[0]
         except (TypeError, ValueError):
-            return next(
-                (
-                    index
-                    for index, values in candidates
-                    if str(values[self.axis]) == str(self.value)
-                ),
-                candidates[0][0],
-            )
+            for index, values in candidates:
+                if str(values[self.axis]) == str(self.value):
+                    return index
+        held = ", ".join(str(values[self.axis]) for _, values in candidates[:10])
+        raise ResultError(f"no step has {self.axis} = {self.value!r}; the steps hold {held}")
 
 
 class StepSelectionFields(StrictModel):

@@ -77,6 +77,17 @@ tool-surface changes.
 
 ### Fixed
 
+- A step parameter written in mixed case in the deck (`.step param Rv`) was
+  not found by that spelling. LTspice writes the name in lower case in its log
+  on both builds (`.step rv=1000`, recorded), so `step={axis:'Rv', ...}`
+  was refused, `group_by=['Rv']` put every row under a null, and
+  `r.steps[0]["Rv"]` raised `KeyError` in the Python API. Every reader of a
+  step parameter's name, the raw's step lookup and `plot_waveform`'s `step`
+  included, now finds it whatever its case; the values keep the log's
+  spelling. The `step` selector also reads a value with a scale suffix as a
+  number (`value: "2k"` picked the first step), and it refuses a value that no
+  step holds, and an axis no step carries, naming what the steps hold rather
+  than falling back to the first step.
 - A Pelgrom `mismatch` rule ignored a device's multiplier `m`. The simulator
   builds m parallel copies from one card and they share its one draw, so
   their area is `m·W·L`, but the draw took the area of a single copy: a device

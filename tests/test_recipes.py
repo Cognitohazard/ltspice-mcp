@@ -7,6 +7,7 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
     QUANTILE_SPREAD_FIELD,
@@ -16,6 +17,7 @@ from ltspice_mcp.lib.recipes import (
     MultiRecipe,
     ScalarRecipe,
     SignalStatsRecipe,
+    StepSelector,
     ValueRecipe,
     VariableRecipe,
     quantile_key,
@@ -344,3 +346,23 @@ class TestSignalStatsQuantiles:
     def test_unusable_levels_are_refused(self, levels: list[float]):
         with pytest.raises(ValidationError):
             self._stats(quantiles=levels)
+
+
+class TestStepSelector:
+    """The ``step`` argument picks the step it names, or says why it cannot."""
+
+    STEPS = ({"rv": 1000.0}, {"rv": 2000.0}, {"rv": 4000.0})
+
+    def test_a_value_with_a_scale_suffix_is_read_as_a_number(self):
+        assert StepSelector(axis="rv", value="2k").pick(self.STEPS) == 1
+        assert StepSelector(axis="rv", value=3900).pick(self.STEPS) == 2
+
+    def test_a_value_no_step_holds_is_refused_with_the_values_held(self):
+        steps = [{"corner": "tt"}, {"corner": "ff"}]
+        assert StepSelector(axis="corner", value="ff").pick(steps) == 1
+        with pytest.raises(ResultError, match=r"no step has corner = 'ss'; the steps hold tt, ff"):
+            StepSelector(axis="corner", value="ss").pick(steps)
+
+    def test_an_axis_no_step_carries_is_refused_with_the_axes_carried(self):
+        with pytest.raises(ResultError, match=r"the steps carry rv$"):
+            StepSelector(axis="temp", value=27).pick(self.STEPS)

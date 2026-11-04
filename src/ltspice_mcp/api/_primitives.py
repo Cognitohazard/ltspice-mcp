@@ -120,7 +120,11 @@ class RawResult:
 
     @property
     def steps(self) -> list[dict[str, Any]]:
-        """Parameter metadata aligned one-for-one with the result steps."""
+        """Parameter metadata aligned one-for-one with the result steps.
+
+        Each entry finds a parameter whatever the case of its name: LTspice
+        writes ``rd`` for a deck's ``RD``, and ``steps[0]["RD"]`` reads it.
+        """
         return copy.deepcopy(list(self._steps))
 
     @property
@@ -371,7 +375,8 @@ async def load_raw_result(
     observations = await asyncio.to_thread(services.read_observations, source, raw)
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
-    steps = [dict(step.parameters) for step in raw.descriptor.steps]
+    # Each step's parameters, found whatever the case of a name (StepValues).
+    steps: list[dict[str, Any]] = [step.values for step in raw.descriptor.steps]
     return RawResult(
         raw,
         source=resolved,
