@@ -1421,6 +1421,7 @@ async def _dwell_and_respond(
             analysis_fields=analysis_fields,
             analysis_answer_channel=rung is not None and rung.answer_channel,
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+            analysis_served=frozenset(state.tool_dispatch),
         )
         data["replayed"] = receipt.replayed
         if warnings:

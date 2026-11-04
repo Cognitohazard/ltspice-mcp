@@ -1010,9 +1010,12 @@ continuation replays them.
   signal no run contains, is one row rather than one per run, so the
   failures channel, which no budget rung trims, does not grow with the run
   count. The page then caps rows at 100,
-  with a `failures_truncated` observation. The Python API's complete
+  with a `failures_truncated` observation that gives the true total and says
+  that `api.analyze_results` returns every record. The Python API's complete
   `analyze_results` result lists every record, one per place; an analysis
-  attached to an experiment is stored as the page renders it.
+  attached to an experiment is stored as the page renders it, except that a
+  failure whose message ends in an `api` snippet says where the snippet runs
+  for the session that shows it.
 - Under a `budget`, the shrink rung lowers one shared limit on every row
   surface (each recipe's `values`, `groups`, `per_run` page and
   `spec.fail_cases`, and `coverage.missing_cases`) to the largest value whose
@@ -1540,8 +1543,10 @@ beside an amplifier's triangle is not in the part.
 A cap of 25 findings per rule applies to the layout and quality rules, to the
 value-suffix rules (`value_suffix_micro_sign`, `value_suffix_mojibake`,
 `value_suffix_nonascii`) and to `dropped_wire`. A capped rule other than
-`dropped_wire` adds an observation `<rule>: showing 25 of <n> findings`;
-`dropped_wire` adds none, and `rules_run` gives its full count.
+`dropped_wire` adds an observation `<rule>: showing 25 of <n> findings;
+api.verify_circuit returns every one.`, followed by where that runs;
+`dropped_wire` adds none, and `rules_run` gives its full count. The `hint`
+counts every finding, not only those shown.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,

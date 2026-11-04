@@ -1593,9 +1593,9 @@ class TestListAndRunsPagination:
         real_render = jobs_module.render_jobs_data
         limits: list[int | None] = []
 
-        def spy(evaluation, *, limit=None, rung=None):
+        def spy(evaluation, *, limit=None, rung=None, **rest):
             limits.append(limit)
-            return real_render(evaluation, limit=limit, rung=rung)
+            return real_render(evaluation, limit=limit, rung=rung, **rest)
 
         monkeypatch.setattr(jobs_module, "render_jobs_data", spy)
         data = _assert_jobs_schema(await handle_jobs(_args("list", limit=500), state_no_sim))

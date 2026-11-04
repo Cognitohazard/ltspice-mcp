@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 import functools
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, get_args
 
@@ -657,6 +657,7 @@ def render_receipt_snapshot(
     analysis_fields: list[str] | None = None,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
+    analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Render the existing receipt envelope from detached neutral facts.
 
@@ -709,6 +710,7 @@ def render_receipt_snapshot(
                 fields=analysis_fields,
                 answer_channel=analysis_answer_channel,
                 row_limit=analysis_rows_cap,
+                served=analysis_served,
             )
         analysis_observations = list(snapshot.analysis_observations)
         data["analysis"] = {
@@ -1129,6 +1131,7 @@ def render_jobs_receipt_snapshot(
     runs_cap: int = JOBS_PAGE_LIMIT,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
+    analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Render one complete jobs receipt from detached snapshot facts."""
     data = render_receipt_snapshot(
@@ -1136,6 +1139,7 @@ def render_jobs_receipt_snapshot(
         runs_cap=runs_cap,
         analysis_answer_channel=analysis_answer_channel,
         analysis_rows_cap=analysis_rows_cap,
+        analysis_served=analysis_served,
     )
     data.update(
         {

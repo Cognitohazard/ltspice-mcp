@@ -14,6 +14,7 @@ and renderers live in ``tools/receipts``.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
@@ -1448,6 +1449,7 @@ def render_jobs_data(
     *,
     limit: int | None = None,
     rung: response_budget.Rung | None = None,
+    served: Collection[str] | None = None,
 ) -> _JobsBuilt:
     """Present one evaluation as a response payload and its text line.
 
@@ -1455,7 +1457,8 @@ def render_jobs_data(
     is one MCP page of that size (the budget ladder re-renders at smaller ones),
     and ``None`` is the complete result the Python API returns. Cancel
     receipts are never paged either way — they are the acknowledgement itself,
-    not a page over a larger set.
+    not a page over a larger set. ``served`` is the MCP session's tools, which
+    an attached analysis's failures name as where their snippet runs.
     """
     args = evaluation.args
     if evaluation.error is not None:
@@ -1562,6 +1565,7 @@ def render_jobs_data(
         runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
         analysis_answer_channel=rung is not None and rung.answer_channel,
         analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+        analysis_served=served,
     )
     if evaluation.warnings:
         data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
@@ -1648,14 +1652,17 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                 )
         try:
             budget = resolve_response_budget(args.budget, state)
+            served = frozenset(state.tool_dispatch)
             if budget.tokens is None:
-                built = render_jobs_data(evaluation, limit=page_limit)
+                built = render_jobs_data(evaluation, limit=page_limit, served=served)
             else:
                 # The presentation re-runs at a smaller page for each rung the
                 # ladder tries; the control-plane work above ran once.
                 built = await _negotiate_jobs(
                     budget,
-                    lambda limit, rung: render_jobs_data(evaluation, limit=limit, rung=rung),
+                    lambda limit, rung: render_jobs_data(
+                        evaluation, limit=limit, rung=rung, served=served
+                    ),
                     page_limit,
                 )
         except Exception as exc:

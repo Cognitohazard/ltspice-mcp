@@ -76,11 +76,12 @@ from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 from mcp import types
 from pydantic import BeforeValidator, Field
 
-from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.errors import PathSecurityError, python_route_text
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES, capabilities
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
@@ -2547,12 +2548,22 @@ async def evaluate_verify_circuit(
     )
 
 
-def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallToolResult:
+def _finding_cap_rest(served: Collection[str] | None) -> str:
+    """Where the findings a capped rule leaves out are read."""
+    rest = "api.verify_circuit returns every one."
+    return rest if served is None else f"{rest} {python_route_text(served)}"
+
+
+def render_verify_circuit(
+    evaluation: VerifyCircuitEvaluation, served: Collection[str] | None = None
+) -> types.CallToolResult:
     """Apply the existing MCP cap and observation presentation to an evaluation.
 
     Selects findings by reference before building the envelope, so the uncapped
     evaluation is never copied wholesale; presentation replaces keys rather than
-    writing through any value it shares with the evaluation.
+    writing through any value it shares with the evaluation. ``served`` is the
+    session's tools, which decide where a capped rule's note sends the caller
+    for the rest.
     """
     shown: dict[str, int] = {}
     presented: list[dict[str, Any]] = []
@@ -2573,14 +2584,16 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
             observations.append(event)
             continue
         observations.extend(
-            f"{kind}: showing {FINDING_RULE_CAP} of {count} findings"
+            f"{kind}: " + cap_note(FINDING_RULE_CAP, count, "findings", _finding_cap_rest(served))
             for kind, count in sorted(event.totals.items())
             if count > FINDING_RULE_CAP
         )
     data["observations"] = observations
     if not evaluation.is_error:
         data["outcome"] = _outcome(data["findings"], data["failures"], data.get("comparison"))
-        data["hint"] = _hint(data)
+        # Counted over every finding, as the observations count them: the cap
+        # shortens the list shown, not what the check found.
+        data["hint"] = _hint({**data, "findings": evaluation.data["findings"]})
 
     result = format_response(data["hint"], data)
     if evaluation.is_error:
@@ -2605,4 +2618,6 @@ async def handle_verify_circuit(
     args: VerifyCircuitInput, state: SessionState
 ) -> types.CallToolResult:
     """Check (and optionally render/compare) a circuit file without changing it."""
-    return render_verify_circuit(await evaluate_verify_circuit(args, state))
+    return render_verify_circuit(
+        await evaluate_verify_circuit(args, state), served=frozenset(state.tool_dispatch)
+    )

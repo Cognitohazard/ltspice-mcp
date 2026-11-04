@@ -46,7 +46,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
-from ltspice_mcp.lib.format import format_spice_value, unique_name
+from ltspice_mcp.lib.format import cap_note, format_spice_value, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
@@ -304,6 +304,15 @@ class Failure:
 _FAILURE_WHERE_CAP = 10
 """How many places a collapsed failure row names before deferring to ``count``."""
 
+_DEFERRED_ROUTE: frozenset[str] = frozenset({"<shown later>"})
+"""``served`` for failure rows that are stored now and shown later (the attached
+analysis): which session will show them, and so where their ``api`` snippet
+runs, is not known yet. A row then keeps its plain message and marks itself
+under ``_ROUTE_KEY``, and the render that shows it adds the route."""
+
+_ROUTE_KEY = "python_route"
+"""Marks a stored failure row whose message ends in an ``api`` snippet."""
+
 _DIGIT_RUN = re.compile(r"(\d+)")
 
 
@@ -338,9 +347,12 @@ def _collapse_failures(
     for failure in failures:
         grouped.setdefault(failure.reason, []).append(failure)
     rows: list[dict[str, Any]] = []
+    deferred = served is _DEFERRED_ROUTE
     for members in grouped.values():
         ordered = sorted(members, key=lambda failure: _place_order(failure.where))
-        row = ordered[0].wire(served)
+        row = ordered[0].wire(None if deferred else served)
+        if deferred and ordered[0].python_route:
+            row[_ROUTE_KEY] = True
         if len(ordered) > 1:
             places = list(dict.fromkeys(failure.where for failure in ordered))
             row["wheres"] = places[:_FAILURE_WHERE_CAP]
@@ -3270,14 +3282,19 @@ def _assemble(
             if len(failures) != len(failure_rows)
             else ""
         )
+        rest = "api.analyze_results returns every record."
+        if a.served is not None and a.served is not _DEFERRED_ROUTE:
+            rest = f"{rest} {python_route_text(a.served)}"
         observations.append(
             Observation(
                 code="failures_truncated",
                 kind="coverage",
                 detail=(
-                    f"Returned {_FAILURE_CAP} of {len(failure_rows)} failure records"
-                    f"{standing_for}; coverage and recipe result presence still "
-                    "reflect the full call."
+                    "failures: "
+                    + cap_note(
+                        _FAILURE_CAP, len(failure_rows), f"failure records{standing_for}", rest
+                    )
+                    + " Coverage and recipe result presence still reflect the full call."
                 ),
             )
         )
@@ -3352,7 +3369,9 @@ def _assemble(
 def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     """Persist facts and bounded unprojected rows, never a rendered response."""
     wide_include = a.include.model_copy(update={"fields": list(_ROW_KEYS)})
-    wide = replace(a, include=wide_include)
+    # Shown later, by a session not known yet: each failure row keeps whether
+    # its message ends in an api snippet, for the render to say where it runs.
+    wide = replace(a, include=wide_include, served=_DEFERRED_ROUTE)
     requested, _ = _assemble(wide, None, _Limits.of(wide_include))
     top = requested
     requested_results = top.pop("results")
@@ -3477,8 +3496,14 @@ def render_attached_analysis(
     fields: list[str] | None,
     answer_channel: bool = False,
     row_limit: int | None = None,
+    served: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Render one public attached result from its stored neutral snapshot."""
+    """Render one public attached result from its stored neutral snapshot.
+
+    ``served`` is the tools of the MCP session showing it, so a failure whose
+    message ends in an ``api`` snippet says where that runs, as on an
+    ``analyze_results`` page; None, for the Python API, leaves the message as is.
+    """
     snapshot_kind = analysis_snapshot.classify(stored)
     if snapshot_kind != "snapshot":
         raise ResultError(
@@ -3487,6 +3512,9 @@ def render_attached_analysis(
         )
 
     data = copy.deepcopy(stored["top"])
+    for row in data.get("failures") or []:
+        if row.pop(_ROUTE_KEY, False) and served is not None:
+            row["message"] = f"{row['message']} {python_route_text(served)}"
     _rebind_snapshot_cursors(data, fields)
     natural_cursor_base = stored.get("natural_cursor_base")
     if answer_channel:
