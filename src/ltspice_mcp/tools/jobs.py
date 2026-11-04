@@ -14,7 +14,6 @@ and renderers live in ``tools/receipts``.
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
@@ -1031,7 +1030,10 @@ async def _cancel_jobs_target(
     if job.status in TERMINAL_STATUSES:
         return []
 
-    if not experiment_store.cancel_authorized(job, args.control_token):
+    # Whether this process runs the job is the registry's answer, never the
+    # record's pid: a dead server's record can carry this process's pid.
+    owned = state.job_registry.owns(job)
+    if not experiment_store.cancel_authorized(job, args.control_token, owned=owned):
         raise _JobsActionError(
             "cancel_not_authorized",
             (
@@ -1042,7 +1044,7 @@ async def _cancel_jobs_target(
         )
     runner = state.runners.get_experiment_runner_for(job)
     if runner is None:
-        if job.owner_pid == os.getpid():
+        if owned:
             raise _JobsActionError(
                 "cancel_unavailable",
                 (

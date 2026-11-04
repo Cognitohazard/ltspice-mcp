@@ -241,7 +241,7 @@ class TestExperimentTypesAndStore:
         job.analysis = AnalysisStage(status="pending", request={"recipes": [{"kind": "summary"}]})
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         assert loaded.control_token == "control-secret"
         assert loaded.cases[0].assignments == {"R1": "1k"}
@@ -283,7 +283,7 @@ class TestExperimentTypesAndStore:
         job.analysis = AnalysisStage(status="completed", result=public_result)
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
 
         assert loaded is not None
         assert loaded.analysis.result == public_result
@@ -303,7 +303,7 @@ class TestExperimentTypesAndStore:
         job.store_path.write_text(json.dumps(data))
 
         with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.experiment_store"):
-            loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+            loaded = experiment_store.load_job(job.job_id, work_dir)
 
         assert loaded is None
         assert "store_version" in caplog.text
@@ -321,7 +321,7 @@ class TestExperimentTypesAndStore:
         job = _job(work_dir, circuit, job_id=stemless_id, status="completed")
         experiment_store.save_job(job)
 
-        loaded = experiment_store.load_job(stemless_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(stemless_id, work_dir)
         assert loaded is not None
         assert loaded.job_id == stemless_id
         assert loaded.cases[0].assignments == {"R1": "1k"}
@@ -413,7 +413,7 @@ class TestLiveJobs:
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, status="running")
         experiment_store.save_job(job)
-        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
 
         waitable = (asyncio.Event, asyncio.Future, asyncio.Condition, asyncio.Semaphore)

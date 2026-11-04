@@ -100,7 +100,7 @@ def _resume_arguments(root: dict) -> dict:
 def _committed_child(work_dir: Path, root: dict):
     journal = load_journal(Store(work_dir), root["request_id"])
     assert journal is not None and journal.head_job_id != root["job_id"]
-    child = experiment_store.load_job(journal.head_job_id, work_dir, own_is_alive=True)
+    child = experiment_store.load_job(journal.head_job_id, work_dir)
     assert child is not None
     return child
 

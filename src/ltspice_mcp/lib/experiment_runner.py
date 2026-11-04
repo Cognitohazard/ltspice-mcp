@@ -870,11 +870,7 @@ class ExperimentRunner(RunnerBase):
         )
         indexed_job_id = str(index.get("job_id", ""))
         try:
-            existing = experiment_store.load_job(
-                indexed_job_id,
-                working_dir,
-                own_is_alive=True,
-            )
+            existing = experiment_store.load_job(indexed_job_id, working_dir)
         except ValueError:
             existing = None
         if existing is None:
@@ -2028,7 +2024,9 @@ class ExperimentRunner(RunnerBase):
         control_token: str | None = None,
     ) -> list[dict[str, Any]]:
         """Stop further submissions and kill active cases when authorized."""
-        if not experiment_store.cancel_authorized(job, control_token):
+        if not experiment_store.cancel_authorized(
+            job, control_token, owned=self.owns_experiment_job(job.job_id)
+        ):
             raise CancelNotAuthorized(
                 f"Cancellation is not authorized for experiment job {job.job_id}"
             )

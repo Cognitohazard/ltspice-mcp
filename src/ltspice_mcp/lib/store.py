@@ -383,12 +383,80 @@ class OwnerLiveness(Enum):
         return self is OwnerLiveness.DEAD
 
 
-def owner_liveness(pid: int | None, *, own_is_alive: bool = False) -> OwnerLiveness:
+#: This process's start marker, by the pid it was read for (a forked child reads
+#: its own). Read once: it cannot change while the process runs.
+_START_MARKERS: dict[int, str | None] = {}
+
+
+def this_process_start_marker() -> str | None:
+    """This process's start marker (``proc_kill.process_start_marker``): what
+    tells it apart from any earlier process that had its pid. None when it
+    cannot be read."""
+    pid = os.getpid()
+    if pid not in _START_MARKERS:
+        from ltspice_mcp.lib.proc_kill import process_start_marker
+
+        try:
+            _START_MARKERS[pid] = process_start_marker(pid)
+        except Exception as exc:
+            logger.debug("Could not read this process's start marker: %s", exc)
+            _START_MARKERS[pid] = None
+    return _START_MARKERS[pid]
+
+
+def is_this_process(pid: int | None, start_marker: str | None) -> bool:
+    """Whether a recorded process identity names this process: its pid AND its
+    start marker. A pid alone never does — pids are reused, quickly on Windows,
+    so a record a dead server left can carry this process's pid."""
+    if pid != os.getpid() or not start_marker:
+        return False
+    return start_marker == this_process_start_marker()
+
+
+def owner_start_record(pid: int, recorded: tuple[int, str] | None) -> dict[str, Any] | None:
+    """The ``owner_start`` a job record is written with: the owning process's pid
+    and start marker, so a reader can tell the process that wrote the record
+    from a later one that took its pid.
+
+    A record naming this process's pid takes this process's marker: this
+    process writes a live record only for a job it runs, and a job it takes
+    over (a resume) is reassigned to it by pid alone. Otherwise ``recorded``,
+    what the record already held, is kept while it still names the record's
+    pid; anything else has none to give, and is probed by pid alone.
+    """
+    if pid == os.getpid():
+        marker = this_process_start_marker()
+        return {"pid": pid, "start_marker": marker} if marker else None
+    if recorded is not None and recorded[0] == pid:
+        return {"pid": pid, "start_marker": recorded[1]}
+    return None
+
+
+def owner_start_of(data: Mapping[str, Any]) -> tuple[int, str] | None:
+    """The owning process's pid and start marker from a stored record, or None
+    when it holds none (a record written before they were) or one that does not
+    name the record's own pid."""
+    start = data.get("owner_start")
+    if not isinstance(start, Mapping):
+        return None
+    pid, marker = start.get("pid"), start.get("start_marker")
+    if not isinstance(marker, str) or not marker or pid != pid_of(data):
+        return None
+    assert isinstance(pid, int)
+    return pid, marker
+
+
+def owner_liveness(pid: int | None, *, start_marker: str | None = None) -> OwnerLiveness:
     """Whether the record's owning server process is still running.
 
-    ``own_is_alive`` decides how a record carrying this process's pid reads:
-    registry loading treats it as a recycled pid, while disk-level summaries
-    treat the common own-pid case as a genuinely running job.
+    With the owner's ``start_marker`` the process is identified by both: a pid
+    now held by another process (pids are reused, quickly on Windows) reads
+    DEAD, this process's own pid included. Without one, by pid alone; a record
+    carrying this process's pid then reads DEAD too, because every record this
+    process writes for a job it owns carries its marker (``owner_start_record``),
+    so one without it was left by an earlier process that had this pid. Whether
+    this process runs a job is not this function's question: that is the
+    registry's (``JobRegistry.owns``).
 
     A record with no usable pid answers DEAD, not UNKNOWN: that is a record
     written before pids were stored, and the recovery of those interrupted
@@ -403,8 +471,20 @@ def owner_liveness(pid: int | None, *, own_is_alive: bool = False) -> OwnerLiven
     """
     if not pid:
         return OwnerLiveness.DEAD
+    if start_marker:
+        from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
+
+        return {
+            ProcessPresence.PRESENT: OwnerLiveness.ALIVE,
+            ProcessPresence.ABSENT: OwnerLiveness.DEAD,
+            ProcessPresence.UNKNOWN: OwnerLiveness.UNKNOWN,
+        }[process_identity_presence(pid, start_marker)]
     if pid == os.getpid():
-        return OwnerLiveness.ALIVE if own_is_alive else OwnerLiveness.DEAD
+        # Unless this process cannot read its own marker: then its own records
+        # carry none either, and nothing tells them from a predecessor's.
+        if this_process_start_marker() is None:
+            return OwnerLiveness.UNKNOWN
+        return OwnerLiveness.DEAD
     # Imported here: every parser process imports this module for its paths,
     # and psutil is most of what that import would otherwise cost.
     import psutil

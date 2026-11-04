@@ -161,6 +161,17 @@ class JobRegistry:
         self.jobs[job.job_id] = job
         return live
 
+    def owns(self, job: ExperimentJob) -> bool:
+        """Whether this process runs ``job``: it admitted the job, so its live
+        job is here (``reserve``).
+
+        The one answer to "is this job ours?". A pid never answers it: a record
+        a dead server left can carry this process's pid once the pid is reused,
+        quickly on Windows, and a record read back from the store is never one
+        this process can wait on, cancel without a token, or settle at shutdown.
+        """
+        return job.job_id in self.live
+
     def release(self, job: ExperimentJob) -> None:
         """Withdraw a reservation whose record was never written."""
         live = self.live.get(job.job_id)
@@ -226,7 +237,7 @@ class JobRegistry:
             return None
         from ltspice_mcp.lib import experiment_store
 
-        return experiment_store.load_job(job_id, self.working_dir, own_is_alive=True)
+        return experiment_store.load_job(job_id, self.working_dir)
 
     def get_or_load(self, job_id: str) -> ExperimentJob | None:
         """A job by id: in memory, else from the store. None if there is none.
@@ -272,12 +283,12 @@ class JobRegistry:
         in this process would ever see it finish. Re-reading the sidecar at
         resolution time picks up the owner's latest persisted state
         (including the interrupted translation once the owner has died).
-        Own jobs, terminal jobs, and persistence-off sessions return
+        Own jobs (``owns``), terminal jobs, and persistence-off sessions return
         unchanged.
         """
         if (
             not self.persist_enabled
-            or getattr(job, "owner_pid", 0) in (0, os.getpid())
+            or self.owns(job)
             or job.status not in NON_TERMINAL_LIVE_STATUSES
         ):
             return job
@@ -300,7 +311,7 @@ class JobRegistry:
         """
         if (
             not self.persist_enabled
-            or getattr(job, "owner_pid", 0) in (0, os.getpid())
+            or self.owns(job)
             or job.status not in NON_TERMINAL_LIVE_STATUSES
         ):
             return job
@@ -343,9 +354,12 @@ class JobRegistry:
         """Wait for a job to finish, or its runs to; the latest view, and whether time ran out.
 
         One answer for every caller, chosen by who can change the job: this
-        process's live job is waited on; another process's job is re-read from
-        its record; anything else has nothing that will change it here, so its
-        record answers at once.
+        process's live job is waited on; any other job is re-read from its
+        record, which the store reconciles once its owner is gone. Without
+        persistence there is no record, so nothing will change it here and it
+        answers at once. A job whose record already says it is done
+        (``finished``) answers at once, live or not, so this wait and every
+        reader of the record agree on when the runs are done.
         """
         live = self.live.get(job.job_id)
         if live is not None:
@@ -355,7 +369,7 @@ class JobRegistry:
             return live.job, not done
         if finished(job, wait_for):
             return job, False
-        if job.owner_pid not in (0, os.getpid()):
+        if self.persist_enabled:
             return await self._wait_for_foreign(job, timeout_s, wait_for)
         return job, True
 

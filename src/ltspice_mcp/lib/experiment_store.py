@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import secrets
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -31,7 +30,6 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import finished, reconcile_experiment_restart
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.native_records import NativeCaseRecord
-from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
@@ -46,6 +44,8 @@ from ltspice_mcp.lib.store import (
     atomic_write_json,
     envelope,
     owner_liveness,
+    owner_start_of,
+    owner_start_record,
     owner_unknown_observation,
     pid_of,
     validate_job_id,
@@ -108,13 +108,21 @@ def cancellation_requested(job_id: str, working_dir: Path) -> bool:
     return Store(working_dir).cancellation(job_id).is_file()
 
 
-def cancel_authorized(job: ExperimentJob, control_token: str | None) -> bool:
-    """Whether this process or the supplied control token may cancel ``job``."""
-    return job.owner_pid == os.getpid() or (
+def holds_control_token(job: ExperimentJob, control_token: str | None) -> bool:
+    """Whether ``control_token`` is ``job``'s control token: the capability by
+    which a caller other than the job's owning process cancels or resumes it."""
+    return (
         control_token is not None
         and bool(job.control_token)
         and secrets.compare_digest(control_token, job.control_token)
     )
+
+
+def cancel_authorized(job: ExperimentJob, control_token: str | None, *, owned: bool) -> bool:
+    """Whether a caller may cancel ``job``: the process running it (``owned``,
+    which its registry answers, never a pid compared with this one) or a
+    holder of its control token."""
+    return owned or holds_control_token(job, control_token)
 
 
 def request_cancellation(
@@ -130,10 +138,11 @@ def request_cancellation(
     """
     store = Store(working_dir)
     with file_lock(store.cancellation_lock(job_id)):
-        job = load_job(job_id, working_dir, own_is_alive=True)
+        job = load_job(job_id, working_dir)
         if job is None:
             return None
-        if not cancel_authorized(job, control_token):
+        # Only for a job this process does not run: the token is the authority.
+        if not cancel_authorized(job, control_token, owned=False):
             raise PermissionError(f"Cancellation is not authorized for experiment job {job_id}")
         store.ensure_root()
         atomic_write_json(
@@ -223,6 +232,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         canonicalizer_version=job.canonicalizer_version,
         control_token=job.control_token,
         pid=job.owner_pid,
+        owner_start=owner_start_record(job.owner_pid, job.owner_start),
         simulator=job.simulator,
         status=job.status,
         started_at=job.started_at.isoformat(),
@@ -622,6 +632,7 @@ def deserialize_job(
         artifacts=list(data.get("artifacts") or []),
         analysis=_analysis_stage(data.get("analysis")),
         owner_pid=pid_of(data) or 0,
+        owner_start=owner_start_of(data),
         recovery=(
             JobRecovery.from_record(data["recovery"]) if data.get("recovery") is not None else None
         ),
@@ -675,12 +686,19 @@ def _validate_recovery_job(job: ExperimentJob) -> None:
             )
 
 
-def load_job_from_path(
-    path: Path,
-    working_dir: Path,
-    *,
-    own_is_alive: bool = False,
-) -> ExperimentJob | None:
+def _record_owner(data: Mapping[str, Any]) -> tuple[int | None, str | None]:
+    """The owning process a record names: its pid, and the start marker that
+    tells it from a later process with the same pid where the record has one.
+    A recoverable record names its owner in its recovery lineage."""
+    recovery_data = data.get("recovery")
+    if recovery_data is not None:
+        identity = JobRecovery.from_record(recovery_data).owner
+        return identity.pid, identity.start_marker
+    start = owner_start_of(data)
+    return pid_of(data), start[1] if start is not None else None
+
+
+def load_job_from_path(path: Path, working_dir: Path) -> ExperimentJob | None:
     """Load one coordinator record after validating store-root containment."""
     store = Store(working_dir)
     resolved = path.resolve()
@@ -693,25 +711,16 @@ def load_job_from_path(
     try:
         liveness = OwnerLiveness.UNKNOWN
         if data.get("status") in NON_TERMINAL_LIVE_STATUSES:
-            pid = pid_of(data)
-            recovery_data = data.get("recovery")
-            if recovery_data is not None:
-                identity = JobRecovery.from_record(recovery_data).owner
-                presence = process_identity_presence(identity.pid, identity.start_marker)
-                liveness = {
-                    ProcessPresence.PRESENT: OwnerLiveness.ALIVE,
-                    ProcessPresence.ABSENT: OwnerLiveness.DEAD,
-                    ProcessPresence.UNKNOWN: OwnerLiveness.UNKNOWN,
-                }[presence]
-            else:
-                liveness = owner_liveness(pid, own_is_alive=own_is_alive)
+            owner = _record_owner(data)
+            pid, start_marker = owner
+            liveness = owner_liveness(pid, start_marker=start_marker)
             if liveness.is_dead:
                 # The owner may have saved its final state and exited after
                 # our first read. Reconcile only a snapshot read after death.
                 data = _read_job_record(resolved)
                 if data is None:
                     return None
-                if pid_of(data) != pid or data.get("recovery") != recovery_data:
+                if _record_owner(data) != owner:
                     liveness = OwnerLiveness.UNKNOWN
         return deserialize_job(data, resolved, liveness=liveness)
     except Exception as exc:
@@ -735,18 +744,9 @@ def _read_job_record(path: Path) -> dict[str, Any] | None:
     return data
 
 
-def load_job(
-    job_id: str,
-    working_dir: Path,
-    *,
-    own_is_alive: bool = False,
-) -> ExperimentJob | None:
+def load_job(job_id: str, working_dir: Path) -> ExperimentJob | None:
     """Load a coordinator directly by validated job id."""
-    return load_job_from_path(
-        Store(working_dir).job_record(job_id),
-        working_dir,
-        own_is_alive=own_is_alive,
-    )
+    return load_job_from_path(Store(working_dir).job_record(job_id), working_dir)
 
 
 def load_jobs_for_circuit(
@@ -782,11 +782,7 @@ def load_jobs_for_circuit(
             if live is not None:
                 jobs.append(live)
                 continue
-            job = load_job_from_path(
-                store.job_record(job_id),
-                working_dir,
-                own_is_alive=True,
-            )
+            job = load_job_from_path(store.job_record(job_id), working_dir)
             if job is not None:
                 jobs.append(job)
         except Exception as exc:

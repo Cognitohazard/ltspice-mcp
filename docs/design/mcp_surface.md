@@ -846,8 +846,9 @@ fields.
 Only the owning process or a caller with a valid control token can cancel;
 any other caller gets `cancel_not_authorized`. Once a cancel is acknowledged,
 no further case is submitted, queued cases are cancelled and active ones are
-killed. A wait on a job owned by another process re-reads that job's record
-every 0.5 s and returns the same output.
+killed. A wait on a job this server process does not run re-reads that job's
+record every 0.5 s and returns the same output; a record whose owner has
+exited is read as `interrupted`.
 
 ### 3.3 `analyze_results` — batched read
 

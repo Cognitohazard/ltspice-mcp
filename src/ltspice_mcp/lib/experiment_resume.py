@@ -62,7 +62,7 @@ from ltspice_mcp.lib.recovery_records import (
     RecoveryError,
 )
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
-from ltspice_mcp.lib.store import OwnerLiveness, Store, path_digest
+from ltspice_mcp.lib.store import OwnerLiveness, Store, is_this_process, path_digest
 from ltspice_mcp.lib.sweep_utils import generate_id
 
 if TYPE_CHECKING:
@@ -115,16 +115,8 @@ def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
     if recovery is None:
         raise RecoveryError("not_recoverable", "This experiment was not submitted as recoverable")
     owner = recovery.owner
-    own = (
-        owner.pid == os.getpid()
-        and process_identity_presence(owner.pid, owner.start_marker) is ProcessPresence.PRESENT
-    )
-    token_matches = (
-        control_token is not None
-        and bool(job.control_token)
-        and secrets.compare_digest(control_token, job.control_token)
-    )
-    if not own and not token_matches:
+    own = is_this_process(owner.pid, owner.start_marker)
+    if not own and not experiment_store.holds_control_token(job, control_token):
         raise RecoveryError("resume_not_authorized", "The experiment control token is required")
     return job.control_token
 
@@ -132,7 +124,7 @@ def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
 async def resume_control_token(state: SessionState, job_id: str, control_token: str | None) -> str:
     """Authorize a private detached handoff from a fresh parent record."""
     job = await asyncio.to_thread(
-        experiment_store.load_job, job_id, state.working_dir, own_is_alive=True
+        experiment_store.load_job, job_id, state.working_dir
     )
     if job is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
@@ -203,7 +195,7 @@ def _entry_for(journal: RecoveryJournal, job_id: str) -> JournalEntry:
 def _load_attempt(journal: RecoveryJournal, entry: JournalEntry, store: Store) -> ExperimentJob:
     if entry.job_id is None:
         raise RecoveryError("recovery_record_invalid", "No-op entry has no job record")
-    job = experiment_store.load_job(entry.job_id, store.working_dir, own_is_alive=True)
+    job = experiment_store.load_job(entry.job_id, store.working_dir)
     if job is None:
         # An unreadable record is evidence too. Never replace it with an older
         # candidate that would erase a launch or a completion.
@@ -658,7 +650,7 @@ async def resume_experiment(
             "recovery_persistence_required", "Resume requires durable job persistence"
         )
     parent = await asyncio.to_thread(
-        experiment_store.load_job, job_id, state.working_dir, own_is_alive=True
+        experiment_store.load_job, job_id, state.working_dir
     )
     if parent is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")

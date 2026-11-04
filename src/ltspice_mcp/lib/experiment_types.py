@@ -313,6 +313,11 @@ class ExperimentJob:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     analysis: AnalysisStage = field(default_factory=AnalysisStage)
     owner_pid: int = field(default_factory=os.getpid)
+    #: The pid and start marker of the owning process, as the record read back
+    #: held them: what tells that process from a later one given the same pid.
+    #: None for a job this process made, whose record is written with its own
+    #: (``store.owner_start_record``), and for a record written before markers.
+    owner_start: tuple[int, str] | None = field(default=None, repr=False)
     recovery: JobRecovery | None = None
     #: Set when the store reconciled this record as it loaded it — the owning
     #: process had died mid-run, so the object in memory now differs from the

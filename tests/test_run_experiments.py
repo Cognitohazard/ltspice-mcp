@@ -848,16 +848,15 @@ class TestIdempotency:
         assert replayed["status"] == "completed", replayed
         await state_with_sim.settled()
 
-    async def test_a_replay_of_a_job_nothing_here_runs_answers_from_its_record(
+    async def test_a_replay_from_a_session_that_runs_nothing_waits_on_the_record(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """A record naming this process as its owner, with no live job behind it
-        in the session asked (a reused pid, or a coordinator lost to a crash),
-        will not change while the replay waits. Its dwell answers from the record
-        rather than waiting out ``wait_s`` on a copy nothing will finish.
+        """A session that does not run a job waits on its record, whatever pid
+        the record names: whether this process runs a job is its registry's
+        answer, and the record's owner here is alive and finishes it.
 
         The job runs in the first session; the replay comes from a second one on
         the same working directory, which runs nothing.
@@ -870,8 +869,27 @@ class TestIdempotency:
         )
         await await_until(lambda: len(held) == 1, what="the case to reach the simulator")
         other = SessionState.create(state_with_sim.config, available={"fake": FakeSim})
+        # timing: how often the record is re-read, not how long the wait lasts
+        monkeypatch.setattr(experiment_store, "FOREIGN_RECORD_POLL_S", 0.01)
+        # The owner finishes only once the replay has read the record as
+        # unfinished, so the replay has to wait on the record to see it done.
+        polled = asyncio.Event()
+        refresh = other.job_registry.refresh_foreign_job_async
+
+        async def observed_refresh(job):
+            fresh = await refresh(job)
+            if fresh.status in {"queued", "running"}:
+                polled.set()
+            return fresh
+
+        monkeypatch.setattr(other.job_registry, "refresh_foreign_job_async", observed_refresh)
+
+        async def finish_owner() -> None:
+            await polled.wait()
+            held[0]()
+
+        owner = asyncio.create_task(finish_owner())
         try:
-            # A dwell longer than the cap: only an answer from the record is in time.
             replayed = _assert_schema(
                 await asyncio.wait_for(
                     handle_run_experiments(_args(deck, "orphan-replay", wait_s=120), other),
@@ -880,9 +898,10 @@ class TestIdempotency:
             )
             assert replayed["replayed"] is True
             assert replayed["job_id"] == first["job_id"]
-            assert replayed["status"] in {"queued", "running"}, replayed
+            assert replayed["status"] == "completed", replayed
         finally:
-            held[0]()
+            polled.set()
+            await owner
             await state_with_sim.settled()
 
     async def test_a_replay_leaves_the_record_as_it_was(
@@ -954,7 +973,7 @@ class TestIdempotency:
 
         # The record as another process sees it: running, and owned by a live
         # process other than the one about to replay it.
-        running = experiment_store.load_job(job_id, work_dir, own_is_alive=True)
+        running = experiment_store.load_job(job_id, work_dir)
         assert running is not None and running.status == "running"
         running.owner_pid = live_peer_pid
         experiment_store.save_job(running)
