@@ -77,6 +77,21 @@ def model_union(annotation: Any) -> tuple[type[BaseModel], ...]:
     return tuple(model for model in (model_of(member) for member in members) if model is not None)
 
 
+def models_in(annotation: Any) -> list[type[BaseModel]]:
+    """The models an argument of this type can hold, through optionals, unions,
+    lists, tuples and sequences. A mapping's keys are the caller's data, not
+    fields, so the walk stops there."""
+    annotation = strip_annotated(annotation)
+    nested = model_of(annotation)
+    if nested is not None:
+        return [nested]
+    found: list[type[BaseModel]] = []
+    if union_members(annotation) is not None or get_origin(annotation) in (list, tuple, Sequence):
+        for member in get_args(annotation):
+            found += models_in(member)
+    return found
+
+
 def scalar_name(annotation: Any) -> str:
     simple = {
         str: "string",

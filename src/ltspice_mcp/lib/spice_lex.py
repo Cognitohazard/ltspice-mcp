@@ -999,12 +999,17 @@ _NAME_EXTRACTORS = {
 }
 
 
-def lex(netlist_text: str) -> LexResult:
+def lex(netlist_text: str, *, title: bool = False) -> LexResult:
     """Tokenize ``netlist_text`` into a flat list of ``SpiceCard``.
 
     Round-trip invariant: ``emit(lex(text).cards) == text`` for
     well-formed netlists. Malformed input still round-trips
     byte-faithful; warnings are surfaced via ``LexResult.warnings``.
+
+    With ``title`` line 1 is the deck's title: free text whatever it says,
+    lexed as a comment card of its own, so it cannot open a ``.SUBCKT``,
+    end the deck or take a ``+`` line. ``lex_deck`` is the reading of a
+    deck that uses it.
     """
     # ``splitlines(keepends=True)`` preserves CRLF/LF for round-trip.
     lines = netlist_text.splitlines(keepends=True)
@@ -1018,6 +1023,9 @@ def lex(netlist_text: str) -> LexResult:
 
     i = 0
     n = len(lines)
+    if title and lines:
+        cards.append(SpiceCard(kind="comment", raw_lines=[lines[0]], body="", line_start=1))
+        i = 1
     while i < n:
         raw_line = lines[i]
         line_start = i + 1  # 1-based
@@ -1165,6 +1173,26 @@ def lex(netlist_text: str) -> LexResult:
     return LexResult(cards=cards, warnings=warnings)
 
 
+def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
+    """The cards a simulator reads from a deck, and ``lex``'s warnings.
+
+    Line 1 of a deck is its title and is not read, whatever it says: both
+    LTspice builds ran ``deck/title_card``, whose title is an ``I1`` card,
+    with one ``I1``, and failed ``deck/title_directive``, whose title is the
+    ``.param`` its resistor needs. Nor is a card after a top-level ``.END``
+    (``deck/after_end``). ``title=False`` reads an included file, which
+    begins with a card. Every reader of what a deck holds goes through here,
+    so none of them can count a card the simulator never sees; an edit keeps
+    using ``lex``, which holds every line for a byte-faithful ``emit``.
+    """
+    result = lex(netlist_text, title=title)
+    cards = result.cards[1:] if title else result.cards
+    return LexResult(
+        cards=[card for card in cards if not card.trailing],
+        warnings=result.warnings,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Emit
 # ---------------------------------------------------------------------------
@@ -1207,14 +1235,6 @@ def cards_from_path(path: object) -> LexResult:
     return lex(read_spice_text(Path(path)))  # type: ignore[arg-type]
 
 
-def write_cards(cards: Sequence[SpiceCard], path: object) -> None:
-    """Render ``cards`` and write to ``path``. Encoding: UTF-8."""
-    from pathlib import Path
-
-    p = Path(path)  # type: ignore[arg-type]
-    p.write_text(emit(cards), encoding="utf-8")
-
-
 # ---------------------------------------------------------------------------
 # Iteration helpers
 # ---------------------------------------------------------------------------
@@ -1241,6 +1261,24 @@ def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | Non
                 return i
             depth -= 1
     return None
+
+
+def subckt_children(
+    cards: Sequence[SpiceCard], opener_idx: int
+) -> Iterator[tuple[int, SpiceCard]]:
+    """Each card one level inside the ``.SUBCKT`` opened at ``opener_idx``,
+    with its index; the cards inside a nested definition are left out.
+
+    Read by span, from the opener to its ``.ENDS`` (to the end of the cards
+    for one never closed), not by scope: two definitions of one name in a
+    file, inline or one per library section, give their bodies the same scope
+    tuple, so a scope query returns both bodies for either definition.
+    """
+    depth = len(cards[opener_idx].scope) + 1
+    closer = find_matching_ends(cards, opener_idx)
+    for i in range(opener_idx + 1, len(cards) if closer is None else closer):
+        if len(cards[i].scope) == depth:
+            yield i, cards[i]
 
 
 def iter_by_kind(

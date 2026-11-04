@@ -7,6 +7,7 @@ projection ran. Shared by ``analyze_results`` and ``run_experiments``; split out
 of ``tools/_base`` because it is pure dict work with no MCP or session in it.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 # --- dotted field projection (shared by analyze_results and run_experiments) ---
@@ -49,6 +50,106 @@ def split_field_path(path: str) -> list[str]:
         current.append("\\")
     segments.append("".join(current))
     return segments
+
+
+def resolve_field_paths(
+    paths: Sequence[str],
+    roots: Sequence[str],
+    *,
+    argument: str,
+    bare_root: str | None = None,
+) -> list[str]:
+    r"""``paths`` as a projection reads them, checked against the row's own keys.
+
+    The one reading of a dotted projection path, for every argument that takes
+    one (``include.fields`` on ``analyze_results`` and on an attached
+    analysis, ``run_fields`` on ``run_experiments`` and ``jobs(runs)``), each
+    passing the top-level keys its rows carry as ``roots``:
+
+    - a path with an empty segment (``'value.'``, ``'a..b'``) is refused;
+    - a path starts at one of ``roots``, or is refused naming them: a
+      projection that silently keeps nothing is worse than none, so an unknown
+      root is an error rather than rows the caller has to explain;
+    - a one-segment name that is not a root reads under ``bare_root`` when the
+      row nests its values there (``'rms'`` is ``'value.rms'``).
+
+    A dot inside a key's own name is written ``\.``. The paths come back in
+    the order given, repeats kept; ``ValueError`` names ``argument``.
+    """
+    resolved: list[str] = []
+    for path in paths:
+        segments = split_field_path(path)
+        if any(not segment for segment in segments):
+            raise ValueError(f"{argument} path {path!r} has an empty segment")
+        root = segments[0]
+        if root not in roots:
+            if len(segments) != 1 or bare_root is None:
+                raise ValueError(
+                    f"{argument} path {path!r} starts at unknown row key {root!r}; "
+                    f"choose one of: {', '.join(roots)}"
+                )
+            # A bare name is the number's own name, which lives under bare_root.
+            path = f"{bare_root}.{path}"
+        resolved.append(path)
+    return resolved
+
+
+def at_path(row: dict[str, Any], segments: Sequence[str]) -> Any:
+    """The value at ``segments``, or ``ABSENT`` when one of them is missing."""
+    node: Any = row
+    for segment in segments:
+        if not isinstance(node, dict) or segment not in node:
+            return ABSENT
+        node = node[segment]
+    return node
+
+
+def absent_path_warnings(
+    rows: Sequence[dict[str, Any]], paths: Sequence[str], *, argument: str, rows_name: str
+) -> list[str]:
+    """One warning per requested path that no row in ``rows`` carries.
+
+    A root key is checked when the path is read (:func:`resolve_field_paths`),
+    so only a path reaching INTO a row can miss here, and it can miss
+    legitimately: a projection is one argument over rows of several shapes.
+    Naming the keys that are there turns a row missing the requested key from
+    a silence into the next call's argument. No rows, no warnings: nothing was
+    there to miss.
+    """
+    if not rows:
+        return []
+    warnings: list[str] = []
+    for path in paths:
+        segments = split_field_path(path)
+        if len(segments) == 1:
+            continue
+        if any(at_path(row, segments) is not ABSENT for row in rows):
+            continue
+        parent_segments = segments[:-1]
+        parent = ".".join(escape_field_segment(segment) for segment in parent_segments)
+        present = sorted(
+            {
+                key
+                for row in rows
+                for node in (at_path(row, parent_segments),)
+                if isinstance(node, dict)
+                for key in node
+            }
+        )
+        # Naming a dotted key as it must be SPELLED, not just as it reads, is
+        # the difference between a warning and a fix: the caller is one escape
+        # away from the value, and no amount of staring at the key says so.
+        addressable = ", ".join(escape_field_segment(key) for key in present)
+        warnings.append(
+            f"{argument} path {path!r} is absent from every {rows_name}; "
+            + (
+                f"keys present at {parent!r}: {addressable}"
+                if present
+                else f"no row reaches {parent!r} — a key whose own name contains a "
+                r"'.' is one segment, so address it with '\.' (e.g. 'value.v(x1\.out)')"
+            )
+        )
+    return warnings
 
 
 def escape_field_segment(segment: str) -> str:

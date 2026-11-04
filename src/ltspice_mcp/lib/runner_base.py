@@ -20,7 +20,12 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
-from ltspice_mcp.lib.deck_staging import resolve_reference
+from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.deck_staging import (
+    closure_depth,
+    resolve_reference,
+    scan_include_references,
+)
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import (
@@ -32,8 +37,8 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
-from ltspice_mcp.lib.simulator_build import ltspice_before_24, reported_build
-from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
+from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
+from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, lex_deck, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
@@ -102,19 +107,7 @@ _REQUESTED_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_
     ".sens",
     ".disto",
 }
-_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
 _MAX_INCLUDE_DEPTH = 3
-
-
-def _include_target(rest: str) -> str | None:
-    """Return the file token from an include or library directive."""
-    rest = rest.strip()
-    if not rest:
-        return None
-    if rest[0] in "\"'":
-        end = rest.find(rest[0], 1)
-        return rest[1:end] if end != -1 else None
-    return rest.split(None, 1)[0]
 
 
 @dataclass(frozen=True)
@@ -130,8 +123,57 @@ class DeckRequirements:
         return () if self.has_control else self.analyses
 
 
+#: What one file of a deck asks for, card by card: an analysis directive's head,
+#: ``.save``, a ``.control`` block, or another file it pulls in (resolved).
+_DeckItem = tuple[str, str | Path]
+
+
+def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
+    """What the file at ``path`` asks for, in card order: the deck itself when
+    ``root`` (its first line its title), else a file it pulls in. Raises
+    ``OSError`` when the file cannot be read."""
+    cards = lex_deck(read_spice_text(path), title=root).cards
+    try:
+        references = {
+            id(reference.card): reference
+            for reference in scan_include_references(
+                cards, path, depth=closure_depth(0 if root else 1)
+            )
+        }
+    except SpiceLexError:
+        references = {}  # a malformed directive: the simulator's to report
+    items: list[_DeckItem] = []
+    for card in cards:
+        if card.kind == "control":
+            items.append(("control", ""))
+            continue
+        parts = card.body.split(None, 1)
+        if card.kind != "directive" or not parts:
+            continue
+        head = parts[0].lower()
+        if head in _REQUESTED_ANALYSES:
+            items.append(("analysis", head))
+        elif head == ".save":
+            items.append(("save", ""))
+        elif (reference := references.get(id(card))) is not None:
+            items.append(("include", resolve_reference(path.parent, reference.raw_path)))
+    return tuple(items)
+
+
+#: An included file's items, kept while the file is unchanged: every case of a
+#: job pulls in the same libraries, which can run to tens of thousands of lines.
+_INCLUDED_ITEMS: FileCache[tuple[_DeckItem, ...]] = FileCache(maxsize=256)
+
+
 def deck_requirements(netlist: Path | None) -> DeckRequirements:
-    """Snapshot requested analyses, ``.save`` and ``.control`` in one walk."""
+    """Snapshot requested analyses, ``.save`` and ``.control`` in one walk.
+
+    It reads the cards the simulator reads (``spice_lex.lex_deck``): a
+    directive continued on a ``+`` line is one card, and neither the deck's
+    title nor a card after an ``.END`` counts. The files it follows are the
+    ones staging reads the deck to pull in (``scan_include_references``), so
+    a library's own ``.lib section`` line is a section, not a file.
+    """
     if netlist is None:
         return DeckRequirements()
     analyses: list[str] = []
@@ -151,28 +193,23 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             return
         seen.add(key)
         try:
-            text = read_spice_text(path)
+            items = (
+                _deck_items(path, root=True)
+                if depth == 0
+                else _INCLUDED_ITEMS.get(key, lambda _key: _deck_items(path, root=False))
+            )
         except OSError:
             return
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("."):
-                continue
-            parts = stripped.split(None, 1)
-            head = parts[0].lower()
-            if head == ".end":
-                break
-            if head == ".control":
+        for kind, value in items:
+            if kind == "control":
                 has_control = True
-            elif head in _REQUESTED_ANALYSES:
-                if head not in analyses:
-                    analyses.append(head)
-            elif head == ".save":
+            elif kind == "save":
                 has_save = True
-            elif head in _INCLUDE_DIRECTIVES and len(parts) > 1:
-                target = _include_target(parts[1])
-                if target is not None:
-                    scan(resolve_reference(path.parent, target), depth + 1)
+            elif kind == "analysis":
+                if value not in analyses:
+                    analyses.append(str(value))
+            else:
+                scan(Path(value), depth + 1)
 
     scan(netlist, 0)
     return DeckRequirements(tuple(analyses), has_save, has_control)
@@ -443,7 +480,9 @@ def collect_run_outcome(
     )
 
 
-def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
+def inject_logopinfo(
+    netlist_path: Path, simulator: type, job_id: str, *, reported: str | None = None
+) -> Path:
     """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
 
     LTspice 24 and later write each semiconductor's small-signal operating
@@ -470,7 +509,9 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
-    if ltspice_before_24(simulator):
+    # ``reported`` is the build an earlier run on this executable named
+    # (``services.reported_build_of``): an LTspice before 24 under another name.
+    if ltspice_before_24(executable_path(simulator), reported):
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path
