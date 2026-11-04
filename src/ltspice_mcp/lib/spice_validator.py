@@ -34,6 +34,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     SubcktCard,
     body_has_stray_kv_remnant,
+    probe_refs,
     read_instance,
 )
 
@@ -592,11 +593,6 @@ _TERMINAL_COUNTS: dict[str, int] = {
 # its model name as a terminal.
 _TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z"})
 
-# V(...) / I(...) probe references inside expression text on instance
-# cards (B/E/G bodies, behavioural params). Probed identifiers are
-# connections too — they feed the suppressor set, never a terminal count.
-PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
-
 
 def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
     """Split an instance view into ``(terminal tokens, other positionals)``.
@@ -754,19 +750,14 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                     continue
                 record(card.scope, node, inst.ref, card)
             suppressed.update(tok.lower() for tok in rest)
-            for probe in PROBE_REF_RE.finditer(card.body):
-                for part in probe.group(1).split(","):
-                    name = part.strip()
-                    if name:
-                        suppressed.add(name.lower())
+            # Probed identifiers in an expression (a B/E/G body, a behavioural
+            # parameter) are connections too: they feed the suppressor set,
+            # never a terminal count.
+            suppressed.update(name.lower() for probe in probe_refs(card) for name in probe.names)
         elif card.kind in ("directive", "meas"):
             # A node that exists only to be probed by a .meas/.print/.plot/.save
             # is intentional, not dangling — suppress it like instance probe refs.
-            for probe in PROBE_REF_RE.finditer(card.body):
-                for part in probe.group(1).split(","):
-                    name = part.strip()
-                    if name:
-                        suppressed.add(name.lower())
+            suppressed.update(name.lower() for probe in probe_refs(card) for name in probe.names)
 
     issues: list[dict[str, object]] = []
     for scope, nodes in occurrences.items():
@@ -885,11 +876,9 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
         # .func defines a formal-parameter expression; its V(formal) is not a node.
         if card.kind == "directive" and card.body.lstrip().lower().startswith(".func"):
             continue
-        for probe in PROBE_REF_RE.finditer(card.body):
-            kind = probe.group(0)[0].upper()  # 'V' or 'I'
-            for part in probe.group(1).split(","):
-                name = part.strip()
-                if not name or not _PLAIN_REF_RE.fullmatch(name):
+        for probe in probe_refs(card):
+            for name in probe.names:
+                if not _PLAIN_REF_RE.fullmatch(name):
                     continue
                 key = name.lower()
                 if key in known or key in seen:
@@ -900,7 +889,7 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
                         "line": card.line_start,
                         "directive": _card_directive(card),
                         "message": (
-                            f"References {kind}({name}) but no node or device named "
+                            f"References {probe.kind}({name}) but no node or device named "
                             f"'{name}' exists in the netlist."
                         ),
                         "suggestion": (

@@ -27,11 +27,16 @@ from ltspice_mcp.lib.spice_lex import (
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, MeasCard, read_instance
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    MeasCard,
+    probe_refs,
+    read_instance,
+    save_cards,
+)
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
-    PROBE_REF_RE,
     meas_functions_refused,
     meas_name_refused,
     validate_netlist_arity,
@@ -43,7 +48,6 @@ LintFinding = dict[str, Any]
 
 linter_version = "9"
 
-_SIGNAL_RE = PROBE_REF_RE
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
 _MILLI_SUFFIX_RE = re.compile(
@@ -166,21 +170,18 @@ def _save_meas_coverage(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    saves = [
-        card
-        for card in context.cards
-        if card.kind == "directive" and _directive_head(card) == ".save"
-    ]
+    saves = save_cards(context.cards)
     measurements = [card for card in context.cards if card.kind == "meas"]
     if not saves or not measurements:
         return []
-    saved_text = " ".join(card.body for card in saves)
-    if re.search(r"(?i)(?:^|\s)\.save\s+(?:all\b|\*)", saved_text):
+    if any(save.saves_all for save in saves):
         return []
-    saved = {_normalize_signal(match.group(0)) for match in _SIGNAL_RE.finditer(saved_text)}
+    # A probe is compared whole, as written: whether LTspice measures V(a,b)
+    # from a saved V(a) and V(b) is not recorded, so the pair is asked for.
+    saved = {_normalize_signal(probe.text) for save in saves for probe in save.probes}
     findings = []
     for card in measurements:
-        required = {_normalize_signal(match.group(0)) for match in _SIGNAL_RE.finditer(card.body)}
+        required = {_normalize_signal(probe.text) for probe in probe_refs(card)}
         missing = sorted(required - saved)
         if missing:
             findings.append(

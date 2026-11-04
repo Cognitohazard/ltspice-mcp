@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -173,3 +174,59 @@ def test_an_include_target_is_read_only_by_the_staging_scanner():
         and ".include" in [text for element in node.elts for text in _strings(element)]
     }
     assert head_sets == {"lib/spice_lex.py"}
+
+
+# --------------------------------------------------------------------------
+# A probe in a card is read by the lexer's views
+# --------------------------------------------------------------------------
+
+#: A pattern for a ``V(...)`` or ``I(...)`` probe: a ``[VI]`` class, or a
+#: ``v(``/``i(`` spelled out (not the end of a longer word), before an
+#: escaped parenthesis.
+_PROBE_PATTERN = re.compile(r"\[[VvIi]{2}\](?:\\s\*)?\\\(|(?:(?<![A-Za-z])|(?<=\\b))[VvIi]\\\(")
+
+#: Modules that compile a probe pattern for text that is not a deck's card.
+_PROBE_PATTERN_READERS: dict[str, str] = {
+    "lib/services.py": "the results side: a caller's signal name, read against a raw's traces",
+    "lib/decoded_raw.py": "the results side: a trace name a raw file holds",
+}
+
+_RE_FUNCTIONS = frozenset(
+    {"compile", "search", "match", "fullmatch", "finditer", "findall", "sub"}
+)
+
+
+def _probe_patterns_in(tree: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _RE_FUNCTIONS
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "re"
+        and node.args
+        and any(_PROBE_PATTERN.search(text) for text in _strings(node.args[0]))
+        for node in ast.walk(tree)
+    )
+
+
+def test_a_probe_in_a_card_is_read_only_by_the_lexer_views():
+    """``spice_lex_views.probe_refs`` reads the probes a card names, and the
+    ``.save`` view the probes it saves; a second pattern elsewhere would read
+    ``V(a,b)`` one way here and another there."""
+    readers = {
+        module
+        for module, tree in _modules().items()
+        if module != "lib/spice_lex_views.py" and _probe_patterns_in(tree)
+    }
+    assert readers == set(_PROBE_PATTERN_READERS)
+
+
+def test_the_probe_pattern_rule_catches_what_it_names():
+    caught = [
+        r're.compile(r"\b[VI]\s*\(([^()]*)\)")',
+        r're.search(r"(?i)\bv\(\w+\)", text)',
+        r're.compile(r"\s*V\(\s*(\S+)\)")',
+    ]
+    missed = [r're.compile(r"\.save\s+(all)")', r're.compile(r"(\w+)\(")']
+    assert [_probe_patterns_in(ast.parse(source)) for source in caught] == [True] * 3
+    assert [_probe_patterns_in(ast.parse(source)) for source in missed] == [False] * 2

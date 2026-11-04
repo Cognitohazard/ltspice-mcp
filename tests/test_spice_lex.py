@@ -1715,7 +1715,7 @@ class TestMeasCard:
     def test_signal_refs_extracted(self) -> None:
         card = lex(".MEAS TRAN vmax MAX V(out)\n").cards[0]
         view = MeasCard.from_card(card)
-        assert "out" in view.signal_refs
+        assert [probe.names for probe in view.signal_refs] == [("out",)]
 
     def test_function_call_with_vdb_detected(self) -> None:
         # The motivating Phase 5 case: detect vdb() inside .MEAS body.

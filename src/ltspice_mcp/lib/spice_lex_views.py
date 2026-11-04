@@ -1034,6 +1034,84 @@ class SubcktCard:
 
 
 # ---------------------------------------------------------------------------
+# Probes and .SAVE
+# ---------------------------------------------------------------------------
+
+#: A ``V(...)`` or ``I(...)`` probe in a card's text, its argument up to the
+#: first closing parenthesis. The one probe pattern for a deck's cards: every
+#: reader of the probes a card names goes through ``probe_refs``.
+PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ProbeRef:
+    """One ``V(...)`` or ``I(...)`` probe a card names.
+
+    ``text`` is the probe as written (``V(a, b)``) and ``kind`` its letter,
+    ``V`` or ``I``. ``names`` are the node or device names inside it, a node
+    pair split at its comma (``("a", "b")``), each stripped, an empty one left
+    out. A reader that compares probes as signals compares ``text``; one that
+    asks which nodes a card reaches reads ``names``.
+    """
+
+    text: str
+    kind: str
+    names: tuple[str, ...]
+
+
+def probe_refs(card: SpiceCard) -> list[ProbeRef]:
+    """Every ``V(...)``/``I(...)`` probe in a card, in order: in a ``.meas``,
+    a ``.save`` or another directive, and in an instance's expression
+    (``B1 x 0 V=V(a)*2``). Read from the lexed card, so a probe on a ``+``
+    line is found and one in a comment is not."""
+    return [
+        ProbeRef(
+            text=match.group(0),
+            kind=match.group(0)[0].upper(),
+            names=tuple(name for part in match.group(1).split(",") if (name := part.strip())),
+        )
+        for match in PROBE_REF_RE.finditer(card.body)
+    ]
+
+
+#: ``.save all`` or ``.save *``: the card saves every signal.
+_SAVES_ALL_RE = re.compile(r"(?i)(?:^|\s)\.save\s+(?:all\b|\*)")
+
+
+@dataclass
+class SaveCard:
+    """Typed view over a ``.SAVE`` directive: the probes it saves, or that it
+    saves every signal (``.save all``). Read-only."""
+
+    card: SpiceCard
+    probes: list[ProbeRef]
+    saves_all: bool
+
+    @classmethod
+    def from_card(cls, card: SpiceCard) -> SaveCard:
+        _require_kind(card, "directive")
+        if not _is_save(card):
+            raise _malformed(card, "not a .save card")
+        return cls(
+            card=card,
+            probes=probe_refs(card),
+            saves_all=_SAVES_ALL_RE.search(card.body) is not None,
+        )
+
+
+def _is_save(card: SpiceCard) -> bool:
+    tokens = tokenize_body(card.body)
+    return bool(tokens) and tokens[0].text.casefold() == ".save"
+
+
+def save_cards(cards: Sequence[SpiceCard]) -> list[SaveCard]:
+    """The ``.save`` directives in ``cards``, each as a ``SaveCard``."""
+    return [
+        SaveCard.from_card(card) for card in cards if card.kind == "directive" and _is_save(card)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # .MEAS
 # ---------------------------------------------------------------------------
 
@@ -1056,9 +1134,9 @@ class MeasCard:
     """Typed view over a ``.MEAS [analysis] NAME ...`` directive.
 
     Exposes its body as classified tokens (``body_tokens``) plus
-    pre-extracted ``function_calls`` and ``signal_refs`` so callers
-    (esp. ``spice_validator``) can run semantic checks without
-    re-parsing characters. Read-only.
+    pre-extracted ``function_calls`` and ``signal_refs`` (the card's probes,
+    as ``probe_refs`` reads them) so callers (esp. ``spice_validator``) can
+    run semantic checks without re-parsing characters. Read-only.
     """
 
     card: SpiceCard
@@ -1066,7 +1144,7 @@ class MeasCard:
     name: str
     body_tokens: list[Token]
     function_calls: list[FunctionCall]
-    signal_refs: list[str]
+    signal_refs: list[ProbeRef]
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard:
@@ -1091,8 +1169,7 @@ class MeasCard:
         # Recurses into PARENED args so nested calls are also surfaced
         # (``mag(V(out))`` reports both ``mag`` and ``V``).
         function_calls: list[FunctionCall] = []
-        signal_refs: list[str] = []
-        _collect_function_calls(body_tokens, function_calls, signal_refs)
+        _collect_function_calls(body_tokens, function_calls)
 
         return cls(
             card=card,
@@ -1100,7 +1177,7 @@ class MeasCard:
             name=meas_name,
             body_tokens=body_tokens,
             function_calls=function_calls,
-            signal_refs=signal_refs,
+            signal_refs=probe_refs(card),
         )
 
 
@@ -1210,7 +1287,6 @@ _CALL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 def _collect_function_calls(
     tokens: Sequence[Token],
     out_calls: list[FunctionCall],
-    out_signal_refs: list[str],
 ) -> None:
     """Walk ``tokens`` and append any ``BARE PARENED`` function calls.
 
@@ -1233,11 +1309,7 @@ def _collect_function_calls(
             and nxt.kind == TokenKind.PARENED
             and (called := _CALL_NAME_RE.search(t.text))
         ):
-            name = called.group(0)
-            args = nxt.text[1:-1]
-            out_calls.append(FunctionCall(name=name, args_text=args))
-            if name.lower() in ("v", "i"):
-                out_signal_refs.append(args.strip())
+            out_calls.append(FunctionCall(name=called.group(0), args_text=nxt.text[1:-1]))
         # Recurse into PARENED / BRACED contents and into a key=value's value.
         if t.kind in (TokenKind.PARENED, TokenKind.BRACED):
             inner_text = t.text[1:-1]
@@ -1249,4 +1321,4 @@ def _collect_function_calls(
             inner_tokens = tokenize_body(inner_text)
         except SpiceLexError:
             continue
-        _collect_function_calls(inner_tokens, out_calls, out_signal_refs)
+        _collect_function_calls(inner_tokens, out_calls)

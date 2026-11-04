@@ -179,18 +179,35 @@ class SubcktCard:          # .SUBCKT opener
 
 class MeasCard:            # .MEAS — read/validated, rarely rewritten
     function_calls: list[FunctionCall]
-    signal_refs: list[str]
+    signal_refs: list[ProbeRef]      # the probes it reads (probe_refs)
     analysis: MeasAnalysis | None    # tran/ac/dc/op
     def set_label(self, new_name) -> None: ...
     def set_analysis(self, kind) -> None: ...
+
+class ProbeRef:            # one V(...) / I(...) a card names
+    text: str              # as written: "V(a, b)"
+    kind: str              # "V" or "I"
+    names: tuple[str, ...] # ("a", "b"): a node pair split at its comma
+
+class SaveCard:            # .SAVE — the probes it saves
+    probes: list[ProbeRef]
+    saves_all: bool        # .save all / .save *
 ```
 
 `MeasCard` gives `spice_validator` the function calls in a `.MEAS` body
-(`function_calls`, which its `vdb_in_meas` rule checks for `vdb()`) and
-the signals the body reads (`signal_refs`, which no rule reads),
+(`function_calls`, which its `vdb_in_meas` rule checks for `vdb()`)
 without substring matching. It walks Layer 3's classified tokens in
 `body_tokens`, where a `BARE` token immediately followed by a `PARENED`
 token is a function call.
+
+`probe_refs(card)` is the one reading of the `V(...)`/`I(...)` probes a
+card names, in a directive or in an instance's expression; `MeasCard`'s
+`signal_refs` and `SaveCard`'s `probes` are its answer. A reader that
+compares probes as signals compares `text`, as the linter's
+`save-meas-coverage` rule does: whether LTspice measures `V(a,b)` from a
+saved `V(a)` and `V(b)` is not recorded. A reader that asks which nodes a
+card reaches reads `names`, as the validator's dangling-node and
+undefined-reference checks do.
 
 `ELEMENT_SPECS` has one entry for each of M/Q/J/X/F/H/R/C/L/V/I/B/E/G/K.
 Each entry gives the minimum node count and says how to read the last
@@ -501,7 +518,7 @@ class SubcktCard:
 
 class MeasCard:
     function_calls: list[FunctionCall]
-    signal_refs: list[str]
+    signal_refs: list[ProbeRef]
     analysis: MeasAnalysis | None
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard: ...
@@ -514,6 +531,8 @@ def iter_models(cards, scope=None) -> Iterator[ModelCard]: ...
 def iter_instances(cards, prefix=None) -> Iterator[InstanceLine]: ...
 def find_model(cards, name, scope=()) -> ModelCard | None: ...
 def instances_by_ref(cards, *, scope=None) -> dict[str, SpiceCard]: ...  # scope=() is the top level
+def probe_refs(card) -> list[ProbeRef]: ...  # every V(...)/I(...) a card names
+def save_cards(cards) -> list[SaveCard]: ...
 def body_has_stray_kv_remnant(body: str) -> bool: ...
 
 # lib/spice_lex_ops.py — cross-card transformations
