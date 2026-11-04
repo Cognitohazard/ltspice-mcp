@@ -11,6 +11,7 @@ import re
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -181,10 +182,61 @@ _NGSPICE_TITLE_PSEUDO_MEAS = "circuit"
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
 # RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
 _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
-# Value capture stops at whitespace/comma AND at the trailing degree symbol
-# LTspice writes for ``.step temp=-40°``. Without the ``°`` exclusion the
-# captured value is ``-40°``, which downstream value-parsing rejects.
-_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s°]+)")
+# A value runs to the next comma or space. A stepped temperature carries its
+# unit after the number: LTspice 24 and later write ``.step temp=-40°``,
+# LTspice XVII ``.step temp=-40°C``.
+_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
+
+
+@dataclass(frozen=True)
+class StepParameter:
+    """One stepped value of a ``.step`` line: its name, the token as printed,
+    and the number it reads as (a temperature's unit left off), or None for a
+    token that is not a number."""
+
+    name: str
+    token: str
+    number: float | None
+
+
+@dataclass(frozen=True)
+class StepLine:
+    """The stepped values one ``.step`` line of a log names, and whether the
+    line holds anything but ``name=value`` pairs."""
+
+    parameters: tuple[StepParameter, ...]
+    only_parameters: bool
+
+
+def read_step_line(line: str) -> StepLine | None:
+    """A log line's ``.step`` values, or None for a line that is not a
+    ``.step`` line. The one reading of the line, for the log's own step rows
+    and for the steps of the raw beside it."""
+    match = _RE_STEP_LINE.match(line.strip())
+    if match is None:
+        return None
+    parameters = []
+    for pair in _RE_STEP_KV.finditer(match[1]):
+        token = pair[2]
+        try:
+            number: float | None = float(token.partition("°")[0])
+        except ValueError:
+            number = None
+        parameters.append(StepParameter(pair[1], token, number))
+    rest = _RE_STEP_KV.sub("", match[1]).strip(" \t,")
+    return StepLine(tuple(parameters), not rest)
+
+
+def _step_row(line: str) -> dict[str, float] | None:
+    """The numbers a ``.step`` line names, by parameter; None for any other
+    line or one that names no number."""
+    step = read_step_line(line)
+    if step is None:
+        return None
+    row = {p.name: p.number for p in step.parameters if p.number is not None}
+    return row or None
+
+
 # Stepped ``.op`` runs don't write ``.step name=val`` markers. LTspice 24 and
 # later log one of these per step instead, and counting them is the only sign
 # in the log that the bias point ran more than once. LTspice XVII words the
@@ -504,20 +556,11 @@ def parse_step_iterations(
     LTspice always writes already-evaluated floats, so this only matters
     for hand-crafted test fixtures.
     """
-    iterations: list[dict[str, float]] = []
-    for line in _resolve_log_text(log_path, text).splitlines():
-        m = _RE_STEP_LINE.match(line.strip())
-        if not m:
-            continue
-        params: dict[str, float] = {}
-        for kv in _RE_STEP_KV.finditer(m.group(1)):
-            try:
-                params[kv.group(1)] = float(kv.group(2))
-            except ValueError:
-                continue
-        if params:
-            iterations.append(params)
-    return iterations
+    return [
+        row
+        for line in _resolve_log_text(log_path, text).splitlines()
+        if (row := _step_row(line)) is not None
+    ]
 
 
 def count_op_iterations(log_path: Path | None = None, *, text: str | None = None) -> int:
@@ -554,18 +597,8 @@ def scan_op_step_log(
     for line in _resolve_log_text(log_path, text).splitlines():
         if _RE_OP_SOLVE_ATTEMPT.match(line):
             op_solve_count += 1
-            continue
-        m = _RE_STEP_LINE.match(line.strip())
-        if not m:
-            continue
-        params: dict[str, float] = {}
-        for kv in _RE_STEP_KV.finditer(m.group(1)):
-            try:
-                params[kv.group(1)] = float(kv.group(2))
-            except ValueError:
-                continue
-        if params:
-            iterations.append(params)
+        elif (row := _step_row(line)) is not None:
+            iterations.append(row)
     return iterations, op_solve_count
 
 

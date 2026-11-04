@@ -148,20 +148,18 @@ def _temperatures(text: str) -> dict[str, float | None]:
 def _steps(text: str) -> list[dict[str, float]]:
     markers = 0
     for line in io.StringIO(text):
-        match = log_parser._RE_STEP_LINE.match(line.strip())  # pyright: ignore[reportPrivateUsage]
-        if match is None:
+        step = log_parser.read_step_line(line)
+        if step is None:
             continue
         markers += 1
         seen: set[str] = set()
-        for parameter in log_parser._RE_STEP_KV.finditer(match[1]):  # pyright: ignore[reportPrivateUsage]
-            name = parameter[1].casefold()
+        for parameter in step.parameters:
+            name = parameter.name.casefold()
             if name in seen:
-                raise LogDecodeError(f"Duplicate step parameter {parameter[1]!r}")
+                raise LogDecodeError(f"Duplicate step parameter {parameter.name!r}")
             seen.add(name)
-            try:
-                float(parameter[2])
-            except ValueError as exc:
-                raise LogDecodeError("Step parameter is not numeric") from exc
+            if parameter.number is None:
+                raise LogDecodeError("Step parameter is not numeric")
     rows = log_parser.parse_step_iterations(text=text)
     if len(rows) != markers:
         raise LogDecodeError("Step rows were not completely decoded")
@@ -228,7 +226,9 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
     )
     _, attempts = log_parser.scan_op_step_log(text=body)
     sections["steps"] = _section(
-        lambda: _steps(body), limits, present=bool(re.search(r"^\s*\.step\s+", body, re.M | re.I))
+        lambda: _steps(body),
+        limits,
+        present=any(log_parser.read_step_line(line) for line in io.StringIO(body)),
     )
     sections["op_iterations"] = _section(
         lambda: {"attempts": attempts, "succeeded": log_parser.count_op_iterations(text=body)},
