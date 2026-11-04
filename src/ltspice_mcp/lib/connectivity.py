@@ -27,18 +27,14 @@ Labels that share a name are one node as well, without any wire between them.
 Names that differ only in case are one name (the ``node-name-case``
 recording), and a ``GND`` label, in any case, is ground as ``0`` is (the
 ``gnd_label`` recordings); ``name_key`` is the one form names are compared in.
-The partition does not apply that: it is wiring only, because a caller often
-needs to tell the two apart (a wire that would join two *named* nets is a
-short, two labels of one name are not). ``label_folded_nets`` applies it on
-top, and ``signature`` reduces a sheet to the pin groups and names a netlist
-would show, so two drawings of one circuit compare equal.
-
-``partition`` (with :class:`NetPartition`, ``label_folded_nets``,
-``NamedNets`` and ``net_members``) groups the same points by coordinate. It
-cannot hold two of the rules, the wire LTspice leaves out between two pins of
-one part when nothing else is on it and the pins of one part that share a
-point, and is kept only until its readers move to ``nets_by_ltspice``. New code
-reads ``Nets``.
+A ``Nets`` net is wiring only, because a caller often needs to tell the two
+apart (a wire that would join two *named* nets is a short, two labels of one
+name are not); ``Nets.folded`` applies the names on top. :class:`NamedNets`
+reads a sheet's nets folded, with the names each carries, for every reader
+that asks which pins or labels are one node or what a point would join
+(``named_nets`` builds one from a sheet's parts, labels and wires), and
+``signature`` reduces a sheet to the pin groups and names a netlist would
+show, so two drawings of one circuit compare equal.
 
 Nothing here reads a file or a symbol, and nothing depends on the event loop.
 """
@@ -59,7 +55,6 @@ from ltspice_mcp.lib.nets import (
     Point,
     Segment,
     SegmentIndex,
-    fold_by_name,
     point_on_segment,
 )
 
@@ -99,45 +94,6 @@ def crossing_points(segments: Iterable[Segment]) -> list[Point]:
             if min(hx1, hx2) < x < max(hx1, hx2) and min(vy1, vy2) < y < max(vy1, vy2):
                 points[(x, y)] = None
     return list(points)
-
-
-class NetPartition(NamedTuple):
-    """Connected-component view of a schematic's nets.
-
-    ``root`` maps any interest coordinate to its net's canonical
-    representative; ``members`` maps a root to every coordinate on that net;
-    ``pin_owners`` maps a coordinate to the ``(ref, pin_name)`` pairs sitting
-    there; ``label_texts`` maps a coordinate to the FLAG texts placed there.
-    """
-
-    root: Callable[[Point], Point]
-    members: dict[Point, set[Point]]
-    pin_owners: dict[Point, list[tuple[str, str]]]
-    label_texts: dict[Point, set[str]]
-
-
-def partition(
-    pins: Iterable[tuple[Point, tuple[str, str]]],
-    labels: Iterable[tuple[Point, str]],
-    segments: Iterable[Segment],
-) -> NetPartition:
-    """Group pins, labels and wire ends by the wiring that joins them.
-
-    ``pins`` are ``(coordinate, (reference, pin name))``, ``labels`` are
-    ``(coordinate, text)`` and ``segments`` are wires as two points each; a
-    caller checking a route it has not drawn yet lists its segments with the
-    sheet's own.
-
-    The work is in finding which points lie on which wire (:func:`_join`).
-    """
-    pin_owners: dict[Point, list[tuple[str, str]]] = {}
-    for coord, owner in pins:
-        pin_owners.setdefault(coord, []).append(owner)
-    label_texts: dict[Point, set[str]] = {}
-    for coord, text in labels:
-        label_texts.setdefault(coord, set()).add(text)
-    find, members = _join([*pin_owners, *label_texts], list(segments))
-    return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
 
 
 def _join(
@@ -214,7 +170,7 @@ def _join(
 
 
 #: The name of ground. A ground flag is a label like any other to the
-#: partition, and no name at all when asking whether two *named* nets are joined.
+#: wiring, and no name at all when asking whether two *named* nets are joined.
 GROUND = "0"
 
 
@@ -258,31 +214,6 @@ def named_labels(labels: Iterable[str]) -> set[str]:
     return {label for label in labels if not is_ground(label)}
 
 
-def label_folded_nets(part: NetPartition) -> Callable[[Point], Point]:
-    """Map a coordinate to its electrical net's representative.
-
-    The partition connects by wire only; LTspice also makes every FLAG with the
-    same name one node, so wired nets that share a label name fold into one
-    here, names compared as :func:`name_key` has them. Two coordinates are on
-    the same netlist node iff this returns the same representative for both.
-    """
-    find = fold_by_name(
-        (
-            (root, text)
-            for root, coords in part.members.items()
-            for coord in coords
-            for text in part.label_texts.get(coord, ())
-        ),
-        name_key,
-    )
-    return lambda coord: find(part.root(coord))
-
-
-def net_members(part: NetPartition, net_of: Callable[[Point], Point], net: Point) -> set[Point]:
-    """Every pin, label and wire-end coordinate on ``net``, a ``net_of`` value."""
-    return {c for root, coords in part.members.items() if net_of(root) == net for c in coords}
-
-
 class Joined(NamedTuple):
     """What a pin or a label put on a point of a sheet would make one node."""
 
@@ -295,45 +226,101 @@ class Joined(NamedTuple):
 
 
 class NamedNets:
-    """A sheet's nets with the names each carries, for asking what a point would join.
+    """A sheet's nets as LTspice netlists them (:class:`Nets`), each with the names it carries.
 
-    Made once from a partition of the sheet as it is, without the thing about
-    to be placed; ``joined_at`` is then asked of each point. Nets are the
-    label-folded ones, so nets that share a name, in any case, and nets that
-    each carry a ground flag, are already one net here. A net's names are as
-    the sheet spells them, two spellings of one name included.
+    A net here is a folded one (``Nets.folded``): nets that share a name, in
+    any case, and nets that each carry a ground flag, are one net. A net's
+    names are as the sheet spells them, two spellings of one name included.
+    Made of the sheet as it is, without anything about to be placed;
+    ``joined_at`` then asks what something put on a point would make one node.
     """
 
-    def __init__(self, part: NetPartition) -> None:
-        self._net_of = label_folded_nets(part)
-        self._names: dict[Point, set[str]] = defaultdict(set)
+    def __init__(self, nets: Nets) -> None:
+        self.nets = nets
+        self._texts: dict[int, set[str]] = defaultdict(set)
         #: The one net each name is on, by its key: labels of one key are one net.
-        self._net_named: dict[str, Point] = {}
-        for coord, texts in part.label_texts.items():
-            net = self._net_of(coord)
-            self._names[net].update(named_labels(texts))
-            for key in name_keys(texts):
-                self._net_named[key] = net
+        self._net_named: dict[str, int] = {}
+        for label in nets.labels:
+            net = self.of_label(label)
+            self._texts[net].add(label.text)
+            self._net_named[nets.name_key(label.text)] = net
 
-    def net_named(self, name: str) -> Point | None:
+    @property
+    def pins(self) -> tuple[PinAt, ...]:
+        """The sheet's pins, each part's in SpiceOrder."""
+        return self.nets.pins
+
+    @property
+    def labels(self) -> tuple[LabelAt, ...]:
+        """The sheet's labels, ground flags among them."""
+        return self.nets.labels
+
+    def of_pin(self, pin: PinAt) -> int:
+        """The net ``pin`` is on."""
+        return self.nets.folded(self.nets.of_pin(pin))
+
+    def of_label(self, label: LabelAt) -> int:
+        """The net ``label`` is on."""
+        return self.nets.folded(self.nets.of_label(label))
+
+    def at(self, point: Point) -> frozenset[int]:
+        """Every net something put on ``point`` would be one node with
+        (``Nets.touched_at``); none for a point nothing is on."""
+        return frozenset(self.nets.folded(net) for net in self.nets.touched_at(point))
+
+    def wired_at(self, point: Point) -> tuple[frozenset[int], ...]:
+        """The nets each run of wire through ``point`` puts it on
+        (``Nets.runs_through``): more than one run of separate nets where wires
+        cross and nothing has joined them."""
+        return tuple(
+            frozenset(self.nets.folded(net) for net in nets)
+            for _run, nets in self.nets.runs_through(point)
+        )
+
+    def along(self, point: Point, wire: Segment) -> frozenset[int]:
+        """The nets the run of wire that ``wire`` is drawn in puts ``point`` on:
+        those of each run through the point that lies on the wire's line."""
+        (x1, y1), (x2, y2) = wire
+        return frozenset(
+            self.nets.folded(net)
+            for ((ax, ay), (bx, by)), nets in self.nets.runs_through(point)
+            if (x2 - x1) * (by - ay) == (y2 - y1) * (bx - ax)
+            and (x2 - x1) * (ay - y1) == (y2 - y1) * (ax - x1)
+            for net in nets
+        )
+
+    def texts(self, net: int) -> frozenset[str]:
+        """The text of every label on ``net``, ground flags among them."""
+        return frozenset(self._texts.get(net, ()))
+
+    def names(self, net: int) -> frozenset[str]:
+        """The names ``net`` carries: its labels' texts, ground left out."""
+        return frozenset(named_labels(self._texts.get(net, ())))
+
+    def net_named(self, name: str) -> int | None:
         """The net a label of ``name`` is on, in any case; None if no label carries it."""
-        return self._net_named.get(name_key(name))
+        return self._net_named.get(self.nets.name_key(name))
 
-    def joined_at(
-        self,
-        on_wires: Iterable[Point],
-        at: Point | None = None,
-        name: str | None = None,
-    ) -> Joined:
-        """What something put on a point would make one node.
+    def pins_on(self, net: int) -> list[PinAt]:
+        """The pins on ``net``, in the sheet's order."""
+        return [pin for pin in self.pins if self.of_pin(pin) == net]
 
-        ``on_wires`` is a point of each wire the place lies on. A pin or a label
-        there joins every one of them, both wires where two cross (the
-        ``pin_at_crossing`` and ``label_at_crossing`` recordings).
+    def labels_on(self, net: int) -> list[LabelAt]:
+        """The labels on ``net``, in the sheet's order."""
+        return [label for label in self.labels if self.of_label(label) == net]
 
-        ``at`` is the place itself, given when what already sits there is
-        joined too: a label is one node with a pin or a label on its point. A
-        place the sheet has nothing on reads as an unnamed net of its own.
+    def joined_at(self, point: Point, *, landing: bool = False, name: str | None = None) -> Joined:
+        """What something put on ``point`` would make one node.
+
+        It joins every run of wire through the point, both wires where two
+        cross (the ``pin_at_crossing`` and ``label_at_crossing`` recordings),
+        and keeps a run LTspice would drop between two pins of one part,
+        joining the two (``same_instance_label_inside`` and
+        ``same_instance_pin_inside``).
+
+        ``landing`` joins what already sits on the point too: a label is one
+        node with a pin or a label on its point. A part's pin is asked without
+        it.
 
         ``name`` is a net name the thing carries, which makes it one node with
         every net already of that name, in any case. Ground is not given as
@@ -341,14 +328,35 @@ class NamedNets:
         with a name may be grounded whatever else is: that is what a ground
         flag is for, and no join of the flag's own making.
         """
-        wired = {self._net_of(point) for point in on_wires}
+        wired: set[int] = set().union(*self.wired_at(point))
         nets = set(wired)
-        if at is not None:
-            nets.add(self._net_of(at))
-        if name is not None and (named_net := self._net_named.get(name_key(name))) is not None:
+        if landing:
+            nets |= self.at(point)
+        if name is not None and (named_net := self.net_named(name)) is not None:
             nets.add(named_net)
-        named = tuple(frozenset(self._names[net]) for net in sorted(nets) if self._names[net])
+        named = tuple(self.names(net) for net in sorted(nets) if self.names(net))
         return Joined(named, len(wired))
+
+
+def named_nets(
+    parts: Iterable[tuple[str, Iterable[tuple[str, Point]]]],
+    labels: Iterable[tuple[Point, str]],
+    wires: Iterable[Segment],
+) -> NamedNets:
+    """The nets LTspice makes of a sheet (:func:`nets_by_ltspice`), named.
+
+    ``parts`` gives each part's reference and its pins in SpiceOrder, as
+    ``(name, point)``; a part is told from the others by its place among
+    them, two that share a reference included. ``labels`` are ``(point,
+    text)``, ground flags among them, and ``wires`` two points each.
+    """
+    pins = [
+        PinAt(point, index, order, reference, name)
+        for index, (reference, its_pins) in enumerate(parts)
+        for order, (name, point) in enumerate(its_pins)
+    ]
+    marks = [LabelAt(point, index, text) for index, (point, text) in enumerate(labels)]
+    return NamedNets(nets_by_ltspice(pins, marks, list(wires)))
 
 
 def _merge_collinear_runs(
@@ -456,9 +464,8 @@ def same_instance_dropped_segments(
     Returns one dict per dropped run with ``segment`` (the merged ``(x1, y1, x2,
     y2)`` tuple), ``ref`` (the shared instance), and ``pins`` (the two pin
     names on that instance), ordered deterministically. ``pin_owners`` maps each
-    pin coordinate to its ``(ref, pin_name)`` owners, as
-    ``NetPartition.pin_owners`` holds it, and ``labels`` are the points of the
-    sheet's labels, ground flags among them.
+    pin coordinate to its ``(ref, pin_name)`` owners, and ``labels`` are the
+    points of the sheet's labels, ground flags among them.
     """
     return _runs_and_drops(segments, pin_owners, labels)[1]
 
@@ -518,9 +525,10 @@ def signature(
 
     Two sheets with equal signatures connect the same pins and name the same
     nets, wherever their parts and wires are drawn, so an edit meant to change
-    only the drawing can be checked by comparing the two. The arguments are
-    those of :func:`partition`, with each part's pins listed in SpiceOrder,
-    as a symbol gives them.
+    only the drawing can be checked by comparing the two. ``pins`` are
+    ``(point, (reference, pin name))``, each part's listed in SpiceOrder, as a
+    symbol gives them; ``labels`` are ``(point, text)`` and ``segments`` wires
+    as two points each.
     """
     parts: dict[str, int] = {}
     placed = [
@@ -571,7 +579,7 @@ def nets_by_ltspice(
         point: net for net, root in enumerate(sorted(members)) for point in members[root]
     }
     fresh = itertools.count(len(members))
-    pin_nets: dict[PinAt, int] = {}
+    by_point: dict[PinAt, int] = {}
     for point, here in pins_at.items():
         last: dict[int, PinAt] = {}
         if len(here) > 1 and point not in labelled and len(members[find(point)]) == 1:
@@ -580,7 +588,8 @@ def nets_by_ltspice(
             last = {pin.part: pin for pin in sorted(here, key=lambda one: one.order)}
         for pin in here:
             alone = bool(last) and last[pin.part] is not pin
-            pin_nets[pin] = next(fresh) if alone else point_nets[point]
+            by_point[pin] = next(fresh) if alone else point_nets[point]
+    pin_nets = {pin: by_point[pin] for pin in pins}
 
     def end(point: Point, part: int, name: str) -> PinAt:
         return next(pin for pin in pins_at[point] if pin.part == part and pin.name == name)

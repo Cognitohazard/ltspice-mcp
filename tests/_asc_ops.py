@@ -30,9 +30,10 @@ DIVIDER_OPS: list[dict[str, Any]] = [
     },
     {"op": "add_net_label", "net": "vout", "pin": "R1.2"},
 ]
-#: A divider deck, and one wired otherwise, to compare a built sheet with.
-DIVIDER_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
-DIVIDER_DECK_REWIRED = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
+#: A divider deck, and one wired otherwise, to compare a built sheet with,
+#: each led by the title line an LTspice export writes and a deck reader skips.
+DIVIDER_DECK = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
+DIVIDER_DECK_REWIRED = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
 
 
 def sha_of(path: Path) -> str:

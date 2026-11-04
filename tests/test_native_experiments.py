@@ -128,7 +128,7 @@ async def test_native_modes_use_pinned_models_and_match_direct_run(native_state,
     assert run.returncode == 0, run.stderr
     assert _values(case.raw_file) == values
     case.raw_file.write_bytes(original)
-    loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+    loaded = experiment_store.load_job(job.job_id, work_dir)
     assert loaded is not None
     assert loaded.cases[0].native_statistics == record
     public = await handle_jobs(
@@ -353,7 +353,7 @@ async def test_cancelled_native_case_keeps_preparation_without_claiming_submissi
     assert case.native_statistics.prepared is not None
     assert case.submitted_at is None
     assert case.raw_file is None
-    loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+    loaded = experiment_store.load_job(job.job_id, work_dir)
     assert loaded is not None
     assert loaded.cases[0].native_statistics == case.native_statistics
     assert loaded.cases[0].submitted_at is None

@@ -31,6 +31,21 @@ def _anchor(path: Path, base: Path | None) -> Path:
     return path if base is None or path.is_absolute() else base / path
 
 
+def relative_base(allowed_dirs: Sequence[Path] | None, relative_to: Path | None) -> Path | None:
+    """The directory a relative path is taken from: the host's declared base
+    (``relative_paths_from``) when there is one, else the first allowed
+    directory, else ``relative_to``.
+
+    The one rule for it, so resolving a relative path, listing the files a
+    relative name can reach and telling a caller where relatives go all name
+    the same directory.
+    """
+    base = _relative_base.get()
+    if base is not None:
+        return base
+    return allowed_dirs[0] if allowed_dirs else relative_to
+
+
 def with_roots(allowed_dirs: Sequence[Path] | None, extra: Iterable[Path]) -> list[Path] | None:
     """``allowed_dirs`` and ``extra`` together. ``None``, no sandbox, stays
     ``None``: a directory added to a sandbox must never create one."""
@@ -81,10 +96,7 @@ def resolve_safe_path(
         raise PathSecurityError(f"Failed to resolve path {user_path!r}: embedded null byte")
 
     base = _relative_base.get()
-    path = _anchor(
-        Path(user_path),
-        base if base is not None else allowed_dirs[0] if allowed_dirs else relative_to,
-    )
+    path = _anchor(Path(user_path), relative_base(allowed_dirs, relative_to))
 
     # Resolve symlinks and normalize (strict=False allows non-existent files).
     # ValueError covers an embedded NUL byte ("embedded null byte"), which

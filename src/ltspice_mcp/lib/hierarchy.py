@@ -27,7 +27,6 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
-from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import (
     Environment,
     NumericFact,
@@ -40,7 +39,7 @@ from ltspice_mcp.lib.spice_lex import (
     Token,
     TokenKind,
     find_matching_ends,
-    lex,
+    lex_deck,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
@@ -274,16 +273,10 @@ def param_assignments(card: SpiceCard) -> dict[str, str]:
 
 
 def parse_hierarchy_cards(content: bytes, *, root: bool) -> list[SpiceCard]:
-    text = decode_spice_bytes(content)
-    if root:
-        # Root decks begin with a title; included fragments begin with a card.
-        # Replace before lexing so a title cannot change scope or terminate input.
-        lines = text.splitlines(keepends=True)
-        text = "* hierarchy root title\n" + "".join(lines[1:])
-    parsed = lex(text)
+    # Root decks begin with a title; included fragments begin with a card.
     # Explicit validation below handles active boundaries, including definitions
     # whose body includes another file. Inactive sections cannot poison a read.
-    return [card for card in parsed.cards if not card.trailing]
+    return lex_deck(decode_spice_bytes(content), title=root).cards
 
 
 def walk_active(
@@ -474,17 +467,13 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     for item in body:
         if item.card.kind != "model":
             continue
-        params = _assignments(item.card)
+        _assignments(item.card)  # refuses a parameter the card gives twice
         model = ModelCard.from_card(item.card)
         key = model.name.casefold()
         if key in models:
             raise NetlistError(f"duplicate active model {model.name}")
-        try:
-            level = parse_spice_value(params["level"]) if "level" in params else None
-        except ValueError:
-            level = None
         models[key] = ModelDefinition(
-            model.name, replace(item.source, definition=enclosing), item.card.body, level
+            model.name, replace(item.source, definition=enclosing), item.card.body, model.level
         )
     return models
 

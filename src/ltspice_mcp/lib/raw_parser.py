@@ -29,11 +29,19 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import NoAxisError
 from ltspice_mcp.lib import atomic_write
-from ltspice_mcp.lib.decoded_log import DecodedLog, LogSectionName
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_log import DecodedLog
+from ltspice_mcp.lib.decoded_raw import (
+    DecodedPlot,
+    DecodedRaw,
+    RawData,
+    deck_time,
+    time_offset,
+)
 from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
+from ltspice_mcp.lib.log_types import LogSectionName
+from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
 
@@ -209,21 +217,6 @@ def _install_multiplot_ascii_guard() -> None:
 _install_multiplot_ascii_guard()
 
 
-def _transient_offset(plotname: object, offset: object) -> float:
-    """Where a windowed transient's stored time axis starts, in deck time.
-
-    LTspice stores ``.tran 0 <tstop> <tstart>`` output from 0 with the true
-    start in the header's ``Offset:`` field. Other analyses' axes are not time,
-    and an unwindowed run writes ``Offset: 0``, so both read as 0 here.
-    """
-    if plot_analysis(str(plotname or ""), "") != "transient":
-        return 0.0
-    try:
-        return float(str(offset or 0).strip())
-    except ValueError:
-        return 0.0
-
-
 class OffsetAwareRawRead(RawRead):
     """RawRead that rebases a windowed-transient time axis to deck time.
 
@@ -241,9 +234,24 @@ class OffsetAwareRawRead(RawRead):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.time_offset = _transient_offset(
-            self.raw_params.get("Plotname"), self.raw_params.get("Offset")
-        )
+        # The decoder's reading of the field (decoded_raw.time_offset), where
+        # an Offset that is not a finite number leaves the axis as stored.
+        first_type = ""
+        if self.has_axis:
+            with contextlib.suppress(*_RAW_ACCESS_ERRORS):
+                first_type = str(self.get_trace(0).whattype or "")
+        offset = self.raw_params.get("Offset")
+        try:
+            self.time_offset = (
+                time_offset(
+                    str(self.raw_params.get("Plotname") or ""),
+                    first_type,
+                    None if offset is None else str(offset),
+                )
+                or 0.0
+            )
+        except ValueError:
+            self.time_offset = 0.0
 
     def get_axis(self, step: int = 0):
         axis = super().get_axis(step)
@@ -378,32 +386,6 @@ def nearest_index(axis: np.ndarray, target: float) -> int:
     if n > 1 and axis[0] > axis[-1]:
         return n - 1 - _nearest_ascending(axis[::-1], target)
     return _nearest_ascending(axis, target)
-
-
-# whattype is spicelib's verbatim per-trace ``var_type`` from the raw header's
-# variable list (the simulator's own declaration). Map the known SPICE types to
-# an SI unit; an unknown type yields None rather than a wrong guess. The raw
-# trace name is always shown regardless — this only *adds* a unit when the
-# simulator stated the type, so it never invents one from a parameter name.
-_WHATTYPE_UNIT = {
-    "voltage": "V",
-    "current": "A",
-    "device_current": "A",
-    "time": "s",
-    "frequency": "Hz",
-    "hertz": "Hz",
-    "admittance": "S",
-    "impedance": "Ω",
-    "capacitance": "F",
-}
-
-
-def whattype_unit(whattype: str | None) -> str | None:
-    """SI unit for a spicelib ``whattype`` string, or None if it is not a
-    known SPICE type. Pure string lookup — no raw access."""
-    if not whattype:
-        return None
-    return _WHATTYPE_UNIT.get(whattype.strip().lower())
 
 
 def declared_type(raw: RawData, name: str) -> str | None:
@@ -707,6 +689,25 @@ def _raw_node_data_is_finite(raw: RawData, trace_names: list[str], step: int) ->
 _SIGNALS_STRUCTURED_CAP = 100
 
 
+def _step_temperature(
+    raw: DecodedRaw | DecodedPlot, step: int, logs: DecodedLog
+) -> tuple[bool, float | None]:
+    """Whether the run steps its temperature, and the temperature of ``step``
+    when the run names it: from the step's own values, which the raw or the
+    log's ``.step`` lines hold."""
+    steps = raw.descriptor.steps
+    log_steps = logs.section("steps")["value"] or []
+    stepped = any(STEPPED_TEMPERATURE in dict(row.parameters) for row in steps) or any(
+        STEPPED_TEMPERATURE in row for row in log_steps
+    )
+    if not stepped or not 0 <= step < len(steps):
+        return stepped, None
+    value = dict(steps[step].parameters).get(STEPPED_TEMPERATURE)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return True, float(value)
+    return True, None
+
+
 def build_simulation_summary(
     raw: DecodedRaw | DecodedPlot,
     logs: DecodedLog | None,
@@ -831,6 +832,13 @@ def build_simulation_summary(
             for name in ("temp_c", "tnom_c"):
                 if temperatures[name] is not None:
                     summary[name] = temperatures[name]
+        stepped, temperature = _step_temperature(raw, step, logs)
+        if stepped:
+            # The header holds one step's temperature (parse_temperatures),
+            # never the step summarised here unless by chance.
+            summary.pop("temp_c", None)
+            if temperature is not None:
+                summary["temp_c"] = temperature
 
         meas_data = section_value("measurements", "measurements")
         if meas_data is not None:
@@ -1236,13 +1244,17 @@ def _int_field(fields: dict[str, str], key: str) -> int:
 
 
 def _raw_writer(fields: dict[str, str], width: int, dialect: str | None) -> str:
-    """The simulator that wrote a plot, from its header before any hint."""
-    command = fields.get("command", "").lower()
-    writer = None
-    # spicelib's order, where a later match wins.
-    for name in ("ltspice", "qspice", "ngspice", "xyce"):
-        if name in command:
-            writer = name
+    """The simulator that wrote a plot, from its header before any hint.
+
+    The ``Command`` field is read as the full reader reads it
+    (``raw_header.command_writer``). One that names no writer, or more than
+    one, leaves the hint and the file's encoding to decide, since a progress
+    read refuses nothing.
+    """
+    try:
+        writer = command_writer(fields.get("command", ""))
+    except RawDialectError:
+        writer = None
     if writer is not None:
         return writer
     if width == 2:
@@ -1278,7 +1290,7 @@ def _progress_of_plot(
             plot=plot,
             axis=axis,
             points=points,
-            last_axis_value=_deck_axis_value(last, axis, plot, fields) if axis else None,
+            last_axis_value=_deck_axis_value(last, header) if axis else None,
             stepped="stepped" in flags,
             cut=cut,
         )
@@ -1337,7 +1349,7 @@ def _progress_of_plot(
             handle.seek(header.data_start + (kept - 1) * record)
             stored = handle.read(8)
             kept_last = (
-                _deck_axis_value(struct.unpack("<d", stored)[0], axis, plot, fields)
+                _deck_axis_value(struct.unpack("<d", stored)[0], header)
                 if axis and len(stored) == 8
                 else None
             )
@@ -1518,20 +1530,19 @@ def _last_complete_ascii_point(lines: list[str], n_vars: int) -> tuple[int, floa
     return None
 
 
-def _deck_axis_value(
-    value: float | None,
-    axis: str | None,
-    plot: str | None,
-    fields: dict[str, str],
-) -> float | None:
-    """A stored axis value in the coordinates the deck and every reader use.
-
-    The same two corrections a full load makes: LTspice may store a time value
-    negated (spicelib's ``Axis.get_wave`` takes the absolute value of a
-    ``time`` axis), and a windowed transient's stored time starts from 0.
+def _deck_axis_value(value: float | None, header: _PlotHeader) -> float | None:
+    """A stored axis value in the coordinates the deck and every reader use:
+    a transient's time corrected as a full load corrects it
+    (``decoded_raw.deck_time``), any other axis as stored. None for a value,
+    or a time ``Offset:``, that is not a finite number.
     """
     if value is None or not math.isfinite(value):
         return None
-    if (axis or "").lower() == "time":
-        value = abs(value)
-    return value + _transient_offset(plot, fields.get("offset"))
+    fields = header.fields
+    try:
+        offset = time_offset(fields.get("plotname", ""), header.first_type, fields.get("offset"))
+    except ValueError:
+        return None
+    if offset is None:
+        return value
+    return float(deck_time(np.asarray(value), offset))

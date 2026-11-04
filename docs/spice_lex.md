@@ -87,12 +87,25 @@ The parser has three layers.
 ### Layer 1: line-level lexer
 
 ```python
-def lex(netlist_text: str) -> LexResult: ...
+def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
+def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...
 ```
 
 `lex` walks the lines once, classifies each line by its first
 non-whitespace character, merges `+` continuation chains and tracks
-`.SUBCKT`/`.ENDS` scope. Each `SpiceCard` has these fields:
+`.SUBCKT`/`.ENDS` scope. With `title`, line 1 is a comment card of its own
+whatever it says, so it cannot open a scope, end the deck or take a `+` line.
+
+`lex_deck` is the reading of a deck: the cards a simulator reads, with
+`lex`'s warnings. Line 1 is the title and is left out (both LTspice builds
+ran `deck/title_card`, whose title is an `I1` card, with one `I1`, and
+failed `deck/title_directive`, whose title is the `.param` it needs), and so
+is every card after a top-level `.END` (`deck/after_end`). `title=False`
+reads an included file, which begins with a card. Every reader of what a
+deck holds (the linter, `verify_circuit`'s checks and both compare modes,
+the `inspect` net query, the hierarchy, the run's requirements and the
+result observations) goes through it; an edit uses `lex`, which keeps every
+line for `emit`. Each `SpiceCard` has these fields:
 
 ```python
 class SpiceCard:
@@ -132,7 +145,7 @@ underlying `SpiceCard` directly.
 class ModelCard:           # .MODEL <name> <type>(<params>)
     name: str
     type: str              # NMOS, NPN, R, ...
-    level: int | None      # parsed from LEVEL=
+    level: float | None    # LEVEL= as a number; None when absent or an expression
     params: dict[str, str] # raw value tokens (caller parses)
     def set_param(self, key, value) -> None: ...
     def remove_param(self, key) -> None: ...
@@ -166,18 +179,35 @@ class SubcktCard:          # .SUBCKT opener
 
 class MeasCard:            # .MEAS — read/validated, rarely rewritten
     function_calls: list[FunctionCall]
-    signal_refs: list[str]
+    signal_refs: list[ProbeRef]      # the probes it reads (probe_refs)
     analysis: MeasAnalysis | None    # tran/ac/dc/op
     def set_label(self, new_name) -> None: ...
     def set_analysis(self, kind) -> None: ...
+
+class ProbeRef:            # one V(...) / I(...) a card names
+    text: str              # as written: "V(a, b)"
+    kind: str              # "V" or "I"
+    names: tuple[str, ...] # ("a", "b"): a node pair split at its comma
+
+class SaveCard:            # .SAVE — the probes it saves
+    probes: list[ProbeRef]
+    saves_all: bool        # .save all / .save *
 ```
 
 `MeasCard` gives `spice_validator` the function calls in a `.MEAS` body
-(`function_calls`, which its `vdb_in_meas` rule checks for `vdb()`) and
-the signals the body reads (`signal_refs`, which no rule reads),
+(`function_calls`, which its `vdb_in_meas` rule checks for `vdb()`)
 without substring matching. It walks Layer 3's classified tokens in
 `body_tokens`, where a `BARE` token immediately followed by a `PARENED`
 token is a function call.
+
+`probe_refs(card)` is the one reading of the `V(...)`/`I(...)` probes a
+card names, in a directive or in an instance's expression; `MeasCard`'s
+`signal_refs` and `SaveCard`'s `probes` are its answer. A reader that
+compares probes as signals compares `text`, as the linter's
+`save-meas-coverage` rule does: whether LTspice measures `V(a,b)` from a
+saved `V(a)` and `V(b)` is not recorded. A reader that asks which nodes a
+card reaches reads `names`, as the validator's dangling-node and
+undefined-reference checks do.
 
 `ELEMENT_SPECS` has one entry for each of M/Q/J/X/F/H/R/C/L/V/I/B/E/G/K.
 Each entry gives the minimum node count and says how to read the last
@@ -287,6 +317,10 @@ These exceptions change the default:
   `set_nodes` edits only these prefixes.
 - `R1 a b R=1k` (and the `C=`/`L=` forms) gives the value as a parameter,
   so every positional token is a node and `value` is the parameter's.
+- `C1 b 0 Q=100n*x` and `L1 c 0 Flux=1m*x` define the part by its charge or
+  flux, which both LTspice builds run as a part between its two nodes
+  (`deck/keyword_values`): every positional token is a node and `value` is
+  None; the expression is `params["Q"]` or `params["Flux"]`.
 - On Q/J/M lines, a trailing area factor or `OFF` after the model is
   moved into `value` (`Q2 c b e QN 8`), as long as the minimum node count
   and a model remain. On S/W lines, a trailing `ON`/`OFF` is moved into
@@ -391,7 +425,7 @@ recovery rules:
   byte-faithful.
 - Cards after a top-level `.END`: they keep their position and scope but
   have `trailing=True`. LTspice ignores them, but the parser keeps them
-  rather than dropping them.
+  rather than dropping them; `lex_deck` leaves them out.
 - `.control` without a matching `.endc`: the region runs to EOF, plus a
   warning. Every remaining line stays an opaque `kind="control"` card.
 
@@ -419,14 +453,15 @@ next edit re-renders too.
 
 ```python
 # lib/spice_lex.py
-def lex(netlist_text: str) -> LexResult: ...
+def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
+def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...  # the cards a simulator reads
 def emit(cards: Sequence[SpiceCard]) -> str: ...
 def tokenize_body(body: str) -> list[Token]: ...
 def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | None: ...
+def subckt_children(cards, opener_idx) -> Iterator[tuple[int, SpiceCard]]: ...  # one body, by span
 def iter_by_kind(cards, kind, scope=None) -> Iterator[SpiceCard]: ...
 def iter_body(cards, scope, *, recursive=True) -> Iterator[SpiceCard]: ...
 def cards_from_path(path) -> LexResult: ...
-def write_cards(cards, path) -> None: ...
 
 class SpiceCard:                 # canonical store
     def replace_span(self, body_start, body_end, new_text) -> None: ...
@@ -482,7 +517,7 @@ class SubcktCard:
 
 class MeasCard:
     function_calls: list[FunctionCall]
-    signal_refs: list[str]
+    signal_refs: list[ProbeRef]
     analysis: MeasAnalysis | None
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard: ...
@@ -494,7 +529,9 @@ class ElementSpec: ...           # ELEMENT_SPECS registry: M/Q/J/X/F/H/R/C/L/V/I
 def iter_models(cards, scope=None) -> Iterator[ModelCard]: ...
 def iter_instances(cards, prefix=None) -> Iterator[InstanceLine]: ...
 def find_model(cards, name, scope=()) -> ModelCard | None: ...
-def instances_by_ref(cards) -> dict[str, SpiceCard]: ...
+def instances_by_ref(cards, *, scope=None) -> dict[str, SpiceCard]: ...  # scope=() is the top level
+def probe_refs(card) -> list[ProbeRef]: ...  # every V(...)/I(...) a card names
+def save_cards(cards) -> list[SaveCard]: ...
 def body_has_stray_kv_remnant(body: str) -> bool: ...
 
 # lib/spice_lex_ops.py — cross-card transformations
@@ -504,6 +541,7 @@ def rename_model(cards, old_name, new_name, *, scope=()) -> int: ...
 def value_suffix_sites(cards) -> list[ValueSuffixSite]: ...  # non-ASCII at a scale-suffix position
 def fold_micro_suffix_cards(cards) -> tuple[ValueSuffixSite, ...]: ...  # µ/μ suffix -> u, in place
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None: ...  # R§Load -> RLoad wherever named
+def section_sign_names(ref: str) -> tuple[str, ...]: ...  # R§Load -> ("RLoad", "Load")
 
 # lib/encoding.py — shared text decoding
 def decode_spice_bytes(raw: bytes) -> str: ...

@@ -17,7 +17,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import InvalidCursorError, ResultError
 from ltspice_mcp.lib import now, parse_iso_datetime
 from ltspice_mcp.lib.cursor_codec import CursorError
 from ltspice_mcp.lib.cursor_codec import canonical_hash as canonical_hash
@@ -304,14 +304,14 @@ def _decode_cursor_body(cursor: str) -> dict[str, Any]:
     try:
         return _decode_body_cursor(cursor)
     except CursorError as exc:
-        raise ResultError(f"Invalid analyze_results cursor: {exc}") from None
+        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
 
 
 def cursor_result_set_id(cursor: str) -> str:
     """Recover the immutable set id carried by a callable page cursor."""
     result_set_id = str(_decode_cursor_body(cursor).get("result_set_id", ""))
     if not result_set_id:
-        raise ResultError("Invalid analyze_results cursor: result_set_id is missing")
+        raise InvalidCursorError("Invalid analyze_results cursor: result_set_id is missing")
     return result_set_id
 
 
@@ -319,15 +319,15 @@ def cursor_view(cursor: str) -> list[str] | None:
     """Return the fields projection the cursor was paged under (``None`` = lean)."""
     body = _decode_cursor_body(cursor)
     if "view" not in body:
-        raise ResultError("Invalid analyze_results cursor: it names no row view")
+        raise InvalidCursorError("Invalid analyze_results cursor: it names no row view")
     view = body["view"]
     if not isinstance(view, dict) or set(view) != {"fields"}:
-        raise ResultError("Invalid analyze_results cursor: malformed render view")
+        raise InvalidCursorError("Invalid analyze_results cursor: malformed render view")
     fields = view["fields"]
     if fields is not None and (
         not isinstance(fields, list) or not all(isinstance(field, str) for field in fields)
     ):
-        raise ResultError("Invalid analyze_results cursor: malformed fields render view")
+        raise InvalidCursorError("Invalid analyze_results cursor: malformed fields render view")
     return fields
 
 
@@ -364,9 +364,9 @@ def decode_cursor(cursor: str, item: ResultSet) -> tuple[int, int, int]:
         intra_item = int(body.get("intra_item", 0))
         missing_offset = int(body.get("missing_offset", 0))
     except (KeyError, TypeError, ValueError) as exc:
-        raise ResultError(f"Invalid analyze_results cursor: {exc}") from None
+        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
     if position < 0 or position > len(item.work) or intra_item < 0 or missing_offset < 0:
-        raise ResultError("Invalid analyze_results cursor position")
+        raise InvalidCursorError("Invalid analyze_results cursor position")
     return position, intra_item, missing_offset
 
 

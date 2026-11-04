@@ -31,12 +31,14 @@ from ltspice_mcp.lib.experiment_inputs import (
 )
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
+    OWNER_STOPPED,
     PARTIAL_RAW_KEY,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
     Completeness,
     ExperimentCase,
     ExperimentJob,
+    OwnerStopped,
     SourceRecord,
     failure_row,
 )
@@ -75,7 +77,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     describe_executable,
@@ -111,7 +113,12 @@ KILL_MAX_PASSES = 5
 KILL_RESCAN_INTERVAL_S = 0.5
 
 RunTimeoutSource = Literal["request", "server_default"]
-StopReason = Literal["cancelled", "job_deadline", "run_timeout"]
+#: Why the coordinator stopped a job's cases: an explicit cancel, the job
+#: deadline, the run timeout, or the shutdown of the process running the job
+#: (``OWNER_STOPPED``, the code a crash leaves too).
+StopReason = Literal["cancelled", "job_deadline", "run_timeout"] | OwnerStopped
+#: The reasons a whole job is stopped for; the run timeout stops one case.
+JobStopReason = Literal["cancelled", "job_deadline"] | OwnerStopped
 
 AnalysisCallback = Callable[[ExperimentJob], Awaitable[dict[str, Any]]]
 
@@ -158,6 +165,7 @@ class IdempotencyConflictError(SimulationError):
     """A request id was reused for a different canonical payload."""
 
     code = "idempotency_conflict"
+    takes_family_hint = False
 
 
 def payload_conflict(request_id: str, job_id: str | None) -> IdempotencyConflictError:
@@ -217,6 +225,7 @@ class RequestGateBusy(SimulationError):
     """
 
     code = "request_gate_busy"
+    takes_family_hint = False
 
 
 class SubmissionCommitted(SimulationError):
@@ -229,6 +238,7 @@ class SubmissionCommitted(SimulationError):
     """
 
     code = "submission_committed"
+    takes_family_hint = False
 
     def __init__(
         self,
@@ -249,6 +259,7 @@ class ExperimentCancellationError(SimulationError):
     """An experiment could not be cancelled by this coordinator."""
 
     code = "cancel_failed"
+    takes_family_hint = False
 
 
 @contextlib.asynccontextmanager
@@ -525,7 +536,7 @@ class _Execution:
     # Orders a worker thread's launch against a stop requested on the loop.
     # Held for two attribute writes at a time, never across a launch.
     launch_lock: threading.Lock = field(default_factory=threading.Lock)
-    stop_reason: Literal["cancelled", "job_deadline"] | None = None
+    stop_reason: JobStopReason | None = None
     slots_held: set[str] = field(default_factory=set)
     retained_slots: set[str] = field(default_factory=set)
     futures: dict[str, asyncio.Future[RunOutcome]] = field(default_factory=dict)
@@ -539,6 +550,10 @@ class _Execution:
     # own snapshot and each report the same transition.
     claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
     persistence_error: Exception | None = None
+    #: The build an earlier run on this job's executable reported, read on the
+    #: loop as the job starts: with the executable's name, what tells whether it
+    #: is an LTspice before 24 (``simulator_build.ltspice_before_24``).
+    reported_build: str | None = None
 
     @property
     def job(self) -> ExperimentJob:
@@ -870,11 +885,7 @@ class ExperimentRunner(RunnerBase):
         )
         indexed_job_id = str(index.get("job_id", ""))
         try:
-            existing = experiment_store.load_job(
-                indexed_job_id,
-                working_dir,
-                own_is_alive=True,
-            )
+            existing = experiment_store.load_job(indexed_job_id, working_dir)
         except ValueError:
             existing = None
         if existing is None:
@@ -975,6 +986,8 @@ class ExperimentRunner(RunnerBase):
                 job_deadline_s=recorded.job_deadline_s,
                 simulator_seed=recorded.simulator_seed,
             )
+        from ltspice_mcp.lib.services import reported_build_of
+
         return _Execution(
             # Without the staging closure: this execution outlives the
             # submission call, and the closure holds that whole scope.
@@ -984,6 +997,7 @@ class ExperimentRunner(RunnerBase):
             capacity=capacity,
             run_timeout_s=run_timeout_s,
             run_timeout_source=run_timeout_source,
+            reported_build=reported_build_of(request.state, job.simulator_executable),
         )
 
     async def _run_job(self, execution: _Execution) -> None:
@@ -1010,7 +1024,7 @@ class ExperimentRunner(RunnerBase):
             await self._persist_job(execution)
             execution.live.mark_runs_done()
 
-            if execution.stop_reason == "cancelled":
+            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
                 self._finish_unstarted_analysis(
                     job,
                     status="cancelled",
@@ -1029,7 +1043,7 @@ class ExperimentRunner(RunnerBase):
                 return
 
             analysis_failed = await self._run_analysis(execution)
-            if execution.stop_reason == "cancelled":
+            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
                 await self._transition_job(execution, "cancelled")
             elif (
                 execution.stop_reason == "job_deadline"
@@ -1050,13 +1064,7 @@ class ExperimentRunner(RunnerBase):
                 status="failed",
                 error="Experiment coordination failed before attached analysis completed",
             )
-            if job.status not in {
-                "completed",
-                "completed_with_failures",
-                "failed",
-                "cancelled",
-                "interrupted",
-            }:
+            if job.status not in TERMINAL_STATUSES:
                 try:
                     await self._transition_job(execution, "failed", error=job.error)
                 except Exception as checkpoint_error:
@@ -1306,7 +1314,12 @@ class ExperimentRunner(RunnerBase):
             # and every provenance check compare against. No-op for ngspice and for
             # decks with no .op. The run_token stamp keeps concurrent cases sharing
             # one staged deck from clobbering each other's copy.
-            run_deck = inject_logopinfo(case.staged_deck, self.simulator_class, case.run_token)
+            run_deck = inject_logopinfo(
+                case.staged_deck,
+                self.simulator_class,
+                case.run_token,
+                reported=execution.reported_build,
+            )
             # On ngspice, a `.control` script replaces the raw the simulator would
             # otherwise write, so a scripted deck that never calls write/wrdata
             # produces no rawfile at all and every recipe over the case reads
@@ -1883,7 +1896,7 @@ class ExperimentRunner(RunnerBase):
     def _request_stop(
         self,
         execution: _Execution,
-        reason: Literal["cancelled", "job_deadline"],
+        reason: JobStopReason,
         *,
         exclude_case_id: str | None = None,
     ) -> None:
@@ -1912,7 +1925,19 @@ class ExperimentRunner(RunnerBase):
         # rather than assume the case never started: an accounting message that
         # can be false is how a completed run gets read as one that never ran.
         launched = case.submitted_at is not None
-        if execution.stop_reason == "job_deadline":
+        if execution.stop_reason == OWNER_STOPPED:
+            self._mark_case(
+                execution,
+                case,
+                "failed",
+                code=OWNER_STOPPED,
+                error=(
+                    "The server shut down while this case was running"
+                    if launched
+                    else "The server shut down before this case was submitted"
+                ),
+            )
+        elif execution.stop_reason == "job_deadline":
             self._mark_case(
                 execution,
                 case,
@@ -2032,9 +2057,17 @@ class ExperimentRunner(RunnerBase):
         job: ExperimentJob,
         *,
         control_token: str | None = None,
+        reason: Literal["cancelled"] | OwnerStopped = "cancelled",
     ) -> list[dict[str, Any]]:
-        """Stop further submissions and kill active cases when authorized."""
-        if not experiment_store.cancel_authorized(job, control_token):
+        """Stop further submissions and kill active cases when authorized.
+
+        ``reason`` is what the stopped cases record: an explicit cancel, or
+        ``OWNER_STOPPED`` when this process is shutting down, which a resume
+        retries by default as it does a case a crash left.
+        """
+        if not experiment_store.cancel_authorized(
+            job, control_token, owned=self.owns_experiment_job(job.job_id)
+        ):
             raise CancelNotAuthorized(
                 f"Cancellation is not authorized for experiment job {job.job_id}"
             )
@@ -2069,7 +2102,7 @@ class ExperimentRunner(RunnerBase):
             and case.case_id not in execution.claimed_cancel_priors
         }
         execution.claimed_cancel_priors.update(before)
-        self._request_stop(execution, "cancelled")
+        self._request_stop(execution, reason)
         await execution.live.wait()
         return [
             cancel_receipt_row(case, before[case.case_id], case.status)
@@ -2087,7 +2120,7 @@ class ExperimentRunner(RunnerBase):
         all but the raw ``kept`` for reads."""
         if _keeps_stopped_artifacts(job):
             return
-        raw_extension = getattr(self.simulator_class, "raw_extension", ".raw")
+        raw_extension = raw_extension_for(self.simulator_class)
         run_suffix = ".cir" if case.native_statistics else case.staged_deck.suffix or ".net"
         # The job's own run directory, which is also what the record persists —
         # the same reconstruction the crash reconciliation uses to FIND these.
@@ -2133,6 +2166,8 @@ def _stop_bound(execution: _Execution, reason: StopReason) -> tuple[str, dict[st
     if reason == "job_deadline":
         deadline = execution.request.job_deadline_s
         return f"the job deadline of {deadline:g}s elapsed", {"job_deadline_s": deadline}
+    if reason == OWNER_STOPPED:
+        return "the server shut down", {}
     return "the job was cancelled", {}
 
 

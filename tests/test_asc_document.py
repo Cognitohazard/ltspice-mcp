@@ -508,3 +508,68 @@ class TestTheFormatThePresentEngineWrites:
         )
         assert built.wires == (Wire(96, 64, 256, 64),)
         assert Text(96, 320, "Left", 2, ";", "a note") in built.texts
+
+
+#: A directive this module reads, spaced as LTspice does not save one: two
+#: spaces after the keyword, a tab after it, or two spaces before the size.
+#: spicelib's editor, through which an edit is committed, reads none of them.
+#: Each says another time, so the three sheets are three sheets as records.
+SPACED_TEXT = (
+    "TEXT  16 16 Left 2 !.tran 1m",
+    "TEXT\t16 16 Left 2 !.tran 2m",
+    "TEXT 16 16 Left  2 !.tran 3m",
+)
+
+
+class TestTheEditorHoldsWhatTheSheetHolds:
+    """An edit is committed from what the schematic editor read, so a record it
+    did not read would be deleted by any edit, while ``inspect`` and
+    ``verify_circuit`` read this document and show it."""
+
+    @pytest.mark.parametrize("path", SUITE_SHEETS, ids=suite_name)
+    def test_every_sheet_the_editor_opens(self, path: Path) -> None:
+        from ltspice_mcp.errors import SymbolResolutionError
+        from ltspice_mcp.lib.schematic_ops import make_editor
+
+        editor: object = None
+        try:
+            editor = make_editor(path)
+        except (NetlistError, SymbolResolutionError, ValueError) as refused:
+            refusal = str(refused)
+        else:
+            refusal = ""
+        # No sheet in the suite holds a record the editor skips.
+        assert "the schematic editor skips" not in refusal
+        if refusal:
+            pytest.skip(f"the editor does not open it: {refusal}")
+        document = parse_asc(path.read_bytes())
+        assert isinstance(editor, AscEditor)
+        assert (
+            len(document.symbols),
+            len(document.texts),
+            len(document.wires),
+            len(document.flags),
+        ) == (
+            len(editor.components),
+            len(editor.directives),
+            len(editor.wires),
+            len(editor.labels),
+        )
+
+    @pytest.mark.parametrize("line", SPACED_TEXT)
+    async def test_a_text_line_the_editor_does_not_read_is_refused_not_dropped(
+        self, state_no_sim: SessionState, work_dir: Path, line: str
+    ) -> None:
+        from ._asc_ops import apply_ops
+
+        sheet = work_dir / "spaced.asc"
+        sheet.write_text(f"Version 4\nSHEET 1 880 680\n{line}\n", encoding="utf-8", newline="\n")
+        before = sheet.read_bytes()
+        assert [text.body for text in parse_asc(before).texts] == [line.split("!")[1]]
+        with pytest.raises(NetlistError, match=r"line 3 \('TEXT.*the schematic editor skips"):
+            await apply_ops(
+                state_no_sim,
+                "spaced.asc",
+                [{"op": "add_directive", "instruction": ".op", "x": 16, "y": 64}],
+            )
+        assert sheet.read_bytes() == before

@@ -599,7 +599,7 @@ class TestReplayAcrossBuilds:
             del case["simulator_version"]
         path.write_text(json.dumps(record))
 
-        loaded = experiment_store.load_job(first["job_id"], work_dir, own_is_alive=True)
+        loaded = experiment_store.load_job(first["job_id"], work_dir)
         assert loaded is not None
         assert loaded.simulator_executable is None
         assert [case.simulator_version for case in loaded.cases] == [None]

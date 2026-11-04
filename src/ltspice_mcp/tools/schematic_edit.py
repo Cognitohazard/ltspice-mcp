@@ -20,7 +20,7 @@ way — the way verify_circuit does; a mismatch or an export failure there is
 reported but never un-commits the sheet.
 """
 
-# The op models, the in-place applier and the net-partition helpers are the
+# The op models, the in-place applier and the sheet's nets are the
 # shared engine in lib/schematic_ops.py, imported rather than duplicated.
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from mcp import types
 from pydantic import Field
 from spicelib import AscEditor
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import InvalidCursorError, NetlistError
 from ltspice_mcp.lib import O_BINARY, fsync_dir, fsync_fd, replace_file
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
 from ltspice_mcp.lib.cursor_codec import canonical_json
@@ -73,19 +73,9 @@ from ltspice_mcp.lib.schematic_ops import (
     KEEPS_WIRING,
     OP_RESULT_FACTS,
     GridPoint,
-    OpAddComponent,
-    OpAddDirective,
-    OpAddNetLabel,
     OpMove,
-    OpMoveComponent,
-    OpRemoveComponent,
-    OpRemoveDirective,
-    OpRemoveNetLabel,
-    OpRemoveWire,
-    OpSetComponentAttribute,
-    OpSetComponentValue,
     OpSetPlotPanes,
-    OpWirePins,
+    SchematicOp,
     SheetPlotSettings,
     attach_symbols,
     blank_sheet,
@@ -98,8 +88,9 @@ from ltspice_mcp.lib.schematic_ops import (
     placed_geometry,
     require_asc,
     run_op_batch,
+    sheet_nets,
     symbols_of,
-    trace_nets,
+    wire_segments_of,
     wiring_profile,
 )
 from ltspice_mcp.lib.schematic_scene import (
@@ -111,6 +102,7 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    ENVELOPE_ERROR_SCHEMA,
     LTSPICE_WINDOW_PROPERTIES,
     OUTCOME_SCHEMA,
     RULES_RUN_SCHEMA,
@@ -148,22 +140,10 @@ _DEFAULT_VIEW_LIMIT = 100
 # learned neither which kinds exist nor what their own payload was missing. With
 # it, an unknown op is one error naming every accepted kind, and a known op with
 # a bad field reports against that kind alone.
-ConsolidatedOp = Annotated[
-    OpAddComponent
-    | OpSetComponentValue
-    | OpSetComponentAttribute
-    | OpRemoveComponent
-    | OpMoveComponent
-    | OpMove
-    | OpAddNetLabel
-    | OpRemoveNetLabel
-    | OpRemoveWire
-    | OpWirePins
-    | OpAddDirective
-    | OpRemoveDirective
-    | OpSetPlotPanes,
-    Field(discriminator="op"),
-]
+#
+# The members are the engine's own op list, so an op the engine applies is one
+# the tool accepts, and the reverse.
+ConsolidatedOp = Annotated[SchematicOp, Field(discriminator="op")]
 
 
 # The views return_views can name, each resumable through its own field of
@@ -320,20 +300,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "sha256": {"type": ["string", "null"]},
         "build_id": {"type": "string"},
         "base": {"type": "string"},
-        "error": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "message": {"type": "string"},
-                "stage": {"type": "string"},
-                "retryable": {"type": "boolean"},
-                "commit_state": {
-                    "type": "string",
-                    "enum": ["not_started", "committed", "unknown"],
-                },
-            },
-            "required": ["code", "message", "stage", "retryable", "commit_state"],
-        },
+        "error": ENVELOPE_ERROR_SCHEMA,
         "stages": {
             "type": "array",
             "description": (
@@ -711,15 +678,15 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
 def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]]:
     """The pin legend (only when ``include_legend``) and the label-only pins of a placed editor.
 
-    A label-only pin has no wire through it, so its net holds nothing but what
-    sits at its own coordinate, and its net name is the labels there — read
-    without tracing the sheet. The whole-sheet trace (``trace_nets``, the
-    union-find over every segment and point) runs only for the legend, which
-    names the net of every pin. The plain results go to the pure
+    A label-only pin has no wire through it, so its net name is the labels at
+    its own coordinate, read without working out the sheet's nets. The nets
+    LTspice makes of the whole sheet (``sheet_nets``) are worked out only for
+    the legend, which names the net of every pin with the labels of that net,
+    nets that share a name being one. The plain results go to the pure
     ``lib/pin_legend`` builders.
     """
     geometry = collect_component_geometry(editor)
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
+    segments = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wire_segments_of(editor)]
     labels_at: dict[tuple[int, int], set[str]] = {}
     for lbl in editor.labels:
         labels_at.setdefault((int(lbl.coord.X), int(lbl.coord.Y)), set()).add(lbl.text)
@@ -731,12 +698,15 @@ def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]
         geometry,
         is_wired=build_on_wire_predicate(segments),
         is_labeled=lambda c: c in labels_at,
-        net_name_of=lambda c: net_name(labels_at.get(c, ())),
+        net_name_of=lambda _ref, _index, c: net_name(labels_at.get(c, ())),
     )
     if not include_legend:
         return [], label_only
-    nets = trace_nets(editor)
-    return build_pin_legend(geometry, lambda c: net_name(nets.get(c, ()))), label_only
+    nets = sheet_nets(editor, geometry=geometry)
+    names = {
+        (pin.reference, pin.order): net_name(nets.texts(nets.of_pin(pin))) for pin in nets.pins
+    }
+    return build_pin_legend(geometry, lambda ref, index, _c: names[ref, index]), label_only
 
 
 async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:
@@ -2135,7 +2105,7 @@ def _validate_view_cursors(cursors: EditViewCursors | None) -> None:
         try:
             decode_page_cursor(cursor, kind)
         except PageCursorError as exc:
-            raise NetlistError(f"invalid view_cursors.{kind}: {exc}") from exc
+            raise InvalidCursorError(f"invalid view_cursors.{kind}: {exc}") from exc
 
 
 def _commit_codec(loaded_as: str, original: bytes | None, text: str) -> str:

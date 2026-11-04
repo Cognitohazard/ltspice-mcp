@@ -14,13 +14,13 @@ after each mutation.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
-from ltspice_mcp.lib.format import is_scaled_number
+from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     MEAS_ANALYSIS_TOKENS,
     SpiceCard,
@@ -176,12 +176,17 @@ class ModelCard:
     ``params`` carries the raw value tokens (``"0.7"``, ``"{vto_n}"``,
     ``"100u"``); callers parse to numeric as needed. Keys are stored
     case-preserved; matching against them folds case at lookup.
+
+    ``level`` is the card's ``LEVEL=`` as a number, None when it gives none
+    or gives an expression. It is the one reading of a model's level: the
+    card's own parameters, so a comment between its ``+`` lines that names
+    another level is no part of it.
     """
 
     card: SpiceCard
     name: str
     type: str
-    level: int | None
+    level: float | None
     _params: _Params = field(default_factory=_Params)
     #: The name's token, renamed in place while it is good.
     _name_token: Token | None = None
@@ -220,9 +225,9 @@ class ModelCard:
         for k, v in params.as_dict().items():
             if k.lower() == "level":
                 try:
-                    level = int(v)
+                    level = parse_spice_value(v)
                 except ValueError:
-                    level = None
+                    level = None  # an expression: no level is known here
                 break
         return cls(
             card=card,
@@ -429,6 +434,10 @@ _EXACT_NODE_COUNT: dict[str, int] = {
     "F": 2,
     "H": 2,
 }
+
+# The keyword that defines a capacitor by its charge, or an inductor by its
+# flux, in place of a value: ``C1 b 0 Q=100n*x``, ``L1 c 0 Flux=1m*x``.
+_DEFINING_KEYS: dict[str, str] = {"C": "q", "L": "flux"}
 
 # A switch (S/W) carries an optional ON/OFF state token AFTER its model name.
 # It is never a model name, so it is peeled into the value tail before model
@@ -642,6 +651,14 @@ class InstanceLine:
                 # KEY_VALUE token and must be edited through set_param.
                 nodes = [t.text for t in positional]
                 value = params[value_param_key]
+            elif any(key.casefold() == _DEFINING_KEYS.get(prefix) for key in params):
+                # A capacitor defined by its charge, an inductor by its flux
+                # (``C1 b 0 Q=100n*x``): both builds run each as a part
+                # between its two nodes (deck/keyword_values). Every
+                # positional is a node and the card has no value.
+                nodes = [t.text for t in positional]
+                value = None
+                model_token = None
 
         # Node-edit span (set_nodes): the first N positional tokens for a
         # fixed-arity element. Computed from the exact count, not the per-kind
@@ -866,9 +883,21 @@ def read_instance(card: SpiceCard) -> InstanceLine | None:
         return None
 
 
-def instances_by_ref(cards) -> dict[str, SpiceCard]:
-    """Lowercased ``ref`` → instance-card lookup. Skips cards with no ref."""
-    return {c.name.lower(): c for c in cards if c.kind == "instance" and c.name}
+def instances_by_ref(
+    cards: Iterable[SpiceCard], *, scope: tuple[str, ...] | None = None
+) -> dict[str, SpiceCard]:
+    """Lowercased ``ref`` → instance-card lookup. Skips cards with no ref.
+
+    ``scope`` keeps only the cards directly in that scope: ``()`` is the top
+    level, where an ``M1`` inside a ``.subckt`` body is another device that
+    only shares the name. ``None`` keeps every scope. A ref the cards give
+    twice maps to its last card.
+    """
+    return {
+        c.name.lower(): c
+        for c in cards
+        if c.kind == "instance" and c.name and (scope is None or c.scope == scope)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1005,6 +1034,84 @@ class SubcktCard:
 
 
 # ---------------------------------------------------------------------------
+# Probes and .SAVE
+# ---------------------------------------------------------------------------
+
+#: A ``V(...)`` or ``I(...)`` probe in a card's text, its argument up to the
+#: first closing parenthesis. The one probe pattern for a deck's cards: every
+#: reader of the probes a card names goes through ``probe_refs``.
+PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ProbeRef:
+    """One ``V(...)`` or ``I(...)`` probe a card names.
+
+    ``text`` is the probe as written (``V(a, b)``) and ``kind`` its letter,
+    ``V`` or ``I``. ``names`` are the node or device names inside it, a node
+    pair split at its comma (``("a", "b")``), each stripped, an empty one left
+    out. A reader that compares probes as signals compares ``text``; one that
+    asks which nodes a card reaches reads ``names``.
+    """
+
+    text: str
+    kind: str
+    names: tuple[str, ...]
+
+
+def probe_refs(card: SpiceCard) -> list[ProbeRef]:
+    """Every ``V(...)``/``I(...)`` probe in a card, in order: in a ``.meas``,
+    a ``.save`` or another directive, and in an instance's expression
+    (``B1 x 0 V=V(a)*2``). Read from the lexed card, so a probe on a ``+``
+    line is found and one in a comment is not."""
+    return [
+        ProbeRef(
+            text=match.group(0),
+            kind=match.group(0)[0].upper(),
+            names=tuple(name for part in match.group(1).split(",") if (name := part.strip())),
+        )
+        for match in PROBE_REF_RE.finditer(card.body)
+    ]
+
+
+#: ``.save all`` or ``.save *``: the card saves every signal.
+_SAVES_ALL_RE = re.compile(r"(?i)(?:^|\s)\.save\s+(?:all\b|\*)")
+
+
+@dataclass
+class SaveCard:
+    """Typed view over a ``.SAVE`` directive: the probes it saves, or that it
+    saves every signal (``.save all``). Read-only."""
+
+    card: SpiceCard
+    probes: list[ProbeRef]
+    saves_all: bool
+
+    @classmethod
+    def from_card(cls, card: SpiceCard) -> SaveCard:
+        _require_kind(card, "directive")
+        if not _is_save(card):
+            raise _malformed(card, "not a .save card")
+        return cls(
+            card=card,
+            probes=probe_refs(card),
+            saves_all=_SAVES_ALL_RE.search(card.body) is not None,
+        )
+
+
+def _is_save(card: SpiceCard) -> bool:
+    tokens = tokenize_body(card.body)
+    return bool(tokens) and tokens[0].text.casefold() == ".save"
+
+
+def save_cards(cards: Sequence[SpiceCard]) -> list[SaveCard]:
+    """The ``.save`` directives in ``cards``, each as a ``SaveCard``."""
+    return [
+        SaveCard.from_card(card) for card in cards if card.kind == "directive" and _is_save(card)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # .MEAS
 # ---------------------------------------------------------------------------
 
@@ -1027,9 +1134,9 @@ class MeasCard:
     """Typed view over a ``.MEAS [analysis] NAME ...`` directive.
 
     Exposes its body as classified tokens (``body_tokens``) plus
-    pre-extracted ``function_calls`` and ``signal_refs`` so callers
-    (esp. ``spice_validator``) can run semantic checks without
-    re-parsing characters. Read-only.
+    pre-extracted ``function_calls`` and ``signal_refs`` (the card's probes,
+    as ``probe_refs`` reads them) so callers (esp. ``spice_validator``) can
+    run semantic checks without re-parsing characters. Read-only.
     """
 
     card: SpiceCard
@@ -1037,7 +1144,7 @@ class MeasCard:
     name: str
     body_tokens: list[Token]
     function_calls: list[FunctionCall]
-    signal_refs: list[str]
+    signal_refs: list[ProbeRef]
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard:
@@ -1062,8 +1169,7 @@ class MeasCard:
         # Recurses into PARENED args so nested calls are also surfaced
         # (``mag(V(out))`` reports both ``mag`` and ``V``).
         function_calls: list[FunctionCall] = []
-        signal_refs: list[str] = []
-        _collect_function_calls(body_tokens, function_calls, signal_refs)
+        _collect_function_calls(body_tokens, function_calls)
 
         return cls(
             card=card,
@@ -1071,7 +1177,7 @@ class MeasCard:
             name=meas_name,
             body_tokens=body_tokens,
             function_calls=function_calls,
-            signal_refs=signal_refs,
+            signal_refs=probe_refs(card),
         )
 
 
@@ -1181,7 +1287,6 @@ _CALL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 def _collect_function_calls(
     tokens: Sequence[Token],
     out_calls: list[FunctionCall],
-    out_signal_refs: list[str],
 ) -> None:
     """Walk ``tokens`` and append any ``BARE PARENED`` function calls.
 
@@ -1204,11 +1309,7 @@ def _collect_function_calls(
             and nxt.kind == TokenKind.PARENED
             and (called := _CALL_NAME_RE.search(t.text))
         ):
-            name = called.group(0)
-            args = nxt.text[1:-1]
-            out_calls.append(FunctionCall(name=name, args_text=args))
-            if name.lower() in ("v", "i"):
-                out_signal_refs.append(args.strip())
+            out_calls.append(FunctionCall(name=called.group(0), args_text=nxt.text[1:-1]))
         # Recurse into PARENED / BRACED contents and into a key=value's value.
         if t.kind in (TokenKind.PARENED, TokenKind.BRACED):
             inner_text = t.text[1:-1]
@@ -1220,4 +1321,4 @@ def _collect_function_calls(
             inner_tokens = tokenize_body(inner_text)
         except SpiceLexError:
             continue
-        _collect_function_calls(inner_tokens, out_calls, out_signal_refs)
+        _collect_function_calls(inner_tokens, out_calls)

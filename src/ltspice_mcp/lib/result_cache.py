@@ -15,7 +15,6 @@ consulted only while admission is open: a retained parser failure closes it too.
 from __future__ import annotations
 
 import math
-import re
 import sys
 import threading
 import time
@@ -30,19 +29,20 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_process import ParserProcessLimits, WarmParser
+from ltspice_mcp.lib.store import is_sha256
 
 RESULT_CACHE_BYTES = 512 * 1024 * 1024
 RESULT_CACHE_ENTRIES = 32
 STAMP_ENTRIES = 256
 """Source stamps remembered at once. A stamp outliving its entry answers
 nothing, so this only bounds the index's own size."""
-_KEY = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class ParserCleanupError(ResultError):
     """Scratch remains because process exit or directory removal was unconfirmed."""
 
     code = "parser_cleanup_failed"
+    takes_family_hint = False
 
     def __init__(self, directory: Path, *, worker_pid: int | None = None) -> None:
         self.directory = directory
@@ -125,7 +125,7 @@ class ResultCache:
 
     def put(self, key: str, value: ParsedArtifacts) -> ParsedArtifacts:
         if (
-            _KEY.fullmatch(key) is None
+            not is_sha256(key)
             or not isinstance(value, ParsedArtifacts)
             or value.snapshot_id != key
         ):

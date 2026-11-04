@@ -128,10 +128,12 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import (
+    InvalidCursorError,
     LTSpiceMCPError,
     NetlistError,
     PathSecurityError,
     compact_validation_error,
+    error_hint,
 )
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
@@ -144,7 +146,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib import simulator as simulator_mod
-from ltspice_mcp.lib.asc_document import ROTATIONS
+from ltspice_mcp.lib.asc_document import ROTATIONS, is_asc
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
     GROUND,
@@ -195,12 +197,11 @@ from ltspice_mcp.lib.simulator import (
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
-    ltspice_before_24,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
-from ltspice_mcp.lib.symbol_library import SymbolResolver
+from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
@@ -209,6 +210,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_WINDOW_PROPERTIES,
     RO_ANNOTATIONS,
     WARNINGS_SCHEMA,
+    NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
     ResponseBudget,
@@ -514,15 +516,26 @@ class _View:
 
 # Every rotation LTspice can place a symbol at, in a stable reported order.
 
-# Dwell caps mirrored for capabilities disclosure. Source of truth: the field
-# constraints on experiments.ExecutionInput.wait_s (run_experiments) and
-# experiments.JobsInput.timeout_s (jobs), themselves the A5 timing defaults.
-# Duplicated as documented constants to keep inspect free of experiments'
-# heavy import side effects; the capabilities test pins key presence, not value.
-_RUN_EXPERIMENTS_WAIT_DEFAULT_S = 60.0
-_RUN_EXPERIMENTS_WAIT_MAX_S = 120.0
-_JOBS_WAIT_DEFAULT_S = 60.0
-_JOBS_WAIT_MAX_S = 300.0
+
+def _dwell_report() -> dict[str, float]:
+    """The dwell defaults and caps, read off what enforces them: the
+    run_experiments ``execution.wait_s`` and jobs ``wait`` ``timeout_s`` fields
+    and the caps their handlers hold them to.
+
+    Imported here, at report time, rather than at module load: inspect stays
+    free of the run and jobs modules' import, and by the time a report is
+    asked for every tool is loaded anyway.
+    """
+    from ltspice_mcp.tools import experiments, jobs
+
+    return {
+        "run_experiments_wait_default_s": experiments.ExperimentExecution.model_fields[
+            "wait_s"
+        ].default,
+        "run_experiments_wait_max_s": experiments.SUBMISSION_DWELL_CAP_S,
+        "jobs_wait_default_s": jobs.JobsWaitInput.model_fields["timeout_s"].default,
+        "jobs_wait_max_s": experiments.JOBS_WAIT_CAP_S,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -537,8 +550,11 @@ _CURSOR_DESCRIPTION = (
 
 #: Most matches one reference lookup will return. Each match carries a full
 #: field table, so the cap is what stops a vague query from answering with the
-#: whole vocabulary at full detail.
+#: whole vocabulary at full detail. A larger limit is served at it, not refused.
 REFERENCE_LIMIT_CAP = 20
+
+#: Most rows one results page carries; a larger limit is served at it.
+RESULTS_LIMIT_CAP = 100
 
 # The file-backed kinds bind the file itself, so the stronger claim holds there.
 _CURSOR_DESCRIPTION_FILE = (
@@ -769,7 +785,7 @@ class ModelQuery(StrictModel):
         return self
 
 
-class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
+class ResultsQuery(OptionalRawSelectionFields, OtherRawFields, NotedModel):
     """RAW inventory or detached log facts with snapshot-bound pages."""
 
     kind: Literal["results"]
@@ -787,7 +803,14 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
         description="Literal signal, measurement or native quantity prefix; omitted lists all.",
     )
     cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
-    limit: int = Field(default=100, ge=1, le=100)
+    limit: int = Field(
+        default=RESULTS_LIMIT_CAP, ge=1, description=f"Held to {RESULTS_LIMIT_CAP}."
+    )
+
+    @model_validator(mode="after")
+    def _hold_limit(self) -> ResultsQuery:
+        self.hold_to_cap("limit", RESULTS_LIMIT_CAP)
+        return self
 
     @model_validator(mode="after")
     def _source(self) -> ResultsQuery:
@@ -806,7 +829,7 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields):
         return self
 
 
-class ReferenceQuery(StrictModel):
+class ReferenceQuery(NotedModel):
     """Look up this server's tool vocabulary — each tool's own arguments, plus
     analysis recipes, schematic ops, variation kinds, query kinds, checks and
     job actions — with every field's type, default and units."""
@@ -823,9 +846,13 @@ class ReferenceQuery(StrictModel):
     limit: int = Field(
         default=5,
         ge=1,
-        le=REFERENCE_LIMIT_CAP,
-        description="How many matches to return with their full field tables.",
+        description=f"Matches to return with full field tables, held to {REFERENCE_LIMIT_CAP}.",
     )
+
+    @model_validator(mode="after")
+    def _hold_limit(self) -> ReferenceQuery:
+        self.hold_to_cap("limit", REFERENCE_LIMIT_CAP)
+        return self
 
 
 class GuideQuery(StrictModel):
@@ -999,7 +1026,7 @@ def _file_stamp(path: Path) -> list[int] | None:
 
 def _invalid_cursor(exc: PageCursorError) -> _QueryError:
     """A tampered, stale, or cross-query cursor, isolated to the one query."""
-    return _QueryError("invalid_cursor", f"cursor is invalid or stale: {exc}")
+    return _QueryError(InvalidCursorError.code, f"cursor is invalid or stale: {exc}")
 
 
 def _paginate(
@@ -1309,12 +1336,7 @@ def _do_capabilities(
             "export_timeout_s": state.config.default_timeout,
             "inspect_page_size": _PAGE_SIZE,
             "inspect_coordinate_page_size": _COORD_PAGE_SIZE,
-            "dwell": {
-                "run_experiments_wait_default_s": _RUN_EXPERIMENTS_WAIT_DEFAULT_S,
-                "run_experiments_wait_max_s": _RUN_EXPERIMENTS_WAIT_MAX_S,
-                "jobs_wait_default_s": _JOBS_WAIT_DEFAULT_S,
-                "jobs_wait_max_s": _JOBS_WAIT_MAX_S,
-            },
+            "dwell": _dwell_report(),
         },
         "linter_version": linter_version,
     }
@@ -1354,7 +1376,8 @@ def _symbol_precedence(asc_path: Path | None, state: SessionState) -> list[tuple
 def _symbols_payload(
     precedence: list[tuple[Path, str]], name_filter: str | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Walk the precedence dirs, collecting legal ``.asy`` names (immutable I/O)."""
+    """Walk the precedence dirs, collecting the ``.asy`` names they resolve
+    (``symbol_library.symbol_files``; immutable I/O)."""
     prec_report: list[dict[str, Any]] = []
     names: list[str] = []
     seen_names: set[str] = set()
@@ -1364,7 +1387,7 @@ def _symbols_payload(
         prec_report.append({"dir": str(path), "tier": tier, "exists": exists})
         if not exists:
             continue
-        for asy in path.rglob("*.asy"):
+        for asy in symbol_files(path, beside_sheet=tier == "schematic-local"):
             stem = asy.stem
             if stem in seen_names:
                 continue
@@ -1461,7 +1484,9 @@ async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
 def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -> str:
     """Resolve a netlist ``at`` to a node name. Netlists carry no geometry, so a
     coordinate is rejected; ``REF.<terminal>`` maps to the node at that 1-based
-    terminal; ``net:NAME`` and a bare name are node names directly."""
+    terminal; ``net:NAME`` and a bare name are node names directly. A card has
+    no pin names, so ``REF.NAME`` for one of the deck's cards is refused, unless
+    a node is called that: answered as a node, it would be an empty net."""
     if isinstance(at, list):
         raise _QueryError(
             "invalid_at",
@@ -1483,6 +1508,15 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
                     f"terminal {index} out of range for '{ref}' ({len(nodes)} terminals)",
                 )
             return nodes[index - 1]
+        nodes = nodes_of.get(ref.lower())
+        named = {name_key(node) for card_nodes in nodes_of.values() for node in card_nodes}
+        if nodes is not None and name_key(at) not in named:
+            raise _QueryError(
+                "invalid_at",
+                f"'{ref}' is a card of this netlist, and a netlist addresses its pins by "
+                f"terminal number, not by name: use at='{ref}.<terminal>' (1 to "
+                f"{len(nodes)}), or at='net:NAME' for a node",
+            )
         # A dotted name whose tail is not a terminal index is a hierarchical node.
         return at
     return at
@@ -1496,7 +1530,7 @@ def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     paths so their file routing and error text stay identical.
     """
     suffix = path.suffix.lower()
-    if suffix == ".asc":
+    if is_asc(path):
         return "asc"
     if suffix in NETLIST_SUFFIXES:
         return "netlist"
@@ -1536,12 +1570,13 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
     """Card-membership for a node in a netlist — no geometry keys (by contract).
 
     The members are the deck's own cards: a card in a ``.subckt`` body is on
-    the subcircuit's nodes, not the deck's. Node names are compared as
-    ``connectivity.name_key`` has them, as on a sheet: without case (the
-    ``node-name-case`` recording) and with ``gnd`` as node 0.
+    the subcircuit's nodes, not the deck's, and the title line and a card after
+    ``.END`` are not cards the simulator reads (``spice_lex.lex_deck``). Node
+    names are compared as ``connectivity.name_key`` has them, as on a sheet:
+    without case (the ``node-name-case`` recording) and with ``gnd`` as node 0.
     """
-    lexed = lex(text)
-    by_ref = instances_by_ref(card for card in lexed.cards if not card.scope)
+    lexed = lex_deck(text)
+    by_ref = instances_by_ref(lexed.cards, scope=())
     parsed: dict[str, InstanceLine] = {}
     nodes_of: dict[str, list[str]] = {}
     unparseable = 0
@@ -2058,10 +2093,10 @@ _DIFFERENCE_ENTRIES_LIMIT = 25
 
 
 def _design_kind(spelled: str) -> str:
-    suffix = Path(spelled).suffix.lower()
-    if suffix == ".asc":
+    path = Path(spelled)
+    if is_asc(path):
         return "schematic"
-    return "netlist" if suffix in NETLIST_SUFFIXES else "other"
+    return "netlist" if path.suffix.lower() in NETLIST_SUFFIXES else "other"
 
 
 def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
@@ -2273,7 +2308,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
         if family == "ngspice"
         else None,
-        xvii_names=family == "ltspice" and ltspice_before_24(simulator),
+        xvii_names=family == "ltspice" and services.simulator_before_24(state, simulator),
     )
     sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(
@@ -2427,6 +2462,8 @@ class _LogRows(Sequence[dict[str, Any]]):
             for key in ("range_from", "range_to", "at"):
                 value = metadata.get(key)
                 row[key] = value[ordinal] if isinstance(value, list) else value
+            if "unreadable" in metadata:
+                row["unreadable"] = metadata["unreadable"]
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
         return {**metadata, key: rows[ordinal]}
@@ -2982,9 +3019,12 @@ async def _run_queries(
             )
             continue
         except LTSpiceMCPError as exc:
-            # The error's own code (errors.py), as every other tool reports it.
-            code = exc.code
-            results.append(_failure_item(index, raw, {"code": code, "message": str(exc)}))
+            # The error's own code (errors.py) and its type's recovery step, as
+            # every other tool reports it.
+            error = {"code": exc.code, "message": str(exc)}
+            if (hint := error_hint(exc)) is not None:
+                error["hint"] = hint
+            results.append(_failure_item(index, raw, error))
             continue
         except Exception as exc:
             # Last-resort isolation: an unexpected fault in one query must not
@@ -2996,6 +3036,11 @@ async def _run_queries(
 
         item: dict[str, Any] = {"index": index, "kind": query.kind, "ok": True}
         item.update(outcome)
+        # A value served at its cap rather than as asked says so on its item.
+        held = query.argument_notes() if isinstance(query, NotedModel) else []
+        if held:
+            data = item.setdefault("data", {})
+            data["warnings"] = [*data.get("warnings", []), *held]
         results.append(item)
     return results
 
