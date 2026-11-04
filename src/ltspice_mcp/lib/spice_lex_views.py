@@ -14,7 +14,7 @@ after each mutation.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
@@ -883,9 +883,21 @@ def read_instance(card: SpiceCard) -> InstanceLine | None:
         return None
 
 
-def instances_by_ref(cards) -> dict[str, SpiceCard]:
-    """Lowercased ``ref`` → instance-card lookup. Skips cards with no ref."""
-    return {c.name.lower(): c for c in cards if c.kind == "instance" and c.name}
+def instances_by_ref(
+    cards: Iterable[SpiceCard], *, scope: tuple[str, ...] | None = None
+) -> dict[str, SpiceCard]:
+    """Lowercased ``ref`` → instance-card lookup. Skips cards with no ref.
+
+    ``scope`` keeps only the cards directly in that scope: ``()`` is the top
+    level, where an ``M1`` inside a ``.subckt`` body is another device that
+    only shares the name. ``None`` keeps every scope. A ref the cards give
+    twice maps to its last card.
+    """
+    return {
+        c.name.lower(): c
+        for c in cards
+        if c.kind == "instance" and c.name and (scope is None or c.scope == scope)
+    }
 
 
 # ---------------------------------------------------------------------------

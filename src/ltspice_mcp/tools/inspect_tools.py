@@ -1477,7 +1477,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
     without case (the ``node-name-case`` recording) and with ``gnd`` as node 0.
     """
     lexed = lex_deck(text)
-    by_ref = instances_by_ref(card for card in lexed.cards if not card.scope)
+    by_ref = instances_by_ref(lexed.cards, scope=())
     parsed: dict[str, InstanceLine] = {}
     nodes_of: dict[str, list[str]] = {}
     unparseable = 0

@@ -41,6 +41,7 @@ from typing import Literal
 
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
     TokenKind,
     emit,
     lex,
@@ -52,6 +53,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     ParamCard,
     find_model,
+    instances_by_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -546,31 +548,38 @@ def inject_card_before_end(netlist_text: str, card: str) -> str:
     return emit(cards)
 
 
+def _top_level_instances(cards: list[SpiceCard]) -> dict[str, SpiceCard]:
+    """The deck's own instance cards by lowercased reference: not one inside a
+    ``.subckt`` body, which is another device that only shares the name, nor
+    one after ``.END``, which no simulator reads. The extraction and the
+    rewrite below both read this, so the card rewritten is the card measured."""
+    return instances_by_ref((card for card in cards if not card.trailing), scope=())
+
+
 def rewrite_instance_model(
     netlist_text: str,
     instance_ref: str,
     new_model_name: str,
 ) -> str:
-    """Replace the model token on a transistor (M/Q/J) instance line.
+    """Replace the model token on a top-level transistor (M/Q/J) instance line.
 
-    The instance line is matched by reference (case-insensitive).
+    The instance line is matched by reference (case-insensitive) among the
+    deck's own cards, the ones ``extract_mosfet_instances`` reads, so a
+    same-named device inside a ``.subckt`` is never the one rewritten.
     Routes through ``InstanceLine.set_model``, which uses the
     classified-token rule to identify the model position correctly
     even with quoted model tokens and trailing params. Raises
     ``ValueError`` if the instance isn't found.
     """
-    target = instance_ref.lower()
     result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "instance" and c.name and c.name.lower() == target:
-            view = InstanceLine.from_card(c)
-            if view.model is None:
-                raise ValueError(
-                    f"Instance {instance_ref!r} has no model token to rewrite: {c.body!r}"
-                )
-            view.set_model(new_model_name)
-            return emit(result.cards)
-    raise ValueError(f"Instance {instance_ref!r} not found in netlist")
+    card = _top_level_instances(result.cards).get(instance_ref.lower())
+    if card is None:
+        raise ValueError(f"Instance {instance_ref!r} not found in netlist")
+    view = InstanceLine.from_card(card)
+    if view.model is None:
+        raise ValueError(f"Instance {instance_ref!r} has no model token to rewrite: {card.body!r}")
+    view.set_model(new_model_name)
+    return emit(result.cards)
 
 
 def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
@@ -585,10 +594,8 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
     """
     instances: list[InstanceGeometry] = []
     result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind != "instance" or not c.name or c.name[:1].upper() != "M":
-            continue
-        if c.scope != ():  # top-level only
+    for c in _top_level_instances(result.cards).values():
+        if not c.name or c.name[:1].upper() != "M":
             continue
         view = InstanceLine.from_card(c)
         if view.model is None:

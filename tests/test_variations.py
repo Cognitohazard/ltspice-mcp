@@ -11,6 +11,8 @@ from pydantic import TypeAdapter, ValidationError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.instance_targeting import canonical_target
+from ltspice_mcp.lib.spice_lex import lex
+from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
@@ -1699,6 +1701,38 @@ class TestMixedFlatAndSubcircuitDecks:
         with pytest.raises(VariationError) as exc:
             expand_variations([circuit], [variation])
         assert exc.value.code == "ambiguous_target"
+
+
+class TestMismatchPerturbsTheDeviceItReports:
+    """A top-level ``M1`` and an ``M1`` inside a subcircuit are two devices; a
+    mismatch rule that draws for the top-level one rewrites that one."""
+
+    CELL = ".subckt cell d g s\nM1 d g s s NCH W=2u L=1u\n.ends cell\n"
+    TOP = "M1 out in 0 0 NCH W=10u L=1u\nX1 a b 0 cell\n"
+
+    @pytest.mark.parametrize("cell_first", [True, False], ids=["cell-first", "cell-last"])
+    def test_the_variant_model_lands_on_the_top_level_device(
+        self, tmp_path: Path, cell_first: bool
+    ):
+        body = self.CELL + self.TOP if cell_first else self.TOP + self.CELL
+        text = f"* t\n{body}.model NCH NMOS(VTO=0.7 KP=100u)\n.op\n.end\n"
+        path = tmp_path / "dut.cir"
+        path.write_text(text)
+        circuit = CircuitDeck("dut", path, text)
+        variation = _random_rule({"rule": "mismatch", "prefix": "M", "AVT": 3e-3})
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+
+        assert self.CELL in case.text
+        top = [
+            InstanceLine.from_card(card)
+            for card in lex(case.text).cards
+            if card.kind == "instance" and card.scope == () and card.name == "M1"
+        ]
+        assert [line.model for line in top] == ["NCH__M1"]
+        assert "random:mismatch:M1.VTO" in case.assignments
 
 
 class TestCaseBundleIsWrittenWhole:

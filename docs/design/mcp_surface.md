@@ -1892,7 +1892,9 @@ RandomRule:
 The `INSTANCE:{delvto|mulu0}` assignment form is never a random-rule target.
 Random mismatch on a top-level MOS (an `M` card in the deck) gives each
 device its own copy of its `.model`, with the drawn threshold shift and
-current-factor scale applied to the parameters the rule names. A
+current-factor scale applied to the parameters the rule names; an `M` card
+of the same name inside a `.subckt` body is another device and is left as
+it is. A
 `rule: "mismatch"` can also select a MOS inside subcircuits by its exact
 instance list, or every MOS inside a subcircuit instance by that instance's
 list. Such a device gets its draw as `delvto` and `mulu0` instance
