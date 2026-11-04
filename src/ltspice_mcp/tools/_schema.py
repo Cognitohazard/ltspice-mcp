@@ -51,9 +51,12 @@ class ToolInput(StrictModel):
         """The JSON Schema this tool advertises, before the shrinking passes.
 
         The model's own schema, except for a tool whose arguments are a
-        top-level union: pydantic emits a bare ``oneOf`` for one of those, and
-        MCP requires an object schema at the top level. Such a model overrides
-        this to wrap its branches; ``build_input_schema`` calls it either way.
+        top-level union: pydantic emits a bare ``oneOf`` for one of those, MCP
+        requires an object schema at the top level, and Claude's API refuses
+        a top-level ``oneOf``, ``allOf`` or ``anyOf`` even inside one. Such a
+        model overrides this to publish one flat object whose fields name the
+        branches that take them (``tools/jobs.py``, ``jobs_input_schema``);
+        ``build_input_schema`` calls it either way.
         """
         return cls.model_json_schema()
 

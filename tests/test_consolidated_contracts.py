@@ -601,6 +601,25 @@ class TestOutputSchemaCoverage:
         assert not missing, f"tools with no declared outputSchema: {missing}"
 
 
+class TestAdvertisedInputSchemasPassTheStrictestClient:
+    """Every advertised input schema is one an MCP client can hand to a model.
+
+    Claude's API refuses a tool whose ``input_schema`` has ``oneOf``,
+    ``allOf`` or ``anyOf`` at its top level, and a client that cannot send such
+    a tool to the model drops it from the session. That is how ``jobs`` went
+    missing from Claude Code sessions while the server listed it. A union of
+    actions is published as one object whose fields say which actions take
+    them, and the input model keeps validating each action.
+    """
+
+    @pytest.mark.parametrize("name", sorted(_input_schemas()))
+    def test_the_top_level_is_a_plain_object(self, name: str):
+        schema = _input_schemas()[name]
+        assert schema.get("type") == "object", f"{name}: top level is not an object"
+        combinators = sorted({"oneOf", "allOf", "anyOf"} & schema.keys())
+        assert not combinators, f"{name}: top-level {combinators} in its input schema"
+
+
 # Serialized size, in characters, of each tool's advertised definition — the
 # name, description and inputSchema a client loads before it can call anything.
 # Every session pays it whether or not the tool is used, so each has an upper
@@ -674,7 +693,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Resume adds selection, authority and dwell fields.
     # place_beside_sheet is a seventh action, a branch with one field of its
     # own (case_id), and a sentence in the description: measured 7,442.
-    "jobs": 7450,
+    # Published as one flat object since: Claude's API refuses a top-level
+    # allOf, and a client then drops the tool. Each field's description names
+    # the actions that take it, which the branches used to show. Measured
+    # 4,384.
+    "jobs": 4400,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route

@@ -136,21 +136,11 @@ def test_wait_caps_are_held_not_advertised_as_a_maximum():
         run_schema["properties"]["execution"],
     )
     jobs_schema = build_input_schema(JobsInput)
-    # The dwell cap lives on the action that takes it, so it is read through
-    # that action's branch rather than off a flat property list.
-    wait_branch = resolve_local_ref(
-        jobs_schema,
-        next(
-            entry["then"]
-            for entry in jobs_schema["allOf"]
-            if entry["if"]["properties"]["action"]["const"] == "wait"
-        ),
-    )
 
     # A strict client checks a maximum before sending and would refuse on the
     # server's behalf; the descriptions name the cap instead.
     assert "maximum" not in execution_schema["properties"]["wait_s"]
-    assert "maximum" not in wait_branch["properties"]["timeout_s"]
+    assert "maximum" not in jobs_schema["properties"]["timeout_s"]
     assert experiments_mod.ExperimentExecution.model_validate({"wait_s": 900}).wait_s == 900
 
 

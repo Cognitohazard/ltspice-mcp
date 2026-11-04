@@ -113,8 +113,8 @@ class JobsInput(ToolInput):
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
             "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
             "cases of a recoverable job; 'place_beside_sheet' copies a case's "
-            "results beside its sheet. Each action takes only its own fields, "
-            "listed below."
+            "results beside its sheet. Each field below starts with the actions "
+            "that take it; any other action refuses it."
         ),
     )
     budget: int | None = Field(
@@ -153,7 +153,7 @@ class JobsInput(ToolInput):
 
     @classmethod
     def wire_input_schema(cls) -> dict[str, Any]:
-        """Advertise the actions as one discriminated union."""
+        """Advertise the actions as one flat object (``jobs_input_schema``)."""
         if cls is not JobsInput:
             return super().wire_input_schema()
         return jobs_input_schema()
@@ -337,54 +337,102 @@ JOBS_ACTIONS: tuple[str, ...] = tuple(
 )
 
 
+#: The fields every action takes, published once without a list of actions.
+_SHARED_JOBS_FIELDS = frozenset({"action", "budget"})
+
+_NULL_SCHEMA: dict[str, Any] = {"type": "null"}
+
+
 def jobs_input_schema() -> dict[str, Any]:
-    """The actions as one object schema, each action's shape its own branch.
+    """The actions as one flat object: every field any action takes, each saying which.
 
-    Three requirements shape this, and only one spelling meets all three.
+    Claude's API refuses a tool whose input schema has ``oneOf``, ``allOf`` or
+    ``anyOf`` at its top level, and a client that cannot send such a tool to
+    the model drops it from the session, so the actions are not published as
+    branches. What a branch per action showed, which action takes which
+    field, is in each field's description instead, which starts with the
+    actions that take it and says where one requires it.
 
-    MCP requires an object schema at the top level — a bare ``oneOf`` makes a
-    strict client reject the whole tool list — and a client that reads
-    ``properties`` and stops there must still see what every action shares, so
-    the two shared arguments are hoisted beside the branches exactly as
-    ``JOBS_OUTPUT_SCHEMA`` hoists the shared response keys. Every branch
-    declares them itself, so hoisting constrains nothing new.
+    Nothing on the server validates a call against the published schema:
+    ``JobsInput`` routes on ``action`` and refuses a field that action does not
+    take, naming both. The schema only has to accept every call the model
+    accepts, so that a client checking a call before sending it never refuses
+    one the server would take.
 
-    The branches are then applied through ``if``/``then`` on the discriminant
-    rather than pydantic's ``oneOf`` so that a client reading the published
-    schema can see which action takes which field: each pair names one action
-    and the constraints that come with it, where a ``oneOf`` list says only
-    that one of several shapes has to match and leaves the reader to work out
-    which fields belong to which. The error a bad call gets does not depend on
-    the choice — nothing validates a call against the published schema; the
-    message comes from ``JobsInput`` itself, through
-    ``errors.compact_validation_error`` over pydantic's report, and pydantic
-    enumerates the actions from the model either way.
-    ``discriminator.propertyName`` is kept beside the branches, saying that
-    they are alternatives chosen by ``action``; the branch table itself is
-    not, because each ``if``/``then`` pair already names an action and the
-    ``$defs`` entry it selects.
+    Built from the action models, so a field added to an action is published
+    with it. A field two actions declare with different types stops the
+    build, because one published field cannot carry both.
     """
-    union = _JOBS_ADAPTER.json_schema(ref_template="#/$defs/{model}")
+    takers: dict[str, list[tuple[str, dict[str, Any], bool]]] = {}
+    defs: dict[str, Any] = {}
+    for model, action in zip(JobsInput.VARIANTS, JOBS_ACTIONS, strict=True):
+        schema = model.model_json_schema(ref_template="#/$defs/{model}")
+        defs.update(schema.get("$defs", {}))
+        required = set(schema.get("required", ()))
+        for name, field in schema["properties"].items():
+            if name not in _SHARED_JOBS_FIELDS:
+                takers.setdefault(name, []).append((action, field, name in required))
     shared = JobsInput.model_json_schema()["properties"]
-    mapping: dict[str, str] = union["discriminator"]["mapping"]
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": list(JOBS_ACTIONS),
-                "description": shared["action"]["description"],
-            },
-            "budget": shared["budget"],
+    properties: dict[str, Any] = {
+        "action": {
+            "type": "string",
+            "enum": list(JOBS_ACTIONS),
+            "description": shared["action"]["description"],
         },
-        "required": ["action"],
-        "discriminator": union["discriminator"],
-        "allOf": [
-            {"if": {"properties": {"action": {"const": action}}}, "then": {"$ref": ref}}
-            for action, ref in mapping.items()
-        ],
-        "$defs": union["$defs"],
+        "budget": shared["budget"],
     }
+    for name, entries in takers.items():
+        properties[name] = _flat_jobs_field(name, entries)
+    flat: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "required": ["action"],
+        "additionalProperties": False,
+    }
+    if defs:
+        flat["$defs"] = defs
+    return flat
+
+
+def _flat_jobs_field(name: str, entries: list[tuple[str, dict[str, Any], bool]]) -> dict[str, Any]:
+    """One published field for every action that takes ``name``.
+
+    The type is the actions' common one, allowing null where any action does,
+    since a call may omit the field for every action but one that requires it.
+    The description gives each action's own sentence after the actions that
+    share it.
+    """
+    shapes = [_without_prose(field) for _action, field, _required in entries]
+    kinds = [_without_null(shape) for shape in shapes]
+    if any(kind != kinds[0] for kind in kinds[1:]):
+        actions = ", ".join(action for action, _field, _required in entries)
+        raise TypeError(f"jobs field {name!r} has different types in the actions {actions}")
+    published = next((shape for shape in shapes if _allows_null(shape)), shapes[0])
+    groups: dict[tuple[str, bool], list[str]] = {}
+    for action, field, required in entries:
+        groups.setdefault((field.get("description", ""), required), []).append(action)
+    sentences = []
+    for (description, required), actions in groups.items():
+        head = ", ".join(actions) + (" (required)" if required else "")
+        sentences.append(f"{head}: {description}" if description else f"{head}.")
+    return {**published, "description": " ".join(sentences)}
+
+
+def _without_prose(field: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in field.items() if key not in ("description", "title")}
+
+
+def _allows_null(shape: dict[str, Any]) -> bool:
+    return _NULL_SCHEMA in shape.get("anyOf", ())
+
+
+def _without_null(shape: dict[str, Any]) -> dict[str, Any]:
+    """The shape an action accepts when it is given a value: no null, no default."""
+    rest = {key: value for key, value in shape.items() if key not in ("anyOf", "default")}
+    members = [member for member in shape.get("anyOf", ()) if member != _NULL_SCHEMA]
+    if len(members) == 1:
+        return {**rest, **members[0]}
+    return {**rest, "anyOf": members} if members else rest
 
 
 _JOBS_ERROR_SCHEMA: dict[str, Any] = {
