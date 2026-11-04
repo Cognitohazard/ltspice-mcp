@@ -3482,6 +3482,105 @@
         ".raw"
       ]
     },
+    "deck/save_pair_as_pair": {
+      "behaviour": "save-meas-node-pair",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_pair_as_pair.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_pair_as_pair.cir": "58e13f3aebf911544547aa16275879442b07e5e75bbc97cc6e749e4dea54582f"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_pair_as_pair.log": {
+          "bytes": 430,
+          "sha256": "af31df9449cb7ebcc28c069cd51cf50f6c53229ffc58eb28e54b66aaa4bb8f30"
+        },
+        "deck/save_pair_as_pair.raw": {
+          "bytes": 852,
+          "sha256": "caab083596f3e2369d212768205469c341cd0ceff3d18a7a6f0bc3cf06bbd1ab"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/save_pair_both_nodes": {
+      "behaviour": "save-meas-node-pair",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_pair_both_nodes.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_pair_both_nodes.cir": "80ce29241a7a380b7e37dbffe2183302e7c32d8810a9c22184d0e8fd26b9e4cf"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_pair_both_nodes.log": {
+          "bytes": 447,
+          "sha256": "0285bb2ae64f3677d0d6616df64c972a92d12beba19980d142ea572052416ad9"
+        },
+        "deck/save_pair_both_nodes.raw": {
+          "bytes": 886,
+          "sha256": "0bae59a8e320c35ac6774a5af0ea436744ee9e2f847f1480d2c811bd46f0d15a"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/save_pair_to_ground": {
+      "behaviour": "save-meas-node-pair",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/save_pair_to_ground.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/save_pair_to_ground.cir": "04bc66bc34c11fc9400a03dfb5ac54d96e8bf1025d1aab824491cf6f9ef0f077"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/save_pair_to_ground.log": {
+          "bytes": 436,
+          "sha256": "d9ebd629c9cedcf2ca317a91bf4911ea98644d418b335a556dadb0cf5241e06c"
+        },
+        "deck/save_pair_to_ground.raw": {
+          "bytes": 794,
+          "sha256": "93bf671d4f9ce306424ac740b359d316da39fa8425a6804daac461f2d28e1d41"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/section_sign_cp1252": {
       "behaviour": "deck-encoding",
       "command": [
@@ -6336,6 +6435,122 @@
       "stopped": false,
       "written": [
         ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_ac": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_ac.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_ac.cir": "3ace212fc0db67640bcd1ce352cfc6d806971eef8880dcbf17e402147144f9a2"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_ac.log": {
+          "bytes": 504,
+          "sha256": "9006be9ab20a417f64a4bd16cfb7d16ae50e06ee8d95710393893e0e9ec44364"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_ac_step": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_ac_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_ac_step.cir": "b02c6c3e268ac3ccdae7d068fd119d065485270496cf580a9d37f05870ff55af"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_ac_step.log": {
+          "bytes": 728,
+          "sha256": "06227870152fd32d12feb2842799444aaa800e8c03a125452c2065e9471d9b74"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_tran": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_tran.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_tran.cir": "4bc5d3e5c438cf9e8f8a6c46b5354caae2c987a55249214be801aa1d8f1f4284"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_tran.log": {
+          "bytes": 669,
+          "sha256": "53088859383b688f4955bbfb24f9105b7340c1ab67019dcd66d68ff48f951f61"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "log/meas_when_threshold_tran_step": {
+      "behaviour": "log-meas-when-threshold",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/meas_when_threshold_tran_step.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "log/meas_when_threshold_tran_step.cir": "343c54cac31a95eab1293a332345ff09b4c189a981c84b124ef90bcf68db6f77"
+      },
+      "kind": "run",
+      "outputs": {
+        "log/meas_when_threshold_tran_step.log": {
+          "bytes": 999,
+          "sha256": "6fbe7a14fb7cb3b0ef4f680a740e1f139410ba457c98f80a3b317fbb9ea96851"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".log.raw",
         ".op.raw",
         ".raw"
       ]
