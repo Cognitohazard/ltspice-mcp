@@ -272,7 +272,9 @@ uv run ltspice-mcp             # run the server (stdio)
 
 To release, add a dated section for the version to `CHANGELOG.md`, run
 `scripts/release.sh <version>`, and push the tag it creates. Pushing the tag
-publishes the release to PyPI.
+publishes the release to PyPI. The script also stamps the version into the
+plugin and Desktop-extension manifests, and the publish workflow refuses a
+tag whose manifests name another version.
 
 ## Contributing
 
