@@ -23,7 +23,12 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.ltspice_window import OpenWindows
-from ltspice_mcp.lib.pathutil import describe_roots, resolve_safe_path, with_roots
+from ltspice_mcp.lib.pathutil import (
+    describe_roots,
+    relative_base,
+    resolve_safe_path,
+    with_roots,
+)
 from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
@@ -231,6 +236,18 @@ class SessionState:
             with_roots(self.allowed_paths(), also),
             relative_to=self.config.working_dir,
         )
+
+    def relative_base(self) -> Path:
+        """The directory a relative path is taken from here, resolved.
+
+        The base :meth:`resolve_path` anchors a relative path on, so a listing
+        of what a relative name can reach, or a note saying where relatives
+        go, names the directory a read of that name opens. It follows a base
+        the host declared for the calling context (the Python API declares its
+        ``working_dir``), so it is read in that context.
+        """
+        base = relative_base(self.allowed_paths(), self.config.working_dir)
+        return (base if base is not None else self.config.working_dir).resolve()
 
     def sandbox_guidance(self) -> str:
         """What a caller whose path was refused can do about it.

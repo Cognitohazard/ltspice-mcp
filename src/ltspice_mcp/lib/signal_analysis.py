@@ -20,6 +20,8 @@ from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 
+from ltspice_mcp.lib.log_types import measurement_named
+
 _LEVEL_EPSILON = 1e-12
 
 CrossingDirection = Literal["rising", "falling"]
@@ -308,10 +310,40 @@ def window_and_clean(
     return t_clean, y_clean, dropped
 
 
+def level_crossings(
+    x: np.ndarray, y: np.ndarray, level: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Where ``y`` crosses ``level`` between its samples, by linear
+    interpolation along ``x`` (a time axis, or the logarithm of a frequency).
+
+    Returns, crossing by crossing in sample order, the index of the sample
+    each one follows, its interpolated ``x``, and whether ``y`` rises through
+    it. A crossing is a strict change of sign of ``y - level`` between two
+    samples, or a sample exactly on the level that the next sample leaves, so
+    a sample on the level is one crossing, never two. The one rule for every
+    crossing a recipe reports.
+    """
+    d = y - level
+    # Strict sign change between consecutive samples
+    sign_change = (d[:-1] * d[1:]) < 0
+    # A sample sitting exactly on the level "exits" on the next sample
+    touch_exit = (d[:-1] == 0) & (d[1:] != 0)
+    idx = np.flatnonzero(sign_change | touch_exit)
+    y0 = y[idx]
+    y1 = y[idx + 1]
+    denom = y1 - y0
+    # frac = 0 where denom == 0 (can only happen for touch_exit with y0==y1==level,
+    # which is filtered above; guard anyway)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac = np.where(denom != 0, (level - y0) / denom, 0.0)
+    return idx, x[idx] + frac * (x[idx + 1] - x[idx]), y1 > y0
+
+
 def _interp_crossings(
     t: np.ndarray, y: np.ndarray, threshold: float, direction: str
 ) -> list[float]:
-    """Sub-sample-accurate threshold crossings via linear interpolation.
+    """Sub-sample-accurate threshold crossings via linear interpolation
+    (:func:`level_crossings`).
 
     ``direction`` is ``"rising"``, ``"falling"``, or ``"any"``. Returns crossing
     times in increasing order. Handles sample values that exactly equal the
@@ -320,27 +352,7 @@ def _interp_crossings(
     """
     if direction not in ("rising", "falling", "any"):
         raise ValueError(f"direction must be 'rising', 'falling', or 'any', got {direction!r}")
-    d = y - threshold
-    # Strict sign change between consecutive samples
-    sign_change = (d[:-1] * d[1:]) < 0
-    # A sample sitting exactly on threshold "exits" on the next sample
-    touch_exit = (d[:-1] == 0) & (d[1:] != 0)
-    idx = np.where(sign_change | touch_exit)[0]
-    if len(idx) == 0:
-        return []
-
-    y0 = y[idx]
-    y1 = y[idx + 1]
-    t0 = t[idx]
-    t1 = t[idx + 1]
-    denom = y1 - y0
-    # frac = 0 where denom == 0 (can only happen for touch_exit with y0==y1==threshold,
-    # which we filtered above; guard anyway)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        frac = np.where(denom != 0, (threshold - y0) / denom, 0.0)
-    tc = t0 + frac * (t1 - t0)
-
-    rising_mask = y1 > y0
+    _idx, tc, rising_mask = level_crossings(t, y, threshold)
     if direction == "rising":
         tc = tc[rising_mask]
     elif direction == "falling":
@@ -2129,17 +2141,21 @@ def compute_measurement_stats(
     """Aggregate stats across all steps of a ``.MEAS`` result dict.
 
     ``None`` entries (failed measurements) are counted but excluded from stats.
-    If ``measurement`` is given, stats are computed for only that one.
+    If ``measurement`` is given, stats are computed for only that one, named
+    in any case (:func:`~ltspice_mcp.lib.log_types.measurement_named`).
     """
     if histogram_bins < 0:
         raise ValueError(f"histogram_bins must be >= 0, got {histogram_bins}")
 
-    names = [measurement] if measurement is not None else list(measurements.keys())
-    if measurement is not None and measurement not in measurements:
-        raise ValueError(
-            f"Measurement {measurement!r} not found. Available: "
-            f"{', '.join(measurements.keys()) or '<none>'}"
-        )
+    names = list(measurements.keys())
+    if measurement is not None:
+        named = measurement_named(measurement, names)
+        if named is None:
+            raise ValueError(
+                f"Measurement {measurement!r} not found. Available: "
+                f"{', '.join(measurements.keys()) or '<none>'}"
+            )
+        names = [named]
 
     result: dict[str, MeasurementStatsEntry] = {}
     for name in names:

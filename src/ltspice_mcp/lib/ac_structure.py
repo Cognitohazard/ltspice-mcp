@@ -52,6 +52,7 @@ from ltspice_mcp.lib.raw_parser import safe_magnitude_db
 # tool layer) additionally carry ``kind``/``severity``/``evidence`` — all
 # optional on the canonical Observation shape, so both flavors fit.
 from ltspice_mcp.lib.result_observations import Observation
+from ltspice_mcp.lib.signal_analysis import level_crossings
 
 # ---------------------------------------------------------------------------
 # Public result types
@@ -441,15 +442,11 @@ def _f0_at_half_swing(x: np.ndarray, phi: np.ndarray, i0: int, i1: int, total_de
     target = phi[i0] + total_deg / 2.0
     seg = phi[i0 : i1 + 1]
     xs = x[i0 : i1 + 1]
-    d = seg - target
-    crossings = np.where(np.diff(np.sign(d)) != 0)[0]
+    _idx, crossings, _rising = level_crossings(xs, seg, target)
     if crossings.size == 0:
-        k = int(np.argmin(np.abs(d)))
+        k = int(np.argmin(np.abs(seg - target)))
         return float(10.0 ** xs[k])
-    k = int(crossings[0])
-    y0, y1 = seg[k], seg[k + 1]
-    xc = xs[k] if y1 == y0 else xs[k] + (target - y0) / (y1 - y0) * (xs[k + 1] - xs[k])
-    return float(10.0**xc)
+    return float(10.0 ** crossings[0])
 
 
 def _read_corner_q(freqs: np.ndarray, H: np.ndarray) -> list[tuple[float, float]]:

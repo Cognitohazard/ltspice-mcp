@@ -55,7 +55,7 @@ async def test_strict_checkpoint_orders_after_pending_write(
         await strict
         await registry.drain_pending()
         assert writes == [job.job_id, job.job_id]
-        assert experiment_store.load_job(job.job_id, work_dir, own_is_alive=True) is not None
+        assert experiment_store.load_job(job.job_id, work_dir) is not None
     finally:
         release.set()
         await registry.drain_pending()
@@ -74,7 +74,7 @@ async def test_strict_checkpoint_preserves_order_before_queued_writer_starts(
     # No yield: the previous writer is queued, but has not taken its lock yet.
     await registry.persist_strict(newer)
     await registry.drain_pending()
-    saved = experiment_store.load_job(older.job_id, work_dir, own_is_alive=True)
+    saved = experiment_store.load_job(older.job_id, work_dir)
     assert saved is not None
     assert saved.status == "failed" and saved.error == "New durable state"
 
@@ -149,7 +149,7 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
         assert await asyncio.to_thread(finished.wait, LIVENESS_S)
         with pytest.raises(asyncio.CancelledError):
             await first
-        saved = experiment_store.load_job(older.job_id, work_dir, own_is_alive=True)
+        saved = experiment_store.load_job(older.job_id, work_dir)
         assert saved is not None
         assert saved.status == "failed" and saved.error == "New durable state"
         assert not completed_before_release
@@ -190,7 +190,7 @@ async def test_strict_atomic_replace_failure_survives_repeated_cancellation(
         release.set()
         with pytest.raises(OSError, match="atomic replacement unavailable"):
             await strict
-        saved = experiment_store.load_job(original.job_id, work_dir, own_is_alive=True)
+        saved = experiment_store.load_job(original.job_id, work_dir)
         assert saved is not None and saved.status == "queued"
     finally:
         release.set()

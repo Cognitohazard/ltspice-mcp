@@ -13,7 +13,7 @@ import pytest
 from spicelib import RawRead
 
 from ltspice_mcp.lib import log_parser, raw_parser, services
-from ltspice_mcp.lib.decoded_raw import DecodedRaw
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, declared_unit
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -25,7 +25,6 @@ from ltspice_mcp.lib.raw_parser import (
     query_point_value,
     read_partial_raw_progress,
     sample_to_dict,
-    whattype_unit,
 )
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -154,13 +153,31 @@ class TestTraceUnit:
     """Units come from the simulator's declared ``whattype`` (relayed, not
     invented); a trace's name never supplies one."""
 
-    def test_whattype_unit_known_and_unknown(self):
-        assert whattype_unit("voltage") == "V"
-        assert whattype_unit("device_current") == "A"
-        assert whattype_unit("frequency") == "Hz"
-        assert whattype_unit("admittance") == "S"
-        assert whattype_unit("notype") is None
-        assert whattype_unit(None) is None
+    def test_a_trace_with_no_declared_type_has_no_unit(self):
+        assert declared_unit(None) is None
+
+    @pytest.mark.parametrize(
+        ("declared", "unit"),
+        [
+            ("voltage", "V"),
+            ("current", "A"),
+            ("device_current", "A"),
+            ("time", "s"),
+            ("frequency", "Hz"),
+            ("hertz", "Hz"),
+            ("admittance", "S"),
+            ("impedance", "Ω"),
+            ("capacitance", "F"),
+            ("voltage-density", "V/√Hz"),
+            ("current-density", "A/√Hz"),
+            ("Voltage ", "V"),
+            ("notype", None),
+        ],
+    )
+    def test_a_declared_type_reads_its_unit(self, declared: str, unit: str | None):
+        """One table says a declared type's unit, for a descriptor's trace
+        and for a derived result's map alike."""
+        assert declared_unit(declared) == unit
 
 
 class TestOffsetAwareRawRead:

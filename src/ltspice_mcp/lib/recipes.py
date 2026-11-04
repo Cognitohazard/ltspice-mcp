@@ -7,6 +7,7 @@ or ``field`` is rejected by schema validation instead of being ignored.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
@@ -20,8 +21,9 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.models import StrictModel
+from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -157,7 +159,7 @@ TRANSIENT_FIELDS_BY_MODE: dict[str, frozenset[str]] = {
 # surface can call and which reads these same models; the Python API's
 # catalogue; and the guide. The helper owning it makes the pointer structural,
 # not a per-call-site convention.
-_DORMANT_POINTER = (
+DORMANT_POINTER = (
     " Full arguments: inspect(kind='reference', query='{metric}'), "
     "api.reference('analyze_results'), or guide section 'tools'."
 )
@@ -193,7 +195,7 @@ def _dormant_wire_stub() -> ConfigDict:
         schema.update(
             {
                 "type": "object",
-                "description": summary + _DORMANT_POINTER.format(metric=metric["const"]),
+                "description": summary + DORMANT_POINTER.format(metric=metric["const"]),
                 "properties": {"metric": metric},
                 "required": ["metric"],
             }
@@ -209,6 +211,53 @@ class Window(StrictModel):
     end: float | str | None = None
 
 
+def step_axis_key(axis: str, values: Mapping[str, Any]) -> str:
+    """The key of one step's ``values`` that a caller's step-axis name reads.
+
+    The name itself where a step holds it, else the one that differs from it
+    only in case: SPICE compares names without case, and both LTspice builds
+    print a parameter the deck steps as ``Rv`` as ``.step rv=...`` in the log
+    (recorded: ``log/meas_when_threshold_tran_step``). A stepped temperature
+    is held as the deck's ``.step temp`` names it; LTspice's raw of a stepped
+    operating point calls the same values ``temperature``, so that name reads
+    them too.
+    """
+    if axis in values:
+        return axis
+    folded = axis.casefold()
+    if folded == "temperature" and STEPPED_TEMPERATURE in values:
+        return STEPPED_TEMPERATURE
+    return next((key for key in values if key.casefold() == folded), axis)
+
+
+def _step_number(value: Any) -> float | None:
+    """A step value, or a selector's, as the number SPICE reads it; None for
+    one that is not a number (``'2k'`` is 2000, ``'fast'`` is None)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = parse_spice_value(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return number if math.isfinite(number) else None
+
+
+#: How many of a run's step values a refusal lists.
+_LISTED_STEP_VALUES = 20
+
+
+def _listed(items: Sequence[str]) -> str:
+    shown = ", ".join(items[:_LISTED_STEP_VALUES])
+    if len(items) > _LISTED_STEP_VALUES:
+        shown += f", ... ({len(items)} in all)"
+    return shown
+
+
 class StepSelector(StrictModel):
     """Select one inner ``.step`` result by axis value."""
 
@@ -216,27 +265,41 @@ class StepSelector(StrictModel):
     value: float | str
 
     def pick(self, step_values: Sequence[Mapping[str, Any]]) -> int:
-        """The index of the step whose ``axis`` is nearest ``value``, or for a
-        value that is not a number, the first equal to it as text."""
+        """The index of the step whose ``axis`` value is nearest ``value``.
+
+        A string is read as SPICE reads a value (``'2k'`` is 2000), as every
+        other value of a recipe is. One that is not a number selects the first
+        step whose value is the same text, and one that no step has is
+        refused with the values the run has, as is an axis it does not step.
+        """
         candidates = [
-            (index, values) for index, values in enumerate(step_values) if self.axis in values
+            (index, values[key])
+            for index, values in enumerate(step_values)
+            if (key := step_axis_key(self.axis, values)) in values
         ]
         if not candidates:
+            axes = sorted({str(key) for values in step_values for key in values})
+            present = f"the run steps {_listed(axes)}" if axes else "the run has no stepped values"
             raise ResultError(
-                f"step axis {self.axis!r} is not present in the captured step metadata"
+                f"step axis {self.axis!r} is not present in the captured step metadata: {present}"
             )
-        try:
-            target = float(format_spice_value(self.value))
-            return min(candidates, key=lambda pair: abs(float(pair[1][self.axis]) - target))[0]
-        except (TypeError, ValueError):
-            return next(
-                (
-                    index
-                    for index, values in candidates
-                    if str(values[self.axis]) == str(self.value)
-                ),
-                candidates[0][0],
+        target = _step_number(self.value)
+        if target is not None:
+            numbers = [
+                (index, number)
+                for index, value in candidates
+                if (number := _step_number(value)) is not None
+            ]
+            if numbers:
+                return min(numbers, key=lambda pair: abs(pair[1] - target))[0]
+        text = str(self.value)
+        found = next((index for index, value in candidates if str(value) == text), None)
+        if found is None:
+            values = list(dict.fromkeys(str(value) for _, value in candidates))
+            raise ResultError(
+                f"no step has {self.axis} = {self.value!r}: its values are {_listed(values)}"
             )
+        return found
 
 
 class StepSelectionFields(StrictModel):
@@ -668,10 +731,18 @@ class OperatingPointRecipe(KeyedRecipe):
     )
 
 
+#: The most points an inline waveform series carries, whatever the server's
+#: ``[analysis] max_points`` allows. A larger ``max_points`` is served at the
+#: lower of the two and said so, not refused.
+WAVEFORM_MAX_POINTS_CAP = 2_000_000
+
+
 class WaveformRecipe(VariableRecipe):
     metric: Literal["waveform"]
     signals: list[str] = Field(min_length=1, max_length=32)
-    max_points: int = Field(default=2000, ge=1, le=2_000_000)
+    max_points: int = Field(
+        default=2000, ge=1, description="Inline points per series, held to [analysis] max_points."
+    )
     format: Literal["inline", "csv"] = "inline"
     window: Window | None = None
 

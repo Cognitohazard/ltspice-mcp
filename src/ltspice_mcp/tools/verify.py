@@ -80,7 +80,7 @@ from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 from mcp import types
 from pydantic import BeforeValidator, Field
 
-from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.errors import PathSecurityError, python_route_text
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
     NETLIST_SUFFIXES,
@@ -91,6 +91,7 @@ from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
+from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
@@ -128,15 +129,14 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
     value_suffix_sites,
 )
 from ltspice_mcp.lib.spice_validator import (
-    drop_title_card,
-    validate_directive,
+    validate_directive_card,
     validate_netlist_arity,
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
@@ -1072,10 +1072,9 @@ async def _export_reference(
 class _LexedDeck:
     """One lex of a netlist, shared by the syntax and quality checks.
 
-    ``cards`` already has the title card dropped: line 1 is free text by SPICE
-    convention and the lexer has no title concept, so a title beginning with an
-    element letter parses as an element whose words the instance-level rules
-    would otherwise count as circuit nodes.
+    ``cards`` are the cards the simulator reads (``spice_lex.lex_deck``): not
+    the title on line 1, which is free text whatever it says, nor a card after
+    ``.END``, so no rule reports a card the simulator never sees.
 
     ``notes`` are the lexer's own remarks about what it had to guess — an
     unclosed ``.SUBCKT``, an ``.ENDS`` that matches nothing, a continuation with
@@ -1090,15 +1089,15 @@ class _LexedDeck:
     notes: list[str]
 
 
-def _lex_deck(text: str) -> _LexedDeck:
+def _lexed_deck(text: str) -> _LexedDeck:
     """Lex a netlist once for every check that reads its cards.
 
     ``lex`` reads any text into cards, a malformed card included, and says what
     it had to guess in its warnings, so there is no deck it refuses.
     """
-    result = lex(text)
+    result = lex_deck(text)
     return _LexedDeck(
-        cards=drop_title_card(result.cards),
+        cards=result.cards,
         notes=[f"netlist lexer: {note}" for note in result.warnings],
     )
 
@@ -1261,19 +1260,20 @@ def _syntax_findings(
     quality check.
     """
     findings: list[dict[str, Any]] = []
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line.startswith("."):
-            continue
-        err = validate_directive(line, simulator)
+    # The deck's cards, as the linter reads them: a directive continued on a
+    # ``+`` line is checked whole, and the title and the cards after ``.END``
+    # are not checked at all.
+    for card in deck.cards:
+        err = validate_directive_card(card, simulator)
         if err is None:
             continue
+        line = " ".join(card.body.split())
         detail = err.message + (f" {err.suggestion}" if err.suggestion else "")
         findings.append(
             _finding(
                 rule_id="directive_syntax",
                 severity="error",
-                at={"file": str(path), "line": lineno},
+                at={"file": str(path), "line": card.line_start},
                 subject=line,
                 evidence={"detail": detail, "card": line},
             )
@@ -1535,7 +1535,7 @@ def _exported_value_suffix_findings(
     except OSError:
         return []
     return _value_suffix_findings(
-        _lex_deck(text).cards,
+        _lexed_deck(text).cards,
         net_path,
         text,
         encoding,
@@ -2182,7 +2182,7 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
         report["reason"] = str(error)
         return report
     report.update(shown_in_window(shown), already_open=shown.held is not None)
-    if shown.held is not None and path.suffix.lower() == ".asc":
+    if shown.held is not None and is_asc(path):
         report.update(window_difference(path.read_bytes(), shown.held))
     return report
 
@@ -2356,14 +2356,14 @@ async def evaluate_verify_circuit(
         return _error_evaluation(data, f"'{path}' does not exist or is not a file")
 
     suffix = path.suffix.lower()
-    if suffix != ".asc" and suffix not in NETLIST_SUFFIXES:
+    if not is_asc(path) and suffix not in NETLIST_SUFFIXES:
         return _error_evaluation(
             data,
             f"'{suffix}' is not a circuit file this tool can check; pass a .asc "
             f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
         )
 
-    kind = "asc" if suffix == ".asc" else "netlist"
+    kind = "asc" if is_asc(path) else "netlist"
     kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
     applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
@@ -2417,7 +2417,7 @@ async def evaluate_verify_circuit(
     # whichever of the two asked for it.
     deck: _LexedDeck | None = None
     if text is not None and (wanted.get("syntax") or wanted.get("quality")):
-        deck = await asyncio.to_thread(_lex_deck, text)
+        deck = await asyncio.to_thread(_lexed_deck, text)
         observation_events.extend(deck.notes)
 
     # The LTspice this session drives, when it decodes decks as cp1252: the one
@@ -2654,12 +2654,22 @@ async def evaluate_verify_circuit(
     )
 
 
-def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallToolResult:
+def _finding_cap_rest(served: Collection[str] | None) -> str:
+    """Where the findings a capped rule leaves out are read."""
+    rest = "api.verify_circuit returns every one."
+    return rest if served is None else f"{rest} {python_route_text(served)}"
+
+
+def render_verify_circuit(
+    evaluation: VerifyCircuitEvaluation, served: Collection[str] | None = None
+) -> types.CallToolResult:
     """Apply the existing MCP cap and observation presentation to an evaluation.
 
     Selects findings by reference before building the envelope, so the uncapped
     evaluation is never copied wholesale; presentation replaces keys rather than
-    writing through any value it shares with the evaluation.
+    writing through any value it shares with the evaluation. ``served`` is the
+    session's tools, which decide where a capped rule's note sends the caller
+    for the rest.
     """
     shown: dict[str, int] = {}
     presented: list[dict[str, Any]] = []
@@ -2680,14 +2690,16 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
             observations.append(event)
             continue
         observations.extend(
-            f"{kind}: showing {FINDING_RULE_CAP} of {count} findings"
+            f"{kind}: " + cap_note(FINDING_RULE_CAP, count, "findings", _finding_cap_rest(served))
             for kind, count in sorted(event.totals.items())
             if count > FINDING_RULE_CAP
         )
     data["observations"] = observations
     if not evaluation.is_error:
         data["outcome"] = _outcome(data["findings"], data["failures"], data.get("comparison"))
-        data["hint"] = _hint(data)
+        # Counted over every finding, as the observations count them: the cap
+        # shortens the list shown, not what the check found.
+        data["hint"] = _hint({**data, "findings": evaluation.data["findings"]})
 
     result = format_response(data["hint"], data)
     if evaluation.is_error:
@@ -2712,4 +2724,6 @@ async def handle_verify_circuit(
     args: VerifyCircuitInput, state: SessionState
 ) -> types.CallToolResult:
     """Check (and optionally render/compare) a circuit file without changing it."""
-    return render_verify_circuit(await evaluate_verify_circuit(args, state))
+    return render_verify_circuit(
+        await evaluate_verify_circuit(args, state), served=frozenset(state.tool_dispatch)
+    )

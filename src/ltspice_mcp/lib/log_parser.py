@@ -11,6 +11,7 @@ import re
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -181,10 +182,61 @@ _NGSPICE_TITLE_PSEUDO_MEAS = "circuit"
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
 # RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
 _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
-# Value capture stops at whitespace/comma AND at the trailing degree symbol
-# LTspice writes for ``.step temp=-40°``. Without the ``°`` exclusion the
-# captured value is ``-40°``, which downstream value-parsing rejects.
-_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s°]+)")
+# A value runs to the next comma or space. A stepped temperature carries its
+# unit after the number: LTspice 24 and later write ``.step temp=-40°``,
+# LTspice XVII ``.step temp=-40°C``.
+_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
+
+
+@dataclass(frozen=True)
+class StepParameter:
+    """One stepped value of a ``.step`` line: its name, the token as printed,
+    and the number it reads as (a temperature's unit left off), or None for a
+    token that is not a number."""
+
+    name: str
+    token: str
+    number: float | None
+
+
+@dataclass(frozen=True)
+class StepLine:
+    """The stepped values one ``.step`` line of a log names, and whether the
+    line holds anything but ``name=value`` pairs."""
+
+    parameters: tuple[StepParameter, ...]
+    only_parameters: bool
+
+
+def read_step_line(line: str) -> StepLine | None:
+    """A log line's ``.step`` values, or None for a line that is not a
+    ``.step`` line. The one reading of the line, for the log's own step rows
+    and for the steps of the raw beside it."""
+    match = _RE_STEP_LINE.match(line.strip())
+    if match is None:
+        return None
+    parameters = []
+    for pair in _RE_STEP_KV.finditer(match[1]):
+        token = pair[2]
+        try:
+            number: float | None = float(token.partition("°")[0])
+        except ValueError:
+            number = None
+        parameters.append(StepParameter(pair[1], token, number))
+    rest = _RE_STEP_KV.sub("", match[1]).strip(" \t,")
+    return StepLine(tuple(parameters), not rest)
+
+
+def _step_row(line: str) -> dict[str, float] | None:
+    """The numbers a ``.step`` line names, by parameter; None for any other
+    line or one that names no number."""
+    step = read_step_line(line)
+    if step is None:
+        return None
+    row = {p.name: p.number for p in step.parameters if p.number is not None}
+    return row or None
+
+
 # Stepped ``.op`` runs don't write ``.step name=val`` markers. LTspice 24 and
 # later log one of these per step instead, and counting them is the only sign
 # in the log that the bias point ran more than once. LTspice XVII words the
@@ -469,8 +521,10 @@ def parse_temperatures(
     Reads the value both LTspice (``temp = 27`` / ``tnom = 27``) and ngspice
     (``Doing analysis at TEMP = 27.0 and TNOM = 27.0``) print by default;
     ``None`` for either value when the log doesn't carry it. On a stepped-
-    temperature run the header value is step 0's, which is still a truthful
-    fact about the header — no attempt is made to derive a per-step temp.
+    temperature run the header holds one step's temperature, not the run's:
+    LTspice 26 prints the first step's before the run and LTspice XVII the
+    last step's after it (the recorded ``raw/step_temp``). It is returned as
+    printed; a step's own temperature is in that step's values.
     """
     body = _resolve_log_text(log_path, text)
     ng = _RE_NG_TEMP.search(body)
@@ -502,20 +556,11 @@ def parse_step_iterations(
     LTspice always writes already-evaluated floats, so this only matters
     for hand-crafted test fixtures.
     """
-    iterations: list[dict[str, float]] = []
-    for line in _resolve_log_text(log_path, text).splitlines():
-        m = _RE_STEP_LINE.match(line.strip())
-        if not m:
-            continue
-        params: dict[str, float] = {}
-        for kv in _RE_STEP_KV.finditer(m.group(1)):
-            try:
-                params[kv.group(1)] = float(kv.group(2))
-            except ValueError:
-                continue
-        if params:
-            iterations.append(params)
-    return iterations
+    return [
+        row
+        for line in _resolve_log_text(log_path, text).splitlines()
+        if (row := _step_row(line)) is not None
+    ]
 
 
 def count_op_iterations(log_path: Path | None = None, *, text: str | None = None) -> int:
@@ -552,18 +597,8 @@ def scan_op_step_log(
     for line in _resolve_log_text(log_path, text).splitlines():
         if _RE_OP_SOLVE_ATTEMPT.match(line):
             op_solve_count += 1
-            continue
-        m = _RE_STEP_LINE.match(line.strip())
-        if not m:
-            continue
-        params: dict[str, float] = {}
-        for kv in _RE_STEP_KV.finditer(m.group(1)):
-            try:
-                params[kv.group(1)] = float(kv.group(2))
-            except ValueError:
-                continue
-        if params:
-            iterations.append(params)
+        elif (row := _step_row(line)) is not None:
+            iterations.append(row)
     return iterations, op_solve_count
 
 
@@ -1221,6 +1256,22 @@ def make_log_reader(log_path: Path, *, scratch_dir: Path | None = None) -> LTSpi
 #: spicelib has turned it into a complex number (sin(pi) is not exactly 0).
 _REAL_ANGLE_TOLERANCE = 1e-9
 
+# LTspice 26 prints a stepped frequency response analysis's margins in its
+# measurement table with their units: a phase margin as ``90.6295°``, and a
+# gain margin whose phase never crosses as ``infdB`` (the recorded
+# raw/fra_step). spicelib keeps such a value as text.
+_RE_PRINTED_WITH_UNIT = re.compile(
+    r"(?P<number>[-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
+)
+
+
+def printed_measurement(value: str) -> float | None:
+    """A measurement LTspice printed as a number with its unit, read as the
+    number (``90.6295°`` is 90.6295, ``infdB`` infinite); None for any other
+    text."""
+    match = _RE_PRINTED_WITH_UNIT.fullmatch(value.strip())
+    return float(match["number"]) if match else None
+
 
 def _complex_measurement(value: complex) -> float:
     """One AC .meas result, which LTspice prints as ``(<magnitude>dB,<angle>°)``.
@@ -1259,6 +1310,17 @@ def empty_measurements(
         "warnings": diagnostics.get("warnings") or None,
         "failed_measurements": list(failed),
     }
+
+
+def _printed_measurement_line(log_text: str, name: str) -> str | None:
+    """The log line that printed measurement ``name``: its ``name: ...`` line,
+    or the ``Measurement: name`` heading of its table in a stepped run."""
+    escaped = re.escape(name)
+    for pattern in (rf"^[ \t]*{escaped}:[^\r\n]*", rf"^Measurement:[ \t]*{escaped}[ \t]*$"):
+        found = re.search(pattern, log_text, re.IGNORECASE | re.MULTILINE)
+        if found:
+            return found.group(0).strip()
+    return None
 
 
 def parse_measurements(
@@ -1315,7 +1377,12 @@ def parse_measurements(
         # tool surfaces the reason.
         return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
-    def _coerce(values: list) -> list[float | None]:
+    # A value LTspice printed that is not a number (a WHEN's threshold written
+    # as a parameter or an expression) fails its own entry, not the table:
+    # name (as the reader keys it) -> the text it printed.
+    unreadable: dict[str, str] = {}
+
+    def _coerce(values: list, name: str) -> list[float | None]:
         out: list[float | None] = []
         for val in values:
             if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
@@ -1324,11 +1391,13 @@ def parse_measurements(
                 out.append(_complex_measurement(val))
             elif hasattr(val, "item") and not isinstance(val, str):
                 out.append(float(val.item()))  # numpy scalar
+            elif isinstance(val, str) and (number := printed_measurement(val)) is not None:
+                out.append(number)
             else:
                 try:
                     out.append(float(val))
                 except (TypeError, ValueError):
-                    logger.warning("Measurement value %r is non-numeric; recording as None", val)
+                    unreadable.setdefault(name, str(val))
                     out.append(None)
         return out
 
@@ -1337,7 +1406,7 @@ def parse_measurements(
     parents: dict[str, list[float | None]] = {}
     metadata: dict[str, dict[str, float | list[float | None] | None]] = {}
     for name in measure_names:
-        coerced = _coerce(reader.dataset.get(name.lower(), []))
+        coerced = _coerce(reader.dataset.get(name.lower(), []), name)
         suffix_match = next(
             ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
             None,
@@ -1387,6 +1456,19 @@ def parse_measurements(
             override = at_overrides.get(name.lower())
             if override:
                 entry["at"] = override[0] if all(v == override[0] for v in override) else override
+        printed = unreadable.get(name) or next(
+            (
+                unreadable[meta]
+                for suffix, _key in _MEAS_METADATA_SUFFIXES
+                if (meta := name + suffix) in unreadable
+            ),
+            None,
+        )
+        if printed is not None:
+            entry["unreadable"] = {
+                "line": _printed_measurement_line(log_text, name),
+                "reason": f"the log gives {printed!r} where a number belongs",
+            }
         measurements[name] = entry
 
     step_count = len(next(iter(parents.values()))) if parents else 0

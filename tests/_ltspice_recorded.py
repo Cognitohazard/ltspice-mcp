@@ -61,9 +61,9 @@ def launcher(build: str) -> type:
     """spicelib's LTspice class, launching the executable ``build`` was recorded
     with, by its file name.
 
-    The server tells LTspice builds apart by that name alone
-    (``simulator_build.predates_logopinfo``), so the folder is made up and
-    nothing is run. A test that uses this does the same on every machine; one
+    Before a run on it has reported its build, the server tells LTspice builds
+    apart by that name (``simulator_build.ltspice_before_24``), so the folder
+    is made up and nothing is run. A test that uses this does the same on every machine; one
     that uses spicelib's class as imported gets whichever LTspice spicelib
     found installed.
     """

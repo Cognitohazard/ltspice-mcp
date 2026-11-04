@@ -410,7 +410,8 @@ class TestOwnerPidLiveness:
         registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
         own = _running_experiment(work_dir, "exp_own", os.getpid())
         foreign = _running_experiment(work_dir, "exp_foreign", live_peer_pid)
-        registry.jobs[own.job_id] = own
+        # This process runs the job its registry holds a live job for.
+        registry.reserve(own)
         registry.jobs[foreign.job_id] = foreign
 
         cancelled: list[str] = []

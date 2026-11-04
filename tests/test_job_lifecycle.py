@@ -142,10 +142,10 @@ class TestTransitionEvents:
 _PACKAGE = SRC / "ltspice_mcp"
 
 # Where a status may change without going through a live job: the live job's
-# own transition, and shutdown settling a job this process holds no live job for.
+# own transition. Shutdown settles only the jobs this process runs, each through
+# its live job.
 _BARE_TRANSITIONS = {
     ("lib/job_lifecycle.py", "LiveJob.transition"),
-    ("lib/job_registry.py", "JobRegistry.cancel_running"),
 }
 
 

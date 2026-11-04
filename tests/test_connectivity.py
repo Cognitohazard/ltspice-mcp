@@ -1,33 +1,32 @@
-"""The net partition and the signature built on it, on plain coordinates.
+"""The nets of a sheet and the signature built on them, on plain coordinates.
 
 The joining rules themselves are held against LTspice's own exports in
-``test_recorded_ltspice_schematics.py``. Here the partition is held against a
-plain reference that tests every point against every wire, on every sheet the
-suite holds and on generated ones, so the indexed search finds exactly what
-the exhaustive one does.
+``test_recorded_ltspice_schematics.py``. Here the wiring that ``nets_by_ltspice``
+joins points by is held against a plain reference that tests every point
+against every wire, on every sheet the suite holds and on generated ones, so
+the indexed search finds exactly what the exhaustive one does.
 """
 
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
-    NetPartition,
     Point,
     Segment,
+    _join,  # pyright: ignore[reportPrivateUsage]
     _runs_and_drops,  # pyright: ignore[reportPrivateUsage]
     build_on_wire_predicate,
-    label_folded_nets,
     name_key,
-    net_members,
+    named_nets,
     nets_by_ltspice,
-    partition,
     point_on_segment,
     signature,
 )
@@ -40,8 +39,30 @@ Pins = list[tuple[Point, tuple[str, str]]]
 Labels = list[tuple[Point, str]]
 
 
-def reference_partition(pins: Pins, labels: Labels, segments: list[Segment]) -> NetPartition:
-    """The partition worked out the plain way: every point against every wire."""
+class Wired(NamedTuple):
+    """Points grouped by the wiring that joins them: each point's representative,
+    every point by representative, and what sits on each point."""
+
+    root: Callable[[Point], Point]
+    members: dict[Point, set[Point]]
+    pin_owners: dict[Point, list[tuple[str, str]]]
+    label_texts: dict[Point, set[str]]
+
+
+def wired(pins: Pins, labels: Labels, segments: Iterable[Segment]) -> Wired:
+    """What the indexed search (``connectivity._join``) joins, by wiring alone."""
+    pin_owners: dict[Point, list[tuple[str, str]]] = {}
+    for coord, owner in pins:
+        pin_owners.setdefault(coord, []).append(owner)
+    label_texts: dict[Point, set[str]] = {}
+    for coord, text in labels:
+        label_texts.setdefault(coord, set()).add(text)
+    find, members = _join([*pin_owners, *label_texts], list(segments))
+    return Wired(find, members, pin_owners, label_texts)
+
+
+def reference_partition(pins: Pins, labels: Labels, segments: list[Segment]) -> Wired:
+    """The wiring worked out the plain way: every point against every wire."""
     parent: dict[Point, Point] = {}
 
     def find(p: Point) -> Point:
@@ -82,10 +103,31 @@ def reference_partition(pins: Pins, labels: Labels, segments: list[Segment]) -> 
     members: dict[Point, set[Point]] = {}
     for p in parent:
         members.setdefault(find(p), set()).add(p)
-    return NetPartition(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
+    return Wired(root=find, members=members, pin_owners=pin_owners, label_texts=label_texts)
 
 
-def assert_same(got: NetPartition, want: NetPartition) -> None:
+def folded(part: Wired) -> Callable[[Point], Point]:
+    """Each point's representative once nets that carry a name in common, as
+    ``name_key`` compares names, are one."""
+    parent: dict[Point, Point] = {}
+
+    def find(net: Point) -> Point:
+        parent.setdefault(net, net)
+        while parent[net] != net:
+            net = parent[net]
+        return net
+
+    first: dict[str, Point] = {}
+    for coord, texts in part.label_texts.items():
+        for text in texts:
+            net = find(part.root(coord))
+            other = find(first.setdefault(name_key(text), net))
+            if other != net:
+                parent[other] = net
+    return lambda coord: find(part.root(coord))
+
+
+def assert_same(got: Wired, want: Wired) -> None:
     # The same nets, under the same representatives, listed in the same order:
     # callers key on a representative and sort by it, so a different one would
     # reorder what they report.
@@ -146,12 +188,12 @@ class TestTheIndexedSearchFindsWhatTheExhaustiveOneDoes:
     @pytest.mark.parametrize("path", SUITE_SHEETS, ids=suite_name)
     def test_on_every_sheet_in_the_suite(self, path: Path) -> None:
         inputs = sheet_inputs(path)
-        assert_same(partition(*inputs), reference_partition(*inputs))
+        assert_same(wired(*inputs), reference_partition(*inputs))
 
     @pytest.mark.parametrize("seed", range(200))
     def test_on_generated_sheets(self, seed: int) -> None:
         inputs = generated_sheet(seed)
-        assert_same(partition(*inputs), reference_partition(*inputs))
+        assert_same(wired(*inputs), reference_partition(*inputs))
 
     def test_the_generated_sheets_hold_the_cases_that_matter(self) -> None:
         on_an_interior = diagonal = zero_length = 0
@@ -187,105 +229,106 @@ class TestOnAWire:
         assert on_wire((32, 32)) and not on_wire((32, 48))
 
 
-def nets(part: NetPartition) -> set[frozenset[Point]]:
+def nets(part: Wired) -> set[frozenset[Point]]:
     return {frozenset(group) for group in part.members.values()}
 
 
-def joined(part: NetPartition, a: Point, b: Point) -> bool:
+def joined(part: Wired, a: Point, b: Point) -> bool:
     return part.root(a) == part.root(b)
 
 
 class TestTheRules:
-    """Each rule on the smallest sheet that shows it."""
+    """Each rule of the wiring on the smallest sheet that shows it."""
 
     def test_a_wire_joins_its_ends(self) -> None:
-        part = partition([], [], [((0, 0), (64, 0))])
+        part = wired([], [], [((0, 0), (64, 0))])
         assert joined(part, (0, 0), (64, 0))
 
     def test_an_end_on_another_wires_interior_is_joined_to_it(self) -> None:
-        part = partition([], [], [((0, 0), (64, 0)), ((32, 0), (32, 48))])
+        part = wired([], [], [((0, 0), (64, 0)), ((32, 0), (32, 48))])
         assert len(nets(part)) == 1
 
     def test_wires_that_only_cross_stay_apart(self) -> None:
-        part = partition([], [], [((0, 16), (64, 16)), ((32, 0), (32, 48))])
+        part = wired([], [], [((0, 16), (64, 16)), ((32, 0), (32, 48))])
         assert len(nets(part)) == 2
         assert not joined(part, (0, 16), (32, 0))
 
     def test_a_label_at_a_crossing_joins_both_wires(self) -> None:
-        part = partition([], [((32, 16), "n")], [((0, 16), (64, 16)), ((32, 0), (32, 48))])
+        part = wired([], [((32, 16), "n")], [((0, 16), (64, 16)), ((32, 0), (32, 48))])
         assert len(nets(part)) == 1
 
     def test_a_pin_at_a_crossing_joins_both_wires(self) -> None:
-        part = partition([((32, 16), ("R1", "A"))], [], [((0, 16), (64, 16)), ((32, 0), (32, 48))])
+        part = wired([((32, 16), ("R1", "A"))], [], [((0, 16), (64, 16)), ((32, 0), (32, 48))])
         assert len(nets(part)) == 1
 
     def test_a_pin_on_a_wires_interior_is_on_that_wire(self) -> None:
-        part = partition([((32, 0), ("R1", "A"))], [], [((0, 0), (64, 0))])
+        part = wired([((32, 0), ("R1", "A"))], [], [((0, 0), (64, 0))])
         assert joined(part, (32, 0), (0, 0))
 
-    def test_two_pins_on_one_point_are_joined(self) -> None:
-        part = partition([((0, 0), ("R1", "B")), ((0, 0), ("R2", "A"))], [], [])
+    def test_two_pins_on_one_point_are_one_point(self) -> None:
+        part = wired([((0, 0), ("R1", "B")), ((0, 0), ("R2", "A"))], [], [])
         assert part.pin_owners[(0, 0)] == [("R1", "B"), ("R2", "A")]
         assert nets(part) == {frozenset({(0, 0)})}
 
     def test_collinear_wires_that_overlap_are_joined(self) -> None:
-        part = partition([], [], [((0, 0), (64, 0)), ((32, 0), (96, 0))])
+        part = wired([], [], [((0, 0), (64, 0)), ((32, 0), (96, 0))])
         assert len(nets(part)) == 1
 
     def test_collinear_wires_with_a_gap_are_not(self) -> None:
-        part = partition([], [], [((0, 0), (32, 0)), ((48, 0), (96, 0))])
+        part = wired([], [], [((0, 0), (32, 0)), ((48, 0), (96, 0))])
         assert len(nets(part)) == 2
 
     def test_a_point_on_a_diagonal_wire_is_on_it(self) -> None:
-        part = partition([((32, 32), ("R1", "A"))], [((16, 48), "off")], [((0, 0), (64, 64))])
+        part = wired([((32, 32), ("R1", "A"))], [((16, 48), "off")], [((0, 0), (64, 64))])
         assert joined(part, (32, 32), (0, 0))
         assert not joined(part, (16, 48), (0, 0))
 
     def test_a_wire_of_no_length_joins_nothing(self) -> None:
-        part = partition([((0, 0), ("R1", "A"))], [], [((16, 0), (16, 0))])
+        part = wired([((0, 0), ("R1", "A"))], [], [((16, 0), (16, 0))])
         assert len(nets(part)) == 2
 
     def test_a_point_beside_a_wire_is_not_on_it(self) -> None:
-        part = partition([((32, 16), ("R1", "A"))], [], [((0, 0), (64, 0))])
+        part = wired([((32, 16), ("R1", "A"))], [], [((0, 0), (64, 0))])
         assert not joined(part, (32, 16), (0, 0))
 
 
 class TestNames:
-    def test_the_partition_is_wiring_only(self) -> None:
-        part = partition([], [((0, 0), "vdd"), ((96, 0), "vdd")], [])
-        assert not joined(part, (0, 0), (96, 0))
-        assert part.label_texts == {(0, 0): {"vdd"}, (96, 0): {"vdd"}}
+    def test_a_net_is_wiring_only(self) -> None:
+        one, other = LabelAt((0, 0), 0, "vdd"), LabelAt((96, 0), 1, "vdd")
+        found = nets_by_ltspice([], [one, other], [])
+        assert found.of_label(one) != found.of_label(other)
+        assert found.folded(found.of_label(one)) == found.folded(found.of_label(other))
 
     def test_labels_of_one_name_are_one_net_once_folded(self) -> None:
-        part = partition(
-            [((16, 0), ("R1", "A")), ((112, 0), ("R2", "A")), ((200, 0), ("R3", "A"))],
+        named = named_nets(
+            [("R1", [("A", (16, 0))]), ("R2", [("A", (112, 0))]), ("R3", [("A", (200, 0))])],
             [((0, 0), "vdd"), ((96, 0), "vdd"), ((184, 0), "out")],
             [((0, 0), (16, 0)), ((96, 0), (112, 0)), ((184, 0), (200, 0))],
         )
-        net_of: Callable[[Point], Point] = label_folded_nets(part)
-        assert net_of((16, 0)) == net_of((112, 0))
-        assert net_of((16, 0)) != net_of((200, 0))
-        assert net_members(part, net_of, net_of((16, 0))) == {(0, 0), (16, 0), (96, 0), (112, 0)}
+        r1, r2, r3 = named.pins
+        assert named.of_pin(r1) == named.of_pin(r2) != named.of_pin(r3)
+        net = named.of_pin(r1)
+        assert [pin.reference for pin in named.pins_on(net)] == ["R1", "R2"]
+        assert [label.point for label in named.labels_on(net)] == [(0, 0), (96, 0)]
+        assert named.texts(net) == {"vdd"}
 
 
 def crossing(across: str = "", down: str = "", *more: tuple[Point, str]) -> NamedNets:
     """A wire across and a wire down that cross at (200,100) and are not joined,
     each with the label given for it, and any further labels."""
     labels = [(at, name) for at, name in (((0, 100), across), ((200, 0), down)) if name]
-    return NamedNets(
-        partition([], [*labels, *more], [((0, 100), (400, 100)), ((200, 0), (200, 200))])
-    )
+    return named_nets([], [*labels, *more], [((0, 100), (400, 100)), ((200, 0), (200, 200))])
 
 
-#: A point of each of the two wires that cross.
-BOTH = [(0, 100), (200, 0)]
+#: A point of the wire across alone, and the point where the two cross.
+ACROSS, BOTH = (100, 100), (200, 100)
 
 
 class TestWhatAPointWouldJoin:
     """Asked of a sheet as it is, before the pin or the label is on it."""
 
     def test_on_one_wire_it_joins_that_net(self) -> None:
-        said = crossing("vdd", "vss").joined_at([(0, 100)])
+        said = crossing("vdd", "vss").joined_at(ACROSS)
         assert (said.named, said.wired) == ((frozenset({"vdd"}),), 1)
 
     def test_on_a_crossing_it_joins_both_wires(self) -> None:
@@ -298,46 +341,57 @@ class TestWhatAPointWouldJoin:
         assert crossing("vdd").joined_at(BOTH) == ((frozenset({"vdd"}),), 2)
 
     def test_wires_already_one_net_are_one(self) -> None:
-        looped = NamedNets(
-            partition(
-                [],
-                [((0, 100), "vdd")],
-                [
-                    ((0, 100), (400, 100)),
-                    ((200, 0), (200, 200)),
-                    ((400, 100), (400, 200)),
-                    ((400, 200), (200, 200)),
-                ],
-            )
+        looped = named_nets(
+            [],
+            [((0, 100), "vdd")],
+            [
+                ((0, 100), (400, 100)),
+                ((200, 0), (200, 200)),
+                ((400, 100), (400, 200)),
+                ((400, 200), (200, 200)),
+            ],
         )
         assert looped.joined_at(BOTH) == ((frozenset({"vdd"}),), 1)
 
     def test_a_name_it_carries_joins_every_net_already_of_that_name(self) -> None:
         nets = crossing("vdd", "vss", ((900, 900), "out"))
-        assert nets.joined_at([(0, 100)]).named == (frozenset({"vdd"}),)
-        by_name = nets.joined_at([(0, 100)], name="out")
+        assert nets.joined_at(ACROSS).named == (frozenset({"vdd"}),)
+        by_name = nets.joined_at(ACROSS, name="out")
         assert set(by_name.named) == {frozenset({"vdd"}), frozenset({"out"})}
         assert by_name.wired == 1
         # Its own name again joins nothing more, and a new name nothing at all.
-        assert nets.joined_at([(0, 100)], name="vdd").named == (frozenset({"vdd"}),)
-        assert nets.joined_at([(0, 100)], name="fresh").named == (frozenset({"vdd"}),)
+        assert nets.joined_at(ACROSS, name="vdd").named == (frozenset({"vdd"}),)
+        assert nets.joined_at(ACROSS, name="fresh").named == (frozenset({"vdd"}),)
 
-    def test_what_sits_on_the_place_is_joined_only_when_the_place_is_given(self) -> None:
+    def test_what_sits_on_the_place_is_joined_only_when_it_lands_there(self) -> None:
         """A label lands on what is there; a part's pin is not asked that way."""
-        nets = NamedNets(partition([((50, 50), ("R1", "A"))], [((50, 50), "out")], []))
-        assert nets.joined_at([]) == ((), 0)
-        assert nets.joined_at([], at=(50, 50)) == ((frozenset({"out"}),), 0)
-        assert nets.joined_at([], at=(700, 700)) == ((), 0)
+        nets = named_nets([("R1", [("A", (50, 50))])], [((50, 50), "out")], [])
+        assert nets.joined_at((50, 50)) == ((), 0)
+        assert nets.joined_at((50, 50), landing=True) == ((frozenset({"out"}),), 0)
+        assert nets.joined_at((700, 700), landing=True) == ((), 0)
 
     def test_ground_is_no_name(self) -> None:
         """Two named nets that each carry a ground are one net, of both names,
         and a third net crossing it is the only other."""
         nets = crossing("vdd", "vss", ((400, 100), "0"), ((900, 900), "com"), ((900, 900), "0"))
-        (grounded,) = nets.joined_at([(0, 100)]).named
+        (grounded,) = nets.joined_at(ACROSS).named
         assert grounded == frozenset({"vdd", "com"})
         assert set(nets.joined_at(BOTH).named) == {grounded, frozenset({"vss"})}
-        only_ground = NamedNets(partition([], [((0, 0), "0")], [((0, 0), (64, 0))]))
-        assert only_ground.joined_at([(0, 0)]) == ((), 1)
+        only_ground = named_nets([], [((0, 0), "0")], [((0, 0), (64, 0))])
+        assert only_ground.joined_at((0, 0)) == ((), 1)
+
+    def test_on_a_wire_ltspice_drops_it_joins_the_pins_at_both_its_ends(self) -> None:
+        """Something put between the ends of a wire straight between two pins of
+        one part keeps the wire (``same_instance_label_inside``), and at either
+        end it is on that pin alone (``same_instance_wire``)."""
+        nets = named_nets(
+            [("R1", [("1", (0, 0)), ("2", (0, 96))])],
+            [((0, 0), "a"), ((0, 96), "b")],
+            [((0, 0), (0, 96))],
+        )
+        assert set(nets.joined_at((0, 48)).named) == {frozenset({"a"}), frozenset({"b"})}
+        assert nets.joined_at((0, 0), landing=True).named == (frozenset({"a"}),)
+        assert len(set(nets.wired_at((0, 48)))) == 1
 
 
 R1 = [((0, 0), ("R1", "A")), ((0, 96), ("R1", "B"))]
@@ -437,8 +491,7 @@ def reference_signature(pins: Pins, labels: Labels, segments: list[Segment]):
 
     It checks how ``nets_by_ltspice`` puts the rules together; the rules
     themselves are held to LTspice's exports in
-    ``test_recorded_ltspice_schematics.py``. It goes with ``partition`` once no
-    reader uses that."""
+    ``test_recorded_ltspice_schematics.py``."""
     owners: dict[Point, list[tuple[str, str]]] = {}
     for coord, owner in pins:
         owners.setdefault(coord, []).append(owner)
@@ -448,7 +501,7 @@ def reference_signature(pins: Pins, labels: Labels, segments: list[Segment]):
     dropped = {drop["segment"] for drop in drops}
     kept = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in runs if (x1, y1, x2, y2) not in dropped]
     part = reference_partition(pins, labels, kept)
-    net_of = label_folded_nets(part)
+    net_of = folded(part)
     on_net: dict[Point, set[tuple[str, str]]] = {}
     alone: list[tuple[str, str]] = []
     for coord, at in part.pin_owners.items():
@@ -499,6 +552,16 @@ class TestNetsOverTerminals:
         assert nets.nets_at((0, 48)) == ()
         assert nets.dropped_at((0, 48)) == nets.dropped
         assert nets.dropped_at(TIE_A.point) == ()
+
+    def test_what_is_put_inside_a_dropped_run_touches_both_its_pins(self) -> None:
+        """Anything put there keeps the run (``same_instance_label_inside``), so
+        it would be one node with the pins at both ends, though the point itself
+        is on no net."""
+        nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 48)), ((0, 48), (0, 96))])
+        pins = (nets.of_pin(TIE_A), nets.of_pin(TIE_B))
+        assert set(nets.touched_at((0, 48))) == set(pins)
+        assert [touched for _run, touched in nets.runs_through((0, 48))] == [pins]
+        assert nets.touched_at(TIE_A.point) == (nets.of_pin(TIE_A),)
 
     def test_a_wire_across_a_dropped_run_is_the_only_net_inside_it(self) -> None:
         nets = nets_by_ltspice([TIE_A, TIE_B], [], [((0, 0), (0, 96)), ((-48, 48), (48, 48))])

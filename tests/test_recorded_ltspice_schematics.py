@@ -9,6 +9,7 @@ connected, and how a card is spelled.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Iterator
 from pathlib import Path, PureWindowsPath
@@ -19,13 +20,7 @@ from spicelib.utils.file_search import search_file_in_containers
 
 from ltspice_mcp.lib import schematic_ops
 from ltspice_mcp.lib.asc_document import parse_asc
-from ltspice_mcp.lib.connectivity import (
-    label_folded_nets,
-    name_keys,
-    named_labels,
-    same_instance_dropped_segments,
-    signature,
-)
+from ltspice_mcp.lib.connectivity import NamedNets, name_keys, named_labels, signature
 from ltspice_mcp.lib.deck_prep import stage_sheet
 from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding
@@ -38,8 +33,7 @@ from ltspice_mcp.lib.schematic_ops import (
     element_class,
     export_parts,
     make_editor,
-    net_partition,
-    trace_nets,
+    sheet_nets,
     wire_segments_of,
 )
 from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
@@ -64,6 +58,10 @@ SAME_INSTANCE = rec.cases_of("same-instance-wire")
 SHARED_POINT = rec.cases_of("pins-of-one-part-on-one-point")
 SHARED_REFERENCE = rec.cases_of("shared-reference")
 PLACEMENTS = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
+
+#: A node an export names itself: N001 for a wired net, P001 where pins only
+#: touch, NC_01 for a pin on nothing.
+UNNAMED_NODE = re.compile(r"N\d{3}|P\d{3}|NC_\d{2}")
 
 
 @pytest.fixture(autouse=True)
@@ -196,22 +194,26 @@ def exported_groups(build: str, case_id: str) -> set[frozenset[str]]:
     return {frozenset(pins) for pins in nodes.values()}
 
 
+def editor_nets(editor: AscEditor) -> tuple[NamedNets, dict[tuple[str, int], dict]]:
+    """The editor's sheet's nets, with each of their pins' geometry row by its
+    part's reference and its place among the part's pins."""
+    geometry = collect_component_geometry(editor)
+    rows = {(row["ref"], index): pin for row in geometry for index, pin in enumerate(row["pins"])}
+    return sheet_nets(editor, geometry=geometry), rows
+
+
 def modelled_groups(sheet: Path) -> set[frozenset[str]]:
-    """The pins the editor's net partition puts on each node."""
-    editor = _editor(sheet)
-    node_of = label_folded_nets(net_partition(editor))
-    nodes: dict[tuple[int, int], set[str]] = {}
-    for row in collect_component_geometry(editor):
-        for pin in row["pins"]:
-            node = node_of((pin["x"], pin["y"]))
-            nodes.setdefault(node, set()).add(f"{canon_ref(row['ref'])}.{pin['order']}")
+    """The pins the editor's sheet's nets put on each node."""
+    nets, rows = editor_nets(_editor(sheet))
+    nodes: dict[int, set[str]] = {}
+    for pin in nets.pins:
+        order = rows[pin.reference, pin.order]["order"]
+        nodes.setdefault(nets.of_pin(pin), set()).add(f"{canon_ref(pin.reference)}.{order}")
     return {frozenset(pins) for pins in nodes.values()}
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(CONNECTIVITY)))
-def test_the_net_partition_connects_what_ltspice_connects(
-    build: str, case_id: str, tmp_path: Path
-):
+def test_the_nets_connect_what_ltspice_connects(build: str, case_id: str, tmp_path: Path):
     """T-junctions, a point on a wire's interior, crossings, overlapping and
     diagonal wires, pins that only touch, labels of one name on two wires."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
@@ -240,16 +242,15 @@ def test_each_pin_is_given_the_node_ltspice_exported_it_on(
     editor = _editor(sheet)
     geometry = collect_component_geometry(editor)
     nodes = exported_pin_nodes(rec.export_text(build, case_id), export_parts(editor, geometry))
-    node_of = label_folded_nets(net_partition(editor))
-    exported: dict[tuple[int, int], set[str]] = {}
+    nets = sheet_nets(editor, geometry=geometry)
+    exported: dict[int, set[str]] = {}
     unmapped = set()
-    for row in geometry:
-        for pin in row["pins"]:
-            node = nodes.get((row["ref"], pin["name"]))
-            if node is None:
-                unmapped.add(row["ref"])
-                continue
-            exported.setdefault(node_of((pin["x"], pin["y"])), set()).add(node.casefold())
+    for pin in nets.pins:
+        node = nodes.get((pin.reference, pin.name))
+        if node is None:
+            unmapped.add(pin.reference)
+            continue
+        exported.setdefault(nets.of_pin(pin), set()).add(node.casefold())
     # An R prefix on a four-pin block symbol writes two nodes: none is read.
     assert unmapped == ({"U1"} if case_id == "export/instance_prefix" else set())
     assert all(len(names) == 1 for names in exported.values()), exported
@@ -296,7 +297,7 @@ async def test_an_edit_compared_with_its_export_names_its_unlabelled_nets(
             assert pin["net_export"] == node, (ref, name)
         else:
             assert "net_export" not in pin
-            assert pin["net"] == node
+            assert pin.get("net") == node
     assert pins[("R2", "1")]["net_export"] == pins[("R1", "1")]["net_export"]
 
 
@@ -338,41 +339,31 @@ def test_a_labelled_net_is_named_by_one_of_its_labels_and_ground_wins(
     build: str, case_id: str, tmp_path: Path
 ):
     sheet = rec.stage_sheet(build, case_id, tmp_path)
-    editor = _editor(sheet)
-    part = net_partition(editor)
-    node_of = label_folded_nets(part)
-    labels: dict[tuple[int, int], set[str]] = {}
-    for coordinate, texts in part.label_texts.items():
-        labels.setdefault(node_of(coordinate), set()).update(texts)
+    nets, rows = editor_nets(_editor(sheet))
     exported = rec.export_instances(build, case_id)
-    for row in collect_component_geometry(editor):
-        nodes = exported[canon_ref(row["ref"])].nodes
-        for pin in row["pins"]:
-            on_net = labels.get(node_of((pin["x"], pin["y"])), set())
-            node = nodes[pin["order"] - 1]
-            if any(text == "0" or text.lower() == "gnd" for text in on_net):
-                # A GND label is ground in any case (gnd_label, gnd_label_lower_case).
-                assert node == "0", f"{row['ref']}.{pin['order']}"
-            elif on_net:
-                # Of several labels, the lowest on the sheet names the net, and
-                # of those the one furthest right; the order they were placed
-                # in does not matter.
-                node_labels = {
-                    text: coordinate
-                    for coordinate, texts in part.label_texts.items()
-                    if node_of(coordinate) == node_of((pin["x"], pin["y"]))
-                    for text in texts
-                }
-                winner = max(node_labels, key=lambda text: node_labels[text][::-1])
-                # Names that differ only in case are one node, which an export
-                # spells as each pin's own label does: out and OUT on separate
-                # wires export as out and OUT (label_case_separate_wires).
-                assert node.lower() == winner.lower(), f"{row['ref']}.{pin['order']}"
-                assert node in node_labels, f"{row['ref']}.{pin['order']}"
-            else:
-                # N001 for a wired net, P001 where pins only touch, NC_01 for
-                # a pin on nothing: never a name the sheet gave.
-                assert re.fullmatch(r"N\d{3}|P\d{3}|NC_\d{2}", node), node
+    for pin in nets.pins:
+        order = rows[pin.reference, pin.order]["order"]
+        node = exported[canon_ref(pin.reference)].nodes[order - 1]
+        net = nets.of_pin(pin)
+        on_net = nets.texts(net)
+        if any(text == "0" or text.lower() == "gnd" for text in on_net):
+            # A GND label is ground in any case (gnd_label, gnd_label_lower_case).
+            assert node == "0", f"{pin.reference}.{order}"
+        elif on_net:
+            # Of several labels, the lowest on the sheet names the net, and
+            # of those the one furthest right; the order they were placed
+            # in does not matter.
+            node_labels = {label.text: label.point for label in nets.labels_on(net)}
+            winner = max(node_labels, key=lambda text: node_labels[text][::-1])
+            # Names that differ only in case are one node, which an export
+            # spells as each pin's own label does: out and OUT on separate
+            # wires export as out and OUT (label_case_separate_wires).
+            assert node.lower() == winner.lower(), f"{pin.reference}.{order}"
+            assert node in node_labels, f"{pin.reference}.{order}"
+        else:
+            # N001 for a wired net, P001 where pins only touch, NC_01 for
+            # a pin on nothing: never a name the sheet gave.
+            assert UNNAMED_NODE.fullmatch(node), node
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
@@ -382,15 +373,13 @@ def test_a_wire_between_two_pins_of_one_part_is_dropped_only_when_straight(
     """The export keeps a part's two pins on separate nodes exactly when the
     editor reports the wire between them as one LTspice discards."""
     sheet = rec.stage_sheet(build, case_id, tmp_path)
-    editor = _editor(sheet)
-    part = net_partition(editor)
-    dropped = same_instance_dropped_segments(
-        part.pin_owners, wire_segments_of(editor), part.label_texts.keys()
-    )
+    dropped = editor_nets(_editor(sheet))[0].nets.dropped
     first, second = exported_card(build, case_id, "R1").nodes
     assert bool(dropped) == (first != second)
     if dropped:
-        assert [(d["ref"], set(d["pins"])) for d in dropped] == [("R1", {"1", "2"})]
+        assert [{(end.reference, end.name) for end in run.ends} for run in dropped] == [
+            {("R1", "1"), ("R1", "2")}
+        ]
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
@@ -653,9 +642,128 @@ def test_both_tools_call_floating_the_pins_ltspice_left_on_nothing(
     assert from_the_checker == alone
 
 
-# --------------------------------------------------------------------------
-# Where a symbol is found
-# --------------------------------------------------------------------------
+#: Every recorded sheet whose export says which pins are one node.
+NET_CASES = CONNECTIVITY + SAME_INSTANCE + SHARED_POINT
+
+
+def _pin_names(sheet: Path) -> dict[tuple[str, str], str]:
+    """Each pin, by its part's reference and its name, as ``REF.order`` names it."""
+    return {
+        (row["ref"], pin["name"]): f"{canon_ref(row['ref'])}.{pin['order']}"
+        for row in collect_component_geometry(_editor(sheet))
+        for pin in row["pins"]
+    }
+
+
+def _exported_node(build: str, case_id: str, pin: str) -> str:
+    """The node the export puts ``pin`` (``REF.order``) on."""
+    reference, order = pin.rsplit(".", 1)
+    return exported_card(build, case_id, reference).nodes[int(order) - 1]
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(NET_CASES)))
+async def test_inspect_traces_from_each_pin_the_net_ltspice_exports_it_on(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A wire straight between two pins of one part joins nothing, and of one
+    part's pins on a point with nothing else there only the last in SpiceOrder
+    touches another part's: the trace says what the netlist does."""
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    names = _pin_names(sheet)
+    traced: set[frozenset[str]] = set()
+    for reference, name in names:
+        query = {"kind": "net", "path": str(sheet), "at": f"{reference}.{name}"}
+        data = await inspect_one(state_no_sim, query)
+        traced.add(frozenset(names[pin["reference"], pin["pin"]] for pin in data["pins"]))
+    assert traced == exported_groups(build, case_id)
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(NET_CASES)))
+async def test_the_pin_legend_names_each_net_as_ltspice_exports_it(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The pins the legend gives one name are the pins of one exported node,
+    and a pin it gives no name is on a node the export names itself."""
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    names = _pin_names(sheet)
+    data = await apply_ops(state_no_sim, sheet.name, [], dry_run=True, return_views=["pin_legend"])
+    by_name: dict[str, set[str]] = {}
+    for row in data["views"]["pin_legend"]["items"]:
+        for pin in row["pins"]:
+            ours = names[row["ref"], pin["name"]]
+            if pin.get("net") is None:
+                assert UNNAMED_NODE.fullmatch(_exported_node(build, case_id, ours)), ours
+            else:
+                by_name.setdefault(pin.get("net"), set()).add(ours)
+    exported = exported_groups(build, case_id)
+    assert [group for group in by_name.values() if frozenset(group) not in exported] == []
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(NET_CASES)))
+def test_both_tools_call_floating_exactly_the_pins_ltspice_exports_unconnected(
+    build: str, case_id: str, tmp_path: Path
+):
+    """An export names a node of nothing but one pin NC_01, or P001 when the
+    pin shares its point with others it does not touch; a node of one pin and
+    a wire is N001, and one of a pin and a label takes the label's name."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    names = _pin_names(sheet)
+    on_node: dict[str, list[str]] = {}
+    for pin in names.values():
+        on_node.setdefault(_exported_node(build, case_id, pin), []).append(pin)
+    unconnected = sorted(
+        pins[0]
+        for node, pins in on_node.items()
+        if len(pins) == 1 and re.fullmatch(r"NC_\d{2}|P\d{3}", node)
+    )
+    editor = _editor(sheet)
+    from_the_editor = sorted(
+        names[found.refs[0], found.facts["pin"]]
+        for found in sheet_findings(editor)
+        if found.rule == "floating_pin"
+    )
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    from_the_checker = sorted(
+        names[found.refs[0], found.facts["pin"]]
+        for found in findings(sheet_view(scene), ["floating_pin"])
+    )
+    assert from_the_editor == from_the_checker == unconnected
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(NET_CASES)))
+def test_a_net_is_said_to_carry_two_names_only_where_ltspice_exports_one_node(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Read where a label sits on a pin: the pins under the labels a finding
+    names are on one exported node, and the labels on the pins of one exported
+    node, if they are of two names or more, are named by a finding."""
+    from ltspice_mcp.lib.connectivity import name_key
+
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    editor = _editor(sheet)
+    pins_at: dict[tuple[int, int], list[str]] = {}
+    for row in collect_component_geometry(editor):
+        for pin in row["pins"]:
+            pins_at.setdefault((pin["x"], pin["y"]), []).append(
+                f"{canon_ref(row['ref'])}.{pin['order']}"
+            )
+    on_node: dict[str, set[str]] = {}
+    for x, y, text in ((int(f.coord.X), int(f.coord.Y), f.text) for f in editor.labels):
+        for pin in pins_at.get((x, y), ()):
+            if not (text == "0" or text.lower() == "gnd"):
+                on_node.setdefault(_exported_node(build, case_id, pin), set()).add(name_key(text))
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    for found in (
+        [f for f in sheet_findings(editor) if f.rule == "net_with_two_names"],
+        findings(sheet_view(scene), ["net_with_two_names"]),
+    ):
+        said = [{name_key(name) for name in finding.facts["names"]} for finding in found]
+        for finding in found:
+            under = {pin for point in finding.points for pin in pins_at.get(point, ())}
+            assert len({_exported_node(build, case_id, pin) for pin in under}) <= 1, finding
+        for keys in on_node.values():
+            assert len(keys) < 2 or any(keys <= named for named in said), (keys, said)
+
 
 #: Each recorded search, and whether LTspice 26 and LTspice XVII found the
 #: symbol. Beside the sheet the two differ, in opposite ways.
@@ -749,6 +857,46 @@ class TestTheServerFindsASymbolWhereEitherBuildDoes:
         assert (resolver.resolve(name) is not None) == either
         assert resolver.resolve(name) == find_symbol(name, sheet.parent, libraries)
 
+    @pytest.mark.parametrize("cache", ["empty", "warmed elsewhere"])
+    def test_the_editor(self, case_id: str, cache: str, tmp_path: Path):
+        """The schematic editor opens the sheet exactly when the session finds its
+        symbol. spicelib's own search, which walked every folder under the
+        sheet's and kept a folder the name gave, and its cache of each name's
+        file for the whole process (docs/spicelib_bugs.md, Bug 17), decide
+        nothing: a cache warmed by a sheet in another folder is passed over."""
+        from ltspice_mcp.errors import SymbolResolutionError
+
+        sheet, name, libraries = _staged_search(case_id, tmp_path)
+        if cache != "empty":
+            elsewhere = tmp_path / "elsewhere"
+            elsewhere.mkdir()
+            for stem in ("part", "battery"):
+                copy = elsewhere / f"{stem}.asy"
+                copy.write_bytes((INPUTS / "search" / "lib" / "part.asy").read_bytes())
+                for folder in ("", "lib/", "Misc/", "Wrong/"):
+                    AscEditor.symbol_cache[f"{folder}{stem}.asy"] = str(copy)
+        found = find_symbol(name, sheet.parent, libraries) is not None
+        try:
+            make_editor(sheet, SymbolLibrary(libraries).for_sheet(sheet))
+        except SymbolResolutionError:
+            opened = False
+        else:
+            opened = True
+        assert opened == found
+
+    async def test_the_listing(self, case_id: str, config, work_dir: Path):
+        """Every name ``inspect(kind="symbols")`` lists for the sheet resolves,
+        so ``inspect(kind="symbol")`` and ``add_component`` take it."""
+        sheet, name, libraries = _staged_search(case_id, work_dir)
+        state = SessionState.create(
+            dataclasses.replace(config, symbol_paths=libraries), available={}
+        )
+        listed = (await inspect_one(state, {"kind": "symbols", "path": str(sheet)}))["symbols"]
+        resolver = state.symbols.for_sheet(sheet)
+        assert [one for one in listed if resolver.load(one) is None] == []
+        bare = name.replace("\\", "/").rsplit("/", 1)[-1]
+        assert (bare in listed) == (resolver.resolve(bare) is not None)
+
 
 #: ``connectivity/bus_label``: the pins both builds put on one node, because a
 #: wire labelled as a bus (``D[0:3]``) is on the node of the bus's first member
@@ -763,8 +911,8 @@ def test_a_bus_label_is_its_first_member_to_ltspice_and_a_name_to_the_server(
 ):
     """R1 is on the wire labelled ``D[0:3]``, R2 on one labelled ``D[0]`` and
     R3 on one labelled ``D[1]``. Both builds export R1 and R2 on ``D[0]``; the
-    editor's net partition keeps them apart and knows R1's net by the label as
-    it is written."""
+    editor's sheet's nets keep them apart and know R1's net by the label as it
+    is written."""
     case_id = "connectivity/bus_label"
     cards = rec.export_instances(build, case_id)
     assert [cards[name].nodes for name in ("r1", "r2", "r3")] == [
@@ -781,8 +929,9 @@ def test_a_bus_label_is_its_first_member_to_ltspice_and_a_name_to_the_server(
     # That one node is all the two disagree on.
     assert exported - {joined} == modelled - apart
 
-    editor = _editor(sheet)
-    assert trace_nets(editor)[placed_pins(sheet)["R1"][1]] == {"D[0:3]"}
+    nets = sheet_nets(_editor(sheet))
+    (r1,) = [pin for pin in nets.pins if pin.reference == "R1" and pin.order == 0]
+    assert nets.texts(nets.of_pin(r1)) == {"D[0:3]"}
 
 
 # --------------------------------------------------------------------------

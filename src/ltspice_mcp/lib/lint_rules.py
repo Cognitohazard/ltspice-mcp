@@ -18,14 +18,27 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family_for
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    TokenKind,
+    lex,
+    lex_deck,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, MeasCard, read_instance
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    MeasCard,
+    ProbeRef,
+    probe_refs,
+    read_instance,
+    save_cards,
+)
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
-    PROBE_REF_RE,
-    drop_title_card,
+    is_ground_node,
     meas_functions_refused,
     meas_name_refused,
     validate_netlist_arity,
@@ -35,9 +48,8 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "9"
+linter_version = "11"
 
-_SIGNAL_RE = PROBE_REF_RE
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
 _MILLI_SUFFIX_RE = re.compile(
@@ -79,9 +91,9 @@ class _LintFile(NamedTuple):
 class _LintContext:
     text: str
     path: Path
-    # The deck's cards without its line-1 title. Both simulators skip line 1
-    # of a netlist, so a title that starts with an element letter (``Diode
-    # clamp test``) is prose, not a card, for every rule.
+    # The deck's cards the simulator reads (``spice_lex.lex_deck``): not its
+    # line-1 title, which is prose whatever it says (``Diode clamp test``),
+    # nor a card after ``.END``, so no rule refuses a card no run reads.
     cards: list[SpiceCard]
     # The simulator family the deck is linted for (see ``lint_deck``).
     family: str
@@ -156,25 +168,39 @@ def _directive_head(card: SpiceCard) -> str:
     return tokens[0].text.casefold() if tokens else ""
 
 
+def _probe_signals(probe: ProbeRef) -> set[str]:
+    """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
+
+    A voltage between two nodes is its two nodes: both LTspice builds measure
+    ``V(a,b)`` from a saved ``V(a)`` and ``V(b)``, and ``.save V(a,b)`` saves
+    ``V(a)`` and ``V(b)`` (recorded deck/save_pair_both_nodes and
+    deck/save_pair_as_pair). Any other probe stands as written, a voltage
+    against ground among them: neither build measures ``V(a,0)`` with only
+    ``V(a)`` saved (deck/save_pair_to_ground).
+    """
+    if (
+        probe.kind == "V"
+        and len(probe.names) == 2
+        and not any(is_ground_node(name) for name in probe.names)
+    ):
+        return {_normalize_signal(f"V({name})") for name in probe.names}
+    return {_normalize_signal(probe.text)}
+
+
 def _save_meas_coverage(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    saves = [
-        card
-        for card in context.cards
-        if card.kind == "directive" and _directive_head(card) == ".save"
-    ]
+    saves = save_cards(context.cards)
     measurements = [card for card in context.cards if card.kind == "meas"]
     if not saves or not measurements:
         return []
-    saved_text = " ".join(card.body for card in saves)
-    if re.search(r"(?i)(?:^|\s)\.save\s+(?:all\b|\*)", saved_text):
+    if any(save.saves_all for save in saves):
         return []
-    saved = {_normalize_signal(match.group(0)) for match in _SIGNAL_RE.finditer(saved_text)}
+    saved = {signal for save in saves for probe in save.probes for signal in _probe_signals(probe)}
     findings = []
     for card in measurements:
-        required = {_normalize_signal(match.group(0)) for match in _SIGNAL_RE.finditer(card.body)}
+        required = {signal for probe in probe_refs(card) for signal in _probe_signals(probe)}
         missing = sorted(required - saved)
         if missing:
             findings.append(
@@ -1006,7 +1032,7 @@ def lint_deck(
     context = _LintContext(
         text=deck_text,
         path=path,
-        cards=drop_title_card(lex(deck_text).cards),
+        cards=lex_deck(deck_text).cards,
         # A deck nothing names is linted as the default family's.
         family=family_for(dialect, simulator) or DEFAULT_FAMILY,
         includes=tuple(includes),

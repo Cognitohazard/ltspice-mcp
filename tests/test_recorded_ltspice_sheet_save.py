@@ -19,7 +19,7 @@ import pytest
 from ltspice_mcp.lib.asc_document import Shape, Symbol, parse_asc
 from ltspice_mcp.lib.schematic_ops import make_editor
 from tests import _ltspice_recorded as rec
-from tests._schematic_fixtures import formatted
+from tests._schematic_fixtures import formatted, suite_resolver
 from tests.ltspice_recorder import INPUTS, discover_builds
 
 SAVES = rec.cases_of("schematic-save-encoding")
@@ -93,7 +93,7 @@ class TestWhatASaveChanges:
         sheet = tmp_path / "shuffled.asc"
         sheet.write_bytes(given("save/shuffled"))
         written = io.StringIO()
-        make_editor(sheet).save_netlist(written)
+        make_editor(sheet, suite_resolver(sheet)).save_netlist(written)
         theirs, ours = (
             [line for line in data.splitlines() if line.startswith(b"TEXT ")]
             for data in (saved(build, "save/shuffled"), written.getvalue().encode())

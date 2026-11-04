@@ -1304,7 +1304,7 @@ class TestWait:
             "owner_liveness",
             lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
         )
-        stale = experiment_store.load_job(owner_job.job_id, work_dir, own_is_alive=True)
+        stale = experiment_store.load_job(owner_job.job_id, work_dir)
         assert stale is not None
         foreign_state.all_jobs[stale.job_id] = stale
         # timing: how often the record is re-read, not how long the wait lasts
@@ -1374,8 +1374,9 @@ class TestCancellationAuthority:
             status="running",
         )
         foreign.owner_pid = -1
-        for job in (owned, foreign):
-            state_no_sim.all_jobs[job.job_id] = job
+        # This process runs the owned job: its registry holds the live job.
+        state_no_sim.job_registry.reserve(owned)
+        state_no_sim.all_jobs[foreign.job_id] = foreign
 
         async def cancel(candidate, *, control_token=None):
             return [cancel_receipt_row(candidate.cases[0], "running", "cancelled")]
@@ -1612,9 +1613,9 @@ class TestListAndRunsPagination:
         real_render = jobs_module.render_jobs_data
         limits: list[int | None] = []
 
-        def spy(evaluation, *, limit=None, rung=None):
+        def spy(evaluation, *, limit=None, rung=None, **rest):
             limits.append(limit)
-            return real_render(evaluation, limit=limit, rung=rung)
+            return real_render(evaluation, limit=limit, rung=rung, **rest)
 
         monkeypatch.setattr(jobs_module, "render_jobs_data", spy)
         data = _assert_jobs_schema(await handle_jobs(_args("list", limit=500), state_no_sim))

@@ -59,9 +59,10 @@ def open_editor(sheet: Path, resolver: SymbolResolver | None = None) -> AscEdito
     ``edit_schematic`` opens one with the session's."""
     from ltspice_mcp.lib.schematic_ops import attach_symbols, make_editor
 
-    editor = make_editor(sheet)
+    symbols = resolver if resolver is not None else suite_resolver(sheet)
+    editor = make_editor(sheet, symbols)
     assert isinstance(editor, AscEditor)
-    return attach_symbols(editor, resolver if resolver is not None else suite_resolver(sheet))
+    return attach_symbols(editor, symbols)
 
 
 def formatted(doc: AscDocument) -> AscDocument:

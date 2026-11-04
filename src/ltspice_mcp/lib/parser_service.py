@@ -16,7 +16,6 @@ admission counts that storage; these component limits are not a total RSS cap.
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import threading
 import time
@@ -38,6 +37,7 @@ from ltspice_mcp.lib.parser_process import (
 from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
 from ltspice_mcp.lib.raw_header import RawLimits
 from ltspice_mcp.lib.result_cache import ParserCleanupError
+from ltspice_mcp.lib.store import is_sha256
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.services import AnalysisSource
@@ -54,7 +54,6 @@ PROCESS_LIMITS = ParserProcessLimits(
     error_bytes=16 * 1024,
     cleanup_grace_s=3.0,
 )
-_KEY = re.compile(r"[0-9a-f]{64}\Z")
 _DIALECTS = {"ltspice", "ngspice", "qspice", "xyce"}
 _ROLES = ("raw", "log", "console")
 _SETTLE_NS = 100_000_000
@@ -304,7 +303,7 @@ def _load(
             type(metadata.get("version")) is not int
             or metadata["version"] != 1
             or not isinstance(key, str)
-            or _KEY.fullmatch(key) is None
+            or not is_sha256(key)
         ):
             raise ResultError("Parser returned an invalid version or content identity")
         if metadata.get("status") == "cached":

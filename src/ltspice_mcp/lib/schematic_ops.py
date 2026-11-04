@@ -16,8 +16,8 @@ What lives here:
 - ``edit_guard``, which serializes one file's mutation in-process and across
   parallel server sessions (with the files beside it a batch writes,
   ``files_written_beside``), and the cached-editor accessors it wraps;
-- the placement and net-partition geometry (``placed_geometry``,
-  ``resolve_pin``, ``net_partition``, ``trace_nets``), which reads each
+- the placement geometry and the sheet's nets (``placed_geometry``,
+  ``resolve_pin``, ``sheet_nets``), which reads each
   symbol once per request through ``symbol_info_for``, and the route
   planner behind ``wire_pins``, which resolves the ends of a route and asks
   ``lib/routing.py`` what drawing it would do;
@@ -48,6 +48,7 @@ from weakref import WeakKeyDictionary
 from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
 from spicelib.editor.asc_editor import LTSPICE_ATTRIBUTES, LTSPICE_PARAMETERS
+from spicelib.editor.asy_reader import AsyReader
 from spicelib.editor.base_schematic import (
     ERotation,
     Line,
@@ -77,19 +78,17 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
-from ltspice_mcp.lib.asc_document import parse_asc
+from ltspice_mcp.lib.asc_document import is_asc, parse_asc
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
-    NetPartition,
     build_on_wire_predicate,
     fold_case,
     is_ground,
-    label_folded_nets,
     name_key,
     name_keys,
     named_labels,
-    partition,
+    named_nets,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
@@ -97,6 +96,8 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
+from ltspice_mcp.lib.nets import PinAt
+from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
     PlotAnalysis,
@@ -124,12 +125,15 @@ from ltspice_mcp.lib.sheet import (
     PARAMETER_ATTRIBUTES,
     PlacedPin,
     element_letter,
-    find_pin,
+    missing_part,
+    placed_pin,
+    references_named,
 )
 from ltspice_mcp.lib.sheet_findings import Part, SheetView
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
+    Token,
     TokenKind,
     key_value_tokens,
     tokenize_body,
@@ -138,7 +142,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )
 from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, usable_symbol_info
-from ltspice_mcp.lib.symbol_library import SymbolResolver
+from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver
 from ltspice_mcp.state import SessionState
 
 
@@ -316,12 +320,6 @@ def _parse_rotation(rotation: str) -> ERotation:
     return erot
 
 
-# Matches one ``KEY=VALUE`` token (value may have braces, parens, sign, etc.).
-# Validation uses it to accept a value shaped ``"NMOS1 W=10u L=1u"``: one head
-# token, then only parameters.
-_PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
-
-
 # Element classes with exactly two terminals before a value that runs to the
 # end of the line: an independent source's spec (``DC 5 AC 1``). LTspice writes
 # the nodes from the symbol's pins, so nothing in the value can be read as a
@@ -370,6 +368,20 @@ def _device_tail_ok(element: str, tokens: list) -> bool:
     return area <= 1 and off <= 1
 
 
+def _head_then_parameters(tokens: Sequence[Token]) -> bool:
+    """Whether ``tokens`` read as ``[MODEL] KEY=VALUE ...``: at most one token,
+    then one or more ``KEY=VALUE`` tokens and nothing else."""
+    first = next(
+        (index for index, tok in enumerate(tokens) if tok.kind == TokenKind.KEY_VALUE),
+        len(tokens),
+    )
+    return (
+        first <= 1
+        and first < len(tokens)
+        and all(tok.kind == TokenKind.KEY_VALUE for tok in tokens[first:])
+    )
+
+
 def _validate_component_value(reference: str, value: str, element: str) -> None:
     """Reject values that would corrupt the netlist line on write.
 
@@ -380,7 +392,8 @@ def _validate_component_value(reference: str, value: str, element: str) -> None:
     as (``element_class``); the shapes that cannot do that are accepted:
 
     - SPICE expressions in braces (``{1/(2*pi*RC)}``) and quoted strings;
-    - ``[MODEL] KEY=VALUE ...`` parameter lists (split by ``_apply_component_value``);
+    - ``[MODEL] KEY=VALUE ...`` parameter lists, split by the lexer as
+      ``_apply_component_value`` splits them;
     - waveform functions (``PULSE(...)``, ``SIN(...) AC 1``), whose parentheses
       protect their spaces;
     - for an independent or behavioural source, any well-formed run of tokens
@@ -440,23 +453,12 @@ def _validate_component_value(reference: str, value: str, element: str) -> None:
         and all(t.kind in POSITIONAL_KINDS for t in toks)
     ):
         return
-    # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one bare
-    # head token (the model name) followed by a non-empty list of KEY=VALUE
-    # tokens. The pure-params and head+params forms collapse into one rule.
-    if "=" in stripped:
-        tokens = stripped.split()
-        head_tokens: list[str] = []
-        for tok in tokens:
-            if "=" in tok:
-                break
-            head_tokens.append(tok)
-        rest = tokens[len(head_tokens) :]
-        if (
-            len(head_tokens) <= 1
-            and rest
-            and all(bool(_PARAM_TOKEN_RE.fullmatch(tok)) for tok in rest)
-        ):
-            return
+    # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one head
+    # token (the model name) followed by a non-empty list of KEY=VALUE tokens,
+    # as the lexer splits them, which is the split ``_apply_component_value``
+    # writes: a braced parameter value with spaces in it is one token.
+    if well_formed and _head_then_parameters(toks):
+        return
     if element in _AREA_CLASSES:
         shape = "a model name, then an optional area factor and 'off' (e.g. '2N3904 2 off')"
     elif element == "M":
@@ -499,6 +501,25 @@ def _reference_taken(
         (name for name in editor.components if name != other_than and fold_case(name) == key),
         None,
     )
+
+
+def part_reference(editor: AscEditor, reference: str) -> str:
+    """The reference of the part ``reference`` names on the editor's sheet
+    (``sheet.references_named``): the one spelled so, else the one whose
+    reference differs from it only in case.
+
+    Raises NetlistError naming the parts there are when it names none, and
+    naming each when it names several, which differ from it only in case.
+    """
+    named = references_named(reference, editor.components)
+    if not named:
+        raise missing_part(reference, editor.components)
+    if len(named) > 1:
+        raise NetlistError(
+            f"'{reference}' names {len(named)} parts whose references differ only in case "
+            f"({', '.join(sorted(named))}); give the reference as one of them spells it."
+        )
+    return named[0]
 
 
 def _same_reference_note(asked: str, taken: str) -> str:
@@ -757,8 +778,6 @@ def collect_component_geometry(editor: AscEditor) -> list[dict]:
 
 def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, int]]:
     """Pin coordinates for a single component, ``set()`` if symbol unknown."""
-    if reference not in editor.components:
-        return set()
     geo = placed_geometry(editor, reference)
     return set() if geo is None else {(p["x"], p["y"]) for p in geo["pins"]}
 
@@ -777,67 +796,33 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
     return coords
 
 
-def net_partition(
+def sheet_nets(
     editor: AscEditor,
-    extra_segments: list[tuple[int, int, int, int]] | None = None,
+    extra_segments: Sequence[tuple[int, int, int, int]] = (),
     without: str | None = None,
     geometry: Iterable[dict] | None = None,
-) -> NetPartition:
-    """The sheet's nets, as ``connectivity.partition`` groups its pins, labels and wires.
+) -> NamedNets:
+    """The sheet's nets as LTspice netlists them (``connectivity.named_nets``).
 
     The joining rules, and the recordings each comes from, are in
     ``lib/connectivity.py``; this collects what ``editor`` holds and hands it
-    over.
+    over, each part's pins in SpiceOrder and each part told by its place among
+    the parts.
 
     ``extra_segments`` lets the caller include not-yet-committed wire
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
-    on the post-route net layout. Shared by ``trace_nets`` (labels-per-net)
-    and ``trace_net`` (full net membership). ``without`` leaves one part's
-    pins out: the sheet as it is apart from a part about to be placed or moved.
+    on the post-route net layout. ``without`` leaves one part's pins out: the
+    sheet as it is apart from a part about to be placed or moved.
     ``geometry`` is the parts' geometry when the caller already holds it.
     """
-    pins = [
-        ((pin["x"], pin["y"]), (entry["ref"], pin["name"]))
+    parts = [
+        (entry["ref"], [(pin["name"], (pin["x"], pin["y"])) for pin in entry["pins"]])
         for entry in (collect_component_geometry(editor) if geometry is None else geometry)
         if entry["ref"] != without
-        for pin in entry["pins"]
     ]
     labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    segments += [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in extra_segments or ()]
-    return partition(pins, labels, segments)
-
-
-def trace_nets(
-    editor: AscEditor,
-    extra_segments: list[tuple[int, int, int, int]] | None = None,
-) -> dict[tuple[int, int], frozenset[str]]:
-    """Map each pin/label/wire coordinate to the labels on its net.
-
-    Thin labels-per-coordinate view over :func:`net_partition`. See it for
-    the segment-aware semantics and ``extra_segments`` contract.
-    """
-    return labels_per_coord(net_partition(editor, extra_segments))
-
-
-def labels_per_coord(part: NetPartition) -> dict[tuple[int, int], frozenset[str]]:
-    """:func:`trace_nets` over a partition the caller already holds."""
-    labels_by_root: dict[tuple[int, int], set[str]] = {}
-    for coord, texts in part.label_texts.items():
-        labels_by_root.setdefault(part.root(coord), set()).update(texts)
-
-    return {
-        p: frozenset(labels_by_root.get(part.root(p), set()))
-        for members in part.members.values()
-        for p in members
-    }
-
-
-def _net_label_at(
-    nets: dict[tuple[int, int], frozenset[str]], coord: tuple[int, int]
-) -> frozenset[str]:
-    """Labels on the net at ``coord``; empty when net is unnamed."""
-    return nets.get(coord, frozenset())
+    segments = [*wire_segments_of(editor), *extra_segments]
+    return named_nets(parts, labels, [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments])
 
 
 def _segment_key(
@@ -848,9 +833,7 @@ def _segment_key(
 
 
 def _wire_segment_keys(editor: AscEditor) -> list[tuple[tuple[int, int], tuple[int, int]]]:
-    return [
-        _segment_key((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires
-    ]
+    return [_segment_key(seg[:2], seg[2:]) for seg in wire_segments_of(editor)]
 
 
 def _append_wire_segments(
@@ -894,27 +877,21 @@ def wiring_profile(editor: AscEditor) -> dict[str, int]:
     components with resolvable symbol geometry (unknown symbols are skipped) —
     the denominator that makes the two classified counts interpretable.
     """
-    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
-    on_wire = build_on_wire_predicate(segments)
+    segments = wire_segments_of(editor)
     label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
-
-    pins_total = 0
-    pins_wired = 0
-    pins_label_only = 0
-    for entry in collect_component_geometry(editor):
-        for p in entry["pins"]:
-            pins_total += 1
-            coord = (p["x"], p["y"])
-            if on_wire(coord):
-                pins_wired += 1
-            elif coord in label_coords:
-                pins_label_only += 1
-
+    ties = [
+        tie
+        for _part, _index, tie in pin_ties(
+            collect_component_geometry(editor),
+            is_wired=build_on_wire_predicate(((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments),
+            is_labeled=label_coords.__contains__,
+        )
+    ]
     return {
         "wire_segments": len(segments),
-        "pins_total": pins_total,
-        "pins_wired": pins_wired,
-        "pins_label_only": pins_label_only,
+        "pins_total": len(ties),
+        "pins_wired": ties.count("wired"),
+        "pins_label_only": ties.count("label"),
     }
 
 
@@ -1021,7 +998,16 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
 
 
 class _AscEditor(AscEditor):
-    """spicelib's editor, opening a sheet whose block symbol has no sheet.
+    """spicelib's editor, finding each symbol as the session does and opening a
+    sheet whose block symbol has no sheet.
+
+    A part's symbol is the file ``symbols`` resolves its name to
+    (``symbol_library.find_symbol``), the one ``inspect``, ``verify_circuit``
+    and the drawing read. spicelib's own search walked every folder under the
+    sheet's, so it found a bare name in a folder neither LTspice build looks
+    in; kept the folder a name gives, so it missed a symbol XVII finds beside
+    the sheet; and cached each name's file for the whole process
+    (``docs/spicelib_bugs.md``, Bug 17).
 
     LTspice netlists an instance of a block symbol as a call to a subcircuit
     of the symbol's name, defined by its own sheet, by a library on the sheet,
@@ -1041,13 +1027,23 @@ class _AscEditor(AscEditor):
         asc_file: str | Path,
         encoding: str = "autodetect",
         *,
+        symbols: SymbolResolver,
         searched: dict[tuple[str, str], str | None] | None = None,
     ) -> None:
+        self._symbols = symbols
         # Where each sheet not beside its symbol was found, shared with the
         # sheets this one opens: a search walks every folder it is given, and
         # a sheet may place the same block many times.
         self._searched = {} if searched is None else searched
         super().__init__(asc_file, encoding)
+
+    def _get_symbol(self, symbol: str) -> AsyReader:
+        found = self._symbols.resolve(symbol)
+        if found is None:
+            raise FileNotFoundError(
+                f"Symbol '{symbol}' not found beside the sheet or in any symbol library"
+            )
+        return AsyReader(found)
 
     def reset_netlist(self, create_blank: bool = False) -> None:
         super().reset_netlist(create_blank)
@@ -1077,55 +1073,99 @@ class _AscEditor(AscEditor):
                     sheet.name, folder, ".", *self.custom_lib_paths
                 )
             sheet = self._searched[sheet.name, folder]
-        return None if sheet is None else type(self)(sheet, searched=self._searched)
+        if sheet is None:
+            return None
+        return type(self)(
+            sheet, symbols=self._symbols.for_sheet(Path(sheet)), searched=self._searched
+        )
 
 
-def _refuse_lost_parts(path: Path, editor: AscEditor) -> None:
-    """Refuse a sheet the editor holds fewer parts of than the file places.
+def _refuse_lost_records(path: Path, editor: AscEditor) -> None:
+    """Refuse a sheet the editor holds fewer records of than the file has.
 
-    spicelib keeps one part per reference (docs/spicelib_bugs.md, Bug 31), so
-    a sheet on which two parts share one opens with only the last of them, and
-    saving any edit deletes the others. Neither LTspice build netlists such a
-    sheet either (recorded as ``connectivity/shared_reference``).
+    An edit is committed from what the editor read, so a record it did not
+    read would be deleted by any edit. spicelib keeps one part per reference
+    (docs/spicelib_bugs.md, Bug 31), so a sheet on which two parts share one
+    opens with only the last of them. Neither LTspice build netlists such a
+    sheet either (recorded as ``connectivity/shared_reference``). spicelib also
+    skips, without a word, a ``TEXT`` line its pattern does not match, such as
+    one with two spaces after the keyword (Bug 36). How LTspice reads that line
+    is not recorded; the sheet's own reader (``asc_document``) reads it, so
+    ``inspect`` and ``verify_circuit`` show it, and it is refused here rather
+    than lost.
     """
-    placed = parse_asc(path.read_bytes()).symbols
-    if len(placed) == len(editor.components):
+    document = parse_asc(path.read_bytes())
+    placed = document.symbols
+    if len(placed) != len(editor.components):
+        by_reference: dict[str, list[tuple[int, int]]] = {}
+        for symbol in placed:
+            by_reference.setdefault(symbol.reference, []).append((symbol.x, symbol.y))
+        shared = "; ".join(
+            f"'{reference}' at " + ", ".join(f"({x},{y})" for x, y in places)
+            for reference, places in by_reference.items()
+            if len(places) > 1
+        )
+        raise NetlistError(
+            f"Cannot open {path.name} for editing: parts share a reference ({shared}). "
+            "The schematic editor keeps one part per reference and would delete the "
+            "others on saving, and neither LTspice build netlists such a sheet. "
+            "Rename the repeated parts in LTspice, then edit the sheet here."
+        )
+    held = {"TEXT": editor.directives, "WIRE": editor.wires, "FLAG": editor.labels}
+    read = {"TEXT": document.texts, "WIRE": document.wires, "FLAG": document.flags}
+    lost = [keyword for keyword in held if len(held[keyword]) != len(read[keyword])]
+    if not lost:
         return
-    by_reference: dict[str, list[tuple[int, int]]] = {}
-    for symbol in placed:
-        by_reference.setdefault(symbol.reference, []).append((symbol.x, symbol.y))
-    shared = "; ".join(
-        f"'{reference}' at " + ", ".join(f"({x},{y})" for x, y in places)
-        for reference, places in by_reference.items()
-        if len(places) > 1
-    )
+    first, number = lost[0], 1
+    for record in document.records:
+        line = (record.source or ("",))[0]
+        if first == "TEXT" and line.startswith("TEXT") and not TEXT_REGEX.match(line):
+            raise NetlistError(
+                f"Cannot open {path.name} for editing: line {number} "
+                f"({line.rstrip()!r}) is a TEXT record the schematic editor skips, "
+                "and saving any edit would delete it. Write it as LTspice saves one, "
+                "with one space between its fields, then edit the sheet here.",
+                show_hint=False,
+            )
+        number += len(record.source or ())
     raise NetlistError(
-        f"Cannot open {path.name} for editing: parts share a reference ({shared}). "
-        "The schematic editor keeps one part per reference and would delete the "
-        "others on saving, and neither LTspice build netlists such a sheet. "
-        "Rename the repeated parts in LTspice, then edit the sheet here."
+        f"Cannot open {path.name} for editing: the schematic editor skips "
+        f"{len(read[first]) - len(held[first])} of its {len(read[first])} {first} records, "
+        "and saving any edit would delete them.",
+        show_hint=False,
     )
 
 
-def make_editor(path: Path) -> Editor:
+def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
 
+    A sheet's symbols are found with ``symbols``, the session's resolver for
+    it (``SymbolLibrary.for_sheet``); without one, with the libraries spicelib
+    is configured with (``engine.py`` sets them from the session's), searched
+    as the session searches them.
+
     Raises NetlistError if the file is not found, has no Version line the
-    schematic editor can find, holds a line it cannot read, or places two
-    parts under one reference, and
+    schematic editor can find, holds a line it cannot read or would skip, or
+    places two parts under one reference, and
     SymbolResolutionError if a file the schematic refers to (a symbol, a
     sub-sheet) is missing.
     """
     try:
-        if path.suffix.lower() != ".asc":
+        if not is_asc(path):
             return SpiceEditor(str(path))
         try:
-            editor = _AscEditor(str(path))
+            if symbols is None:
+                library = SymbolLibrary(
+                    [Path(folder) for folder in AscEditor.custom_lib_paths],
+                    [Path(folder) for folder in AscEditor.simulator_lib_paths],
+                )
+                symbols = library.for_sheet(path)
+            editor = _AscEditor(str(path), symbols=symbols)
         except NotImplementedError as e:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
-        _refuse_lost_parts(path, editor)
+        _refuse_lost_records(path, editor)
         return editor
     except FileNotFoundError as e:
         if not path.is_file():
@@ -1145,7 +1185,7 @@ def make_editor(path: Path) -> Editor:
 
 def _get_editor(path: Path, state: SessionState) -> Editor:
     """Get a cached editor instance, creating via make_editor if needed."""
-    return state.editors.get(path, lambda p: make_editor(p))
+    return state.editors.get(path, lambda p: make_editor(p, state.symbols.for_sheet(p)))
 
 
 def get_asc_editor(path: Path, state: SessionState) -> AscEditor:
@@ -1155,10 +1195,6 @@ def get_asc_editor(path: Path, state: SessionState) -> AscEditor:
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
     # This request resolves symbols afresh, from the session's library.
     return attach_symbols(editor, state.symbols.for_sheet(path))
-
-
-def is_asc(path: Path) -> bool:
-    return path.suffix.lower() == ".asc"
 
 
 def require_asc(path: Path) -> None:
@@ -1251,98 +1287,30 @@ def _append_asc_text(
     )
 
 
-def _remove_exact_directive(editor, instruction: str) -> bool:
-    """Remove one DIRECTIVE-type record matching ``instruction`` by FULL-TEXT
-    equality (not substring), returning whether one was removed.
-
-    spicelib's ``remove_instruction`` matches by substring and removes the first
-    hit, so an undo of ``.tran 1m`` could instead delete ``.tran 10m`` (or a
-    pre-existing duplicate) and silently corrupt the simulation setup. On an
-    AscEditor (``directives`` is a list of typed Text records) we filter by exact
-    text and drop a single record. Netlist editors (SpiceEditor — no
-    ``directives`` list) keep spicelib's substring matcher; the ``.cir``/``.net``
-    edit path is out of scope here.
-    """
-    directives = getattr(editor, "directives", None)
-    if directives is None:
-        return bool(editor.remove_instruction(instruction))
-    body = _text_record_body(instruction)
-    for idx, d in enumerate(directives):
-        dtype = getattr(d, "type", None)
-        dtext = getattr(d, "text", None)
-        if dtype == TextTypeEnum.DIRECTIVE and dtext == body:
-            del directives[idx]
-            return True
-    return False
-
-
-def _remove_directive_or_comment(editor, instruction: str) -> None:
-    """Remove a directive or comment matching ``instruction``.
-
-    The default path is an exact, literal match: a DIRECTIVE is removed only when
-    its full text equals ``instruction`` (see ``_remove_exact_directive``), and a
-    comment only when its body equals it. ``instruction`` is never treated as a
-    regex by default — common SPICE directives contain ``(`` and ``)`` (every
-    ``.meas``/``.four``/``.print`` referencing ``V(node)``) which would silently
-    turn into regex capture groups under any "metachar means regex" heuristic.
-    Pass an explicit ``regex:`` prefix to opt in to regex matching.
+def _remove_directive_or_comment(editor: AscEditor, instruction: str) -> None:
+    """Remove every directive and comment ``instruction`` names (``_text_matcher``).
 
     Raises NetlistError when nothing matched, so the user can't think they
     cleaned a directive that's still in the file.
     """
-    matcher = _text_matcher(instruction)
-    if isinstance(matcher, re.Pattern):
-        directive_hit = bool(editor.remove_Xinstruction(matcher.pattern))
-        comment_hit = _strip_matching_comments(editor, matcher)
-        if not (directive_hit or comment_hit):
-            raise NetlistError(
-                f"No directive or comment matched regex {matcher.pattern!r}. It is matched "
-                "against each TEXT line's text, where a line break is a \\n escape."
-            )
+    named = _text_matcher(instruction)
+    kept = [text for text in editor.directives if not named(text)]
+    if len(kept) < len(editor.directives):
+        editor.directives[:] = kept
         return
-
-    directive_hit = _remove_exact_directive(editor, instruction)
-    comment_hit = _strip_matching_comments(editor, instruction)
-    if not (directive_hit or comment_hit):
+    if instruction.startswith("regex:"):
         raise NetlistError(
-            f"No directive or comment matched {instruction!r} exactly. "
-            "Match is literal by default — pass 'regex:<pattern>' for regex "
-            "matching, or copy the text of the sheet's TEXT line, after its '!' "
-            "(directive) or ';' (comment); a line break may be given as a newline "
-            "or as the \\n escape the file holds."
+            f"No directive or comment matched regex {instruction[6:]!r}. It is searched "
+            "for in each TEXT line's text, in the case it is given, where a line break "
+            "is a \\n escape."
         )
-
-
-def _strip_matching_comments(editor, matcher) -> bool:
-    """Best-effort removal of TEXT-COMMENT entries whose body matches.
-
-    ``matcher`` is either a literal string (exact match) or a compiled
-    regex. ``editor.directives`` only exists on AscEditor — silently
-    no-op for netlist-mode editors. Returns True when at least one
-    comment was removed so the caller can decide whether the overall
-    remove operation hit anything.
-    """
-    directives = getattr(editor, "directives", None)
-    if directives is None:
-        return False
-    if isinstance(matcher, str):
-        matcher = _text_record_body(matcher.strip())
-    keep = []
-    for entry in directives:
-        body = getattr(entry, "text", None)
-        entry_kind = getattr(entry, "type", None)
-        if entry_kind == TextTypeEnum.COMMENT and isinstance(body, str):
-            if isinstance(matcher, str):
-                if body.strip() == matcher:
-                    continue
-            else:
-                if matcher.search(body):
-                    continue
-        keep.append(entry)
-    if len(keep) != len(directives):
-        directives[:] = keep
-        return True
-    return False
+    raise NetlistError(
+        f"No directive or comment matched {instruction!r} exactly. "
+        "Match is literal by default — pass 'regex:<pattern>' for regex "
+        "matching, or copy the text of the sheet's TEXT line, after its '!' "
+        "(directive) or ';' (comment); a line break may be given as a newline "
+        "or as the \\n escape the file holds."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1354,11 +1322,19 @@ def _xy(point: Point) -> tuple[int, int]:
     return int(point.X), int(point.Y)
 
 
-def _text_matcher(instruction: str) -> "str | re.Pattern[str]":
-    """How a directive or comment is named: ``regex:<pattern>`` compiled, to be
-    searched in each text, or else the literal text itself."""
+def _text_matcher(instruction: str) -> Callable[[Text], bool]:
+    """Whether a directive or comment is one ``instruction`` names: the one rule
+    ``remove_directive`` and ``move`` select texts by, for both kinds of text.
+
+    A literal names every text whose words equal it, space around either
+    ignored, a line break given as a newline or as the ``\\n`` escape a TEXT
+    record holds. ``regex:<pattern>`` names every text the pattern is found in
+    (``re.search``), in the case it is given: ``(?i)`` ignores case and ``^``
+    anchors it at the start of the text.
+    """
     if not instruction.startswith("regex:"):
-        return instruction
+        body = _text_record_body(instruction.strip())
+        return lambda text: text.text.strip() == body
     pattern = instruction[6:]
     if not pattern.strip():
         raise NetlistError(
@@ -1366,22 +1342,16 @@ def _text_matcher(instruction: str) -> "str | re.Pattern[str]":
             "provide an explicit regex after 'regex:'."
         )
     try:
-        return re.compile(pattern)
+        compiled = re.compile(pattern)
     except re.error as e:
         raise NetlistError(f"Invalid regex {pattern!r}: {e}") from e
+    return lambda text: compiled.search(text.text) is not None
 
 
 def _texts_matching(editor: AscEditor, wanted: str) -> list[int]:
-    """Indices of the directives and comments ``wanted`` names, for ``move``.
-
-    Exact text, compared as a TEXT record holds it (line breaks as ``\\n``,
-    surrounding space ignored), or ``regex:<pattern>`` searched in each text.
-    """
-    matcher = _text_matcher(wanted)
-    if isinstance(matcher, re.Pattern):
-        return [i for i, d in enumerate(editor.directives) if matcher.search(d.text)]
-    body = _text_record_body(matcher.strip())
-    return [i for i, d in enumerate(editor.directives) if d.text.strip() == body]
+    """Indices of the directives and comments ``wanted`` names, for ``move``."""
+    named = _text_matcher(wanted)
+    return [i for i, text in enumerate(editor.directives) if named(text)]
 
 
 class _MovePlan(NamedTuple):
@@ -1398,9 +1368,7 @@ class _MovePlan(NamedTuple):
 
 def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _MovePlan:
     """Resolve a ``move``'s selection, refusing anything it names that is not there."""
-    for ref in op.references:
-        if ref not in editor.components:
-            raise NetlistError(f"Component '{ref}' not found.")
+    references = [part_reference(editor, ref) for ref in op.references]
     labels: set[int] = set()
     for point in op.labels:
         at = [i for i, lbl in enumerate(editor.labels) if _xy(lbl.coord) == (point.x, point.y)]
@@ -1422,7 +1390,7 @@ def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _M
             raise NetlistError(f"No directive or comment matched {wanted!r}.")
         texts.update(found)
 
-    parts = list(dict.fromkeys(op.references))
+    parts = list(dict.fromkeys(references))
     region = op.region
     if region is not None:
 
@@ -1490,32 +1458,35 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
         return shifted(_xy(w.V1), first), shifted(_xy(w.V2), second)
 
     ends = [wire_ends(i, w) for i, w in enumerate(editor.wires)]
-    after = partition(
-        (
+    after = named_nets(
+        [
             (
-                shifted((pin["x"], pin["y"]), entry["ref"] in moved_parts),
-                (entry["ref"], pin["name"]),
+                entry["ref"],
+                [
+                    (pin["name"], shifted((pin["x"], pin["y"]), entry["ref"] in moved_parts))
+                    for pin in entry["pins"]
+                ],
             )
             for entry in geometry.values()
-            for pin in entry["pins"]
-        ),
-        (
+        ],
+        [
             (shifted(_xy(lbl.coord), i in plan.labels), lbl.text)
             for i, lbl in enumerate(editor.labels)
-        ),
+        ],
         ends,
     )
-    # A net of the moved sheet with two names on it joins them; that is a short
-    # unless the sheet as it is already made them one node (names compared as
-    # LTspice compares them, nets that share a name or a ground already one).
-    names_on: dict[tuple[int, int], set[str]] = defaultdict(set)
-    for coord, texts in after.label_texts.items():
-        names_on[after.root(coord)].update(named_labels(texts))
+    # A net of the moved sheet, by its wiring, with two names on it joins them;
+    # that is a short unless the sheet as it is already made them one node
+    # (names compared as LTspice compares them, nets that share a name or a
+    # ground already one).
+    names_on: dict[int, set[str]] = defaultdict(set)
+    for label in after.labels:
+        names_on[after.nets.of_label(label)].update(named_labels([label.text]))
     before: NamedNets | None = None
     for names in names_on.values():
         if len(name_keys(names)) < 2:
             continue
-        before = before or NamedNets(net_partition(editor, geometry=geometry.values()))
+        before = before or sheet_nets(editor, geometry=geometry.values())
         if len({before.net_named(name) for name in names}) > 1:
             raise NetlistError(
                 f"Refused to move: it would join nets that each carry a name {sorted(names)}, "
@@ -1569,12 +1540,14 @@ def _pins_on_crossings(
     """Refuse putting ``reference``'s pins at ``pins`` where one would short two named nets.
 
     A pin on a point where wires cross joins them (the ``pin_at_crossing``
-    recording), as a label there does. Anywhere else a pin lands, on a wire's
+    recording), as a label there does, and a pin on a wire LTspice drops,
+    straight between two pins of one part, keeps the wire, joining those two
+    (``same_instance_pin_inside``). Anywhere else a pin lands, on a wire's
     interior or end, a label or another part's pin, there is one net already,
-    so a crossing is the one way placing or moving a part makes one net of
-    two. Two that each carry a name are a short, refused as a wire or a label
-    that joined them is. Any other join is taken as meant, and the finished
-    sheet says it (the ``joined_at_crossing`` rule).
+    so those are the ways placing or moving a part makes one net of two. Two
+    that each carry a name are a short, refused as a wire or a label that
+    joined them is. Any other join is taken as meant, and the finished sheet
+    says it (the ``joined_at_crossing`` rule).
 
     The sheet is read without the part itself, and ``already`` is where its
     pins are now: what a pin joins from where it already is, is not this
@@ -1582,28 +1555,39 @@ def _pins_on_crossings(
     leaves the sheet as it was.
     """
     wires = wire_segments_of(editor)
-    # Nearly every pin is on one wire or none, and the sheet's nets need not
-    # be worked out for those.
+    # Nearly every pin is on one wire's end or on none, and the sheet's nets
+    # need not be worked out for those.
     on_wires = [
         (pin, through)
         for pin in pins
-        if (pin["x"], pin["y"]) not in already
-        and len(through := wires_through((pin["x"], pin["y"]), wires)) > 1
+        if (point := (pin["x"], pin["y"])) not in already
+        and (through := wires_through(point, wires))
+        and (len(through) > 1 or point not in (through[0][:2], through[0][2:]))
     ]
     if not on_wires:
         return
-    nets = NamedNets(net_partition(editor, without=reference))
+    nets = sheet_nets(editor, without=reference)
     for pin, through in on_wires:
-        joined = nets.joined_at(seg[:2] for seg in through)
-        if len(joined.named) > 1:
-            listed = "; ".join(str(sorted(names)) for names in joined.named)
+        joined = nets.joined_at((pin["x"], pin["y"]))
+        if len(joined.named) < 2:
+            continue
+        listed = "; ".join(str(sorted(names)) for names in joined.named)
+        if len(through) == 1:
             raise NetlistError(
                 f"Refused to {doing}: {reference}.{pin['name']} would land at "
-                f"({pin['x']},{pin['y']}), where "
-                f"wires of nets that each carry a name cross ({listed}). A pin on a "
-                "crossing joins the wires, shorting those nets together. Put the part "
-                "where the pin is on the one wire it is meant for."
+                f"({pin['x']},{pin['y']}) on the wire {segment_text(through[0])}, which "
+                "runs straight between two pins of one part and which LTspice leaves out "
+                "of the netlist. A pin on it keeps the wire, joining nets that each carry "
+                f"a name ({listed}) and shorting them together. Put the part where the "
+                "pin is on the one net it is meant for."
             )
+        raise NetlistError(
+            f"Refused to {doing}: {reference}.{pin['name']} would land at "
+            f"({pin['x']},{pin['y']}), where "
+            f"wires of nets that each carry a name cross ({listed}). A pin on a "
+            "crossing joins the wires, shorting those nets together. Put the part "
+            "where the pin is on the one wire it is meant for."
+        )
 
 
 def _placed_component_data(
@@ -1634,7 +1618,7 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     case-insensitively. Only when no pin carries that name, and it is all
     digits, is it read as the pin's 1-based SpiceOrder — the terminal number a
     netlist uses. Names win because some symbols name their pins '1', '2' in an
-    order that need not be their SpiceOrder. The match is ``sheet.find_pin``,
+    order that need not be their SpiceOrder. The match is ``sheet.placed_pin``,
     which ``inspect``'s net trace uses too.
 
     Raises NetlistError if the reference cannot be resolved.
@@ -1673,19 +1657,15 @@ def resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         )
 
     ref, pin_name = pin_ref.rsplit(".", 1)
-    component_refs = editor.get_components()
-    if ref not in component_refs:
-        raise NetlistError(
-            f"Component '{ref}' not found. Available: {', '.join(sorted(component_refs))}"
-        )
-
+    ref = part_reference(editor, ref)
     symbol = editor.components[ref].symbol
     geometry = placed_geometry(editor, ref)
     pins = [
         PlacedPin(pin["name"], pin["order"], pin["x"], pin["y"], pin["dir"])
         for pin in (geometry["pins"] if geometry is not None else ())
     ]
-    return find_pin(pins, ref, symbol or "", pin_name, "not found" if geometry is None else "")
+    pin = placed_pin(pins, ref, symbol or "", pin_name, "not found" if geometry is None else "")
+    return pin.x, pin.y
 
 
 def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> None:
@@ -1699,16 +1679,22 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> None:
     (``joined_at_crossing``), a label still on nothing (``dangling_label``).
     """
     # A FLAG anywhere along a wire, its interior included, joins that wire's
-    # net, and one at a crossing joins both (see connectivity.partition for the
-    # export record). It is one node with whatever sits on its point, and with
+    # net, and one at a crossing joins both (see lib/connectivity.py for the
+    # export records). It is one node with whatever sits on its point, and with
     # every net already of its name; ground is no name (NamedNets.joined_at).
-    through = wires_through((x, y), wire_segments_of(editor))
     grounding = is_ground(net)
-    joined = NamedNets(net_partition(editor)).joined_at(
-        (seg[:2] for seg in through), at=(x, y), name=None if grounding else net
-    )
+    nets = sheet_nets(editor)
+    joined = nets.joined_at((x, y), landing=True, name=None if grounding else net)
     if len(joined.named) > 1:
         listed = "; ".join(f"{sorted(names)}" for names in joined.named)
+        if grounding and len(set(nets.wired_at((x, y)))) < 2:
+            # Not a crossing: a wire LTspice drops between two pins of one
+            # part, which a flag on it keeps.
+            raise NetlistError(
+                f"Refused to add ground at ({x},{y}): the flag would join nets that each "
+                f"carry a name ({listed}), shorting them together and to ground. Put the "
+                "flag on a point of the one net it is meant for."
+            )
         if grounding:
             raise NetlistError(
                 f"Refused to add ground at ({x},{y}): wires of nets that each carry a "
@@ -1746,10 +1732,10 @@ def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
 def wires_of_one_net(
     coord: tuple[int, int],
     segments: Sequence[tuple[int, int, int, int]],
-    net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
+    nets: NamedNets,
     remedy: str,
 ) -> list[tuple[int, int, int, int]]:
-    """:func:`wires_through` for a point that must name one net.
+    """:func:`wires_through` for a point that must name one net of ``nets``.
 
     Refuses, naming the wires and ending with ``remedy``, when the point is
     where wires of separate nets cross: LTspice leaves a plain crossing unjoined
@@ -1757,7 +1743,7 @@ def wires_of_one_net(
     alone. An empty list means the point touches no wire.
     """
     through = wires_through(coord, segments)
-    if len({net_of(s[:2]) for s in through}) > 1:
+    if len(set(nets.wired_at(coord))) > 1:
         raise crossing_refused(coord, through, remedy)
     return through
 
@@ -1783,32 +1769,31 @@ def _resolve_route_endpoint(
     endpoint: "str | GridPoint",
     editor: AscEditor,
     existing_wires: list[tuple[int, int, int, int]],
-    node_coords: "Container[tuple[int, int]]",
-    net_of: "Callable[[tuple[int, int]], tuple[int, int]]",
-) -> tuple[tuple[int, int], tuple[int, int]]:
-    """Resolve one ``wire_pins`` endpoint to its coordinate and an anchor.
+    nets: NamedNets,
+) -> tuple[int, int]:
+    """Resolve one ``wire_pins`` endpoint, on the sheet whose nets are ``nets``,
+    to its coordinate.
 
-    The anchor is a pin, label or wire end on the endpoint's net before the
-    route is drawn, for looking the net up. A pin or label reference resolves
-    through :func:`resolve_pin` and is its own anchor. A coordinate must already
-    touch the circuit: at a pin or a net label (``node_coords``), its own
-    anchor, or anywhere along a wire. An end there connects to it, and one on a
-    wire's interior is a T-junction LTspice joins without the wire being split.
+    A pin or label reference resolves through :func:`resolve_pin`. A coordinate
+    must already touch the circuit: at a pin or a net label, or anywhere along
+    a wire. An end there connects to it, and one on a wire's interior is a
+    T-junction LTspice joins without the wire being split.
     A label's point is how a route reaches a label that stands on nothing, one
     of several labels of one name, or a ground, none of which ``net:NAME`` can
     name. A coordinate where wires of separate nets cross is refused, because a
     wire ending there would join all of them.
     """
     if isinstance(endpoint, str):
-        coord = resolve_pin(endpoint, editor)
-        return coord, coord
+        return resolve_pin(endpoint, editor)
     coord = (endpoint.x, endpoint.y)
-    if coord in node_coords:
-        return coord, coord
+    if any(pin.point == coord for pin in nets.pins) or any(
+        label.point == coord for label in nets.labels
+    ):
+        return coord
     through = wires_of_one_net(
         coord,
         existing_wires,
-        net_of,
+        nets,
         "A wire ending there would join them all; end the route on a point of "
         "just the wire you mean.",
     )
@@ -1819,7 +1804,7 @@ def _resolve_route_endpoint(
             "point, place a net label there first, and to turn a corner there, give "
             "it as a waypoint instead."
         )
-    return coord, through[0][:2]
+    return coord
 
 
 def _plan_connect_route(
@@ -1843,17 +1828,11 @@ def _plan_connect_route(
     """
     component_geo = collect_component_geometry(editor)
     existing_wires = wire_segments_of(editor)
-    part_before = net_partition(editor)
-    net_of = label_folded_nets(part_before)
-    node_coords = part_before.pin_owners.keys() | part_before.label_texts.keys()
+    before = sheet_nets(editor, geometry=component_geo)
     from_name, to_name = _endpoint_name(from_pin), _endpoint_name(to_pin)
 
-    (x1, y1), from_anchor = _resolve_route_endpoint(
-        from_pin, editor, existing_wires, node_coords, net_of
-    )
-    (x2, y2), to_anchor = _resolve_route_endpoint(
-        to_pin, editor, existing_wires, node_coords, net_of
-    )
+    x1, y1 = _resolve_route_endpoint(from_pin, editor, existing_wires, before)
+    x2, y2 = _resolve_route_endpoint(to_pin, editor, existing_wires, before)
 
     if (x1, y1) == (x2, y2) and not waypoints:
         raise NetlistError(
@@ -1887,32 +1866,41 @@ def _plan_connect_route(
     # geometry complaint. An end given as ``net:NAME`` is on the net of that
     # label and is checked like a pin: naming the net one end is on does not
     # make joining it to another named net any less a short. A coordinate
-    # endpoint on a wire's interior reads the labels of that wire's net.
+    # endpoint on a wire's interior reads the names of that wire's net.
     # Two-phase check:
-    #   1) BEFORE state — endpoints resolve to two different already-named
+    #   1) BEFORE state — the endpoints are on two different already-named
     #      nets (the standard short).
     #   2) AFTER state — proposed route drags a mid-segment label into
     #      the union, merging an additional named net.
-    # Names are compared as LTspice compares them (name_key): a net named
-    # VOUT and one named Vout are one node already.
-    nets_before = labels_per_coord(part_before)
-    from_labels_before = named_labels(_net_label_at(nets_before, from_anchor))
-    to_labels_before = named_labels(_net_label_at(nets_before, to_anchor))
-    from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
-    if from_keys and to_keys and from_keys.isdisjoint(to_keys):
+    # Nets are the ones LTspice makes, names compared as LTspice compares them
+    # (name_key): a net named VOUT and one named Vout, or two names a wire
+    # already joins, are one node already.
+    from_nets, to_nets = before.at((x1, y1)), before.at((x2, y2))
+    from_labels_before = set().union(*(before.names(net) for net in from_nets))
+    to_labels_before = set().union(*(before.names(net) for net in to_nets))
+    named = [net for net in sorted(from_nets | to_nets) if before.names(net)]
+    if len(named) > 1:
+        if from_labels_before and to_labels_before:
+            joined = (
+                f"{from_name} is on net {sorted(from_labels_before)} and {to_name} is on "
+                f"net {sorted(to_labels_before)}. Connecting them would short the two "
+                "named nets."
+            )
+        else:
+            listed = "; ".join(str(sorted(before.names(net))) for net in named)
+            joined = (
+                f"the route would join nets that each carry a name ({listed}), shorting "
+                "them together."
+            )
         raise NetlistError(
             f"Refused to connect {from_name} to {to_name}: "
-            f"Net-label conflict — {from_name} is on net "
-            f"{sorted(from_labels_before)} and {to_name} is on net "
-            f"{sorted(to_labels_before)}. Connecting them would short "
-            f"the two named nets. To join them on purpose, give both the "
+            f"Net-label conflict — {joined} To join them on purpose, give both the "
             f"same name: remove one side's labels with remove_net_label "
             f"and label it with the other's name; no wire is needed."
         )
-    nets_after = trace_nets(editor, extra_segments=segments)
-    from_labels_after = named_labels(_net_label_at(nets_after, (x1, y1)))
-    to_labels_after = named_labels(_net_label_at(nets_after, (x2, y2)))
-    unioned = from_labels_after | to_labels_after
+    from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
+    after = sheet_nets(editor, extra_segments=segments, geometry=component_geo)
+    unioned = set().union(*(after.names(net) for net in after.at((x1, y1)) | after.at((x2, y2))))
     if len(name_keys(unioned)) >= 2:
         # Some labels seen post-route weren't there pre-route on
         # either endpoint — that's the mid-segment case.
@@ -1935,8 +1923,11 @@ def _plan_connect_route(
     # (see same_instance_dropped_segments), so reporting the tie as connected
     # would be a lie. The fix is a route change, so surface it before route
     # geometry.
+    pin_owners: dict[tuple[int, int], list[tuple[str, str]]] = {}
+    for pin in before.pins:
+        pin_owners.setdefault(pin.point, []).append((pin.reference, pin.name))
     dropped = same_instance_dropped_segments(
-        part_before.pin_owners, segments, part_before.label_texts.keys()
+        pin_owners, segments, [label.point for label in before.labels]
     )
     if dropped:
         ref = dropped[0]["ref"]
@@ -1955,8 +1946,8 @@ def _plan_connect_route(
         )
 
     # Everything else said of a route is routing.judge's, which reads the sheet
-    # as plain data: the parts with their pins, the wires, and the partition
-    # worked out above. A route across a part is not judged at all here: the
+    # as plain data: the parts with their pins, the wires, and the nets worked
+    # out above. A route across a part is not judged at all here: the
     # finished sheet's own rule says it.
     view = SheetView(
         parts=tuple(
@@ -1972,11 +1963,10 @@ def _plan_connect_route(
         points=tuple(points),
         segments=tuple(segments),
         ends=((x1, y1), (x2, y2)),
-        anchors=(from_anchor, to_anchor),
         end_names=(from_name, to_name),
         ends_by_coordinate=(not isinstance(from_pin, str), not isinstance(to_pin, str)),
     )
-    judged = judge(view, part_before, route)
+    judged = judge(view, before, route)
     if judged.refusals:
         error_lines = [f"Refused to connect {from_name} to {to_name}:"]
         error_lines.extend(f"  {found.detail}" for found in judged.refusals)
@@ -2127,7 +2117,7 @@ class OpMove(StrictModel):
     wires: list[WireEnds] = Field(default_factory=list)
     texts: list[str] = Field(
         default_factory=list,
-        description="Directives and comments: exact text or 'regex:'; every match moves.",
+        description="Directives and comments, named as for remove_directive; each moves.",
     )
     region: SheetRegion | None = Field(
         default=None,
@@ -2204,8 +2194,8 @@ class OpRemoveWire(StrictModel):
     pin: str | None = Field(
         default=None,
         description=(
-            "Incident-point form: removes every segment touching this pin, including "
-            "wires belonging to other connections at a shared node."
+            "Incident-point form: removes each wire ending on this pin, other "
+            "connections' too; one passing through stays."
         ),
     )
     x: int | None = Field(default=None, description="Incident-point form, as a coordinate.")
@@ -2240,8 +2230,8 @@ class OpRemoveDirective(StrictModel):
     op: Literal["remove_directive"]
     instruction: str = Field(
         description=(
-            "Directive or comment text to remove, matched literally by default; "
-            "prefix with 'regex:' to match by pattern."
+            "Removes each directive and comment equal to this, outer space ignored; "
+            "with 'regex:', each a case-sensitive search finds."
         )
     )
 
@@ -2468,55 +2458,52 @@ def apply_op_inplace(
         return {"op": "add_component", **placed}
 
     if isinstance(op, OpSetComponentValue):
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
-        before = _attributes_of(editor, op.reference)
-        _apply_component_value(editor, op.reference, op.value, element_class(editor, op.reference))
+        reference = part_reference(editor, op.reference)
+        before = _attributes_of(editor, reference)
+        _apply_component_value(editor, reference, op.value, element_class(editor, reference))
         result: dict[str, object] = {
             "op": "set_component_value",
-            "reference": op.reference,
+            "reference": reference,
             "value": op.value,
         }
-        if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
+        if changed := _attributes_changed(before, _attributes_of(editor, reference)):
             result["changed"] = changed
         return result
 
     if isinstance(op, OpSetComponentAttribute):
         _reject_unknown_attr(op.attribute)
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
-        before = _attributes_of(editor, op.reference)
+        reference = part_reference(editor, op.reference)
+        before = _attributes_of(editor, reference)
         if not op.value.strip():
             # Empty value = clear. LTspice's format has no "empty value"
             # representation (a 2-token SYMATTR line is unreadable), so the
             # line is removed instead.
-            _require_clearable_attr(op.reference, op.attribute)
-            editor.get_component(op.reference).attributes.pop(op.attribute, None)
+            _require_clearable_attr(reference, op.attribute)
+            editor.get_component(reference).attributes.pop(op.attribute, None)
         elif op.attribute == "InstName":
-            return _rename_component(editor, op.reference, op.value.strip())
+            return _rename_component(editor, reference, op.value.strip())
         else:
             editor.set_component_attribute(
-                op.reference,
+                reference,
                 op.attribute,
-                _attribute_value(op.reference, op.attribute, op.value),
+                _attribute_value(reference, op.attribute, op.value),
             )
         attr_result: dict[str, object] = {
             "op": "set_component_attribute",
-            "reference": op.reference,
+            "reference": reference,
             "attribute": op.attribute,
         }
-        if changed := _attributes_changed(before, _attributes_of(editor, op.reference)):
+        if changed := _attributes_changed(before, _attributes_of(editor, reference)):
             attr_result["changed"] = changed
         return attr_result
 
     if isinstance(op, OpRemoveComponent):
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
-        target_only = _component_pin_coords(editor, op.reference) - _other_components_pin_coords(
-            editor, op.reference
+        reference = part_reference(editor, op.reference)
+        target_only = _component_pin_coords(editor, reference) - _other_components_pin_coords(
+            editor, reference
         )
-        editor.remove_component(op.reference)
-        rm_result: dict[str, object] = {"op": "remove_component", "reference": op.reference}
+        editor.remove_component(reference)
+        rm_result: dict[str, object] = {"op": "remove_component", "reference": reference}
         # A wire it leaves on nothing is the finished sheet's to say
         # (dangling_wire_end), so a later op of the batch that removes or
         # reconnects it leaves nothing said.
@@ -2525,28 +2512,27 @@ def apply_op_inplace(
         return rm_result
 
     if isinstance(op, OpMoveComponent):
-        if op.reference not in editor.components:
-            raise NetlistError(f"Component '{op.reference}' not found.")
+        reference = part_reference(editor, op.reference)
         new_rot = (
             _parse_rotation(op.rotation)
             if op.rotation is not None
-            else editor.get_component_position(op.reference)[1]
+            else editor.get_component_position(reference)[1]
         )
-        old_pins = _component_pin_coords(editor, op.reference)
-        moved_symbol = editor.components[op.reference].symbol
+        old_pins = _component_pin_coords(editor, reference)
+        moved_symbol = editor.components[reference].symbol
         moved_info = symbol_info_for(editor, moved_symbol) if moved_symbol else None
         if moved_info is not None:
             _pins_on_crossings(
                 editor,
-                op.reference,
+                reference,
                 compute_placed_geometry(moved_info, op.x, op.y, new_rot.name)["pins"],
-                f"move {op.reference}",
+                f"move {reference}",
                 already=old_pins,
             )
         # Wires left at its old pins are the finished sheet's to say
         # (dangling_wire_end), as for remove_component.
-        editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
-        return {"op": "move_component", "reference": op.reference}
+        editor.set_component_position(reference, Point(op.x, op.y), new_rot)
+        return {"op": "move_component", "reference": reference}
 
     if isinstance(op, OpMove):
         return {"op": "move", **_apply_move(editor, op)}
@@ -2588,26 +2574,27 @@ def apply_op_inplace(
                 # fact, not a pin fact: cutting a duplicated bridge between two
                 # wired stubs splits the net while every pin still touches some
                 # wire, so a floating-pin scan blesses exactly the cut this
-                # guard exists to refuse. The oracle is the net partition.
-                part_before = net_partition(editor)
-                nets_before: dict[tuple[int, int], list[tuple[int, int]]] = {}
-                for coord in part_before.pin_owners:
-                    nets_before.setdefault(part_before.root(coord), []).append(coord)
+                # guard exists to refuse. The oracle is the sheet's wired nets.
+                nets_before = sheet_nets(editor).nets
+                on_net: dict[int, list[PinAt]] = {}
+                for pin in nets_before.pins:
+                    on_net.setdefault(nets_before.of_pin(pin), []).append(pin)
                 original, editor.wires = editor.wires, kept
-                part_after = net_partition(editor)
-                for coords in nets_before.values():
-                    sides: dict[tuple[int, int], list[tuple[int, int]]] = {}
-                    for coord in coords:
-                        sides.setdefault(part_after.root(coord), []).append(coord)
+                nets_after = sheet_nets(editor).nets
+                for pins in on_net.values():
+                    sides: dict[int, list[PinAt]] = {}
+                    for pin in pins:
+                        sides.setdefault(nets_after.of_pin(pin), []).append(pin)
                     if len(sides) < 2:
                         continue
                     editor.wires = original
 
-                    def _side_names(side: list[tuple[int, int]]) -> str:
+                    def _side_names(side: list[PinAt]) -> str:
                         names = [
-                            f"{ref}.{pin}" if pin else ref
-                            for c in sorted(side)
-                            for ref, pin in part_before.pin_owners[c]
+                            f"{pin.reference}.{pin.name}" if pin.name else pin.reference
+                            for pin in sorted(
+                                side, key=lambda pin: (pin.point, pin.part, pin.order)
+                            )
                         ]
                         return ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
 

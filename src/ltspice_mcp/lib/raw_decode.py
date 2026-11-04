@@ -14,7 +14,6 @@ import hashlib
 import io
 import math
 import os
-import re
 import stat
 from dataclasses import asdict
 from pathlib import Path
@@ -24,7 +23,8 @@ import numpy as np
 from spicelib.raw.plot_data import PlotData
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
-from ltspice_mcp.lib.parser_capture import CapturedFile, CapturedInputs
+from ltspice_mcp.lib.log_parser import read_step_line
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES, CapturedFile, CapturedInputs
 from ltspice_mcp.lib.raw_header import (
     RawHeader,
     RawLimitError,
@@ -34,13 +34,10 @@ from ltspice_mcp.lib.raw_header import (
     preflight_raw,
 )
 from ltspice_mcp.lib.result_kinds import STEPPED_SWEEP, Analysis, header_analysis, stepped_kind
-from ltspice_mcp.lib.store import parser_file_in
+from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 _CHUNK_BYTES = 64 * 1024
-_INPUT_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
-_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.I)
-_STEP_PARAMETER = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
 
 
 class RawDecodeError(ValueError):
@@ -120,23 +117,23 @@ def _verified_inputs(
     captured: CapturedInputs, directory: Path, limits: RawLimits, step_log_bytes: int
 ) -> dict[str, CapturedFile]:
     roles = [item.role for item in captured.files] + list(captured.absent)
-    if len(roles) != 3 or set(roles) != set(_INPUT_NAMES):
+    if len(roles) != 3 or set(roles) != set(CAPTURED_NAMES):
         raise RawDecodeError("Captured input roles must occur exactly once, present or absent")
     records = {item.role: item for item in captured.files}
     if "raw" not in records:
         raise RawDecodeError("RAW decoding requires a captured raw file")
     for item in captured.files:
-        if item.name != _INPUT_NAMES[item.role]:
+        if item.name != CAPTURED_NAMES[item.role]:
             raise RawDecodeError("Invalid captured input filename")
         if type(item.size_bytes) is not int or item.size_bytes < 0:
             raise RawDecodeError("Invalid captured input size")
-        if not re.fullmatch(r"[0-9a-f]{64}", item.sha256):
+        if not is_sha256(item.sha256):
             raise RawDecodeError("Invalid captured input digest")
     if records["raw"].size_bytes > limits.input_bytes:
         raise RawLimitError("input_bytes limit exceeded")
     if sum(item.size_bytes for role, item in records.items() if role != "raw") > step_log_bytes:
         raise RawLimitError("step_log_bytes limit exceeded")
-    for role, name in _INPUT_NAMES.items():
+    for role, name in CAPTURED_NAMES.items():
         path = parser_file_in(directory, name)
         if role not in records:
             if path.exists() or path.is_symlink():
@@ -198,25 +195,25 @@ def _step_log(
     rows: list[dict[str, Any]] = []
     for line_number, line in enumerate(io.StringIO(text), 1):
         original = line.rstrip("\r\n")
-        match = _STEP_LINE.fullmatch(original.strip())
-        if match is None:
+        step = read_step_line(original)
+        if step is None:
             continue
         if len(encode_spice_text(original, encoding)) > limits.line_bytes:
             raise RawLimitError("line_bytes limit exceeded in step log row")
         if len(rows) == row_limit:
             raise RawLimitError("step_rows limit exceeded in companion log")
-        parameters = []
-        for parameter in _STEP_PARAMETER.finditer(match.group(1)):
-            token = parameter.group(2)
-            try:
-                # A stepped temperature carries its unit: LTspice 24 and later
-                # write "-40°", LTspice XVII "-40°C".
-                value = float(token.partition("°")[0])
-            except ValueError:
-                value = None
-            if value is not None and not math.isfinite(value):
-                value = None
-            parameters.append({"name": parameter.group(1), "token": token, "value": value})
+        parameters = [
+            {
+                "name": parameter.name,
+                "token": parameter.token,
+                "value": (
+                    parameter.number
+                    if parameter.number is not None and math.isfinite(parameter.number)
+                    else None
+                ),
+            }
+            for parameter in step.parameters
+        ]
         if len({p["name"].casefold() for p in parameters}) != len(parameters):
             raise RawDecodeError(f"Duplicate step parameter in companion log line {line_number}")
         rows.append(
@@ -387,8 +384,8 @@ def _step_facts(
     if starts is None or log["status"] != "parsed" or not log["rows"] or plot_count != 1:
         return result
     for row in log["rows"]:
-        body = _STEP_LINE.fullmatch(row["text"].strip())
-        if body is None or _STEP_PARAMETER.sub("", body.group(1)).strip(" \t,"):
+        step = read_step_line(row["text"])
+        if step is None or not step.only_parameters:
             return result
     ends = [*starts[1:], header.point_count]
     ranges = [

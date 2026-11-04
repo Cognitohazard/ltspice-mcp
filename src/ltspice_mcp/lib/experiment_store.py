@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import secrets
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -18,6 +17,7 @@ from typing import Any
 
 from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
     Completeness,
@@ -29,10 +29,11 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import finished, reconcile_experiment_restart
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.native_records import NativeCaseRecord
-from ltspice_mcp.lib.proc_kill import ProcessPresence, process_identity_presence
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
+from ltspice_mcp.lib.simulator import raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
     KIND_CANCELLATION,
@@ -45,6 +46,8 @@ from ltspice_mcp.lib.store import (
     atomic_write_json,
     envelope,
     owner_liveness,
+    owner_start_of,
+    owner_start_record,
     owner_unknown_observation,
     pid_of,
     validate_job_id,
@@ -96,9 +99,6 @@ CANONICALIZER_VERSION = 6
 #   6: attached analysis includes plot_index and dialect, which select the
 #      result data and participate even when normalized to their defaults.
 
-_LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
-
-
 FOREIGN_RECORD_POLL_S = 0.5
 """How often a server re-reads a record another server process writes: the
 owner looking for a cancellation request, and a waiter looking for the owner's
@@ -110,13 +110,21 @@ def cancellation_requested(job_id: str, working_dir: Path) -> bool:
     return Store(working_dir).cancellation(job_id).is_file()
 
 
-def cancel_authorized(job: ExperimentJob, control_token: str | None) -> bool:
-    """Whether this process or the supplied control token may cancel ``job``."""
-    return job.owner_pid == os.getpid() or (
+def holds_control_token(job: ExperimentJob, control_token: str | None) -> bool:
+    """Whether ``control_token`` is ``job``'s control token: the capability by
+    which a caller other than the job's owning process cancels or resumes it."""
+    return (
         control_token is not None
         and bool(job.control_token)
         and secrets.compare_digest(control_token, job.control_token)
     )
+
+
+def cancel_authorized(job: ExperimentJob, control_token: str | None, *, owned: bool) -> bool:
+    """Whether a caller may cancel ``job``: the process running it (``owned``,
+    which its registry answers, never a pid compared with this one) or a
+    holder of its control token."""
+    return owned or holds_control_token(job, control_token)
 
 
 def request_cancellation(
@@ -132,10 +140,11 @@ def request_cancellation(
     """
     store = Store(working_dir)
     with file_lock(store.cancellation_lock(job_id)):
-        job = load_job(job_id, working_dir, own_is_alive=True)
+        job = load_job(job_id, working_dir)
         if job is None:
             return None
-        if not cancel_authorized(job, control_token):
+        # Only for a job this process does not run: the token is the authority.
+        if not cancel_authorized(job, control_token, owned=False):
             raise PermissionError(f"Cancellation is not authorized for experiment job {job_id}")
         store.ensure_root()
         atomic_write_json(
@@ -225,6 +234,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         canonicalizer_version=job.canonicalizer_version,
         control_token=job.control_token,
         pid=job.owner_pid,
+        owner_start=owner_start_record(job.owner_pid, job.owner_start),
         simulator=job.simulator,
         status=job.status,
         started_at=job.started_at.isoformat(),
@@ -427,11 +437,13 @@ def case_raw_path(job: ExperimentJob, case: ExperimentCase) -> Path | None:
     """Where a case's raw is, or is being written: as recorded, else by its run token.
 
     The runner names every artifact ``{run_token}.{ext}`` inside the job's
-    output folder. None for a record written before that folder was persisted.
+    output folder, the raw with the simulator class's ``raw_extension``
+    (``simulator.raw_extension_for``). None for a record written before that
+    folder was persisted.
     """
     if job.output_folder is None or not case.run_token:
         return None
-    extension = ".qraw" if "qspice" in job.simulator.lower() else ".raw"
+    extension = raw_extension_for(job.simulator)
     return case.raw_file or job.output_folder / f"{case.run_token}{extension}"
 
 
@@ -471,7 +483,7 @@ def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path,
 
 
 def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
-    if job.status not in _LIVE_STATUSES:
+    if job.status not in NON_TERMINAL_LIVE_STATUSES:
         return
     if liveness is OwnerLiveness.UNKNOWN:
         # Not an answer, so not grounds to take a peer's live experiment away
@@ -525,7 +537,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
         failed = replace(
             case,
             status="failed",
-            failure_code="server_restarted",
+            failure_code=OWNER_STOPPED,
             # Name the mechanism the caller can act on — the owning process
             # exited — never "the server": the store cannot see which interface
             # owned the job, and for the in-process API the owner is the
@@ -582,6 +594,12 @@ def deserialize_job(
     )
     if has_recovery and data.get("store_version") != 4:
         raise RecoveryError("recovery_record_invalid", "Legacy records cannot claim recovery")
+    status = data.get("status", "interrupted")
+    if status not in TERMINAL_STATUSES | NON_TERMINAL_LIVE_STATUSES:
+        # A status no writer of this vocabulary produces (a hand-edited or
+        # foreign record) is neither live nor terminal, so a wait, a receipt
+        # and a reconciliation would each read it their own way. Refused.
+        raise ValueError(f"unknown experiment status {status!r}")
     started_at = parse_iso_datetime(data.get("started_at")) or now()
     completeness_data = data.get("completeness") or {}
     completeness = Completeness(
@@ -607,7 +625,7 @@ def deserialize_job(
         ],
         simulator=str(data.get("simulator", "")),
         completeness=completeness,
-        status=str(data.get("status", "interrupted")),  # type: ignore[arg-type]
+        status=status,
         started_at=started_at,
         completed_at=parse_iso_datetime(data.get("completed_at")),
         error=data.get("error"),
@@ -618,6 +636,7 @@ def deserialize_job(
         artifacts=list(data.get("artifacts") or []),
         analysis=_analysis_stage(data.get("analysis")),
         owner_pid=pid_of(data) or 0,
+        owner_start=owner_start_of(data),
         recovery=(
             JobRecovery.from_record(data["recovery"]) if data.get("recovery") is not None else None
         ),
@@ -671,12 +690,19 @@ def _validate_recovery_job(job: ExperimentJob) -> None:
             )
 
 
-def load_job_from_path(
-    path: Path,
-    working_dir: Path,
-    *,
-    own_is_alive: bool = False,
-) -> ExperimentJob | None:
+def _record_owner(data: Mapping[str, Any]) -> tuple[int | None, str | None]:
+    """The owning process a record names: its pid, and the start marker that
+    tells it from a later process with the same pid where the record has one.
+    A recoverable record names its owner in its recovery lineage."""
+    recovery_data = data.get("recovery")
+    if recovery_data is not None:
+        identity = JobRecovery.from_record(recovery_data).owner
+        return identity.pid, identity.start_marker
+    start = owner_start_of(data)
+    return pid_of(data), start[1] if start is not None else None
+
+
+def load_job_from_path(path: Path, working_dir: Path) -> ExperimentJob | None:
     """Load one coordinator record after validating store-root containment."""
     store = Store(working_dir)
     resolved = path.resolve()
@@ -688,26 +714,17 @@ def load_job_from_path(
         return None
     try:
         liveness = OwnerLiveness.UNKNOWN
-        if data.get("status") in _LIVE_STATUSES:
-            pid = pid_of(data)
-            recovery_data = data.get("recovery")
-            if recovery_data is not None:
-                identity = JobRecovery.from_record(recovery_data).owner
-                presence = process_identity_presence(identity.pid, identity.start_marker)
-                liveness = {
-                    ProcessPresence.PRESENT: OwnerLiveness.ALIVE,
-                    ProcessPresence.ABSENT: OwnerLiveness.DEAD,
-                    ProcessPresence.UNKNOWN: OwnerLiveness.UNKNOWN,
-                }[presence]
-            else:
-                liveness = owner_liveness(pid, own_is_alive=own_is_alive)
+        if data.get("status") in NON_TERMINAL_LIVE_STATUSES:
+            owner = _record_owner(data)
+            pid, start_marker = owner
+            liveness = owner_liveness(pid, start_marker=start_marker)
             if liveness.is_dead:
                 # The owner may have saved its final state and exited after
                 # our first read. Reconcile only a snapshot read after death.
                 data = _read_job_record(resolved)
                 if data is None:
                     return None
-                if pid_of(data) != pid or data.get("recovery") != recovery_data:
+                if _record_owner(data) != owner:
                     liveness = OwnerLiveness.UNKNOWN
         return deserialize_job(data, resolved, liveness=liveness)
     except Exception as exc:
@@ -731,18 +748,9 @@ def _read_job_record(path: Path) -> dict[str, Any] | None:
     return data
 
 
-def load_job(
-    job_id: str,
-    working_dir: Path,
-    *,
-    own_is_alive: bool = False,
-) -> ExperimentJob | None:
+def load_job(job_id: str, working_dir: Path) -> ExperimentJob | None:
     """Load a coordinator directly by validated job id."""
-    return load_job_from_path(
-        Store(working_dir).job_record(job_id),
-        working_dir,
-        own_is_alive=own_is_alive,
-    )
+    return load_job_from_path(Store(working_dir).job_record(job_id), working_dir)
 
 
 def load_jobs_for_circuit(
@@ -778,11 +786,7 @@ def load_jobs_for_circuit(
             if live is not None:
                 jobs.append(live)
                 continue
-            job = load_job_from_path(
-                store.job_record(job_id),
-                working_dir,
-                own_is_alive=True,
-            )
+            job = load_job_from_path(store.job_record(job_id), working_dir)
             if job is not None:
                 jobs.append(job)
         except Exception as exc:
