@@ -13,7 +13,7 @@ import pytest
 from spicelib import RawRead
 
 from ltspice_mcp.lib import log_parser, raw_parser, services
-from ltspice_mcp.lib.decoded_raw import DecodedRaw
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, declared_unit
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -161,6 +161,29 @@ class TestTraceUnit:
         assert whattype_unit("admittance") == "S"
         assert whattype_unit("notype") is None
         assert whattype_unit(None) is None
+
+    @pytest.mark.parametrize(
+        ("declared", "unit"),
+        [
+            ("voltage", "V"),
+            ("current", "A"),
+            ("device_current", "A"),
+            ("time", "s"),
+            ("frequency", "Hz"),
+            ("hertz", "Hz"),
+            ("admittance", "S"),
+            ("impedance", "Ω"),
+            ("capacitance", "F"),
+            ("voltage-density", "V/√Hz"),
+            ("current-density", "A/√Hz"),
+            ("Voltage ", "V"),
+            ("notype", None),
+        ],
+    )
+    def test_whattype_unit_reads_the_decoders_table(self, declared: str, unit: str | None):
+        """One table says a declared type's unit, for a descriptor's trace
+        and for a derived result's map alike."""
+        assert whattype_unit(declared) == declared_unit(declared) == unit
 
 
 class TestOffsetAwareRawRead:
