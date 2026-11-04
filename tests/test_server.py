@@ -387,6 +387,14 @@ class TestServerDispatch:
         )
         assert result.is_error
         assert f"{old!r} is now 'path'." in tool_text(result)
+        # A client that checks a call against its own copy of the tool's
+        # arguments would refuse 'path' while that copy lists the old name, so
+        # the refusal says where the fault is and how to clear it.
+        assert says(
+            tool_text(result),
+            f"If your copy of this tool's arguments still lists {old!r}, it is out of date",
+            "reload the tool's definition or reconnect this server",
+        )
 
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         result = await call_tool(
