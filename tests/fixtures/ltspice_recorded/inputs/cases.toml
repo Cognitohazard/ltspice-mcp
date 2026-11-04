@@ -20,7 +20,7 @@
 
 [behaviour.symbol-orientation]
 summary = "Where each of the eight placements (R0-R270, M0-M270) puts a symbol's pins, and that a netlist lists a component's nodes in SpiceOrder."
-model = ["lib/symbol_geometry.py", "lib/schematic_scene.py", "lib/schematic_ops.py"]
+model = ["lib/symbol_file.py", "lib/symbol_geometry.py", "lib/schematic_scene.py", "lib/schematic_ops.py"]
 # Each sheet holds one instance per placement. A net label named for its own
 # coordinates (x368y352) sits at every point any placement could put a pin, so
 # the exported netlist states where LTspice found each pin.
@@ -34,7 +34,7 @@ inputs = ["export/orientation_nmos4.asc", "export/orientation_res.asc", "export/
 
 [behaviour.stock-symbol-pins]
 summary = "The pin names, order and offsets of the stock symbols the suite's stand-in symbols are written to match."
-model = ["tests/fixtures/symbols", "lib/library_manager.py"]
+model = ["tests/fixtures/symbols", "lib/library_manager.py", "lib/symbol_file.py"]
 evidence = "manifest: library.symbols"
 
 [behaviour.wire-connectivity]
