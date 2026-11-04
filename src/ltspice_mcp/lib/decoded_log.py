@@ -17,32 +17,12 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.log_types import LOG_SECTIONS as _SECTIONS
 from ltspice_mcp.lib.log_types import LogDiagnostics, MeasurementsOutput, NativeTableBlock
+from ltspice_mcp.lib.log_types import LogSectionName as LogSectionName
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES as _NAMES
 from ltspice_mcp.lib.parser_capture import CapturedInputs
 
-LogSectionName = Literal[
-    "diagnostics",
-    "measurements",
-    "device_op",
-    "steps",
-    "op_iterations",
-    "temperatures",
-    "fourier",
-    "native_tables",
-    "error_context",
-]
-_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
-_SECTIONS: tuple[LogSectionName, ...] = (
-    "diagnostics",
-    "measurements",
-    "device_op",
-    "steps",
-    "op_iterations",
-    "temperatures",
-    "fourier",
-    "native_tables",
-    "error_context",
-)
 _Value = TypeVar("_Value")
 
 

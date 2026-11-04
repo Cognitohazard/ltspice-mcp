@@ -25,7 +25,7 @@ from spicelib.raw.plot_data import PlotData
 
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
 from ltspice_mcp.lib.log_parser import read_step_line
-from ltspice_mcp.lib.parser_capture import CapturedFile, CapturedInputs
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES, CapturedFile, CapturedInputs
 from ltspice_mcp.lib.raw_header import (
     RawHeader,
     RawLimitError,
@@ -38,7 +38,6 @@ from ltspice_mcp.lib.result_kinds import STEPPED_SWEEP, Analysis, header_analysi
 from ltspice_mcp.lib.store import parser_file_in
 
 _CHUNK_BYTES = 64 * 1024
-_INPUT_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
 _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
 
 
@@ -119,13 +118,13 @@ def _verified_inputs(
     captured: CapturedInputs, directory: Path, limits: RawLimits, step_log_bytes: int
 ) -> dict[str, CapturedFile]:
     roles = [item.role for item in captured.files] + list(captured.absent)
-    if len(roles) != 3 or set(roles) != set(_INPUT_NAMES):
+    if len(roles) != 3 or set(roles) != set(CAPTURED_NAMES):
         raise RawDecodeError("Captured input roles must occur exactly once, present or absent")
     records = {item.role: item for item in captured.files}
     if "raw" not in records:
         raise RawDecodeError("RAW decoding requires a captured raw file")
     for item in captured.files:
-        if item.name != _INPUT_NAMES[item.role]:
+        if item.name != CAPTURED_NAMES[item.role]:
             raise RawDecodeError("Invalid captured input filename")
         if type(item.size_bytes) is not int or item.size_bytes < 0:
             raise RawDecodeError("Invalid captured input size")
@@ -135,7 +134,7 @@ def _verified_inputs(
         raise RawLimitError("input_bytes limit exceeded")
     if sum(item.size_bytes for role, item in records.items() if role != "raw") > step_log_bytes:
         raise RawLimitError("step_log_bytes limit exceeded")
-    for role, name in _INPUT_NAMES.items():
+    for role, name in CAPTURED_NAMES.items():
         path = parser_file_in(directory, name)
         if role not in records:
             if path.exists() or path.is_symlink():

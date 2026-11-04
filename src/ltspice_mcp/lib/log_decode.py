@@ -17,26 +17,15 @@ from typing import Any
 
 from ltspice_mcp.lib import log_parser
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly
+from ltspice_mcp.lib.log_types import LOG_SECTIONS as _SECTIONS
 from ltspice_mcp.lib.log_types import LogDecodeError as LogDecodeError
 from ltspice_mcp.lib.log_types import LogLimitError as LogLimitError
 from ltspice_mcp.lib.log_types import LogLimits as LogLimits
 from ltspice_mcp.lib.log_types import log_section as _section
 from ltspice_mcp.lib.native_log_tables import decode_native_tables
+from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES as _NAMES
 from ltspice_mcp.lib.parser_capture import CapturedInputs
 from ltspice_mcp.lib.store import parser_file_in
-
-_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
-_SECTIONS = (
-    "diagnostics",
-    "measurements",
-    "device_op",
-    "steps",
-    "op_iterations",
-    "temperatures",
-    "fourier",
-    "native_tables",
-    "error_context",
-)
 
 
 def _read_captures(captured: CapturedInputs, directory: Path, limits: LogLimits) -> dict[str, str]:
@@ -208,7 +197,7 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
     must run this synchronous operation in its killable parser worker.
     """
     text = _read_captures(captured, directory, limits)
-    log_path = parser_file_in(directory, "input.log")
+    log_path = parser_file_in(directory, _NAMES["log"])
     body = text.get("log", "")
     sections = {}
     sections["error_context"] = (

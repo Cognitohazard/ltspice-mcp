@@ -5,9 +5,24 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from typing_extensions import TypedDict
+
+#: The sections a captured log decodes into, in the order the decoder writes
+#: them: the one list the decoder and the validated view share.
+LogSectionName = Literal[
+    "diagnostics",
+    "measurements",
+    "device_op",
+    "steps",
+    "op_iterations",
+    "temperatures",
+    "fourier",
+    "native_tables",
+    "error_context",
+]
+LOG_SECTIONS: tuple[LogSectionName, ...] = get_args(LogSectionName)
 
 
 class LogDecodeError(ValueError):
