@@ -31,6 +31,7 @@ from ltspice_mcp.lib.experiment_inputs import (
 )
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
+    OWNER_STOPPED,
     PARTIAL_RAW_KEY,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
@@ -111,7 +112,12 @@ KILL_MAX_PASSES = 5
 KILL_RESCAN_INTERVAL_S = 0.5
 
 RunTimeoutSource = Literal["request", "server_default"]
-StopReason = Literal["cancelled", "job_deadline", "run_timeout"]
+#: Why the coordinator stopped a job's cases: an explicit cancel, the job
+#: deadline, the run timeout, or the shutdown of the process running the job
+#: (``OWNER_STOPPED``, the code a crash leaves too).
+StopReason = Literal["cancelled", "job_deadline", "run_timeout", "server_restarted"]
+#: The reasons a whole job is stopped for; the run timeout stops one case.
+JobStopReason = Literal["cancelled", "job_deadline", "server_restarted"]
 
 AnalysisCallback = Callable[[ExperimentJob], Awaitable[dict[str, Any]]]
 
@@ -525,7 +531,7 @@ class _Execution:
     # Orders a worker thread's launch against a stop requested on the loop.
     # Held for two attribute writes at a time, never across a launch.
     launch_lock: threading.Lock = field(default_factory=threading.Lock)
-    stop_reason: Literal["cancelled", "job_deadline"] | None = None
+    stop_reason: JobStopReason | None = None
     slots_held: set[str] = field(default_factory=set)
     retained_slots: set[str] = field(default_factory=set)
     futures: dict[str, asyncio.Future[RunOutcome]] = field(default_factory=dict)
@@ -1006,7 +1012,7 @@ class ExperimentRunner(RunnerBase):
             await self._persist_job(execution)
             execution.live.mark_runs_done()
 
-            if execution.stop_reason == "cancelled":
+            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
                 self._finish_unstarted_analysis(
                     job,
                     status="cancelled",
@@ -1025,7 +1031,7 @@ class ExperimentRunner(RunnerBase):
                 return
 
             analysis_failed = await self._run_analysis(execution)
-            if execution.stop_reason == "cancelled":
+            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
                 await self._transition_job(execution, "cancelled")
             elif (
                 execution.stop_reason == "job_deadline"
@@ -1873,7 +1879,7 @@ class ExperimentRunner(RunnerBase):
     def _request_stop(
         self,
         execution: _Execution,
-        reason: Literal["cancelled", "job_deadline"],
+        reason: JobStopReason,
         *,
         exclude_case_id: str | None = None,
     ) -> None:
@@ -1902,7 +1908,19 @@ class ExperimentRunner(RunnerBase):
         # rather than assume the case never started: an accounting message that
         # can be false is how a completed run gets read as one that never ran.
         launched = case.submitted_at is not None
-        if execution.stop_reason == "job_deadline":
+        if execution.stop_reason == OWNER_STOPPED:
+            self._mark_case(
+                execution,
+                case,
+                "failed",
+                code=OWNER_STOPPED,
+                error=(
+                    "The server shut down while this case was running"
+                    if launched
+                    else "The server shut down before this case was submitted"
+                ),
+            )
+        elif execution.stop_reason == "job_deadline":
             self._mark_case(
                 execution,
                 case,
@@ -2022,8 +2040,14 @@ class ExperimentRunner(RunnerBase):
         job: ExperimentJob,
         *,
         control_token: str | None = None,
+        reason: Literal["cancelled", "server_restarted"] = "cancelled",
     ) -> list[dict[str, Any]]:
-        """Stop further submissions and kill active cases when authorized."""
+        """Stop further submissions and kill active cases when authorized.
+
+        ``reason`` is what the stopped cases record: an explicit cancel, or
+        ``OWNER_STOPPED`` when this process is shutting down, which a resume
+        retries by default as it does a case a crash left.
+        """
         if not experiment_store.cancel_authorized(
             job, control_token, owned=self.owns_experiment_job(job.job_id)
         ):
@@ -2061,7 +2085,7 @@ class ExperimentRunner(RunnerBase):
             and case.case_id not in execution.claimed_cancel_priors
         }
         execution.claimed_cancel_priors.update(before)
-        self._request_stop(execution, "cancelled")
+        self._request_stop(execution, reason)
         await execution.live.wait()
         return [
             cancel_receipt_row(case, before[case.case_id], case.status)
@@ -2125,6 +2149,8 @@ def _stop_bound(execution: _Execution, reason: StopReason) -> tuple[str, dict[st
     if reason == "job_deadline":
         deadline = execution.request.job_deadline_s
         return f"the job deadline of {deadline:g}s elapsed", {"job_deadline_s": deadline}
+    if reason == OWNER_STOPPED:
+        return "the server shut down", {}
     return "the job was cancelled", {}
 
 

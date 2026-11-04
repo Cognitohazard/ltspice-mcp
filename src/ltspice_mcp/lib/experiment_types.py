@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from ltspice_mcp.lib import now
 
@@ -52,6 +52,13 @@ AnalysisStatus = Literal[
     "failed",
     "cancelled",
 ]
+
+#: The failure code of a case stopped because the process running its job went
+#: away: found dead by the next reader of the job's record, or shut down, the
+#: server's or the Python API's, while the case ran. One code for both, as
+#: distinct from an explicit cancel (``cancelled``), so a resume retries either
+#: by default.
+OWNER_STOPPED: Final = "server_restarted"
 
 TERMINAL_CASE_STATUSES: frozenset[str] = frozenset({"produced", "failed", "cancelled", "skipped"})
 #: Launched and not yet terminal: a simulator may be running for the case now.

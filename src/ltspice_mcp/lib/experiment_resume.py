@@ -26,6 +26,7 @@ from ltspice_mcp.lib.experiment_inputs import (
     verify_startup,
 )
 from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
     AnalysisStage,
     ExperimentCase,
     ExperimentJob,
@@ -501,10 +502,18 @@ async def mark_attempt_launched(job: ExperimentJob, state: SessionState) -> None
             await asyncio.to_thread(save_journal, store, updated)
 
 
+#: The stops a resume retries by default: the process running the job went away
+#: (``OWNER_STOPPED``, which a crash and a shutdown both record, and
+#: ``server_shutdown``, which earlier builds recorded for a shutdown), or the job
+#: deadline elapsed. An explicit cancel needs ``retry_cancelled``, any other
+#: failure ``retry_failed``.
+_RETRIED_BY_DEFAULT = frozenset({OWNER_STOPPED, "server_shutdown", "job_deadline"})
+
+
 def _eligible(case: ExperimentCase, *, retry_failed: bool, retry_cancelled: bool) -> bool:
     if case.recovery is None or case.status == "produced":
         return False
-    if case.failure_code in {"server_restarted", "job_deadline"}:
+    if case.failure_code in _RETRIED_BY_DEFAULT:
         return True
     if case.status == "cancelled" or case.failure_code == "cancelled":
         return retry_cancelled

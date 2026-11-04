@@ -533,7 +533,9 @@ with `recovery_stale_parent`, and one whose process still runs it with
 cases write run files under new names (`{child job_id}_case_{run_index}`), so
 the parent's files are kept, and its successful cases reuse the parent's
 results after their hashes are checked. Cases that failed with
-`server_restarted` or `job_deadline` are retried by default; other failures
+`server_restarted` (the process running the job went away: it exited, or shut
+down while they ran; earlier versions recorded a shutdown as
+`server_shutdown`) or `job_deadline` are retried by default; other failures
 need `retry_failed` and explicit cancellations need `retry_cancelled`. If
 preparing the child fails, the resume is refused and nothing is recorded under
 its `resume_request_id`, so the same request can be sent again. `case_ids` is
@@ -579,7 +581,11 @@ result sets that read them. A recoverable job is never deleted.
 **Attached analysis is a job stage.** A job is terminal when all its runs and
 its analysis are terminal; the status sequence is
 `queued -> running -> analyzing -> completed | completed_with_failures | failed | cancelled`,
-and a job whose server stopped before its runs finished is `interrupted`.
+and a job whose server exited before its runs finished is `interrupted`. A
+server that shuts down cancels the jobs it runs, and their unfinished cases
+fail with `server_restarted`, as they do after a crash. A job's status is read
+from its record; whether this server process runs a job is never decided from
+the process id the record names, which another process may have taken since.
 The dwell and `jobs(wait)` wait for full terminality by default;
 `jobs(wait, wait_for: "runs")` returns once the runs are terminal: once every
 case's status is terminal, which can be just before the job's status changes.

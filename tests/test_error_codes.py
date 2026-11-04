@@ -611,7 +611,6 @@ FROZEN_ERROR_CODES = (
     "selector_conflict",
     "semantic_profile_required",
     "server_restarted",
-    "server_shutdown",
     "sheet_changed",
     "sheet_missing",
     "simulation_failed",

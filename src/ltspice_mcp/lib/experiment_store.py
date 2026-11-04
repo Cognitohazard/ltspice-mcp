@@ -17,6 +17,7 @@ from typing import Any
 
 from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
     Completeness,
@@ -533,7 +534,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
         failed = replace(
             case,
             status="failed",
-            failure_code="server_restarted",
+            failure_code=OWNER_STOPPED,
             # Name the mechanism the caller can act on — the owning process
             # exited — never "the server": the store cannot see which interface
             # owned the job, and for the in-process API the owner is the

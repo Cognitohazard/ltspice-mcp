@@ -86,6 +86,8 @@ blocked waiting on it.
 deadlock.
 
 **`close()`** cancels the jobs this process owns, as server shutdown does.
+Their unfinished cases fail with code `server_restarted`, as after a crash, so
+`jobs(action="resume")` retries them by default.
 Calls made after it starts raise `ApiClosedError`. It is idempotent, and a
 second `close()` from another thread returns once the first has finished. A
 call already running in another thread when `close()` starts is cancelled and

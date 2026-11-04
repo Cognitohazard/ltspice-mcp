@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import contextvars
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -23,8 +22,13 @@ from typing import Any
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.background import BackgroundTasks
-from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
-from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished, transition
+from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
+    TERMINAL_CASE_STATUSES,
+    ExperimentJob,
+    failure_row,
+)
+from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
@@ -675,28 +679,31 @@ class JobRegistry:
         return self._pending_persist.pending(job_id)
 
     async def cancel_running(self, runners, session_state) -> None:
-        """Cancel any jobs still in running/queued state.
+        """Stop the jobs this process runs (``owns``) that are still live.
+
+        Their stopped cases record ``OWNER_STOPPED``, the code a crash leaves
+        too: the case stopped because the process running it went away, not
+        because anyone cancelled it, so a resume retries it by default either
+        way. The jobs themselves end ``cancelled``.
 
         Runners' ``cancel`` APIs take a SessionState for historical reasons;
         the caller passes it through rather than the registry reaching back
         for a circular reference.
         """
-        own_pid = os.getpid()
         # Snapshot before iterating: the awaits below suspend this coroutine,
         # and a concurrent registration would change the dict under us —
         # "dictionary changed size during iteration".
         #
-        # Only THIS process's jobs are cancelled: a parallel server session's
-        # live job also sits in the registry as running (loaded from its
-        # record with the owner still alive) and must not be killed or
-        # relabeled by our shutdown.
-        experiments = list(self.jobs.values())
+        # Only THIS process's jobs are stopped: another server's live job also
+        # sits in the registry as running (loaded from its record with the
+        # owner still alive) and must not be killed or relabeled by our
+        # shutdown, whatever pid its record names.
+        experiments = [job for job in self.jobs.values() if self.owns(job)]
         await _issue_cancels(
             [
-                runner.cancel(experiment)
+                runner.cancel(experiment, reason=OWNER_STOPPED)
                 for experiment in experiments
-                if experiment.owner_pid == own_pid
-                and (runner := runners.get_experiment_runner_for(experiment)) is not None
+                if (runner := runners.get_experiment_runner_for(experiment)) is not None
             ]
         )
         # No record is kept of which cancels succeeded, because a cancel that
@@ -708,53 +715,36 @@ class JobRegistry:
         # write it a terminal status before the process exits. Skipping it would
         # persist a sidecar reading "running" under a pid that no longer exists.
         for experiment in experiments:
-            if experiment.status in NON_TERMINAL_LIVE_STATUSES and experiment.owner_pid == own_pid:
-                cancelled_at = now()
-                newly_cancelled = [
-                    case for case in experiment.cases if case.status not in TERMINAL_CASE_STATUSES
-                ]
-                experiment.cases = [
-                    (
-                        case
-                        if case.status in TERMINAL_CASE_STATUSES
-                        else replace(
-                            case,
-                            status="cancelled",
-                            failure_code="server_shutdown",
-                            error="Server shut down before this case completed",
-                            completed_at=cancelled_at,
-                        )
-                    )
-                    for case in experiment.cases
-                ]
-                experiment.completeness = replace(
-                    experiment.completeness,
-                    cancelled=(experiment.completeness.cancelled + len(newly_cancelled)),
+            if experiment.status not in NON_TERMINAL_LIVE_STATUSES:
+                continue
+            stopped_at = now()
+            stopped = [
+                replace(
+                    case,
+                    status="failed",
+                    failure_code=OWNER_STOPPED,
+                    error="The server shut down before this case completed",
+                    completed_at=stopped_at,
                 )
-                experiment.failures.extend(
-                    {
-                        "case_id": case.case_id,
-                        "code": "server_shutdown",
-                        "message": "Server shut down before this case completed",
-                    }
-                    for case in newly_cancelled
+                for case in experiment.cases
+                if case.status not in TERMINAL_CASE_STATUSES
+            ]
+            replaced = {case.case_id: case for case in stopped}
+            experiment.cases = [replaced.get(case.case_id, case) for case in experiment.cases]
+            experiment.completeness.recount(experiment.cases, execution_job_id=experiment.job_id)
+            experiment.failures.extend(failure_row(case) for case in stopped)
+            if experiment.analysis.status in {"pending", "running"}:
+                experiment.analysis = replace(
+                    experiment.analysis,
+                    status="cancelled",
+                    error="Server shut down before attached analysis completed",
+                    completed_at=stopped_at,
                 )
-                if experiment.analysis.status in {"pending", "running"}:
-                    experiment.analysis = replace(
-                        experiment.analysis,
-                        status="cancelled",
-                        error="Server shut down before attached analysis completed",
-                        completed_at=cancelled_at,
-                    )
-                live = self.live.get(experiment.job_id)
-                if live is not None:
-                    live.transition("cancelled")
-                else:
-                    transition(experiment, "cancelled")
-                self.persist_job(experiment)
+            # Still live, so still here: eviction takes only finished jobs.
+            self.live[experiment.job_id].transition("cancelled")
+            self.persist_job(experiment)
 
+        # A job that finished during the cancels may have been evicted since.
         await _issue_cancels(
-            _cancel_tasks(
-                [self.live[job.job_id] for job in experiments if job.job_id in self.live]
-            )
+            _cancel_tasks([self.live[job.job_id] for job in experiments if job.job_id in self.live])
         )
