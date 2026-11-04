@@ -86,6 +86,17 @@ tool-surface changes.
 
 ### Fixed
 
+- An `edit_schematic` dry run with `compare` returned no `verification`, so a
+  batch could be checked against its reference only by committing it. The
+  reference check exports a staged copy of the sheet the batch would write,
+  so it now runs on a dry run too, an op-less read included, and reports the
+  same block, the exported netlist on a mismatch and a `partial` outcome, with
+  nothing saved. When an op failed the batch would write nothing, so
+  `verification.compare_error` says the sheet was not compared.
+- In the Python API, `r.steps[0]["Rv"]` raised `KeyError` for a parameter
+  the deck steps as `Rv`, since LTspice logs it as `rv`. Each entry of
+  `RawResult.steps` now finds a name as a step selector does, whatever its
+  case, and keeps the keys as the run wrote them.
 - An argument refusal names the fix for a field it does not know: an unknown
   field is answered with the names its place takes, the closest first ("Did
   you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where

@@ -59,6 +59,7 @@ from ltspice_mcp.lib.raw_parser import (
 from ltspice_mcp.lib.recipes import (
     MeasurementsRecipe,
     StabilityRecipe,
+    StepSelector,
     ValueRecipe,
 )
 from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck_tran_max_step
@@ -790,6 +791,51 @@ async def test_every_reader_of_a_raw_says_compression_left_it_coarse(
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_finds_a_step_parameter_whatever_its_case(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/step_tran`` steps ``r``, and each reader that takes a step
+    parameter's name from a caller finds it as ``R``: the Python API's steps,
+    a step chosen by its axis in analyze_results, and group_by.
+    plot_waveform's is the next test."""
+    raw = rec.stage_run(build, "raw/step_tran", work_dir)
+    loaded = SyncApi(state_no_sim).load_raw(path=raw)
+    assert [step["R"] for step in loaded.steps] == [1000.0, 2000.0, 4000.0]
+    assert [step.get("R") for step in loaded.steps] == [1000.0, 2000.0, 4000.0]
+
+    def analyzed(**selection: Any) -> dict[str, Any]:
+        return SyncApi(state_no_sim).analyze_results(
+            sources=[{"path": str(raw), "label": "run"}],
+            recipes=[{"metric": "value", "key": "v", "expr": "V(out)", "at": "0.9m"}],
+            include={"per_run": True},
+            **selection,
+        )
+
+    (row,) = analyzed(step={"axis": "R", "value": "2k"})["results"]["v"]["per_run"]["items"]
+    assert row["step_index"] == 1
+    groups = analyzed(all_steps=True, group_by=["R"])["results"]["v"]["groups"]
+    assert [group["by"] for group in groups] == [{"R": 1000.0}, {"R": 2000.0}, {"R": 4000.0}]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_plot_waveform_finds_a_step_parameter_whatever_its_case(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    raw = rec.stage_run(build, "raw/step_tran", work_dir)
+    plot = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(
+            path=str(raw),
+            signals=["V(out)"],
+            step=StepSelector(axis="R", value="2k"),
+            open=False,
+        ),
+        state_no_sim,
+    )
+    assert plot.structured_content is not None
+    assert plot.structured_content["steps_plotted"] == 1
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 def test_the_api_says_compression_left_a_raw_coarse(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):
@@ -1306,6 +1352,27 @@ class TestMeasurements:
         assert [(group["by"], group["count"]) for group in groups] == [
             ({"c": 1e-7}, 2),
             ({"c": 2e-7}, 2),
+        ]
+
+    def test_a_step_parameter_is_found_by_the_decks_spelling(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The deck steps ``Rv`` and both builds log ``.step rv=...``, so the
+        rows carry ``rv``; a step chosen by ``Rv``, and rows grouped by ``Rv``,
+        still find it."""
+        case_id = "log/meas_when_threshold_tran_step"
+        assert ".step param Rv" in (INPUTS / f"{case_id}.cir").read_text(encoding="utf-8")
+        assert ".step rv=2000" in read_log_text(rec.recorded(build, f"{case_id}.log"))
+        log = rec.stage_run(build, case_id, work_dir).with_suffix(".log")
+        reply = self.read_steps(log, state_no_sim, step={"axis": "Rv", "value": "2k"})
+        (row,) = reply["results"]["meas"]["per_run"]["items"]
+        assert (row["step_index"], row["step_values"]) == (1, {"rv": 2000.0})
+        groups = self.read_steps(log, state_no_sim, all_steps=True, group_by=["Rv"])["results"][
+            "meas"
+        ]["groups"]
+        assert [(group["by"], group["count"]) for group in groups] == [
+            ({"Rv": 1000.0}, 1),
+            ({"Rv": 2000.0}, 1),
         ]
 
     def test_rows_the_step_lines_do_not_number_are_refused(
