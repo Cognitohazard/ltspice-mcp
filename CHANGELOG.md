@@ -317,7 +317,9 @@ tool-surface changes.
   next to the schematic. It used to overwrite `<name>.net` beside the sheet
   unless asked not to, the one default left that wrote into the caller's
   folder after `run_experiments` stopped. `export_to="sidecar"` still writes
-  that file and reports what changed from the one it replaced.
+  that file. Both modes report what changed since the schematic's previous
+  export (`diff_vs_prior`): a sidecar export against the file it replaces, a
+  managed one against the previous managed export, which the server keeps.
 - A call that sends a renamed argument's old name is refused, as before,
   and the refusal now also says that a copy of the tool's arguments still
   listing the old name is out of date, and to reload the tool's definition or

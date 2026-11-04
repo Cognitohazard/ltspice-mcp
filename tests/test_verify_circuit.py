@@ -1888,6 +1888,34 @@ async def test_managed_export_is_non_destructive(config, work_dir, asc_symbols, 
     assert ".ltspice-mcp" in data["export"]["netlist"]
 
 
+async def test_a_managed_export_reports_what_changed_since_the_previous_one(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """The default export writes nothing beside the sheet, so it compares with
+    the copy the server kept of the previous one, as a sidecar export compares
+    with the .net it replaces."""
+    exports = iter([_PRIOR_NET, _NEW_NET])
+
+    def exporter(_cls, asc_path, timeout=0):
+        net = Path(asc_path).with_suffix(".net")
+        net.write_text(next(exports))
+        return net
+
+    monkeypatch.setattr(vc, "_create_netlist", exporter)
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "m.asc", _RES_ASC)
+
+    first = await _run(state, path=str(asc), checks=["export"])
+    assert first["export"]["destination"] == "managed"
+    assert first["export"]["diff_vs_prior"] is None  # nothing was exported before
+
+    second = await _run(state, path=str(asc), checks=["export"])
+    diff = second["export"]["diff_vs_prior"]
+    assert diff is not None
+    assert diff["components_added"] == ["R2"]
+    assert not (work_dir / "m.net").exists()
+
+
 async def test_sidecar_export_writes_in_place_with_diff(
     config, work_dir, asc_symbols, monkeypatch
 ):

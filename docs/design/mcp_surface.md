@@ -1417,7 +1417,10 @@ includes from the schematic's folder, not from the scratch copy.
 schematic's `<name>.net` under lock and returns `{path, sha256,
 diff_vs_prior?}`. LTspice writes the same file beside a schematic it runs from
 its own window; asking for it makes the call destructive, as the annotation
-table shows.
+table shows. Both modes report in `diff_vs_prior` what changed since the
+schematic's previous export: `sidecar` against the `.net` it replaces,
+`managed` against the previous managed export of the same schematic, which
+the store keeps.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
