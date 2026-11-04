@@ -229,7 +229,7 @@ def test_python_api_preserves_seed_execution_field(work_dir):
             lint="off",
         )
         assert result["status"] == "completed"
-        recorded = experiment_store.load_job(result["job_id"], work_dir, own_is_alive=True)
+        recorded = experiment_store.load_job(result["job_id"], work_dir)
         assert recorded is not None
         recovery = recorded.recovery
         assert recovery is not None and recovery.execution.simulator_seed == 17

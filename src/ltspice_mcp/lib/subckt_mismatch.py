@@ -32,7 +32,6 @@ mid-simulation.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import cache, cached_property, partial
@@ -66,10 +65,11 @@ from ltspice_mcp.lib.spice_lex import (
     emit,
     find_matching_ends,
     lex,
+    subckt_children,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end, rename_subckt
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
 
 logger = logging.getLogger(__name__)
 
@@ -465,23 +465,6 @@ def _closer_index(cards: list[SpiceCard], opener_index: int) -> int:
     return len(cards) if closer is None else closer
 
 
-def _direct_children(index: _FileIndex, opener_index: int) -> list[tuple[int, SpiceCard]]:
-    """Cards one level inside a subcircuit body, nested bodies excluded.
-
-    Addressed by span rather than by scope: two definitions of one name in a
-    file — the ordinary shape of a library entered under two corner sections —
-    give their bodies the same scope tuple, so a scope query would return both
-    bodies' cards for whichever definition was resolved.
-    """
-    depth = len(index.cards[opener_index].scope) + 1
-    stop = _closer_index(index.cards, opener_index)
-    return [
-        (i, index.cards[i])
-        for i in range(opener_index + 1, stop)
-        if len(index.cards[i].scope) == depth
-    ]
-
-
 def _instances(children: Iterable[tuple[int, SpiceCard]], prefix: str) -> list[SpiceCard]:
     return [
         card
@@ -547,7 +530,11 @@ def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
 
     A binned foundry model declares ``.model <name>.0``, ``.model <name>.1``,
     … and the instance names the unsuffixed base, so the lookup accepts both
-    spellings. Every bin of one device shares a level.
+    spellings. Every bin of one device shares a level. The level is the
+    card's own (``ModelCard.level``): a foundry deck sections a card's
+    parameters with full-line comments between its ``+`` lines, which the
+    lexer reads past as a simulator does, and a level such a comment names is
+    no part of the card.
     """
     folded = model_name.casefold()
     for index in indexes:
@@ -559,31 +546,13 @@ def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
                 continue
             if not index.is_active(card_index):
                 continue
-            match = _LEVEL_RE.search(_model_card_text(index, card_index))
-            if match is not None:
-                return float(match.group(1))
+            try:
+                level = ModelCard.from_card(card).level
+            except SpiceLexError:
+                continue
+            if level is not None:
+                return level
     return None
-
-
-_LEVEL_RE = re.compile(r"\blevel\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
-
-
-def _model_card_text(index: _FileIndex, card_index: int) -> str:
-    """A model card's own text, including continuations a comment interrupted.
-
-    Foundry model decks section their parameter blocks with full-line comments
-    between the ``+`` continuations. A simulator reads straight through those,
-    but the lexer ends a card at the comment and hands the rest back as loose
-    continuation lines, so the card alone holds only the model's name and type.
-    Re-joining the continuation run is what lets the level be read at all.
-    """
-    parts = list(index.cards[card_index].raw_lines)
-    for card in index.cards[card_index + 1 :]:
-        if card.kind not in ("comment", "blank"):
-            break
-        if card.raw_lines and card.raw_lines[0].lstrip().startswith("+"):
-            parts.extend(card.raw_lines)
-    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +638,7 @@ def build_plan(
             )
         def_file, opener_index = sites[0]
         def_index = indexes[def_file]
-        children = _direct_children(def_index, opener_index)
+        children = list(subckt_children(def_index.cards, opener_index))
         inner_cards = _instances(children, "M")
         if not inner_cards:
             _refuse_or_skip_without_mos(x_ref, subckt, children, indexes, definitions, skips)
@@ -888,7 +857,7 @@ def _refuse_or_skip_without_mos(
         if not sites:
             continue
         def_file, opener_index = sites[0]
-        nested = _direct_children(indexes[def_file], opener_index)
+        nested = list(subckt_children(indexes[def_file].cards, opener_index))
         if _instances(nested, "M"):
             raise MismatchPlanError(
                 "nested_fet_unsupported",

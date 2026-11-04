@@ -916,29 +916,36 @@ def _nest(path: tuple[str, ...], value: Any) -> dict[str, Any]:
     return value
 
 
-def _door_rejection(arguments: dict[str, Any]) -> str | None:
-    """What the door says about these arguments — the refusal, or the warning
-    it attaches when it drops a presentation control — or None if it lets
-    them through unremarked."""
+def _door_rejection(arguments: dict[str, Any], model: type[BaseModel]) -> str | None:
+    """What the door says about these arguments to ``model``'s operation — the
+    refusal, or the warning it attaches when it drops a presentation control —
+    or None if it lets them through unremarked."""
     try:
-        dropped = methods_module._enforce_auto_door(arguments)
+        dropped = methods_module._enforce_auto_door(arguments, model)
     except ValueError as exc:
         return str(exc)
     return "; ".join(dropped) or None
 
 
 def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
-    paths = {path for model in _DOOR_MODELS for path in _field_paths(model)}
-    candidates = sorted(path for path in paths if _WIRE_ONLY_NAME.search(path[-1]))
+    candidates = sorted(
+        {
+            (path, model)
+            for model in _DOOR_MODELS
+            for path in _field_paths(model)
+            if _WIRE_ONLY_NAME.search(path[-1])
+        },
+        key=lambda pair: (pair[0], pair[1].__name__),
+    )
     assert candidates, "the sweep found no wire-only fields at all — the walk is broken"
 
     unclassified: list[str] = []
     unnamed: list[str] = []
-    for path in candidates:
+    for path, model in candidates:
         if path in _DOOR_ALLOWLIST:
             continue
         dotted = ".".join(path)
-        rejection = _door_rejection(_nest(path, "x"))
+        rejection = _door_rejection(_nest(path, "x"), model)
         if rejection is None:
             unclassified.append(dotted)
         elif dotted not in rejection:
@@ -961,7 +968,7 @@ class TestPresentationControlsAreDropped:
 
     def test_budget_is_dropped_and_named(self):
         arguments: dict[str, Any] = {"budget": 4000, "queries": []}
-        warnings = methods_module._enforce_auto_door(arguments)
+        warnings = methods_module._enforce_auto_door(arguments, inspect_tools.InspectInput)
         assert arguments == {"queries": []}
         assert len(warnings) == 1 and warnings[0].startswith("budget")
         assert "complete results" in warnings[0]
@@ -969,7 +976,7 @@ class TestPresentationControlsAreDropped:
 
     def test_wait_s_is_dropped_and_named(self):
         arguments: dict[str, Any] = {"execution": {"wait_s": 30, "simulator": "ngspice"}}
-        warnings = methods_module._enforce_auto_door(arguments)
+        warnings = methods_module._enforce_auto_door(arguments, experiments.RunExperimentsInput)
         assert arguments == {"execution": {"simulator": "ngspice"}}
         assert warnings[0].startswith("execution.wait_s")
         assert "api.wait" in warnings[0]
@@ -982,14 +989,14 @@ class TestPresentationControlsAreDropped:
 
     def test_a_paging_control_still_gets_the_raw_page_remedy(self):
         with pytest.raises(ApiValidationError) as caught:
-            methods_module._enforce_auto_door({"cursor": "o:5"})
+            methods_module._enforce_auto_door({"cursor": "o:5"}, jobs_mod.JobsInput)
         assert "raw_page=True" in str(caught.value)
 
     def test_the_refusal_is_catchable_as_the_documented_api_error(self):
         """``ApiValidationError`` subclasses ValueError, not the reverse — a bare
         ValueError here slips past every documented ``except ApiValidationError``."""
         with pytest.raises(ApiValidationError):
-            methods_module._enforce_auto_door({"cursor": "o:1"})
+            methods_module._enforce_auto_door({"cursor": "o:1"}, jobs_mod.JobsInput)
 
 
 def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(

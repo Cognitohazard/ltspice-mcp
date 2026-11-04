@@ -101,14 +101,22 @@ class TestAValueOrAName:
         assert parse_plain_value(text) == pytest.approx(expected)
         assert parse_spice_value(text) == pytest.approx(expected)
 
-    def test_two_model_names_are_compared_as_names(self):
+    def test_a_value_that_runs_is_read_as_ltspice_runs_it(self):
+        """The comparison and the Monte Carlo nominal read the value a card
+        runs with, which is LTspice's reading; a model name reaches the
+        comparison as the card's model, never as its value. What does not
+        start with a number is compared as text."""
         from ltspice_mcp.lib.montecarlo import parse_value
         from ltspice_mcp.lib.netlist_graph import values_equal
 
-        assert not values_equal("2N3904", "2N3904A", 1e-6)
+        assert values_equal("4R7", "4.7", 1e-6)
         assert values_equal("1k", "1000", 1e-6)
-        assert parse_value("2N2222") is None
+        assert not values_equal("1k5", "1k", 1e-6)
+        assert values_equal("SCHMITT", "schmitt", 1e-6)
+        assert not values_equal("PULSE(0 1)", "PULSE(0 2)", 1e-6)
+        assert parse_value("4R7") == pytest.approx(4.7)
         assert parse_value("4.7u") == pytest.approx(4.7e-6)
+        assert parse_value("{rd}") is None
 
 
 class TestParseSpiceCaseSensitivity:

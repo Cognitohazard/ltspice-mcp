@@ -39,8 +39,9 @@ import random
 from dataclasses import dataclass
 from typing import Literal
 
-from ltspice_mcp.lib.format import parse_plain_value
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
     TokenKind,
     emit,
     lex,
@@ -50,8 +51,7 @@ from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     ModelCard,
-    ParamCard,
-    find_model,
+    instances_by_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,12 +59,6 @@ logger = logging.getLogger(__name__)
 
 Distribution = Literal["uniform", "normal", "gaussian"]
 ToleranceKind = Literal["relative", "absolute"]
-
-
-# Component prefixes whose values can be perturbed without breaking
-# semantics. Sources, controlled sources, and switches are excluded —
-# their values often encode behavior, not magnitudes.
-_PERTURBABLE_PREFIXES: frozenset[str] = frozenset({"R", "C", "L"})
 
 
 @dataclass(frozen=True)
@@ -253,20 +247,6 @@ def _truncated_gauss(rng: random.Random, sigma: float, bound: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ModelTolerance:
-    """Process-variation rule for one ``.MODEL`` card.
-
-    Per Monte Carlo run, each parameter is sampled once and the perturbed
-    value is written back to the ``.MODEL`` line; every transistor instance
-    using this model inherits the same perturbation (foundry-correlated
-    process variation).
-    """
-
-    model_name: str
-    parameters: dict[str, ToleranceSpec]
-
-
 def sample_model_perturbation(
     sampler: MCSampler,
     model_name: str,
@@ -300,30 +280,6 @@ def sample_model_perturbation(
         delta = sampler.sample_offset(nominal, spec, stream=f"model:{model_name}.{param}")
         perturbed[param] = nominal + delta
     return perturbed
-
-
-def perturb_model_in_text(
-    netlist_text: str,
-    model_name: str,
-    perturbations: dict[str, float],
-) -> str:
-    """Rewrite the ``.MODEL <model_name> ...`` card to apply parameter overrides.
-
-    Existing ``param=value`` tokens are replaced in place; new params are
-    appended. Continuation lines and quoted/braced values are handled
-    correctly via the shared ``spice_lex`` parser.
-
-    Raises ``ValueError`` if ``model_name`` isn't found.
-    """
-    if not perturbations:
-        return netlist_text
-    result = lex(netlist_text)
-    view = find_model(result.cards, model_name)
-    if view is None:
-        raise ValueError(f".MODEL {model_name!r} not found in netlist")
-    for param, new_value in perturbations.items():
-        view.set_param(param, new_value)
-    return emit(result.cards)
 
 
 # ---------------------------------------------------------------------------
@@ -462,60 +418,6 @@ def render_variant_model_card(
     return emit(cards)
 
 
-def extract_model_card(netlist_text: str, model_name: str) -> str | None:
-    """Return the merged text of a ``.MODEL`` card by name, or None.
-
-    The returned text is the original raw lines (continuation lines
-    intact, leading/trailing whitespace and the trailing newline
-    preserved).
-    """
-    target = model_name.lower()
-    result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "model" and c.name and c.name.lower() == target:
-            return "".join(c.raw_lines)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: .PARAM perturbation
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ParamTolerance:
-    """Perturbation rule for one ``.PARAM`` directive.
-
-    Sampled once per Monte Carlo run. The user is expected to wire the
-    ``.PARAM`` into model/component cards via ``{param}`` substitution
-    (e.g. ``.MODEL NMOS1 NMOS(VTO={vto_n})`` with ``.PARAM vto_n=0.7``);
-    we just rewrite the ``.PARAM`` value per run.
-    """
-
-    name: str
-    spec: ToleranceSpec
-
-
-def perturb_param_in_text(
-    netlist_text: str,
-    name: str,
-    new_value: float,
-) -> str:
-    """Rewrite ``.PARAM <name>=<value>`` in place.
-
-    Case-insensitive match on the param name. Raises ``ValueError`` if
-    no matching ``.PARAM`` is present.
-    """
-    target = name.lower()
-    result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "param" and c.name and c.name.lower() == target:
-            view = ParamCard.from_card(c)
-            view.set_value(new_value)
-            return emit(result.cards)
-    raise ValueError(f".PARAM {name!r} not found in netlist")
-
-
 # ---------------------------------------------------------------------------
 # Netlist parsing helpers — extract nominals for the various MC phases
 # ---------------------------------------------------------------------------
@@ -563,31 +465,38 @@ def inject_card_before_end(netlist_text: str, card: str) -> str:
     return emit(cards)
 
 
+def _top_level_instances(cards: list[SpiceCard]) -> dict[str, SpiceCard]:
+    """The deck's own instance cards by lowercased reference: not one inside a
+    ``.subckt`` body, which is another device that only shares the name, nor
+    one after ``.END``, which no simulator reads. The extraction and the
+    rewrite below both read this, so the card rewritten is the card measured."""
+    return instances_by_ref((card for card in cards if not card.trailing), scope=())
+
+
 def rewrite_instance_model(
     netlist_text: str,
     instance_ref: str,
     new_model_name: str,
 ) -> str:
-    """Replace the model token on a transistor (M/Q/J) instance line.
+    """Replace the model token on a top-level transistor (M/Q/J) instance line.
 
-    The instance line is matched by reference (case-insensitive).
+    The instance line is matched by reference (case-insensitive) among the
+    deck's own cards, the ones ``extract_mosfet_instances`` reads, so a
+    same-named device inside a ``.subckt`` is never the one rewritten.
     Routes through ``InstanceLine.set_model``, which uses the
     classified-token rule to identify the model position correctly
     even with quoted model tokens and trailing params. Raises
     ``ValueError`` if the instance isn't found.
     """
-    target = instance_ref.lower()
     result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "instance" and c.name and c.name.lower() == target:
-            view = InstanceLine.from_card(c)
-            if view.model is None:
-                raise ValueError(
-                    f"Instance {instance_ref!r} has no model token to rewrite: {c.body!r}"
-                )
-            view.set_model(new_model_name)
-            return emit(result.cards)
-    raise ValueError(f"Instance {instance_ref!r} not found in netlist")
+    card = _top_level_instances(result.cards).get(instance_ref.lower())
+    if card is None:
+        raise ValueError(f"Instance {instance_ref!r} not found in netlist")
+    view = InstanceLine.from_card(card)
+    if view.model is None:
+        raise ValueError(f"Instance {instance_ref!r} has no model token to rewrite: {card.body!r}")
+    view.set_model(new_model_name)
+    return emit(result.cards)
 
 
 def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
@@ -607,10 +516,8 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
     """
     instances: list[InstanceGeometry] = []
     result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind != "instance" or not c.name or c.name[:1].upper() != "M":
-            continue
-        if c.scope != ():  # top-level only
+    for c in _top_level_instances(result.cards).values():
+        if not c.name or c.name[:1].upper() != "M":
             continue
         view = InstanceLine.from_card(c)
         if view.model is None:
@@ -664,68 +571,13 @@ def find_mismatch_rule(
     return None
 
 
-def parse_param_nominal(netlist_text: str, name: str) -> float | None:
-    """Read the nominal value from ``.PARAM <name>=<value>``.
-
-    Returns ``None`` when the param is absent or its value isn't a plain
-    number (e.g. expressions like ``{2*Rd}``). Phase 3 silently skips such
-    params — they're already user-side expressions.
-    """
-    target = name.lower()
-    result = lex(netlist_text)
-    for c in result.cards:
-        if c.kind == "param" and c.name and c.name.lower() == target:
-            view = ParamCard.from_card(c)
-            return parse_value(view.value)
-    return None
-
-
-def expand_tolerances(
-    component_refs: list[str],
-    type_tolerances: dict[str, tuple[float, str]],
-    component_overrides: dict[str, tuple[float, str]],
-) -> dict[str, ToleranceSpec]:
-    """Resolve type-prefix and per-ref rules to a flat ref -> spec map.
-
-    Resolution order: ``component_overrides`` (specific ref) > matching
-    prefix in ``type_tolerances`` > skip. Refs whose prefix isn't in
-    ``_PERTURBABLE_PREFIXES`` are dropped (perturbing a voltage source
-    would change the stimulus). Drops are logged at debug level so a
-    user passing e.g. ``type_tolerances={"V": 0.05}`` can find them.
-    """
-    resolved: dict[str, ToleranceSpec] = {}
-    skipped: list[str] = []
-    for ref in component_refs:
-        prefix = ref[0].upper() if ref else ""
-        if prefix not in _PERTURBABLE_PREFIXES:
-            skipped.append(ref)
-            continue
-
-        if ref in component_overrides:
-            tol, dist = component_overrides[ref]
-        elif prefix in type_tolerances:
-            tol, dist = type_tolerances[prefix]
-        else:
-            continue
-        resolved[ref] = ToleranceSpec(
-            tolerance=tol,
-            distribution=dist,  # type: ignore[arg-type]
-        )
-    if skipped:
-        logger.debug(
-            "MC: skipped %d non-perturbable refs (prefix not in R/C/L): %s",
-            len(skipped),
-            ", ".join(skipped[:8]) + ("…" if len(skipped) > 8 else ""),
-        )
-    return resolved
-
-
 def parse_value(value: str | float) -> float | None:
     """Parse a SPICE-formatted component value to float, or None.
 
-    Wraps ``lib.format.parse_spice_value`` with two MC-specific behaviors:
-    skips parametric expressions (``{Rd}``, ``table(...)``) so they
-    don't get corrupted, and accepts numeric passthrough.
+    Wraps ``lib.format.parse_spice_value``, so a value reads as LTspice runs
+    it (``4R7`` is 4.7, ``1k5`` 1500, ``2Hz`` 2), with two MC-specific
+    behaviors: skips parametric expressions (``{Rd}``, ``table(...)``) so
+    they don't get corrupted, and accepts numeric passthrough.
     """
     if isinstance(value, int | float):
         return float(value)
@@ -733,6 +585,6 @@ def parse_value(value: str | float) -> float | None:
     if not s or "{" in s or "(" in s:
         return None
     try:
-        return parse_plain_value(s)
+        return parse_spice_value(s)
     except ValueError:
         return None

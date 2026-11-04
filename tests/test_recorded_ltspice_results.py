@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.device_names import (
@@ -505,6 +506,34 @@ class TestSteppedRuns:
         assert summary["step_count"] == 3
         assert not any("Stepped .op" in warning for warning in summary.get("warnings", []))
 
+    @pytest.mark.parametrize("case_id", ["raw/step_temp", "raw/step_temp_op"])
+    def test_each_steps_summary_reports_that_steps_temperature(
+        self, build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The log's header names one step's temperature: LTspice 26 prints
+        the first step's before the run, XVII the last step's after it. Each
+        step's summary reports its own."""
+        header = parse_temperatures(rec.recorded(build, f"{case_id}.log"))[0]
+        assert header == (-40.0 if rec.generation(build) == "current" else 125.0)
+        raw = rec.stage_run(build, case_id, work_dir)
+        reply = SyncApi(state_no_sim).analyze_results(
+            sources=[{"path": str(raw), "label": "dut"}],
+            recipes=[{"key": "s", "metric": "summary"}],
+            all_steps=True,
+            include={"fields": ["step_values", "value.temp_c", "value.tnom_c"]},
+        )
+        rows = reply["results"]["s"]["values"]
+        assert [row["step_values"] for row in rows] == [
+            {"temp": -40.0},
+            {"temp": 27.0},
+            {"temp": 125.0},
+        ]
+        assert [row["value"] for row in rows] == [
+            {"temp_c": -40.0, "tnom_c": 27.0},
+            {"temp_c": 27.0, "tnom_c": 27.0},
+            {"temp_c": 125.0, "tnom_c": 27.0},
+        ]
+
 
 #: What each build stored of ``raw/compress_*``, an RC charge over 5 ms: the
 #: points, and for a run reported as coarse, its widest gap (from, to) in s.
@@ -982,21 +1011,45 @@ class TestMeasurements:
     @pytest.mark.parametrize(
         "case_id", ["log/meas_when_threshold_tran", "log/meas_when_threshold_ac"]
     )
-    def test_a_when_against_a_non_number_fails_the_measurements_in_the_server_only(
+    def test_a_when_against_a_non_number_fails_only_its_own_entry(
         self, build: str, case_id: str, tmp_path: Path
     ):
         """LTspice prints a crossing for each WHEN of these runs (all but XVII's
-        ``f_param``, which it fails). The server's log decoder takes a WHEN's
-        printed threshold for its value and fails the whole measurements
-        section when the threshold is not a number. The same measurements
-        stepped print a table of crossings, which it reads."""
+        ``f_param``, which it fails). Where the threshold it prints after ``=``
+        is a parameter, an expression or another measurement, the server's log
+        decoder fails that entry alone: its value is null and it carries the
+        line LTspice printed and the reason. Every other measurement of the log
+        reads. The same measurements stepped print a table of crossings, which
+        it reads."""
         whens = {
             name: line for name, line in self.printed(build, case_id).items() if name[1] == "_"
         }
         assert whens and all(" at " in line for line in whens.values())
         plain = rec.decode_log(build, case_id, tmp_path / "plain").section("measurements")
-        assert plain["status"] == "error"
-        assert "is not numeric" in plain["error"]["message"]
+        assert plain["status"] == "parsed"
+        entries = plain["value"]["measurements"]
+        unreadable = set()
+        for name, line in whens.items():
+            if name not in entries:  # LTspice 26's braced threshold; pinned below
+                continue
+            threshold = line.split("=", 1)[1].rsplit(" at ", 1)[0]
+            entry = entries[name]
+            try:
+                float(threshold)
+            except ValueError:
+                unreadable.add(name)
+                assert entry["values"] == [None], name
+                assert entry["unreadable"]["line"].lower() == f"{name}: {line}"
+                assert threshold in entry["unreadable"]["reason"].lower()
+            else:
+                assert "unreadable" not in entry and entry["values"][0] is not None, name
+        assert unreadable and len(unreadable) < len(entries)
+        # A measurement LTspice itself FAIL'ed is listed as failed, not as unreadable.
+        failed = set(plain["value"]["failed_measurements"])
+        assert not failed & unreadable
+        assert all("unreadable" not in entries[name] for name in failed)
+        others = [entry for name, entry in entries.items() if name not in unreadable | failed]
+        assert all(entry["values"][0] is not None for entry in others)
         stepped = rec.decode_log(build, f"{case_id}_step", tmp_path / "stepped")
         assert stepped.section("measurements")["status"] == "parsed"
 
@@ -2169,7 +2222,9 @@ def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
 async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
     """An other raw is a case's: a path names its file instead."""
     raw = work_dir / "fra.fra_1.raw"
-    with pytest.raises(TypeError, match="case_id and other_raw are only valid with job_id"):
+    with pytest.raises(
+        ApiValidationError, match="case_id and other_raw are only valid with job_id"
+    ):
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
     with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
         await analysis.handle_plot_waveform(

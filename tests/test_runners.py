@@ -103,36 +103,6 @@ class TestMCSampler:
             sampler.sample(1.0, bad_spec)
 
 
-class TestExpandTolerances:
-    def test_per_ref_override_wins_over_type(self):
-        from ltspice_mcp.lib.montecarlo import expand_tolerances
-
-        out = expand_tolerances(
-            ["R1", "R2", "C1"],
-            type_tolerances={"R": (0.05, "normal")},
-            component_overrides={"R1": (0.01, "uniform")},
-        )
-        assert out["R1"].tolerance == 0.01
-        assert out["R1"].distribution == "uniform"
-        # R2 falls back to the type rule.
-        assert out["R2"].tolerance == 0.05
-        # C1 has no rule, so it's not in the map.
-        assert "C1" not in out
-
-    def test_unperturbable_prefixes_skipped(self):
-        from ltspice_mcp.lib.montecarlo import expand_tolerances
-
-        # Voltage sources, switches, etc. are excluded even if rules try.
-        out = expand_tolerances(
-            ["V1", "S1", "R1"],
-            type_tolerances={"V": (0.05, "normal"), "S": (0.05, "normal"), "R": (0.05, "normal")},
-            component_overrides={},
-        )
-        assert "R1" in out
-        assert "V1" not in out
-        assert "S1" not in out
-
-
 class TestParseValue:
     def test_engineering_suffixes(self):
         import pytest
@@ -263,54 +233,6 @@ class TestModelPerturbationMath:
         assert 80e-6 < out["KP"] < 120e-6
 
 
-class TestPerturbModelInText:
-    def test_replaces_existing_param(self):
-        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
-
-        text = (
-            "* test\n"
-            ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u LAMBDA=0.02)\n"
-            "M1 d g 0 0 NMOS1 W=10u L=1u\n"
-            ".END\n"
-        )
-        out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.715, "KP": 0.000105})
-        # Old values must be gone
-        assert "VTO=0.7\b" not in out
-        assert "KP=100u" not in out
-        # New values present
-        assert "VTO=0.715" in out
-        assert "KP=0.000105" in out
-
-    def test_appends_missing_param_inside_paren(self):
-        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
-
-        text = ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u)\n"
-        out = perturb_model_in_text(text, "NMOS1", {"LAMBDA": 0.025})
-        assert "LAMBDA=0.025" in out
-        # Closing paren still present and balanced.
-        assert out.count("(") == out.count(")")
-
-    def test_case_insensitive_match(self):
-        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
-
-        text = ".model nmos1 nmos(vto=0.7)\n"
-        out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.65})
-        assert "0.65" in out
-
-    def test_continuation_lines_merged(self):
-        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
-
-        text = ".MODEL NMOS1 NMOS(VTO=0.7\n+ KP=100u LAMBDA=0.02)\n.END\n"
-        out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.715})
-        assert "0.715" in out
-
-    def test_missing_model_raises(self):
-        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
-
-        with pytest.raises(ValueError, match="not found"):
-            perturb_model_in_text(".MODEL OTHER NPN(BF=200)\n", "NMOS1", {"VTO": 0.7})
-
-
 class TestPelgromMismatch:
     def test_smaller_devices_have_larger_sigma(self):
         import statistics
@@ -438,36 +360,7 @@ class TestExtractMosfetInstances:
         assert instances[0].model_name == "nmos1"
 
 
-class TestParamPerturbation:
-    def test_perturb_param_replaces_value(self):
-        from ltspice_mcp.lib.montecarlo import perturb_param_in_text
-
-        text = "* test\n.PARAM vto_n=0.7\n.PARAM kp_n=100u\n.END\n"
-        out = perturb_param_in_text(text, "vto_n", 0.715)
-        assert ".PARAM vto_n=0.715" in out
-        assert ".PARAM kp_n=100u" in out  # untouched
-
-    def test_perturb_param_case_insensitive(self):
-        from ltspice_mcp.lib.montecarlo import perturb_param_in_text
-
-        text = ".param vto_n = 0.7\n"
-        out = perturb_param_in_text(text, "VTO_N", 0.715)
-        assert "0.715" in out
-
-    def test_perturb_param_missing_raises(self):
-        from ltspice_mcp.lib.montecarlo import perturb_param_in_text
-
-        with pytest.raises(ValueError, match="not found"):
-            perturb_param_in_text(".PARAM rd=1k\n", "vto_n", 0.7)
-
-    def test_parse_param_nominal(self):
-        from ltspice_mcp.lib.montecarlo import parse_param_nominal
-
-        text = ".PARAM vto_n=0.7\n.PARAM kp_n=100u\n"
-        assert parse_param_nominal(text, "vto_n") == pytest.approx(0.7)
-        assert parse_param_nominal(text, "kp_n") == pytest.approx(100e-6)
-        assert parse_param_nominal(text, "missing") is None
-
+class TestModelNominals:
     @pytest.mark.parametrize(
         "card",
         [

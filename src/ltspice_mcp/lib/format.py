@@ -25,6 +25,17 @@ def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
         payload[key] = items
 
 
+def cap_note(shown: int, total: int, noun: str, rest: str) -> str:
+    """The sentence a reply list cut at a cap says about itself.
+
+    The same convention as :func:`cap_list`, for a list whose cut is reported
+    in prose: the TRUE total, never the count shown, and ``rest``, the route to
+    the entries left out. A count with no route leaves the caller knowing
+    there is more and no way to read it.
+    """
+    return f"showing {shown} of {total} {noun}; {rest}"
+
+
 #: SI prefixes for engineering-notation display, largest first, as
 #: ``(scale, prefix)``. Display only: SPICE input spells mega ``Meg`` and micro
 #: ``u`` (see :data:`_SCALE_FACTORS`).

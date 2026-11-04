@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -27,16 +28,28 @@ from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.log_types import MeasurementsOutput
-from ltspice_mcp.lib.netlist_graph import compare_graphs
+from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
+from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph, values_equal
+from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
+from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import lex
+from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
-    drop_title_card,
+    _instance_terminals,
     validate_directive,
     validate_netlist_arity,
 )
+from ltspice_mcp.lib.variations import (
+    AssignVariation,
+    CircuitDeck,
+    RandomVariation,
+    VariationError,
+    expand_variations,
+    materialize_variants,
+)
+from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
@@ -59,7 +72,7 @@ def lint_input(case_id: str, **options) -> list[dict]:
 def resistances(case_id: str) -> dict[str, str]:
     """Each probe node of a suffix deck and the value written on its resistor."""
     values: dict[str, str] = {}
-    for card in drop_title_card(lex(deck_text(case_id)).cards):
+    for card in lex_deck(deck_text(case_id)).cards:
         line = read_instance(card) if card.kind == "instance" else None
         if line is not None and line.ref[:1].upper() == "R":
             values[line.nodes[0].lower()] = line.value or ""
@@ -106,6 +119,60 @@ def test_a_value_the_server_parses_is_the_value_ltspice_read(
         assert parse_spice_value(spelling) == pytest.approx(voltages[f"v({node})"], rel=1e-6), (
             spelling
         )
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+def test_every_reader_of_a_value_that_runs_reads_the_value_ltspice_read(
+    build: str, case_id: str, tmp_path: Path
+):
+    """The equivalence comparison and the Monte Carlo nominal read a value as
+    LTspice runs it, so ``4R7`` equals 4.7 and a random rule on it draws
+    around 4.7."""
+    voltages = rec.operating_point(build, case_id, tmp_path)
+    for node, spelling in resistances(case_id).items():
+        ran_as = voltages[f"v({node})"]
+        assert montecarlo.parse_value(spelling) == pytest.approx(ran_as, rel=1e-6), spelling
+        assert values_equal(spelling, repr(ran_as), rtol=1e-6), spelling
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+def test_a_deck_is_the_same_circuit_with_its_values_written_as_ltspice_ran_them(
+    build: str, case_id: str, tmp_path: Path
+):
+    voltages = rec.operating_point(build, case_id, tmp_path)
+    cards = lex(deck_text(case_id)).cards
+    for line in map(read_instance, cards):
+        if line is not None and line.ref[:1] == "R":
+            line.set_value(repr(voltages[f"v({line.nodes[0].lower()})"]))
+    comparison = compare_graphs(deck_text(case_id), emit(cards))
+    assert comparison.equivalent, comparison.value_mismatches
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+def test_a_random_rule_draws_around_the_value_ltspice_ran(
+    build: str, case_id: str, tmp_path: Path
+):
+    voltages = rec.operating_point(build, case_id, tmp_path / "raw")
+    path = tmp_path / "deck.cir"
+    path.write_text(deck_text(case_id), encoding="utf-8")
+    circuit = CircuitDeck("dut", path, deck_text(case_id))
+    rule = {"rule": "component", "target": "R*", "tolerance": 1e-9, "distribution": "uniform"}
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
+    drawn = {
+        name.removeprefix("random:component:"): value
+        for name, value in case.assignments.items()
+        if name.startswith("random:component:")
+    }
+    assert drawn == {
+        line.ref: pytest.approx(voltages[f"v({line.nodes[0].lower()})"], rel=1e-6)
+        for line in map(read_instance, lex_deck(deck_text(case_id)).cards)
+        if line is not None and line.ref[:1] == "R"
+    }
 
 
 def test_the_spellings_once_refused_are_all_recorded():
@@ -270,6 +337,74 @@ def test_a_section_sign_marks_where_an_instance_name_starts(
     assert set(traces) == {"v(a)", "i(i1)", "i(load)"}
 
 
+SECTION_SIGN_DECKS = ["deck/section_sign_utf8", "deck/section_sign_cp1252"]
+
+
+def variant_values(text: str, path: Path, target: str, scratch: Path) -> dict[str, str]:
+    """Each instance's value in the case deck one assignment of ``target`` writes."""
+    circuit = CircuitDeck("dut", path, text)
+    variation = AssignVariation(kind="assign", assign={target: ["2k"]})
+    (case,) = materialize_variants(circuit, expand_variations([circuit], [variation]), scratch)
+    return {
+        line.ref: line.value or "" for line in map(read_instance, lex(case.text).cards) if line
+    }
+
+
+def drawn_for(text: str, path: Path, target: str, scratch: Path) -> list[str]:
+    """The references a random component rule on ``target`` draws for."""
+    circuit = CircuitDeck("dut", path, text)
+    rule = {"rule": "component", "target": target, "tolerance": 0.1}
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+    (case,) = materialize_variants(circuit, expand_variations([circuit], [variation]), scratch)
+    prefix = "random:component:"
+    return sorted(
+        name.removeprefix(prefix) for name in case.assignments if name.startswith(prefix)
+    )
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SECTION_SIGN_DECKS)))
+@pytest.mark.parametrize("for_ngspice", [False, True], ids=["ltspice", "ngspice"])
+def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
+    build: str, case_id: str, for_ngspice: bool, tmp_path: Path
+):
+    """A variation names ``R§Load`` as the sheet does (``Load``), as LTspice's
+    results do (``I(Load)``, recorded) or as ``verify_circuit`` reports it
+    (``RLoad``), and ``RLoad`` names it on either simulator's copy of the
+    deck, though ngspice's has the marker taken out."""
+    assert "i(load)" in rec.operating_point(build, case_id, tmp_path / "raw")
+    export = tmp_path / "load.net"
+    export.write_bytes((INPUTS / rec.CASES.case(case_id).source).read_bytes())
+    _stem, data = deck_prep._read_export(export, for_ngspice=for_ngspice)
+    text = decode_spice_bytes_with_encoding(data)[0]
+    (load,) = [
+        line.ref
+        for line in map(read_instance, lex(text).cards)
+        if line and line.nodes == ["a", "0"]
+    ]
+    names = ["RLoad"] if for_ngspice else ["R§Load", "RLoad", "Load", "load"]
+    for index, target in enumerate(names):
+        values = variant_values(text, export, target, tmp_path / str(index))
+        assert values == {"I1": "1", load: "2k"}, target
+        assert drawn_for(text, export, target, tmp_path / f"random{index}") == [load], target
+
+
+def test_a_name_two_parts_answer_to_is_refused(tmp_path: Path):
+    """``RLoad`` is both a part and the other name of ``R§Load``, which an
+    ngspice copy would also call ``RLoad``: no target can mean one of them."""
+    text = deck_text("deck/section_sign_utf8").replace(".op", "RLoad a 0 3k\n.op")
+    path = tmp_path / "load.cir"
+    with pytest.raises(VariationError) as exc:
+        variant_values(text, path, "RLoad", tmp_path / "out")
+    assert exc.value.code == "ambiguous_target"
+    with pytest.raises(VariationError) as exc:
+        drawn_for(text, path, "RLoad", tmp_path / "random")
+    assert exc.value.code == "ambiguous_target"
+    assert variant_values(text, path, "Load", tmp_path / "load")["R§Load"] == "2k"
+    assert drawn_for(text, path, "R*", tmp_path / "glob") == ["RLoad", "R§Load"]
+
+
 #: The bytes cp1252 gives no character, each with the letter that follows it
 #: in a node name of ``deck/bytes_in_node_names``.
 UNDEFINED_IN_CP1252 = {0x81: "a", 0x8D: "b", 0x8F: "c", 0x90: "d", 0x9D: "e"}
@@ -290,7 +425,7 @@ def test_a_byte_cp1252_leaves_undefined_is_read_as_each_build_reads_it(build: st
     bytes cp1252 lacks the server reads the same one."""
     case_id = "deck/bytes_in_node_names"
     nodes: set[str] = set()
-    for card in drop_title_card(lex(deck_text(case_id)).cards):
+    for card in lex_deck(deck_text(case_id)).cards:
         line = read_instance(card) if card.kind == "instance" else None
         if line is not None:
             nodes.update(line.nodes)
@@ -349,7 +484,7 @@ def test_byte_85_in_a_comment_ends_the_line_for_ltspice_26_alone(build: str, tmp
     case_id = "deck/byte_85_in_comment"
     traces = set(rec.operating_point(build, case_id, tmp_path))
     assert ("i(r3)" in traces) == (rec.generation(build) != "xvii")
-    cards = drop_title_card(lex(deck_text(case_id)).cards)
+    cards = lex_deck(deck_text(case_id)).cards
     assert {card.name for card in cards if card.kind == "instance"} == {"V1", "R1", "R2"}
     xvii = rec.generation(build) == "xvii"
     findings = lint_input(
@@ -426,7 +561,7 @@ class TestDeckStructure:
     ):
         # Line 1 is "I1 0 a 5"; read as a card it would duplicate I1.
         assert self.voltage(build, "deck/title_card", tmp_path) == pytest.approx(1000.0)
-        kept = drop_title_card(self.cards("deck/title_card"))
+        kept = lex_deck(deck_text("deck/title_card")).cards
         assert [card.body for card in kept if card.name == "I1"] == ["I1 0 a 1"]
 
     def test_the_first_line_is_a_title_even_when_it_reads_as_a_directive(self, build: str):
@@ -434,7 +569,7 @@ class TestDeckStructure:
         the resistor that uses ``{r}`` fails the run; the server's checks must
         not count the line as a directive either."""
         assert not ran(build, "deck/title_directive")
-        kept = drop_title_card(self.cards("deck/title_directive"))
+        kept = lex_deck(deck_text("deck/title_directive")).cards
         assert not [card for card in kept if card.kind == "param"]
 
     def test_cards_after_end_are_not_read(self, build: str, tmp_path: Path):
@@ -442,6 +577,10 @@ class TestDeckStructure:
         assert self.voltage(build, "deck/after_end", tmp_path) == pytest.approx(1000.0)
         (after,) = [c for c in self.cards("deck/after_end") if c.name == "R2"]
         assert after.trailing
+        assert [c.name for c in lex_deck(deck_text("deck/after_end")).cards if c.name] == [
+            "I1",
+            "R1",
+        ]
 
     def test_a_continuation_joins_across_a_comment_and_a_blank_line(
         self, build: str, tmp_path: Path
@@ -509,7 +648,49 @@ class TestDeckStructure:
             ("I3", 1),
             ("R3", 2),
         }
-        assert any("kiltpsa" in warning for warning in data["warnings"]), data
+        assert any("kiltpsa" in warning for warning in data.get("warnings", [])), data
+
+
+#: Recorded decks whose lines each build reads in a way a line-by-line reader
+#: would not: a ``+`` line continuing a card past a comment and past a blank
+#: line, and a lone ``$`` starting a comment after a value.
+LINE_FORM_DECKS = ["deck/continuation", "deck/comment_dollar", "deck/comment_semicolon"]
+
+
+def as_voltage_sources(text: str) -> str:
+    """``text`` with every source and resistor written as a voltage source
+    (``I1`` is ``VI1``), so the reader of a deck's voltage sources meets each
+    line form the recording holds."""
+    return re.sub(r"(?m)^([IR])", r"V\1", text)
+
+
+@pytest.mark.parametrize("case_id", LINE_FORM_DECKS)
+def test_the_source_amplitudes_are_the_values_the_lexer_reads(case_id: str):
+    """The result observations' largest-source reading takes each voltage
+    source's value from the card LTspice reads (``TestDeckStructure`` holds
+    the lexer to the recordings)."""
+    text = as_voltage_sources(deck_text(case_id))
+    lines = [line for line in map(read_instance, lex_deck(text).cards) if line is not None]
+    assert parse_source_amplitudes(text) == {
+        line.ref: parse_spice_value(line.value or "") for line in lines
+    }
+    assert {line.ref for line in lines} >= {"VI1", "VR1"}
+
+
+def test_the_requested_outputs_are_the_cards_the_lexer_reads():
+    """A ``.four`` and a ``.meas`` continued past a comment line, as the
+    recorded ``deck/continuation`` continues a card, and a ``;`` comment."""
+    text = as_voltage_sources(deck_text("deck/continuation")).replace(
+        ".op\n",
+        ".tran 1m\n"
+        ".four 1k V(a) ; the input\n"
+        "* and the output\n"
+        "+ V(b)\n"
+        ".meas tran\n"
+        "* the peak\n"
+        "+ vmax MAX V(a)\n",
+    )
+    assert parse_requested_outputs(text) == {"meas": ["vmax"], "four": ["V(a)", "V(b)"]}
 
 
 async def hierarchy_rows(state, work_dir: Path, case_id: str) -> dict[tuple[str, ...], dict]:
@@ -521,6 +702,138 @@ async def hierarchy_rows(state, work_dir: Path, case_id: str) -> dict[tuple[str,
     )
     assert result["ok"], result
     return {tuple(row["instance"]): row for row in result["data"]["instances"]}
+
+
+# --------------------------------------------------------------------------
+# Cards a deck's readers read
+# --------------------------------------------------------------------------
+
+#: Decks with a card LTspice does not read: a title that reads as a card or as
+#: a directive, and a card after ``.end`` (``TestDeckStructure`` holds what
+#: each build did with them).
+UNREAD_CARD_DECKS = ["deck/title_card", "deck/title_directive", "deck/after_end"]
+
+
+def as_ltspice_reads(text: str) -> str:
+    """``text`` holding only the cards LTspice reads: a comment for its title
+    line, and nothing after ``.end``."""
+    lines = ["* title\n", *text.splitlines(keepends=True)[1:]]
+    end = next(i for i, line in enumerate(lines) if line.strip().casefold() == ".end")
+    return "".join(lines[: end + 1])
+
+
+def no_structural_change(delta: dict[str, list]) -> bool:
+    return not any(changes for key, changes in delta.items() if key != "components_renamed")
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+def test_the_comparisons_read_only_the_cards_ltspice_reads(case_id: str):
+    """Both compare modes call a deck the same circuit as the one LTspice
+    reads from it: neither counts the title as a second ``I1`` or a
+    ``.param``, nor the resistor after ``.end``."""
+    text = deck_text(case_id)
+    read = as_ltspice_reads(text)
+    graphs = compare_graphs(text, read)
+    assert graphs.equivalent, graphs.as_dict()
+    assert no_structural_change(structural_delta(read_deck(text), read_deck(read)))
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+async def test_the_net_query_lists_only_cards_ltspice_reads(
+    case_id: str, state_no_sim, work_dir: Path
+):
+    answers = []
+    text = deck_text(case_id)
+    for name, deck in (("deck.cir", text), ("read.cir", as_ltspice_reads(text))):
+        path = work_dir / name
+        path.write_text(deck, encoding="utf-8")
+        (result,) = await _run(state_no_sim, [{"kind": "net", "path": str(path), "at": "a"}])
+        assert result["ok"], result
+        answers.append(result["data"]["members"])
+    assert answers[0] == answers[1]
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+async def test_the_checks_read_only_the_cards_ltspice_reads(
+    case_id: str, state_no_sim, work_dir: Path
+):
+    """The linter, verify_circuit's syntax and quality checks and the run's
+    requirements see the deck LTspice reads."""
+
+    async def readings(name: str, text: str) -> tuple:
+        path = work_dir / name
+        path.write_text(text, encoding="utf-8")
+        verified = await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(path)}), state_no_sim
+        )
+        assert verified.structured_content is not None
+        linted = lint_deck(text, path, "ltspice", "LTspice")
+        return (
+            sorted((f["rule_id"], f["at"]["line"]) for f in linted),
+            sorted(
+                (f["rule_id"], f["at"].get("line"))
+                for f in verified.structured_content.get("findings", [])
+            ),
+            deck_requirements(path),
+            parse_requested_outputs(text),
+            parse_source_amplitudes(text),
+        )
+
+    text = deck_text(case_id)
+    assert await readings("deck.cir", text) == await readings("read.cir", as_ltspice_reads(text))
+
+
+#: The cards ``deck/after_end`` and ``deck/title_directive`` show LTspice does
+#: not read, written as cards each reader would otherwise act on: a second
+#: analysis and a one-node resistor after ``.end``, a ``.tran``, a refused
+#: ``.meas`` and a voltage source as the title.
+UNREAD_CARDS = [
+    pytest.param(
+        ".tran 1m\n"
+        "V1 a 0 1\n"
+        "R1 a 0 1k\n"
+        ".meas tran top MAX V(a)\n"
+        ".op\n"
+        ".end\n"
+        ".ac dec 10 1 1k\n"
+        "R9 lonely\n"
+        "V9 b 0 50\n"
+        ".meas ac g FIND vdb(a) AT 1k\n"
+        ".four 1k V(a)\n",
+        id="analysis-title-and-cards-after-end",
+    ),
+    pytest.param(
+        "V7 c 0 70\nV1 a 0 1\nR1 a 0 1k\n.meas tran top MAX V(a)\n.op\n.end\n",
+        id="source-title",
+    ),
+    pytest.param(
+        ".meas ac g FIND vdb(a) AT 1k\nV1 a 0 1\nR1 a 0 1k\n.op\n.end\n",
+        id="refused-measurement-title",
+    ),
+]
+
+
+@pytest.mark.parametrize("text", UNREAD_CARDS)
+async def test_a_card_ltspice_does_not_read_changes_no_reading(
+    text: str, state_no_sim, work_dir: Path
+):
+    """Each reader gives the same answer for the deck as for the deck LTspice
+    reads from it, and so refuses nothing on a card it does not read."""
+    path = work_dir / "deck.cir"
+    path.write_text(text, encoding="utf-8")
+    read = work_dir / "read.cir"
+    read.write_text(as_ltspice_reads(text), encoding="utf-8")
+    assert lint_deck(text, path, "ltspice", "LTspice") == []
+    verified = await handle_verify_circuit(
+        VerifyCircuitInput.model_validate({"path": str(path)}), state_no_sim
+    )
+    assert verified.structured_content is not None
+    assert [
+        f for f in verified.structured_content.get("findings", []) if f["severity"] == "error"
+    ] == []
+    assert deck_requirements(path) == deck_requirements(read)
+    assert parse_requested_outputs(text) == parse_requested_outputs(as_ltspice_reads(text))
+    assert parse_source_amplitudes(text) == parse_source_amplitudes(as_ltspice_reads(text))
 
 
 # --------------------------------------------------------------------------
@@ -552,7 +865,7 @@ def refusals(case_id: str) -> set[str]:
     lint = {f["rule_id"] for f in lint_input(case_id) if f["severity"] == "error"}
     arity = {
         str(issue["check"])
-        for issue in validate_netlist_arity(drop_title_card(lex(text).cards), simulator="LTspice")
+        for issue in validate_netlist_arity(lex_deck(text).cards, simulator="LTspice")
         if issue["severity"] == "error"
     }
     return lint | arity
@@ -614,6 +927,36 @@ class TestRecordedValuesOfTheForms:
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_charge_or_flux_defined_part_has_two_terminals(
+    build: str, tmp_path: Path, state_no_sim, work_dir: Path
+):
+    """``C1 b 0 Q=100n*x`` and ``L1 c 0 Flux=1m*x``, each behind 1k from a
+    1 V step: current flows through each to ground, so the node it sits on
+    stays below the step where both builds measured it. Every reader of the
+    card's terminals gives both: the graph, the inspect net query and the
+    validator."""
+    logs = rec.decode_log(build, "deck/keyword_values", tmp_path)
+    measured = logs.value("measurements")["measurements"]
+    # With no path to ground each node would sit at the step's 1 V.
+    assert 0.9 < measured["vb"]["values"][0] < 0.999
+    assert 0.6 < measured["vc"]["values"][0] < 0.7
+
+    text = deck_text("deck/keyword_values")
+    expected = {"C1": ["b", "0"], "L1": ["c", "0"]}
+    graph = {c.ref: list(c.nodes) for c in parse_netlist_graph(text).components}
+    assert {ref: graph[ref] for ref in expected} == expected
+    lines = {line.ref: line for line in map(read_instance, lex_deck(text).cards) if line}
+    assert {ref: _instance_terminals(lines[ref])[0] for ref in expected} == expected
+    assert {ref: lines[ref].nodes for ref in expected} == expected
+    path = work_dir / "keyword_values.cir"
+    path.write_text(text, encoding="utf-8")
+    (result,) = await _run(state_no_sim, [{"kind": "net", "path": str(path), "at": "0"}])
+    assert result["ok"], result
+    on_ground = {(m["reference"], m["terminal"]) for m in result["data"]["members"]}
+    assert {("C1", 2), ("L1", 2)} <= on_ground
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
 @pytest.mark.parametrize("function", ["vdb", "phase", "group_delay"])
 def test_a_function_the_directive_check_refuses_fails_in_ltspice(build: str, function: str):
     """``vdb()``, ``phase()`` and ``group_delay()`` are not functions a
@@ -662,16 +1005,14 @@ def pair_run(build: str, case_id: str, tmp_path: Path) -> tuple[list[str], Measu
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_a_pair_measured_from_its_two_saved_nodes_is_refused_by_the_lint(
-    build: str, tmp_path: Path
-):
+def test_a_pair_measured_from_its_two_saved_nodes_passes_the_lint(build: str, tmp_path: Path):
     """``.save V(in) V(mid)`` with ``FIND V(in,mid)``: both builds take the
     measurement from the two nodes, the only voltages the raw holds, and
-    ``save-meas-coverage`` refuses the deck for want of the pair."""
+    ``save-meas-coverage`` accepts the deck, reading the pair as its nodes."""
     traces, data = pair_run(build, "deck/save_pair_both_nodes", tmp_path)
     assert traces == ["time", "V(in)", "V(mid)"]
     assert data["measurements"]["vpair"]["values"][0] == pytest.approx(PAIR_VOLTS, abs=5e-4)
-    assert refusals("deck/save_pair_both_nodes") == {"save-meas-coverage"}
+    assert refusals("deck/save_pair_both_nodes") == set()
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

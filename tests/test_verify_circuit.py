@@ -35,9 +35,9 @@ from pydantic import ValidationError
 from spicelib.simulators.xyce_simulator import XyceSimulator
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import compact_validation_error
+from ltspice_mcp.errors import compact_validation_error, python_route_text
 from ltspice_mcp.lib import raster
-from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
+from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER, lint_deck
 from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import Finding
 from ltspice_mcp.lib.store import RENDER_RETENTION_S, Store
@@ -377,10 +377,13 @@ async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, 
 
     shown = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert len(shown) == vc.FINDING_RULE_CAP
+    rest = f"api.verify_circuit returns every one. {python_route_text(state.tool_dispatch)}"
     assert (
-        f"value_suffix_micro_sign: showing {vc.FINDING_RULE_CAP} of 60 findings"
+        f"value_suffix_micro_sign: showing {vc.FINDING_RULE_CAP} of 60 findings; {rest}"
         in (data["observations"])
     )
+    # The hint counts what the check found, not the capped list it shows.
+    assert "60 warning(s): value_suffix_micro_sign" in data["hint"]
 
 
 async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir):
@@ -471,6 +474,60 @@ async def test_syntax_checks_against_an_ltspice_default(state_no_sim, work_dir):
         "C1 in out C=1n",
         "p",
     ]
+
+
+#: An AC deck to measure, between its title and its ``.end``.
+_AC_CIRCUIT = "V1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1n\n.ac dec 10 1 1meg\n"
+_REFUSED = ".meas ac g FIND vdb(out) AT 1k\n"
+
+#: Where a directive the checks refuse can sit, and the line its card starts
+#: on when the simulator reads it: one line, continued on a ``+`` line past a
+#: comment (joined, as both LTspice builds join ``deck/continuation``), as the
+#: title or after ``.end`` (neither read: ``deck/title_*``, ``deck/after_end``).
+_REFUSED_DIRECTIVE_PLACES = [
+    pytest.param("* t\n" + _AC_CIRCUIT + _REFUSED + ".end\n", [6], id="one-line"),
+    pytest.param(
+        "* t\n" + _AC_CIRCUIT + ".meas ac g\n+ FIND vdb(out) AT 1k\n.end\n",
+        [6],
+        id="continued-function",
+    ),
+    pytest.param(
+        "* t\n" + _AC_CIRCUIT + ".meas ac\n* the name\n+ k FIND mag(V(out)) AT 1k\n.end\n",
+        [6],
+        id="continued-name",
+    ),
+    pytest.param(_REFUSED + _AC_CIRCUIT + ".end\n", [], id="title"),
+    pytest.param("* t\n" + _AC_CIRCUIT + ".end\n" + _REFUSED, [], id="after-end"),
+]
+
+
+@pytest.mark.parametrize(("text", "lines"), _REFUSED_DIRECTIVE_PLACES)
+async def test_syntax_and_the_linter_refuse_the_same_directive_cards(
+    state_no_sim, work_dir, text: str, lines: list[int]
+):
+    deck = _write(work_dir, "meas.cir", text)
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+    verified = [
+        f["at"]["line"] for f in data.get("findings", []) if f["rule_id"] == "directive_syntax"
+    ]
+    linted = [
+        f["at"]["line"]
+        for f in lint_deck(text, deck, "ltspice", "LTspice")
+        if f["rule_id"] in {"meas-function-ltspice", "meas-name-ltspice"}
+    ]
+    assert verified == linted == lines
+
+
+async def test_syntax_reads_a_continued_tran_as_one_card(config, work_dir):
+    """ngspice refuses a zero ``.tran`` step wherever the card puts it."""
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
+    deck = _write(work_dir, "tran.cir", "* t\nV1 a 0 1\nR1 a 0 1k\n.tran\n+ 0 1m\n.end\n")
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    assert [(f["rule_id"], f["at"]["line"]) for f in data["findings"]] == [("directive_syntax", 4)]
 
 
 _TRIG_MEAS = (
@@ -792,8 +849,9 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     assert len(full) - len(shown) == 7
     # The count of a rule is of what it found, not of what the reply shows.
     assert data["rules_run"]["floating_pin"] == len(full)
+    rest = f"api.verify_circuit returns every one. {python_route_text(state_no_sim.tool_dispatch)}"
     assert any(
-        note == (f"floating_pin: showing {vc.FINDING_RULE_CAP} of {len(full)} findings")
+        note == (f"floating_pin: showing {vc.FINDING_RULE_CAP} of {len(full)} findings; {rest}")
         for note in data["observations"]
     )
 
@@ -821,6 +879,35 @@ async def test_reference_outside_sandbox_names_the_text_alternative(state_no_sim
     assert "netlist text itself" in finding["evidence"]["detail"]
 
 
+async def test_a_refused_reference_is_filed_under_the_reference(state_no_sim, work_dir):
+    # It was filed under the circuit, which was allowed and read.
+    deck = _write(work_dir, "cand.cir", _BASE)
+    data = await _run(state_no_sim, path=str(deck), reference="/outside/ref.cir")
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert finding["at"] == {"file": "/outside/ref.cir"}
+    assert finding["subject"] == "/outside/ref.cir"
+
+
+async def test_a_refused_include_is_placed_at_its_directive(
+    state_no_sim, work_dir, tmp_path_factory
+):
+    """A refused include is placed at the line that names it, in the deck or in
+    the included file that holds it, where it was placed at the deck alone."""
+    outside = tmp_path_factory.mktemp("outside")
+    lib = _write(outside, "part.lib", ".subckt PART 1 2\nR9 1 2 1\n.ends\n")
+    nested = _write(work_dir, "nested.lib", f"* models\n\n.include {lib}\n")
+    deck = _write(
+        work_dir,
+        "cand.cir",
+        f"* c\nX1 in out PART\nR1 in out 1k\n.include {lib}\n.include {nested}\n.end\n",
+    )
+
+    data = await _run(state_no_sim, path=str(deck), checks=["compare"], reference=_BASE)
+
+    denied = [f["at"] for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert denied == [{"file": str(deck), "line": 4}, {"file": str(nested), "line": 3}]
+
+
 async def test_equivalence_reordered(state_no_sim, work_dir):
     deck = _write(work_dir, "cand.cir", _BASE)
     ref = _write(work_dir, "ref.cir", _REORDERED)
@@ -842,6 +929,78 @@ async def test_equivalence_topology_changed(state_no_sim, work_dir):
     data = await _run(state_no_sim, path=str(deck), reference=str(ref))
     assert data["comparison"]["structurally_equivalent"] is False
     assert data["comparison"]["equivalent"] is False
+
+
+_PARAM_DIVIDER = "* divider\n.param rv=1k\nV1 in 0 5\nR1 in out {rv}\nR2 out 0 2k\n.end\n"
+
+
+async def test_equivalence_compares_the_directives_beside_the_wiring(state_no_sim, work_dir):
+    """A changed .param changes the circuit its parts read, though every part's
+    value is still ``{rv}``: the comparison is not equivalent, says the wiring
+    matched and the directives did not, and lists the two directive lines."""
+    deck = _write(work_dir, "cand.cir", _PARAM_DIVIDER)
+    ref = _write(work_dir, "ref.cir", _PARAM_DIVIDER.replace("rv=1k", "rv=2k"))
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    comparison = data["comparison"]
+    assert comparison["equivalent"] is False
+    assert comparison["structurally_equivalent"] is True
+    assert comparison["directives_equivalent"] is False
+    assert comparison["directives_added"] == [".param rv=1k"]
+    assert comparison["directives_removed"] == [".param rv=2k"]
+    assert data["outcome"] == "partial"
+
+
+async def test_an_equivalent_comparison_carries_only_its_verdict(state_no_sim, work_dir):
+    """Beside ``equivalent: true`` every part matched, so no partial verdict and
+    no difference list is sent."""
+    deck = _write(work_dir, "cand.cir", _PARAM_DIVIDER)
+    data = await _run(state_no_sim, path=str(deck), reference=_PARAM_DIVIDER)
+    assert data["comparison"] == {"mode": "equivalence", "equivalent": True}
+
+
+async def test_equivalence_reads_directives_as_structural_diff_does(state_no_sim, work_dir):
+    """Spelling is not a difference (case, spacing, assignment order), and the
+    lines LTspice's netlister adds to an export are left out, as in a structural
+    diff; a real directive change is listed the same way by both modes."""
+    deck = _write(
+        work_dir,
+        "cand.cir",
+        "* divider\n.PARAM  b=2 a=1\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n"
+        ".TRAN 0 1m\n.lib C:\\LTspice\\lib\\cmp\\standard.res\n.backanno\n.end\n",
+    )
+    ref = "* divider\n.param a=1 b=2\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n.tran 0 1m\n.end\n"
+    data = await _run(state_no_sim, path=str(deck), reference=ref)
+    assert data["comparison"]["equivalent"] is True
+
+    changed = ref.replace(".tran 0 1m", ".tran 0 2m")
+    by_mode = {
+        mode: (await _run(state_no_sim, path=str(deck), reference=changed, compare_mode=mode))[
+            "comparison"
+        ]
+        for mode in ("equivalence", "structural_diff")
+    }
+    for comparison in by_mode.values():
+        assert comparison["equivalent"] is False
+        assert comparison["directives_added"] == [".TRAN 0 1m"]
+        assert comparison["directives_removed"] == [".tran 0 2m"]
+
+
+async def test_equivalence_compares_a_subcircuit_as_wiring_wherever_it_is_defined(
+    state_no_sim, work_dir
+):
+    """A definition moved into an included file is the same wiring, so only the
+    include line is a directive difference; the definition's own lines are not
+    directives here."""
+    block = ".subckt DIV a b\n.param half=1k\nR1 a mid {half}\nR2 mid b {half}\n.ends DIV\n"
+    _write(work_dir, "div.lib", block)
+    deck = _write(work_dir, "cand.cir", "* top\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n")
+    ref = _write(work_dir, "ref.cir", f"* top\nV1 in 0 5\nX1 in 0 DIV\n{block}.end\n")
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    comparison = data["comparison"]
+    assert comparison["equivalent"] is False
+    assert comparison["structurally_equivalent"] is True
+    assert comparison["directives_added"] == [".include div.lib"]
+    assert "directives_removed" not in comparison
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ import numpy as np
 # implementation lives in raw_parser so AC and transient tools share the
 # same clamped-log10 behavior.
 from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
+from ltspice_mcp.lib.signal_analysis import level_crossings
 
 # Phase sample step above which we warn about possible unwrap errors — if the
 # raw wrapped phase jumps by more than this between adjacent points, unwrap
@@ -49,11 +50,11 @@ _UNWRAP_WARN_STEP_DEG = 90.0
 # the magnitude well past a few tenths of a dB within one sample.
 _UNITY_GAIN_DEADBAND_DB = 0.3
 
-# True half-power point: 20·log10(1/√2) = -3.0103 dB. Use this (not a rounded
-# -3.0) for "−3 dB" cutoff/bandwidth so bode_metrics(mode='filter') and the AC
-# summary agree with bode_metrics(mode='crossing'/'point'), which already use the
-# exact half-power level. The 0.0103 dB difference shifts a 1 kHz RC
-# corner by ~0.24%.
+# True half-power point: 20·log10(1/√2) = -3.0103 dB. Every "-3 dB" cutoff,
+# bandwidth and resonance flank is read at this level (not a rounded -3.0), so
+# the bode_filter recipe, the AC summary's bandwidth and a resonance's Q agree
+# with a bode_crossing at the same level and with LTspice's own .meas at
+# 1/sqrt(2). The 0.0103 dB difference shifts a 1 kHz RC corner by ~0.24%.
 HALF_POWER_DB = -3.010299956639812
 
 # Shared type aliases — used by both lib function signatures and the
@@ -250,24 +251,12 @@ def detect_crossings(
         raise ValueError(f"min_amplitude must be >= 0, got {min_amplitude}")
 
     d = np.asarray(values, dtype=float) - float(level)
-    sign_change = (d[:-1] * d[1:]) < 0
-    touch_exit = (d[:-1] == 0) & (d[1:] != 0)
-    idx = np.where(sign_change | touch_exit)[0]
+    # Interpolated in log frequency, the rule every crossing is found by.
+    idx, xc, rising_mask = level_crossings(np.log10(freqs), np.asarray(values), level)
     if len(idx) == 0:
         return []
-
-    log_f = np.log10(freqs)
-    y0 = values[idx]
-    y1 = values[idx + 1]
-    x0 = log_f[idx]
-    x1 = log_f[idx + 1]
-    denom = y1 - y0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        frac = np.where(denom != 0, (level - y0) / denom, 0.0)
-    xc = x0 + frac * (x1 - x0)
     fc = np.power(10.0, xc)
 
-    rising_mask = y1 > y0
     directions: list[str]
     if direction == "rising":
         fc = fc[rising_mask]
@@ -384,8 +373,9 @@ def find_crossings_any_quantity(
 ) -> tuple[list[CrossingWithQuantity], list[str]]:
     """Crossing primitive that backs ``find_crossing``.
 
-    Slices to ``[f_start, f_end]`` (inclusive, log-interpolation at the
-    endpoints), selects the quantity to cross, and returns at most
+    Selects the quantity to cross over the whole sweep (an unwrapped phase
+    from the sweep's first point), keeps the samples in ``[f_start, f_end]``
+    (inclusive), and returns at most
     ``max_results`` crossings. Warnings (e.g. unwrap instability on phase
     queries) come out in the second return value.
     """
@@ -405,18 +395,21 @@ def find_crossings_any_quantity(
 
     mask = (freqs >= lo) & (freqs <= hi)
     f_win = freqs[mask]
-    H_win = H[mask]
     if len(f_win) < 2:
         raise ValueError(f"Window [{lo:.6g}, {hi:.6g}] contains fewer than 2 sample points")
 
+    # The quantity is taken over the whole sweep and then windowed, so an
+    # unwrapped phase keeps the sweep's own reference (its first point, as
+    # gain_at_frequencies and compute_stability_metrics take it) rather than
+    # starting over at the window's first sample.
     if quantity == "magnitude_db":
-        values = magnitude_db(H_win)
+        values = magnitude_db(H)
         units = "dB"
     elif quantity == "magnitude_linear":
-        values = np.abs(H_win).astype(float)
+        values = np.abs(H).astype(float)
         units = ""
     elif quantity == "phase_deg":
-        phase_deg, phase_warn = unwrap_phase_safe(H_win)
+        phase_deg, phase_warn = unwrap_phase_safe(H)
         warnings.extend(phase_warn)
         values = phase_deg
         units = "deg"
@@ -428,7 +421,7 @@ def find_crossings_any_quantity(
 
     crossings = detect_crossings(
         f_win,
-        values,
+        values[mask],
         level,
         direction=direction,
         min_separation_decades=min_separation_decades,
@@ -1466,7 +1459,7 @@ def compute_resonances(
     for idx in selected[:max_peaks]:
         f_peak = float(freqs[idx])
         peak_db = float(mag_db[idx])
-        level = peak_db - 3.0
+        level = peak_db + HALF_POWER_DB
         crossings = detect_crossings(freqs, mag_db, level, direction="any")
         below = [c for c in crossings if c["frequency_hz"] < f_peak]
         above = [c for c in crossings if c["frequency_hz"] > f_peak]

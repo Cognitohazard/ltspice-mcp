@@ -156,3 +156,67 @@ def test_plain_value_error_is_rendered_unchanged():
     message = "unsupported recipe metric 'unknown'"
 
     assert compact_validation_error(ValueError(message)) == message
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_field_is_answered_with_the_field_it_meant(config):
+    # An optional field: "Field required" names nothing for it, so before this
+    # the refusal said only that 'dry_runn' was not permitted.
+    state = _consolidated_state(config)
+    arguments = {"path": "amp.asc", "ops": [], "dry_runn": True}
+
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("edit_schematic", arguments)
+    )
+
+    assert result.is_error
+    message = tool_text(result)
+    assert "Did you mean 'dry_run' for 'dry_runn'?" in message
+    assert "This tool takes path, base, expected_sha256," in message
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_nested_field_is_answered_with_the_names_its_place_takes(config):
+    state = _consolidated_state(config)
+    arguments = {"request_id": "nested-typo", "circuits": [{"pathh": "dut.cir"}]}
+
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("run_experiments", arguments)
+    )
+
+    assert result.is_error
+    message = tool_text(result)
+    assert "Did you mean 'path' for 'pathh'? circuits[] takes path, id." in message
+
+
+@pytest.mark.asyncio
+async def test_a_jobs_call_without_an_action_names_the_actions_and_the_misspelling(config):
+    state = _consolidated_state(config)
+
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("jobs", {"actionn": "status"})
+    )
+
+    assert result.is_error
+    message = tool_text(result)
+    assert "action: Field required, one of 'status', 'wait', 'cancel', 'list'," in message
+    assert "Did you mean 'action' for 'actionn'?" in message
+    assert "Unable to extract tag" not in message
+
+
+@pytest.mark.asyncio
+async def test_a_missing_op_is_answered_with_the_ops_and_its_misspelling(config):
+    # Validation stops at the missing op, so the misspelled field was never named.
+    state = _consolidated_state(config)
+    arguments = {"path": "amp.asc", "ops": [{"opp": "move", "references": ["R1"]}]}
+
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("edit_schematic", arguments)
+    )
+
+    assert result.is_error
+    message = tool_text(result)
+    assert "ops.0.op: Field required, one of 'add_component', 'set_component_value'," in message
+    assert "ops.0.opp: Extra inputs are not permitted" in message
+    assert "Did you mean 'op' for 'opp'?" in message
+    assert "ops.0.references" not in message

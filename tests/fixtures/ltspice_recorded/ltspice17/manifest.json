@@ -5041,6 +5041,8 @@
       "inputs": {
         "export/hier_amp.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
         "export/hier_amp.asy": "237b42203009a88f012b8e734baa10bd41472abdd010c7e333dae10c7e244a83",
+        "export/hier_plain.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "export/hier_plain.asy": "5843ec7471ce02ff200968a8194711ca4043f176fb19b718314ddf6b5b7ce353",
         "export/hier_top.asc": "3cae0c71e8a6c64c0d3dd650063f4618d38a71ec2678afc8c354d85057e47c88"
       },
       "kind": "netlist",

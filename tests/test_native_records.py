@@ -69,7 +69,7 @@ async def test_failed_native_case_survives_reload_and_public_runs(
     case.native_statistics = _record(work_dir, prepared=prepared)
     job.completeness.recount(job.cases)
     experiment_store.save_job(job)
-    loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+    loaded = experiment_store.load_job(job.job_id, work_dir)
     assert loaded is not None
     restored = loaded.cases[0].native_statistics
     assert restored is not None

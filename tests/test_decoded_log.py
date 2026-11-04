@@ -313,10 +313,25 @@ def test_value_returns_detached_parsed_and_absent_facts_without_relabelling(mani
     assert console.section("measurements")["status"] == "absent"
 
 
+def test_a_value_printed_as_text_fails_only_its_measurement(tmp_path):
+    """One measurement printed with something other than a number fails that
+    entry, with its line and the reason; the section and the others read."""
+    captured, directory = capture(
+        tmp_path, text="Circuit: test\ngain: V(out)=bad\nvo: MAX(V(out))=1.5 FROM 0 TO 0.001\n"
+    )
+    log = resident(decode_logs(captured, directory, limits=LIMITS))
+    assert log.section("measurements")["status"] == "parsed"
+    entries = log.value("measurements")["measurements"]
+    assert entries["gain"]["values"] == [None]
+    assert entries["gain"]["unreadable"]["line"] == "gain: V(out)=bad"
+    assert "'bad'" in entries["gain"]["unreadable"]["reason"]
+    assert entries["vo"]["values"] == [1.5]
+
+
 @pytest.mark.parametrize(
     ("body", "name"),
     [
-        ("Circuit: test\ngain: V(out)=bad\n", "measurements"),
+        ("Circuit: test\nMeasurement: gain\n", "measurements"),
         (fourier_text().replace("8.464e-01", "not-a-number"), "fourier"),
         ("Circuit: test\n.step R=bad\n", "steps"),
     ],

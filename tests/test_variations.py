@@ -11,6 +11,8 @@ from pydantic import TypeAdapter, ValidationError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.instance_targeting import canonical_target
+from ltspice_mcp.lib.spice_lex import lex
+from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
@@ -1789,6 +1791,38 @@ class TestMixedFlatAndSubcircuitDecks:
         assert exc.value.code == "ambiguous_target"
 
 
+class TestMismatchPerturbsTheDeviceItReports:
+    """A top-level ``M1`` and an ``M1`` inside a subcircuit are two devices; a
+    mismatch rule that draws for the top-level one rewrites that one."""
+
+    CELL = ".subckt cell d g s\nM1 d g s s NCH W=2u L=1u\n.ends cell\n"
+    TOP = "M1 out in 0 0 NCH W=10u L=1u\nX1 a b 0 cell\n"
+
+    @pytest.mark.parametrize("cell_first", [True, False], ids=["cell-first", "cell-last"])
+    def test_the_variant_model_lands_on_the_top_level_device(
+        self, tmp_path: Path, cell_first: bool
+    ):
+        body = self.CELL + self.TOP if cell_first else self.TOP + self.CELL
+        text = f"* t\n{body}.model NCH NMOS(VTO=0.7 KP=100u)\n.op\n.end\n"
+        path = tmp_path / "dut.cir"
+        path.write_text(text)
+        circuit = CircuitDeck("dut", path, text)
+        variation = _random_rule({"rule": "mismatch", "prefix": "M", "AVT": 3e-3})
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+
+        assert self.CELL in case.text
+        top = [
+            InstanceLine.from_card(card)
+            for card in lex(case.text).cards
+            if card.kind == "instance" and card.scope == () and card.name == "M1"
+        ]
+        assert [line.model for line in top] == ["NCH__M1"]
+        assert "random:mismatch:M1.VTO" in case.assignments
+
+
 class TestCaseBundleIsWrittenWhole:
     """A case's edited includes and its root deck are one bundle.
 
@@ -1895,3 +1929,28 @@ class TestCircuitIdRejection:
         # The id it refused, and the rule it refused it by.
         assert "_chosen" in message
         assert "letter or digit" in message
+
+
+@pytest.mark.parametrize("card", ["Q1 out in 0 2N3904", "D1 out 0 1N4148"])
+def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str):
+    """Where a value runs, LTspice reads ``2N3904`` as 2.3904n, but on a
+    transistor or diode card it names the model. A random rule on such a part
+    has no nominal to draw around and is refused, never perturbs the name."""
+    path = tmp_path / "dut.cir"
+    text = f"* part numbers\nV1 in 0 1\n{card}\n.op\n.end\n"
+    path.write_text(text)
+    circuit = CircuitDeck("dut", path, text)
+    ref = card.split()[0]
+    variation = RandomVariation.model_validate(
+        {
+            "kind": "random",
+            "runs": 1,
+            "seed": 3,
+            "rules": [{"rule": "component", "target": ref, "tolerance": 0.1}],
+        }
+    )
+
+    with pytest.raises(VariationError, match="no plain numeric nominal") as excinfo:
+        materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "random_nominal_unavailable"

@@ -47,3 +47,6 @@ ltspice-mcp.toml
 
 # git worktrees kept inside the project (branch checkouts, never committed)
 worktrees/
+
+# The small-run benchmark baseline is the machine's own
+.benchmark_small_runs.json

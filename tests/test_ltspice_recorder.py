@@ -407,6 +407,17 @@ class TestCommittedRecordings:
         ]
         assert not stale, f"inputs changed since they were recorded; record again: {stale}"
 
+    def test_every_case_was_run_on_the_files_it_copies_now(self, build: str):
+        """A file added to a behaviour's extra list is copied into each of its
+        cases, so each case is recorded again, not only the one it was added for."""
+        copies = {case.case_id: set(case.copies) for case in CASES.cases}
+        stale = sorted(
+            case_id
+            for case_id, entry in load_manifest(FIXTURES / build)["cases"].items()
+            if case_id in copies and set(entry["inputs"]) != copies[case_id]
+        )
+        assert not stale, f"the files a case copies changed since it was recorded: {stale}"
+
     def test_every_command_is_the_one_the_server_launches(self, build: str):
         """A plot case, a save case and a draw case are the exceptions: the
         first runs the sheet in the window, as the person the sheet is handed

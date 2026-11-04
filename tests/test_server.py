@@ -19,11 +19,11 @@ from ltspice_mcp.errors import (
     LTSpiceMCPError,
     NetlistError,
     PathSecurityError,
+    hint_for_type,
 )
 from ltspice_mcp.server import (
     CONSOLIDATED_INSTRUCTIONS,
     GUIDE_REMINDER,
-    _get_error_hint,
     _invoke,
     build_instructions,
     call_tool,
@@ -51,16 +51,16 @@ def _read_params(uri: str) -> mcp_types.ReadResourceRequestParams:
 
 class TestGetErrorHint:
     def test_known_types_have_hints(self):
-        hint = _get_error_hint(NetlistError)
+        hint = hint_for_type(NetlistError)
         assert hint is not None
         assert "verify_circuit" in hint
-        assert _get_error_hint(LibraryError) is not None
+        assert hint_for_type(LibraryError) is not None
 
     def test_unknown_returns_none(self):
         class FakeErr(LTSpiceMCPError):
             pass
 
-        assert _get_error_hint(FakeErr) is None
+        assert hint_for_type(FakeErr) is None
 
 
 class TestServerInstructions:

@@ -9,7 +9,13 @@ import pytest
 
 from ltspice_mcp.lib import lint_rules
 from ltspice_mcp.lib.lint_rules import RULES, RULES_BY_ID, LintRule, lint_deck, linter_version
-from ltspice_mcp.lib.spice_validator import ARITY_CHECKS
+from ltspice_mcp.lib.spice_lex import lex_deck
+from ltspice_mcp.lib.spice_lex_views import MeasCard
+from ltspice_mcp.lib.spice_validator import (
+    ARITY_CHECKS,
+    validate_netlist_dangling_nodes,
+    validate_netlist_directive_refs,
+)
 
 
 def _ids(
@@ -251,6 +257,74 @@ def test_lib_section_ngspice_names_the_setting_that_fixes_it(tmp_path, monkeypat
     assert '[simulator] ngbehavior = "hsa"' in reason
     assert "LTSPICE_MCP_NGBEHAVIOR=hsa" in reason
     assert "restart" in reason
+
+
+#: Probe spellings, with what each reader of a probe makes of them: the names
+#: the save rule finds unsaved beside ``.save V(a) V(b) I(R1)``, and the names
+#: the validator reads inside it. Both read a pair of two nodes as its nodes:
+#: both LTspice builds measure ``V(a,b)`` from a saved ``V(a)`` and ``V(b)``.
+_PROBE_READINGS = [
+    pytest.param("V(a)", [], ["a"], id="a-node"),
+    pytest.param("v( a )", [], ["a"], id="spaced"),
+    pytest.param("V(a,b)", [], ["a", "b"], id="a-pair"),
+    pytest.param("V(a, b)", [], ["a", "b"], id="a-spaced-pair"),
+    pytest.param("I(R1)", [], ["R1"], id="a-current"),
+    pytest.param("V(x1:out)", ["v(x1:out)"], ["x1:out"], id="a-node-in-a-subcircuit"),
+]
+
+
+@pytest.mark.parametrize(("probe", "unsaved", "names"), _PROBE_READINGS)
+def test_each_reader_of_a_probe_reads_its_nodes(
+    tmp_path: Path, probe: str, unsaved: list[str], names: list[str]
+):
+    deck = f"* t\nV1 in 0 1\nR1 in a 1k\nR2 in b 1k\n.meas tran m AVG {probe}\n.tran 1m\n.end\n"
+    saved = deck.replace(".tran", ".save V(a) V(b) I(R1)\n.tran")
+    (coverage,) = [
+        f["evidence"]["missing_signals"]
+        for f in lint_deck(saved, tmp_path / "deck.cir", "ltspice", "LTspice")
+        if f["rule_id"] == "save-meas-coverage"
+    ] or [[]]
+    assert coverage == unsaved
+
+    cards = lex_deck(deck).cards
+    (meas,) = [card for card in cards if card.kind == "meas"]
+    view_names = [name for probe in MeasCard.from_card(meas).signal_refs for name in probe.names]
+    assert view_names == names
+    dangling = {
+        str(issue["message"]).split("'")[1] for issue in validate_netlist_dangling_nodes(cards)
+    }
+    assert dangling == {"a", "b"} - {name.casefold() for name in names}
+    elsewhere = lex_deck(deck.replace("R1 in a 1k\nR2 in b 1k\n", "R9 in 0 1k\n")).cards
+    undefined = [
+        str(issue["message"]).split("'")[1] for issue in validate_netlist_directive_refs(elsewhere)
+    ]
+    assert undefined == [name for name in names if ":" not in name]
+
+
+@pytest.mark.parametrize(
+    ("save", "probe", "missing"),
+    [
+        pytest.param("V(a) V(b)", "V(a,b)", [], id="pair-from-both-nodes"),
+        pytest.param("V(a)", "V(a,b)", ["v(b)"], id="pair-missing-a-node"),
+        pytest.param("V(a,b)", "V(b)", [], id="saved-pair-saves-its-nodes"),
+        pytest.param("V(a)", "V(a,0)", ["v(a,0)"], id="against-ground-as-written"),
+        pytest.param("V(a)", "V(a,GND)", ["v(a,gnd)"], id="against-gnd-as-written"),
+        pytest.param("V(a,0)", "V(a,0)", [], id="saved-as-written"),
+    ],
+)
+def test_the_save_rule_reads_a_pair_of_two_nodes_as_its_nodes(
+    tmp_path: Path, save: str, probe: str, missing: list[str]
+):
+    """Recorded on both builds: ``V(a,b)`` is measured from a saved ``V(a)``
+    and ``V(b)``, and ``.save V(a,b)`` saves both nodes. A voltage against
+    ground is not measured with only the node saved, so it stands as written."""
+    deck = f"* t\nV1 a 0 1\nR1 a b 1k\nR2 b 0 1k\n.save {save}\n.tran 1m\n.meas tran m AVG {probe}\n.end\n"
+    found = [
+        f["evidence"]["missing_signals"]
+        for f in lint_deck(deck, tmp_path / "deck.cir", "ltspice", "LTspice")
+        if f["rule_id"] == "save-meas-coverage"
+    ]
+    assert found == ([missing] if missing else [])
 
 
 def test_save_meas_coverage_distinguishes_voltage_and_current(tmp_path: Path):

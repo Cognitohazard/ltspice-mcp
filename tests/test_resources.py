@@ -279,7 +279,7 @@ class TestRecentAndJobsListAgree:
             owner_pid=os.getpid(),
             expanded=1,
         )
-        job = experiment_store.load_job("exp_live", work_dir, own_is_alive=True)
+        job = experiment_store.load_job("exp_live", work_dir)
         assert job is not None and job.status == "running"
         # A transition made in memory and deliberately not persisted.
         job.status = "completed"

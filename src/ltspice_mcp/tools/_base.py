@@ -528,6 +528,20 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                     "value measurements."
                 ),
             },
+            "unreadable": {
+                "type": "object",
+                "properties": {
+                    "line": {"type": ["string", "null"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["reason"],
+                "description": (
+                    "Present when the log printed something other than a number for "
+                    "this value, such as a WHEN threshold written as a parameter or "
+                    "an expression: 'values' is null, 'line' is the log line and "
+                    "'reason' says what was printed. Only this entry fails."
+                ),
+            },
         },
         "required": ["values"],
     },
@@ -637,6 +651,11 @@ _COMPARISON: dict[str, Kept] = {
         "The wiring-only verdict, kept beside an equivalent that is false or null "
         "so the caller sees which part held; left out beside equivalent: true, "
         "which gives it."
+    ),
+    "directives_equivalent": Kept(
+        "The directives-only verdict, kept beside an equivalent that is false or "
+        "null so the caller sees which part held; left out beside equivalent: "
+        "true, which gives it."
     ),
 }
 
@@ -751,10 +770,13 @@ def held_to_cap(
     """
     if requested <= cap:
         return requested, None
-    return (
-        cap,
-        f"{name}={requested:g}{unit} is above its cap of {cap:g}{unit}; {cap:g}{unit} was used.",
-    )
+
+    def spelled(value: _Number) -> str:
+        # An integer is written out whole: 3000000, not 3e+06.
+        return f"{value:d}" if isinstance(value, int) else f"{value:g}"
+
+    asked, held = spelled(requested), spelled(cap)
+    return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
 
 
 def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
@@ -787,6 +809,23 @@ class NotedModel(StrictModel):
             object.__setattr__(self, name, kept)
             listed = ", ".join(repr(value) for value in dict.fromkeys(repeats))
             self._notes.append(f"{name} repeated {listed}; each is read once.")
+
+    def hold_to_cap(self, name: str, cap: float, unit: str = "") -> None:
+        """Hold numeric field ``name`` at ``cap`` rather than refuse it, and note it.
+
+        The rule of :func:`held_to_cap`: a cap bounds one call's cost, so a
+        larger value is served at the cap and said so. The model carries the
+        held value, so whatever reads it serves what the note says. An unset
+        (``None``) field is left alone.
+        """
+        value = getattr(self, name)
+        if value is None:
+            return
+        held, note = held_to_cap(name, value, type(value)(cap), unit)
+        if note is not None:
+            # Past validate_assignment, which would run the model's validators again.
+            object.__setattr__(self, name, held)
+            self._notes.append(note)
 
     def argument_notes(self) -> list[str]:
         notes = list(self._notes)
@@ -868,6 +907,26 @@ def outcome_schema(*outcomes: str) -> dict[str, Any]:
 
 
 OUTCOME_SCHEMA: dict[str, Any] = outcome_schema()
+
+#: The ``error`` object an envelope carries when the call failed: the shared
+#: convention ``docs/design/mcp_surface.md`` gives every enveloped tool
+#: (section 2, "Envelope"), declared once so the tools that report it cannot
+#: drift apart.
+ENVELOPE_ERROR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "stage": {"type": "string"},
+        "retryable": {"type": "boolean"},
+        "commit_state": {
+            "type": "string",
+            "enum": ["not_started", "committed", "unknown"],
+        },
+        "item_id": {"type": "string"},
+    },
+    "required": ["code", "message", "stage", "retryable", "commit_state"],
+}
 
 
 def failures_schema(row: dict[str, Any]) -> dict[str, Any]:
