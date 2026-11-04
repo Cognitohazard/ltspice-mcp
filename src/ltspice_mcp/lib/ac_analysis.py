@@ -384,8 +384,9 @@ def find_crossings_any_quantity(
 ) -> tuple[list[CrossingWithQuantity], list[str]]:
     """Crossing primitive that backs ``find_crossing``.
 
-    Slices to ``[f_start, f_end]`` (inclusive, log-interpolation at the
-    endpoints), selects the quantity to cross, and returns at most
+    Selects the quantity to cross over the whole sweep (an unwrapped phase
+    from the sweep's first point), keeps the samples in ``[f_start, f_end]``
+    (inclusive), and returns at most
     ``max_results`` crossings. Warnings (e.g. unwrap instability on phase
     queries) come out in the second return value.
     """
@@ -405,18 +406,21 @@ def find_crossings_any_quantity(
 
     mask = (freqs >= lo) & (freqs <= hi)
     f_win = freqs[mask]
-    H_win = H[mask]
     if len(f_win) < 2:
         raise ValueError(f"Window [{lo:.6g}, {hi:.6g}] contains fewer than 2 sample points")
 
+    # The quantity is taken over the whole sweep and then windowed, so an
+    # unwrapped phase keeps the sweep's own reference (its first point, as
+    # gain_at_frequencies and compute_stability_metrics take it) rather than
+    # starting over at the window's first sample.
     if quantity == "magnitude_db":
-        values = magnitude_db(H_win)
+        values = magnitude_db(H)
         units = "dB"
     elif quantity == "magnitude_linear":
-        values = np.abs(H_win).astype(float)
+        values = np.abs(H).astype(float)
         units = ""
     elif quantity == "phase_deg":
-        phase_deg, phase_warn = unwrap_phase_safe(H_win)
+        phase_deg, phase_warn = unwrap_phase_safe(H)
         warnings.extend(phase_warn)
         values = phase_deg
         units = "deg"
@@ -428,7 +432,7 @@ def find_crossings_any_quantity(
 
     crossings = detect_crossings(
         f_win,
-        values,
+        values[mask],
         level,
         direction=direction,
         min_separation_decades=min_separation_decades,

@@ -13,6 +13,7 @@ import pytest
 
 from ltspice_mcp.lib.ac_analysis import (
     HALF_POWER_DB,
+    Quantity,
     _find_passband_range,
     classify_filter,
     compute_filter_metrics,
@@ -292,6 +293,36 @@ class TestFindCrossingsAnyQuantity:
         H = np.exp(1j * np.deg2rad(phase_deg))
         _cx, warn = find_crossings_any_quantity(f, H, quantity="phase_deg", level=-180.0)
         assert any("Phase changes by up to" in w for w in warn)
+
+    @pytest.mark.parametrize("quantity", ["phase_deg", "magnitude_db", "magnitude_linear"])
+    @pytest.mark.parametrize("level", [-270.0, -180.0, -90.0, 90.0, -40.0, 0.01])
+    @pytest.mark.parametrize(("f_start", "f_end"), [(5e3, None), (2e3, 2e5), (None, 2e4)])
+    def test_a_window_keeps_the_crossings_of_the_whole_sweep_inside_it(
+        self, quantity: Quantity, level: float, f_start: float | None, f_end: float | None
+    ):
+        """Four poles at 100 Hz, 1, 10 and 100 kHz: past 5 kHz the phase is
+        below -180 degrees, so read from there it must not start over."""
+        f = _log_freqs(0, 7, 351)
+        H = 1000 / np.prod([1 + 1j * f / pole for pole in (1e2, 1e3, 1e4, 1e5)], axis=0)
+        whole, _ = find_crossings_any_quantity(
+            f, H, quantity=quantity, level=level, max_results=100
+        )
+        windowed, _ = find_crossings_any_quantity(
+            f, H, quantity=quantity, level=level, f_start=f_start, f_end=f_end, max_results=100
+        )
+        low, high = f_start or f[0], f_end or f[-1]
+        assert windowed == [c for c in whole if low <= c["frequency_hz"] <= high]
+
+    def test_a_windowed_phase_crossing_is_where_the_unwrapped_phase_is_that_level(self):
+        f = _log_freqs(0, 7, 351)
+        H = 1000 / np.prod([1 + 1j * f / pole for pole in (1e2, 1e3, 1e4, 1e5)], axis=0)
+        (found,), _ = find_crossings_any_quantity(
+            f, H, quantity="phase_deg", level=-270.0, f_start=5e3
+        )
+        (point,), _ = gain_at_frequencies(
+            f, H, [found["frequency_hz"]], include_unwrapped_phase=True
+        )
+        assert point.get("phase_deg_unwrapped") == pytest.approx(-270.0, abs=0.05)
 
 
 # ---------------------------------------------------------------------------
