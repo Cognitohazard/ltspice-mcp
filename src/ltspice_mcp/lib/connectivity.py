@@ -265,8 +265,8 @@ class NamedNets:
 
     def at(self, point: Point) -> frozenset[int]:
         """Every net something put on ``point`` would be one node with
-        (``Nets.nets_at``); none for a point nothing is on."""
-        return frozenset(self.nets.folded(net) for net in self.nets.nets_at(point))
+        (``Nets.touched_at``); none for a point nothing is on."""
+        return frozenset(self.nets.folded(net) for net in self.nets.touched_at(point))
 
     def wired_at(self, point: Point) -> tuple[frozenset[int], ...]:
         """The nets each run of wire through ``point`` puts it on
@@ -560,8 +560,8 @@ def nets_by_ltspice(
     and ``wires``, by every rule of this module.
 
     Wires are merged into runs as LTspice merges them, cut at every pin, label
-    and junction, and the runs it drops join nothing; a point on one touches
-    the nets of both its pins, because anything put there keeps the run. Of
+    and junction, and the runs it drops join nothing, though anything put
+    inside one would keep it (``Nets.dropped_at``). Of
     one part's pins on a point with no wire or label there, only the last in
     SpiceOrder joins what else is on the point. Names compare as
     :func:`name_key` has them.

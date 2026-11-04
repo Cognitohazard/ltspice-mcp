@@ -32,6 +32,7 @@ from tests._asc_ops import (
     build_sheet,
     components_of,
     inspect_one,
+    inspect_refusal,
     load_editor,
     sheet_findings,
     structured_warnings,
@@ -2825,15 +2826,9 @@ class TestTJunctionGroundTruth:
     ):
         # The export keeps the two crossing wires on separate nets (a and b), so
         # the crossing point belongs to neither alone.
-        from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-
         asc = _copy_t_junction_sheet("crossing_wires", work_dir)
         query = {"kind": "net", "path": str(asc), "at": [192, 96]}
-        result = await handle_inspect(InspectInput.model_validate({"queries": [query]}), asc_state)
-        assert result.structured_content is not None
-        (item,) = result.structured_content["results"]
-        assert item["ok"] is False
-        message = item["error"]["message"]
+        message = await inspect_refusal(asc_state, query)
         assert "cross" in message
         assert "(96,96)->(288,96)" in message and "(192,48)->(192,176)" in message
 

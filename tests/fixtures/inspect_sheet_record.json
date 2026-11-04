@@ -83352,7 +83352,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -83369,7 +83369,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -83856,7 +83856,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -83876,7 +83876,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -83896,7 +83896,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -83916,7 +83916,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -85174,7 +85174,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -85194,7 +85194,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -85214,7 +85214,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {
@@ -85234,7 +85234,7 @@
     "total_coordinates": 1,
     "total_pins": 1,
     "warnings": [
-     "R1.1 and R1.2 are drawn tied by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so they are on separate nets in simulation. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
     ]
    },
    {

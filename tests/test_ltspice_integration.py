@@ -6,12 +6,14 @@ They exercise the full simulation pipeline: create netlist → run sim → parse
 """
 
 import asyncio
+import contextlib
 import math
 import os
 import shutil
 import sys
 import tempfile
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import psutil
@@ -757,6 +759,22 @@ class TestSheetOpenInAWindow:
     @pytest.fixture
     def open_sheet(self, ltspice_state: SessionState, work_dir: Path):
         """A sheet in the sandbox, open in an LTspice window nobody can see."""
+        with self._open_in(ltspice_state, work_dir, 1) as (sheet, (pid,)):
+            yield sheet, pid
+
+    @pytest.fixture
+    def open_twice(self, ltspice_state: SessionState, work_dir: Path):
+        """A sheet open in two LTspice windows, as when it is opened twice by hand."""
+        with self._open_in(ltspice_state, work_dir, 2) as opened:
+            yield opened
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _open_in(
+        ltspice_state: SessionState, work_dir: Path, windows: int
+    ) -> Iterator[tuple[Path, list[int]]]:
+        """A sheet in the sandbox, open in ``windows`` LTspice windows on a desktop
+        nobody can see, with the processes of those windows."""
         from ltspice_mcp.lib.ltspice_bridge import bridge_command
         from ltspice_mcp.lib.ltspice_frame import LtspiceFrame
         from ltspice_mcp.lib.ltspice_window import OpenWindows
@@ -782,9 +800,15 @@ class TestSheetOpenInAWindow:
                 pytest.skip("Windows gave no desktop to keep the window off this one")
             # The window's frame is on that desktop, not on this one.
             ltspice_state.open_windows = OpenWindows(command, frame=LtspiceFrame(desktop.windows))
-            with desktop.start([exe, str(sheet), "-ini", str(ini)]) as window:
-                wait_for_window(command, window.pid, sheet)
-                yield sheet, window.pid
+            with contextlib.ExitStack() as started:
+                pids = []
+                for _ in range(windows):
+                    window = started.enter_context(
+                        desktop.start([exe, str(sheet), "-ini", str(ini)])
+                    )
+                    wait_for_window(command, window.pid, sheet)
+                    pids.append(window.pid)
+                yield sheet, pids
 
     @staticmethod
     async def _edit(
@@ -862,6 +886,45 @@ class TestSheetOpenInAWindow:
         assert file_difference(on_disk, changed) is None
         assert saved["sha256"] == hashlib.sha256(on_disk).hexdigest()
         await self._window_settled(ltspice_state, pid)
+
+        data = await self._edit(ltspice_state, sheet, "2.2k")
+        assert data["commit_state"] == "committed", data
+
+    async def test_of_two_windows_the_copy_the_user_chose_is_saved_and_handed_to_the_other(
+        self, ltspice_state: SessionState, open_twice
+    ):
+        """A save asks which copy to keep, and with one named, LTspice saves it
+        and the other window is handed the saved sheet."""
+        from ltspice_mcp.lib.ltspice_window import file_difference
+
+        sheet, (first, second) = open_twice
+        windows = ltspice_state.open_windows
+        held = {each.pid: each for each in await asyncio.to_thread(windows.holding, sheet)}
+        assert sorted(held) == sorted([first, second])
+        for pid, value in ((first, "9k"), (second, "7k")):
+            changed = held[pid].text.replace("SYMATTR Value 1k", f"SYMATTR Value {value}")
+            await asyncio.to_thread(windows.show, held[pid], changed)
+
+        unchosen = await self._edit(ltspice_state, sheet, ops=[], open_window="save")
+        assert unchosen["error"]["code"] == "window_not_chosen", unchosen
+
+        saved = await self._edit(
+            ltspice_state, sheet, ops=[], open_window="save", window_pid=second
+        )
+
+        assert saved["commit_state"] == "committed", saved
+        assert [
+            (row["pid"], row.get("saved"), row["shown"]) for row in saved["open_in_ltspice"]
+        ] == [
+            (second, True, True),
+            (first, None, True),
+        ]
+        on_disk = await asyncio.to_thread(sheet.read_bytes)
+        assert "SYMATTR Value 7k" in on_disk.decode("cp1252")
+        now = await asyncio.to_thread(windows.holding, sheet)
+        assert [file_difference(on_disk, each.text) for each in now] == [None, None]
+        for pid in (first, second):
+            await self._window_settled(ltspice_state, pid)
 
         data = await self._edit(ltspice_state, sheet, "2.2k")
         assert data["commit_state"] == "committed", data
@@ -1074,7 +1137,8 @@ class TestSheetOpenInAWindow:
             return result.structured_content["ltspice"]
 
         shown = await show(another)
-        assert (shown["shown"], shown["pid"], shown["already_open"]) == (True, pid, False), shown
+        assert (shown["shown"], shown["pid"]) == (True, pid), shown
+        assert "already_open" not in shown
         front, designs = await asyncio.to_thread(in_front)
         assert Path(front) == another
         assert {Path(design) for design in designs} == {already_open, another}
@@ -1291,7 +1355,8 @@ class TestSheetOpenInAWindow:
         assert dropped["commit_state"] == "not_committed", dropped
         shown = await self._plot(ltspice_state, job_id, "V(filtered)")
 
-        assert (shown["shown"], shown["tied"], shown["differs_from_file"]) == (True, True, False)
+        assert (shown["shown"], shown["tied"]) == (True, True), shown
+        assert "differs_from_file" not in shown
         # The discard opened the sheet with its results beside it, which ties it.
         assert "sheet_reopened" not in shown
         await self._window_settled(ltspice_state, pid)

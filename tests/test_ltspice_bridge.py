@@ -215,6 +215,14 @@ class TestRecording:
             "a sheet whose window copy differs from the file is asked about before it closes": True,
             "answered No, it closes and its file is as it was": [True, True],
             "opened again, the window holds the file": True,
+            # What window_pid relies on.
+            "a second LTspice started with a sheet the first has open is a window of its "
+            "own, and both have the sheet open": [True, True, True],
+            "each window holds the copy it was handed": [True, True],
+            "Save in the second writes its copy to the file, and the first still holds its own": [
+                True,
+                True,
+            ],
             "no LTspice was started in its place": True,
         }
 
@@ -624,7 +632,7 @@ class TestOpenWindows:
         world = tmp_path / "world.json"
         write_world(world, [{"pid": 8, "version": "26.1.1", "designs": {str(sheet): "B\n"}}])
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
-        assert windows.show_each(windows.holding(sheet), "C\n", b"B\n") == [WindowUpdate()]
+        assert windows.show_each(windows.holding(sheet), "C\n") == [WindowUpdate()]
         assert read_world(world)["windows"][0]["designs"][str(sheet)] == "C\n"
 
     def test_a_window_that_closed_in_between_is_an_answer_not_an_error(self, tmp_path: Path):
@@ -634,7 +642,7 @@ class TestOpenWindows:
         windows = OpenWindows(fake_command(world), timeout=LIVENESS_S)
         held = windows.holding(sheet)
         write_world(world, [])
-        assert windows.show_each(held, "C\n", b"B\n") == [
+        assert windows.show_each(held, "C\n") == [
             WindowUpdate("no live LTspice instance with that pid")
         ]
 

@@ -1343,9 +1343,14 @@ a window's copy and does not check. For one that replaces the sheet:
   `window_check`, naming a few of the differing entries, and writes nothing.
   A call with no ops and `open_window` set to the user's choice settles it.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
-  and the reply gives the file's new `sha256`. A box LTspice shows instead of
-  saving fails the call with `window_not_saved`, quoting the box, and the
-  server closes the box with Cancel, which leaves the window's copy as it was.
+  and the reply gives the file's new `sha256`. Where more than one window
+  holds a different copy, `window_pid` names the process whose copy the user
+  chose, the other windows are handed the saved sheet, and a call without it,
+  or with a process that holds no different copy, fails with
+  `window_not_chosen`, listing each window's difference. A box
+  LTspice shows instead of saving fails the call with `window_not_saved`,
+  quoting the box, and the server closes the box with Cancel, which leaves the
+  window's copy as it was.
   With `"discard"`, the server closes the sheet in each window that differs
   without saving and opens it again from the file, which is unchanged; a
   window whose copy changes meanwhile is left open and fails the call with
@@ -1454,11 +1459,13 @@ be grounded after the first. Names already joined, by a wire between two
 labels or by a shared name, are one net, so joining them again is no short.
 `wire_pins` passes over a pin, a wire's end or a label already on the net of
 either of its ends as a junction, and refuses one on any other net.
-`inspect(kind: "net")` traces the net LTspice netlists from the start it is
-given. At a point on a wire's interior it traces that wire's net and names the
-wire under `snapped_to_wire`; a point where two nets' wires cross, a point on
-a wire LTspice drops between two pins of one part, and a point holding pins on
-separate nets are refused as ambiguous.
+`inspect(kind: "net")` follows the nets as LTspice netlists them: a wire
+straight between two pins of one part joins nothing, and a trace from one of a
+part's pins stacked on one point answers that pin's own net. At a point on a
+wire's interior it traces that wire's net and names the wire under
+`snapped_to_wire`. A point on two nets is refused, saying why: two nets' wires
+cross there, it is inside a wire LTspice drops, or it holds a part's stacked
+pins.
 
 **Waveform panes.** `set_plot_panes{analysis, panes}` writes the plot
 settings file that LTspice's waveform window reads when the sheet runs, which

@@ -166,6 +166,9 @@ class Bridge:
             )
         self._attached = pid
         self._was_attached = True
+        # A session attached afresh has changed nothing in that window yet
+        # (recorded: the last status after a re-attach says so).
+        self._committed = False
         return {"attachedPid": pid, "ok": True, "port": PORT}
 
     def _design(self, path: str) -> tuple[dict[str, Any], str]:

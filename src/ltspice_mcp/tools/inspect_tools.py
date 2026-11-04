@@ -149,7 +149,6 @@ from ltspice_mcp.lib.connectivity import (
     name_key,
     name_keys,
     named_labels,
-    point_on_segment,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
@@ -170,9 +169,9 @@ from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, segment_text, wires_through
 from ltspice_mcp.lib.schematic_ops import (
+    crossing_refused,
     netlist_card_value,
     require_asc,
-    wires_of_one_net,
 )
 from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_file
 from ltspice_mcp.lib.simulator import (
@@ -325,115 +324,85 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     asc_path = safe_path(args.path, state)
     require_asc(asc_path)
     sheet, _digest = await _sheet_of_file(asc_path, state)
+    # The nets as LTspice netlists them, labels of one name as one net, so a
+    # trace answers "what's on net X" on label-wired sheets too. They are kept
+    # on the sheet for the call's other queries; grouping a large sheet is
+    # slow, so it runs off the event loop.
+    await asyncio.to_thread(lambda: sheet.net_points)
+    nets = sheet.nets
 
-    nets = sheet.nets()
-    wires = list(sheet.wires)
-    snapped: tuple[int, int, int, int] | None = None
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
         # normal case on label-wired schematics (one FLAG per pin) — and a name
-        # matches its labels in any case, ground every ground flag. Every one
-        # of them is on one net, so trace from any (the lowest, for
-        # determinism).
+        # matches its labels in any case, ground every ground flag. They are
+        # one net, so seed from any matching label (lowest, for determinism).
         net_name = args.pin[4:]
-        key = name_key(net_name)
-        matches = sorted(
-            (label.point, label.index) for label in nets.labels if name_key(label.text) == key
+        key = nets.name_key(net_name)
+        first = min(
+            (label for label in sheet.net_labels if nets.name_key(label.text) == key),
+            key=lambda label: label.point,
+            default=None,
         )
-        if not matches:
+        if first is None:
             raise NetlistError(
                 f"Net label '{net_name}' not found in schematic. Add it with the "
                 "add_net_label op of edit_schematic first, or trace a "
                 "component pin / coordinate."
             )
-        (x, y), index = matches[0]
-        net = nets.of_label(nets.labels[index])
+        x, y = first.point
+        net = nets.of_label(first)
     elif args.pin is not None:
-        pin = sheet.pin_named(args.pin)
-        (x, y), net = pin.point, nets.of_pin(pin)
+        # A pin answers its own net, which one of a part's pins stacked on a
+        # point may hold alone.
+        pin = sheet.net_pin(args.pin)
+        x, y = pin.point
+        net = nets.of_pin(pin)
     elif args.x is not None and args.y is not None:
         x, y = args.x, args.y
-        here = nets.at((x, y))
-        if not here:
-            raise NetlistError(
-                f"Nothing found at ({x},{y}): no component pin, net label or wire "
-                "touches it. Use inspect(kind='components') to inspect the layout."
-            )
-        # Wires that only cross are on separate nets, and so, by LTspice's
-        # netlister, are pins of one part alone on one point.
-        wires_of_one_net((x, y), wires, nets, "Trace from an end of the wire you mean.")
-        if len(here) > 1:
-            for run in nets.nets.dropped:
-                if (x, y) not in run.segment and point_on_segment((x, y), *run.segment):
-                    a, b = run.ends
-                    raise NetlistError(
-                        f"({x},{y}) lies on the wire {segment_text((*a.point, *b.point))} "
-                        f"straight between {a.reference}.{a.name} and {b.reference}.{b.name}, "
-                        "two pins of one part, which LTspice leaves out of the netlist, so "
-                        "the point is on no net. Trace one of the two pins as REF.PIN."
-                    )
-            on_point = sorted(
-                f"{pin.reference}.{pin.name}" for pin in nets.pins if pin.point == (x, y)
-            )
-            raise NetlistError(
-                f"({x},{y}) holds pins on separate nets ({', '.join(on_point)}): LTspice "
-                "joins one part's pins on a point only through a wire or a label there. "
-                "Trace one of them as REF.PIN."
-            )
-        (net,) = here
-        on_something = any(pin.point == (x, y) for pin in nets.pins) or any(
-            label.point == (x, y) for label in nets.labels
-        )
-        if not on_something and all((x, y) not in (w[:2], w[2:]) for w in wires):
-            # A point on a wire's interior is on that wire's net, since
-            # LTspice joins anything placed there; say which wire was traced.
-            snapped = wires_through((x, y), wires)[0]
+        net = _net_at(sheet, (x, y))
     else:
         raise NetlistError("inspect(kind='net') needs either 'pin' or both 'x' and 'y'.")
 
-    on_net = nets.pins_on(net)
-    labels = set(nets.texts(net))
+    root = nets.folded(net)
+    coords = sheet.net_points.get(root, ())
+    snapped: tuple[int, int, int, int] | None = None
+    if (x, y) not in sheet.drawn_points:
+        # A point on a wire's interior is on that wire's net, since LTspice
+        # joins anything placed there; say which wire, one with an end on it.
+        on_net = set(coords)
+        snapped = next(
+            wire
+            for wire in wires_through((x, y), sheet.wires)
+            if wire[:2] in on_net or wire[2:] in on_net
+        )
+
+    labels = {label.text for label in nets.labels_on(net)}
     pins = sorted(
         (
             {"reference": pin.reference, "pin": pin.name, "x": pin.point[0], "y": pin.point[1]}
-            for pin in on_net
+            for pin in nets.pins_on(net)
         ),
         key=lambda p: (p["reference"], p["pin"]),
     )
-    # Every pin, label and wire end on the net: a wire end is on it when a run
-    # of wire LTspice keeps on the net passes through it.
-    member_coords = {pin.point for pin in on_net}
-    member_coords |= {label.point for label in nets.labels_on(net)}
-    member_coords |= {
-        end
-        for wire in wires
-        for end in (wire[:2], wire[2:])
-        if any(nets.nets.folded(kept) == net for kept in nets.nets.kept_at(end))
-    }
-
     named = sorted(named_labels(labels))
     # Two spellings of one name are one name, not a short.
     is_shorted = len(name_keys(named)) > 1
-    coords = sorted(member_coords)
 
-    # LTspice drops a wire straight between two pins of one component, so the
-    # pins at its ends are on separate nets though the sheet shows them tied.
-    # Each such wire at a pin of this net is said, as a fact (not a verdict):
-    # the model decides whether the tie was intended.
     warnings = sheet.unread_notes(
         "this trace",
         "anything it connects is not followed",
         "anything they connect is not followed",
     )
+    # A wire straight between two pins of one part is drawn joining them, so
+    # say that LTspice drops it wherever it touches this net.
     warnings += [
-        f"{a.reference}.{a.name} and {b.reference}.{b.name} are drawn tied by a wire "
-        f"straight between two pins of the same component; LTspice drops that wire "
-        f"from the netlist, so they are on separate nets in simulation. Reroute the "
-        f"wire to bend out of line with the two pins, or label both pins with the "
-        f"same net name."
-        for run in nets.nets.dropped
-        for a, b in [run.ends]
-        if net in (nets.of_pin(a), nets.of_pin(b))
+        " and ".join(end.qualified_name for end in run.ends)
+        + " are joined by a wire straight between two pins of the same component; "
+        "LTspice drops that wire from the netlist, so it joins nothing. Reroute the "
+        "wire to bend out of line with the two pins, or label both pins with the same "
+        "net name."
+        for run in nets.dropped
+        if any(nets.folded(nets.of_pin(end)) == root for end in run.ends)
     ]
 
     data: dict = {
@@ -465,6 +434,39 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     for w in warnings:
         lines.append(f"  WARNING: {w}")
     return format_response("\n".join(lines), data, args.format)
+
+
+def _net_at(sheet: Sheet, point: tuple[int, int]) -> int:
+    """The one net, labels of one name as one, that a trace from ``point``
+    follows. Refuses a point on no net, and a point on several, saying why."""
+    nets = sheet.nets
+    found = {nets.folded(net) for net in nets.nets_at(point)}
+    if len(found) == 1:
+        return found.pop()
+    x, y = point
+    if not found and (dropped := nets.dropped_at(point)):
+        a, b = (end.qualified_name for end in dropped[0].ends)
+        raise NetlistError(
+            f"({x},{y}) lies inside the wire from {a} to {b}, which runs straight between "
+            f"two pins of one component; LTspice drops that wire from the netlist, so "
+            f"the point is on no net. Trace {a} or {b}."
+        )
+    if not found:
+        raise NetlistError(
+            f"Nothing found at ({x},{y}): no component pin, net label or wire "
+            "touches it. Use inspect(kind='components') to inspect the layout."
+        )
+    here = nets.pins_at(point)
+    if len({nets.folded(nets.of_pin(pin)) for pin in here}) > 1:
+        raise NetlistError(
+            f"({x},{y}) holds {', '.join(pin.qualified_name for pin in here)}, which "
+            f"LTspice puts on {len(found)} separate nets: of a component's pins on one "
+            f"point with no wire or label there, only the last in SpiceOrder joins what "
+            f"else is there. Trace one of the pins by name."
+        )
+    raise crossing_refused(
+        point, wires_through(point, sheet.wires), "Trace from an end of the wire you mean."
+    )
 
 
 # Fixed server-side page size for the paginated kinds. The A.5 query specs list

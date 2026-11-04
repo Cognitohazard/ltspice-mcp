@@ -76,7 +76,7 @@ def test_it_places_what_the_editor_places(sheet: Path, tmp_path: Path) -> None:
         assert part.box.to_origin_size_dict() == geometry["bounding_box"]
     if len(once) == len(read.parts):
         # With no reference repeated or missing, the nets are the editor's too.
-        mine, theirs = read.nets(), sheet_nets(editor)
+        mine, theirs = NamedNets(read.nets), sheet_nets(editor)
 
         def groups(nets: NamedNets) -> set[tuple[frozenset[tuple[str, str]], frozenset[str]]]:
             on_net: dict[int, set[tuple[str, str]]] = {}
@@ -150,7 +150,8 @@ class TestAPart:
         read = self._read(tmp_path)
         assert read.wires == ((0, 0, 96, 0),)
         assert read.labels == ((0, 0, "in"),)
-        assert [(label.point, label.text) for label in read.nets().labels] == [((0, 0), "in")]
+        (label,) = read.net_labels
+        assert read.nets.nets_at((96, 0)) == (read.nets.of_label(label),)
 
 
 class TestAPinByName:
@@ -161,8 +162,8 @@ class TestAPinByName:
 
     def test_by_name_then_by_spice_order(self, tmp_path: Path) -> None:
         read = self._read(tmp_path, "SYMBOL box2 96 0 R0\nSYMATTR InstName U1\n")
-        assert read.pin_at("U1.a") == (96, 8)
-        assert read.pin_at("U1.2") == (128, 8)
+        assert read.net_pin("U1.a").point == (96, 8)
+        assert read.net_pin("U1.2").point == (128, 8)
 
     def test_of_a_reference_two_parts_share_is_refused_naming_both(self, tmp_path: Path) -> None:
         twice = (
@@ -173,7 +174,7 @@ class TestAPinByName:
         with pytest.raises(
             NetlistError, match=r"'U1' names 2 parts, placed at \(96,0\), \(300,0\)"
         ):
-            read.pin_at("U1.A")
+            read.net_pin("U1.A")
 
     @pytest.mark.parametrize(
         ("spec", "said"),
@@ -186,7 +187,7 @@ class TestAPinByName:
     def test_that_is_not_there_is_refused(self, tmp_path: Path, spec: str, said: str) -> None:
         read = self._read(tmp_path, "SYMBOL box2 96 0 R0\nSYMATTR InstName U1\n")
         with pytest.raises(NetlistError, match=re.escape(said)):
-            read.pin_at(spec)
+            read.net_pin(spec)
 
 
 class TestASymbolFileThatCannotBeRead:
@@ -214,4 +215,4 @@ class TestASymbolFileThatCannotBeRead:
         with pytest.raises(
             NetlistError, match=r"symbol 'box2' could not be read \(no such shape\)"
         ):
-            read.pin_at("U1.A")
+            read.net_pin("U1.A")

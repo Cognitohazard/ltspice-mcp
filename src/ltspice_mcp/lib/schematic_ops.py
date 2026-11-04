@@ -1743,12 +1743,20 @@ def wires_of_one_net(
     """
     through = wires_through(coord, segments)
     if len(set(nets.wired_at(coord))) > 1:
-        listed = "; ".join(segment_text(s) for s in through)
-        raise NetlistError(
-            f"({coord[0]},{coord[1]}) is where wires on separate nets cross ({listed}); "
-            f"LTspice leaves a plain crossing unjoined. {remedy}"
-        )
+        raise crossing_refused(coord, through, remedy)
     return through
+
+
+def crossing_refused(
+    coord: tuple[int, int], through: Sequence[tuple[int, int, int, int]], remedy: str
+) -> NetlistError:
+    """The refusal of a point where the wires ``through`` it, on separate nets,
+    cross, naming them and ending with ``remedy``."""
+    listed = "; ".join(segment_text(s) for s in through)
+    return NetlistError(
+        f"({coord[0]},{coord[1]}) is where wires on separate nets cross ({listed}); "
+        f"LTspice leaves a plain crossing unjoined. {remedy}"
+    )
 
 
 def _endpoint_name(endpoint: "str | GridPoint") -> str:

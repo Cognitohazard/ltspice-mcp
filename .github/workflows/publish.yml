@@ -43,6 +43,25 @@ jobs:
         with:
           enable-cache: true
 
+      # The plugin and Desktop-extension manifests are static JSON that
+      # scripts/release.sh stamps with the tag's version, in every "version"
+      # slot it rewrites. A tag cut without it would publish while they still
+      # name the previous release. The tests pin the slots to each other only.
+      - name: Check the manifests carry the tag's version
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          slots=$(grep -HoE '"version": *"[^"]*"' \
+            .claude-plugin/plugin.json \
+            .claude-plugin/marketplace.json \
+            packaging/mcpb/manifest.json || true)
+          stale=$(printf '%s\n' "$slots" | grep -vF "\"$version\"" || true)
+          if [ -z "$slots" ] || [ -n "$stale" ]; then
+            echo "::error::Not every manifest version is $version; cut the release with scripts/release.sh"
+            printf '%s\n' "$slots"
+            exit 1
+          fi
+
       - name: Build package
         if: github.event_name != 'workflow_dispatch'
         run: uv build

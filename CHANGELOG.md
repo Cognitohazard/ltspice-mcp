@@ -91,6 +91,13 @@ tool-surface changes.
   with `ltspice-mcp-bridge.exe did not answer within 5 s`, because the bridge's
   time limit also counted the wait for LTspice to close the pane or answer its
   question. That wait is now added to the limit.
+- `inspect(kind="net")` put two pins of one part on one net where LTspice
+  leaves them apart. One case is a wire running straight between the two
+  pins, which LTspice drops (recorded: `connectivity/same_instance_wire`). The
+  other is the part's pins stacked on one point with nothing else there
+  (`connectivity/pins_of_one_part_on_one_point`). A trace now follows the nets
+  as LTspice netlists them. A trace from inside such a wire, or from a point
+  holding stacked pins, is refused and names the pins to trace instead.
 - `net_with_two_names` reported one net carrying two labels where a wire
   running straight between two labelled pins of one part joined them on the
   sheet. LTspice drops that wire and keeps the labels on separate nodes
@@ -473,6 +480,28 @@ tool-surface changes.
 - `set_component_value` refused `1u Rser={0.1 * k}` with advice to put the
   expression in braces, although it is braced and the write would have set
   it. The check now splits the value as the write does.
+- The documentation and package metadata no longer claim that the server
+  runs on macOS. It refuses every `.raw` and `.log` read there, because the
+  memory limit of the process that reads results and the cleanup of that
+  process and its children have not been validated on macOS. Yet the README
+  said it found a simulator on macOS, the PyPI classifiers listed macOS, and
+  the Claude Desktop extension offered itself on macOS. The extension's
+  manifest now lists Windows and Linux only, and the README, `docs/DESIGN.md`
+  and the extension's README say that macOS is not supported yet.
+- The Claude Code plugin and Desktop-extension manifests still said 0.6.1
+  after the 0.7.0 release, because the 0.7.0 tag was cut without
+  `scripts/release.sh`, which stamps them. They now say 0.7.0, and the
+  publish workflow refuses a tag whose manifests name another version.
+- `SECURITY.md` named the retired file arguments `raw_path`, `log_path` and
+  `raw_file` where the tools now take `path`. It also listed the
+  `<name>.net` beside a schematic that `run_experiments` no longer writes,
+  and left out the results `jobs(action="place_beside_sheet")` copies beside
+  a sheet.
+- The README described the SPICEAssistant study (arXiv:2507.10639) as
+  comparing scalar results with raw output. Its o3 solve rates of 25.4% and
+  84.9% compare no simulation with simulation feedback from tools that
+  return values read from each run as text (section 4.3, Table 2), and the
+  README now says so.
 
 ### Added
 
@@ -495,7 +524,11 @@ tool-surface changes.
   after a plot opens with `tied: false` because its sheet had unsaved changes.
   A box LTspice shows instead of saving, such as for a write-protected file,
   is quoted in `window_not_saved` and closed with Cancel; a window whose copy
-  changes during a discard is left open, with `window_not_discarded`.
+  changes during a discard is left open, with `window_not_discarded`. When
+  the sheet is open in more than one LTspice and each holds a different copy,
+  `window_pid` names the one the user chose to save, the other windows are
+  handed the saved sheet, and a save without it, or with a process that
+  holds no different copy, fails with `window_not_chosen`.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the

@@ -46,7 +46,7 @@ from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver, find_s
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as verify_tool
 from tests import _ltspice_recorded as rec
-from tests._asc_ops import apply_ops, inspect_one, sha_of, sheet_findings
+from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
 from tests._schematic_fixtures import open_editor
 from tests.conftest import FIXTURES_DIR, FakeSim
 from tests.ltspice_recorder import INPUTS
@@ -544,6 +544,62 @@ def test_a_parts_pins_on_one_point_are_joined_only_by_what_else_is_there(build: 
     # So do two other parts' pins.
     assert nodes["r8"][1] == nodes["r9"][0] == nodes["r10"][1]
     assert nodes["r8"][0] != nodes["r8"][1]
+
+
+@pytest.mark.parametrize(
+    ("build", "case_id"), list(rec.per_build([*SAME_INSTANCE, *SHARED_POINT]))
+)
+async def test_a_net_trace_from_a_pin_lists_the_pins_ltspice_put_on_its_node(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A wire straight between two pins of one part joins nothing, and of one
+    part's pins on a point with nothing else there only the last in SpiceOrder
+    joins: the trace from each pin follows the export, not the drawing."""
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    spec_of = {
+        f"{canon_ref(row['ref'])}.{pin['order']}": f"{row['ref']}.{pin['name']}"
+        for row in collect_component_geometry(_editor(sheet))
+        for pin in row["pins"]
+    }
+    exported_as = {spec: member for member, spec in spec_of.items()}
+    for group in exported_groups(build, case_id):
+        for member in sorted(group):
+            query = {"kind": "net", "path": str(sheet), "at": spec_of[member]}
+            traced = (await inspect_one(state_no_sim, query))["pins"]
+            assert {exported_as[f"{p['reference']}.{p['pin']}"] for p in traced} == group, member
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_trace_from_inside_a_dropped_wire_is_refused_and_from_its_pin_follows_the_pin(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``same_instance_wire`` labels both of R1's pins and exports ``R1 a b``:
+    the wire between them joins nothing, inside it or at its ends."""
+    sheet = rec.stage_sheet(build, "connectivity/same_instance_wire", work_dir)
+    (x1, y1), (x2, y2) = placed_pins(sheet)["R1"][1], placed_pins(sheet)["R1"][2]
+    inside = {"kind": "net", "path": str(sheet), "at": [(x1 + x2) // 2, (y1 + y2) // 2]}
+    refused = await inspect_refusal(state_no_sim, inside)
+    assert "LTspice drops that wire from the netlist" in refused
+    at_pin = await inspect_one(state_no_sim, {"kind": "net", "path": str(sheet), "at": [x1, y1]})
+    assert [(p["x"], p["y"]) for p in at_pin["pins"]] == [(x1, y1)]
+    assert "is_shorted" not in at_pin
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_trace_from_a_point_holding_a_parts_pins_on_two_nets_is_refused(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """R1's two pins are alone on their point, R2's share theirs with R3.1."""
+    sheet = rec.stage_sheet(build, "connectivity/pins_of_one_part_on_one_point", work_dir)
+    placed = placed_pins(sheet)
+    alone = await inspect_refusal(
+        state_no_sim, {"kind": "net", "path": str(sheet), "at": list(placed["R1"][1])}
+    )
+    assert "holds R1.1, R1.2, which LTspice puts on 2 separate nets" in alone
+    shared = await inspect_refusal(
+        state_no_sim, {"kind": "net", "path": str(sheet), "at": list(placed["R2"][1])}
+    )
+    assert "R2.1" in shared and "R2.2" in shared and "R3.1" in shared
 
 
 @pytest.mark.parametrize(
