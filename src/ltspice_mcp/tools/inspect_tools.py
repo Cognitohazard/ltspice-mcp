@@ -78,10 +78,14 @@ than a hunt.
   circuit" starts when no path was given. A sheet the server may read comes
   with its ``sha256`` and with whether the window's copy differs from the file
   (unsaved changes, or a file that changed after it was opened), which is what
-  ``edit_schematic`` refuses on. A document outside the sandbox, when one is
+  ``edit_schematic`` refuses on, and where they differ, up to 25 entries a
+  side. A document outside the sandbox, when one is
   set, is listed and not read. It is asked of LTspice itself, through the bridge it ships from
   26.1; where that cannot be reached the query fails, saying why, since
-  "nothing is open" would be a different answer.
+  "nothing is open" would be a different answer. With a ``path`` (and a
+  ``pid`` where more than one window has it open) it answers for that one
+  sheet instead: every entry where the window's copy differs from the file,
+  paged under one cursor bound to the difference itself.
 
 Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
@@ -160,7 +164,12 @@ from ltspice_mcp.lib.library_manager import (
 )
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
-from ltspice_mcp.lib.ltspice_window import OpenDesign, WindowsUnavailable
+from ltspice_mcp.lib.ltspice_window import (
+    OpenDesign,
+    OpenSheet,
+    WindowsUnavailable,
+    file_difference,
+)
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
@@ -844,9 +853,32 @@ class SimulatorDocsQuery(StrictModel):
 
 
 class OpenInLtspiceQuery(StrictModel):
-    """List the sheets and netlists open in LTspice windows, and which one is in front."""
+    """List the sheets and netlists open in LTspice windows, and which is in
+    front; with a path, every entry where its window copy differs from the file."""
 
     kind: Literal["open_in_ltspice"]
+    path: str | None = Field(
+        default=None,
+        min_length=1,
+        description="A .asc sheet: read its window copy's difference in full, paged.",
+    )
+    pid: int | None = Field(
+        default=None, ge=1, description="With path: the LTspice process, if several have it open."
+    )
+    cursor: str | None = Field(
+        default=None,
+        description="Page token from a previous 'next_cursor'; stale once either copy changes.",
+    )
+
+    @model_validator(mode="after")
+    def _sheet_named(self) -> OpenInLtspiceQuery:
+        if self.path is None and (self.pid is not None or self.cursor is not None):
+            raise ValueError("pid and cursor need path, the sheet whose difference they read")
+        if self.path is not None and _design_kind(self.path) != "schematic":
+            raise ValueError(
+                "path must be a .asc sheet: only a sheet's window copy is compared with its file"
+            )
+        return self
 
 
 Query: TypeAlias = Annotated[
@@ -995,23 +1027,30 @@ def _paginate(
 
 
 def _paginate_pair(
-    primary: list[Any],
-    secondary: list[Any],
+    primary: Sequence[Any],
+    secondary: Sequence[Any],
     kind: str,
     identity: dict[str, Any],
     cursor: str | None,
     sources: Sequence[Path],
     view: _View,
+    revision: str | None = None,
+    *,
+    secondary_limit: int | None = None,
 ) -> dict[str, Any]:
-    """Page an item's two collections under its single cursor (both offsets ride in it)."""
+    """Page an item's two collections under its single cursor (both offsets ride in it).
+
+    The second collection pages by ``view.coord_limit`` unless ``secondary_limit``
+    says otherwise; ``revision`` is as for ``_paginate``.
+    """
     try:
         return paginate_pair(
             primary,
             secondary,
-            _binding(kind, identity, sources),
+            _binding(kind, identity, sources, revision),
             cursor=cursor,
             limit=view.limit,
-            secondary_limit=view.coord_limit,
+            secondary_limit=view.coord_limit if secondary_limit is None else secondary_limit,
         )
     except PageCursorError as exc:
         raise _invalid_cursor(exc) from exc
@@ -2046,13 +2085,30 @@ def _design_row(design: OpenDesign, resolved: Path | None) -> dict[str, Any]:
     return row
 
 
-async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
-    """What LTspice has open, asked of LTspice (``OpenWindows.designs``).
+def _windows_error(exc: BridgeError) -> _QueryError:
+    """The query's failure where LTspice cannot be asked: no bridge here, or no answer."""
+    if isinstance(exc, WindowsUnavailable):
+        return _QueryError(
+            "open_windows_unavailable",
+            f"{exc}. inspect(kind='capabilities') reports this under open_window_sync.",
+        )
+    return _QueryError(
+        "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
+    )
+
+
+async def _do_open_in_ltspice(
+    q: OpenInLtspiceQuery, state: SessionState, view: _View
+) -> dict[str, Any]:
+    """What LTspice has open, asked of LTspice (``OpenWindows.designs``), or
+    with ``path`` where one window's copy of that sheet differs from the file.
 
     A sheet's copy in the window is read only for a file the sandbox admits,
     and compared with that file by content. Both the bridge and the files are
     read off the loop.
     """
+    if q.path is not None:
+        return await _window_difference_page(q, q.path, state, view)
 
     def read() -> tuple[int, int, list[dict[str, Any]]]:
         # Where the sandbox admits each document, decided once: it says which
@@ -2069,15 +2125,8 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
 
     try:
         count, total, rows = await asyncio.to_thread(read)
-    except WindowsUnavailable as exc:
-        raise _QueryError(
-            "open_windows_unavailable",
-            f"{exc}. inspect(kind='capabilities') reports this under open_window_sync.",
-        ) from exc
     except BridgeError as exc:
-        raise _QueryError(
-            "open_windows_unreachable", f"LTspice could not be asked what it has open: {exc}."
-        ) from exc
+        raise _windows_error(exc) from exc
     data: dict[str, Any] = {"windows": count, "designs": rows, "total": total}
     hints: list[str] = []
     if any(row.get("differs_from_file") for row in rows):
@@ -2094,6 +2143,86 @@ async def _do_open_in_ltspice(state: SessionState) -> dict[str, Any]:
     if hints:
         data["hint"] = " ".join(hints)
     return {"data": data}
+
+
+def _held_by(holding: Sequence[OpenSheet]) -> str:
+    return ", ".join(str(sheet.pid) for sheet in holding)
+
+
+async def _window_difference_page(
+    q: OpenInLtspiceQuery, path: str, state: SessionState, view: _View
+) -> dict[str, Any]:
+    """Where one window's copy of a sheet differs from the file: every entry,
+    the two sides paged under one cursor.
+
+    The window and the file are read again for every page, and the cursor binds
+    the difference itself, so a page asked after either copy changed is refused
+    rather than read from offsets into a different list.
+    """
+    target = safe_path(path, state)
+
+    def read() -> tuple[list[OpenSheet], bytes]:
+        return state.open_windows.holding(target), target.read_bytes()
+
+    try:
+        holding, on_disk = await asyncio.to_thread(read)
+    except BridgeError as exc:
+        raise _windows_error(exc) from exc
+    except OSError as exc:
+        raise _QueryError("read_error", f"{target} could not be read: {exc}.") from exc
+    chosen = [sheet for sheet in holding if q.pid is None or sheet.pid == q.pid]
+    if not chosen:
+        if holding:
+            message = (
+                f"LTspice process {q.pid} does not have {target.name} open; it is "
+                f"open in process {_held_by(holding)}: pass one as pid."
+            )
+        else:
+            message = (
+                f"No LTspice window has {target.name} open; "
+                "inspect(kind='open_in_ltspice') without a path lists what is open."
+            )
+        raise _QueryError("sheet_not_open", message)
+    if len(chosen) > 1:
+        raise _QueryError(
+            "window_not_chosen",
+            f"{len(chosen)} LTspice windows have {target.name} open (processes "
+            f"{_held_by(chosen)}): pass one as pid.",
+        )
+    (sheet,) = chosen
+    difference = file_difference(on_disk, sheet.text)
+    sides = (difference.only_in_window, difference.only_in_file) if difference else ((), ())
+    # Paged even when nothing differs, so a cursor minted while the copies
+    # differed is refused once they no longer do.
+    page = _paginate_pair(
+        *sides,
+        "open_in_ltspice",
+        {"path": str(target), "pid": sheet.pid},
+        q.cursor,
+        (),
+        view,
+        canonical_hash(sides),
+        secondary_limit=view.limit,
+    )
+    data: dict[str, Any] = {
+        "path": sheet.path,
+        "pid": sheet.pid,
+        "version": sheet.version,
+        "sha256": hashlib.sha256(on_disk).hexdigest(),
+        "differs_from_file": difference is not None,
+    }
+    if difference is None:
+        return {"data": data}
+    data.update(
+        difference=difference.summary(),
+        only_in_window=page["items"],
+        only_in_file=page["secondary_items"],
+    )
+    return {
+        "data": data,
+        "next_cursor": page["next_cursor"],
+        "page": _page_meta(page, "only_in_window", "only_in_file"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2468,7 +2597,7 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
     if isinstance(query, SimulatorDocsQuery):
         return await asyncio.to_thread(_simulator_docs_page, query, state, view)
     if isinstance(query, OpenInLtspiceQuery):
-        return await _do_open_in_ltspice(state)
+        return await _do_open_in_ltspice(query, state, view)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 
@@ -2602,7 +2731,28 @@ _SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
     },
 }
 
-#: The ``open_in_ltspice`` kind's payload.
+#: A sheet open in a window, compared with its file: what a listed document
+#: and the reply to a query naming the sheet both say of it.
+_OPEN_SHEET_PROPERTIES: dict[str, Any] = {
+    "path": {"type": "string", "description": "As LTspice spells it."},
+    **LTSPICE_WINDOW_PROPERTIES,
+    "sha256": {
+        "type": "string",
+        "description": "Of the file: what edit_schematic takes as expected_sha256.",
+    },
+    "differs_from_file": {
+        "type": "boolean",
+        "description": (
+            "The window's copy is not the file's: unsaved changes, or a "
+            "file that changed after it was opened. Only for a sheet the "
+            "server may read."
+        ),
+    },
+    "difference": {"type": "string"},
+}
+
+#: The ``open_in_ltspice`` kind's payload: the documents open, or, for a query
+#: naming a sheet, that sheet with a page of the entries where it differs.
 _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
     "windows": {"type": "integer", "description": "How many LTspice windows are running."},
     "total": {"type": "integer", "description": "How many documents they have open in all."},
@@ -2611,35 +2761,24 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
         "items": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "As LTspice spells it."},
+                **_OPEN_SHEET_PROPERTIES,
                 "kind": {"enum": ["schematic", "netlist", "other"]},
                 "active": {
                     "type": "boolean",
                     "description": "The document in front in its window.",
                 },
-                **LTSPICE_WINDOW_PROPERTIES,
                 "in_sandbox": {
                     "type": "boolean",
                     "description": "Whether this server may read and edit the file.",
                 },
-                "sha256": {
-                    "type": "string",
-                    "description": "Of the file: what edit_schematic takes as expected_sha256.",
-                },
-                "differs_from_file": {
-                    "type": "boolean",
-                    "description": (
-                        "The window's copy is not the file's: unsaved changes, or a "
-                        "file that changed after it was opened. Only for a sheet the "
-                        "server may read."
-                    ),
-                },
-                "difference": {"type": "string"},
                 **LTSPICE_DIFFERENCE_ENTRIES,
             },
             "required": ["path", "kind", "active", "pid", "version", "in_sandbox"],
         },
     },
+    **_OPEN_SHEET_PROPERTIES,
+    "only_in_window": LTSPICE_DIFFERENCE_ENTRIES["only_in_window"],
+    "only_in_file": LTSPICE_DIFFERENCE_ENTRIES["only_in_file"],
 }
 
 _OUTPUT_SCHEMA: dict[str, Any] = {

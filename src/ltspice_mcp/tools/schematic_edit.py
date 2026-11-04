@@ -1328,14 +1328,27 @@ def _window_differs(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
     )
 
 
+# ``_window_differs`` names a difference by a few first lines a side; these are
+# the calls that read every entry of it (inspect's open_in_ltspice, given the
+# sheet, and the window where more than one has it open).
+_DIFFERENCE_IN_ONE = (
+    "inspect(kind='open_in_ltspice') with this path lists every entry where the "
+    "window's copy differs from the file."
+)
+_DIFFERENCE_IN_EACH = (
+    "inspect(kind='open_in_ltspice') with this path and a window's process as pid "
+    "lists every entry where that window's copy differs from the file."
+)
+
 _WINDOW_REMEDY = (
-    "Ask the user whether to keep the changes in their LTspice window. Then call "
+    "Ask the user whether to keep the changes in their LTspice window; "
+    f"{_DIFFERENCE_IN_ONE} Then call "
     "edit_schematic with ops=[], this expected_sha256 and open_window='save' to keep "
     "them or open_window='discard' to drop them, read the sheet again, and resubmit."
 )
 _WINDOWS_REMEDY = (
-    "Ask the user which window's copy to keep; inspect(kind='open_in_ltspice') lists "
-    "where each differs from the file. Then call edit_schematic with ops=[], "
+    f"Ask the user which window's copy to keep; {_DIFFERENCE_IN_EACH} "
+    "Then call edit_schematic with ops=[], "
     "this expected_sha256, open_window='save' and window_pid set to that window's "
     "process, or open_window='discard' to drop every copy, read the sheet again, and "
     "resubmit."
@@ -1717,11 +1730,13 @@ async def _evaluate_edit_schematic(
                 )
             differing = differing_copies(open_sheets, on_disk)
             differs = _window_differs(differing) if differing else None
-            remedy = _WINDOW_REMEDY if len(differing) == 1 else _WINDOWS_REMEDY
+            one = len(differing) == 1
+            remedy = _WINDOW_REMEDY if one else _WINDOWS_REMEDY
             if differs is not None and dry_run:
                 window_notes.append(
                     f"{differs} A commit is refused until the window's copy is saved or "
-                    "dropped (open_window, with the user's answer) or the sheet is closed."
+                    "dropped (open_window, with the user's answer) or the sheet is closed. "
+                    + (_DIFFERENCE_IN_ONE if one else _DIFFERENCE_IN_EACH)
                 )
             elif differs is not None:
                 return refused(

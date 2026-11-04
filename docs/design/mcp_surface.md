@@ -1284,7 +1284,11 @@ a window's copy and does not check. For one that replaces the sheet:
   window that differs either has unsaved changes or was opened before the file
   last changed, and committing would leave two sheets, each missing the
   other's changes. The call then fails with `open_window_differs` at stage
-  `window_check`, naming a few of the differing entries, and writes nothing.
+  `window_check`, naming a few of the differing entries, and writes nothing;
+  its `hint` names `inspect(kind="open_in_ltspice")` with this path (and the
+  window's `pid` where more than one window differs) as the call that reads
+  every entry. A dry run reports the same difference in a note, with the
+  same call.
   A call with no ops and `open_window` set to the user's choice settles it.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
   and the reply gives the file's new `sha256`. Where more than one window
@@ -1739,7 +1743,7 @@ cursors where listed:
     headings and paged by section. An unknown name fails as `unknown_document`,
     listing the names; an install with none fails as
     `simulator_docs_unavailable`
-{kind: "open_in_ltspice"}
+{kind: "open_in_ltspice", path?, pid?, cursor?}
     the documents open in the LTspice windows on this machine: `windows`
     (how many are running), `total`, and `designs`, each {path, kind:
     "schematic"|"netlist"|"other", active (the one in front in its window),
@@ -1748,7 +1752,19 @@ cursors where listed:
     `difference` names a few entries in a sentence, and `only_in_window` and
     `only_in_file` list the differing entries (a symbol with its
     attributes, or one other line), up to 25 a side, with
-    `difference_omitted` counting the rest. Fails as
+    `difference_omitted` counting the rest and a `hint` naming the call
+    that reads them. That call names the sheet: with a `path` (a `.asc`) the
+    query answers for the window that has it open, `pid` choosing one
+    where more than one has, as {path, pid, version, sha256,
+    differs_from_file}, and when they differ `difference`, `only_in_window`
+    and `only_in_file` with every entry, both lists paged under one cursor
+    (`page.collections` says which continues). The cursor is bound to the
+    difference itself, and the window and the file are read again for every
+    page, so a page asked after either copy changed fails as
+    `invalid_cursor`. A path no window has open fails as `sheet_not_open`,
+    and more than one window without a `pid` as `window_not_chosen`, naming
+    the processes; `pid` and `cursor` without a `path`, or a path that is
+    not a `.asc`, fail as `invalid_query`. Fails as
     `open_windows_unavailable` where there is no bridge to ask (not
     Windows, LTspice before 26.1, the setting off) and as
     `open_windows_unreachable` when the bridge does not answer

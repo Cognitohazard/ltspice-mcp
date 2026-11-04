@@ -614,6 +614,7 @@ FROZEN_ERROR_CODES = (
     "server_shutdown",
     "sheet_changed",
     "sheet_missing",
+    "sheet_not_open",
     "simulation_failed",
     "simulator_docs_unavailable",
     "solve_failure",

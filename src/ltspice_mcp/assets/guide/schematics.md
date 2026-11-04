@@ -32,8 +32,10 @@ that are not in the file, so a run would simulate something other than what
 they see. Tell them, and ask whether to keep those changes; `edit_schematic`
 saves or drops them with `open_window` (below). `only_in_window` and `only_in_file`
 list the `.asc` lines where the two differ; a part whose value changed appears
-in both, once with each value. Use them to tell the user what is unsaved, and
-do not treat them as the circuit to work on.
+in both, once with each value. They hold 25 entries a side; past that,
+`difference_omitted` counts the rest, and the same query with that `path` and
+`pid` pages through every entry. Use them to tell the user what is unsaved,
+and do not treat them as the circuit to work on.
 
 When they ask to see a sheet you built or changed, `verify_circuit(path=...,
 in_ltspice=true)` opens it in their LTspice window, in front. If the reply's

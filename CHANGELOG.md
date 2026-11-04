@@ -74,6 +74,18 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- `inspect(kind="open_in_ltspice")` reads every entry where a window's copy
+  of a sheet differs from the file. The listing still names 25 entries a
+  side and counts the rest in `difference_omitted`, and a `hint` beside the
+  count now names the call that reads them: the same query with the sheet's
+  `path` (and `pid`, where more than one window has it open), which returns
+  that window's difference with both lists paged under one cursor. The
+  cursor is bound to the difference, so a page asked after either copy
+  changed is refused as `invalid_cursor`; a sheet no window has open fails as
+  `sheet_not_open`. `edit_schematic`'s `open_window_differs` refusal, which
+  names only a few entries a side, now names the same call in its hint, as
+  does a dry run's note about a differing window. The Python API's
+  `inspect` follows the cursor and returns the whole difference.
 
 ### Fixed
 
